@@ -79,11 +79,12 @@ Module* findModule(int id) {
     return nullptr;
 }
 
-int addHleModule(const std::string& name, const std::string& path) {
+int addHleModule(const std::string& name, const std::string& path, uint16_t version = 0) {
     Module m;
     m.id = g_nextId++;
     m.name = name;
     m.path = path;
+    m.version = version;
     m.hle = true;
     m.started = true;
     g_modules.push_back(m);
@@ -255,14 +256,16 @@ void startModule(int id, const std::string& path, const std::string& args, Done 
     g_starts.push_back({tid, id, block, std::move(done)});
 }
 
-// Finds the image for `path`: the IRX file if there is one, plus the name the
-// module goes by.
-bool locate(const std::string& path, std::vector<uint8_t>& image, std::string& name) {
+// Finds the image for `path`: the IRX file if there is one, plus the name and
+// version the module goes by (version 0 without a file).
+bool locate(const std::string& path, std::vector<uint8_t>& image, std::string& name, uint16_t& version) {
     name = baseName(path);
+    version = 0;
     if (!hostfs::readWholeFile(path, image)) return false;
     try {
         const IrxInfo irx = ps2uc::parseIrx(ElfFile::parse(image, path));
         if (!irx.name.empty()) name = toLower(irx.name);
+        version = irx.version;
     } catch (const std::exception&) {
     }
     return true;
@@ -270,16 +273,16 @@ bool locate(const std::string& path, std::vector<uint8_t>& image, std::string& n
 
 // Modules the HLE kernel provides: enables their host services. Returns the
 // module id, or 0 if the module is not one of them.
-int provide(const std::string& name, const std::string& path) {
+int provide(const std::string& name, const std::string& path, uint16_t version) {
     const std::string file = baseName(path);
     if (!providedByHle(name) && !providedByHle(file)) return 0;
     if (!kKernelModules.count(name) && !kKernelModules.count(file)) {
-        if (!enableModuleServices(name)) enableModuleServices(file);
+        if (!enableModuleServices(name, version)) enableModuleServices(file, version);
     }
     for (const auto& m : g_modules)
         if (m.hle && (m.name == name || baseName(m.path) == file)) return m.id;
     PS2_INFO("iop", "module %s (\"%s\") is provided by the HLE kernel", path.c_str(), name.c_str());
-    return addHleModule(name, path);
+    return addHleModule(name, path, version);
 }
 
 // ---- loadcore exports -----------------------------------------------------------------------------
@@ -346,8 +349,9 @@ void mlLoadModule() {
     const std::string path = mem::readString(arg(0));
     std::vector<uint8_t> image;
     std::string name;
-    const bool found = locate(path, image, name);
-    if (int id = provide(name, path)) return ret(id);
+    uint16_t version = 0;
+    const bool found = locate(path, image, name, version);
+    if (int id = provide(name, path, version)) return ret(id);
     if (!found) return ret(KE_NOFILE);
     ret(loadImage(std::move(image), path));
 }
@@ -356,8 +360,9 @@ void mlLoadModuleAddress() {
     const std::string path = mem::readString(arg(0));
     std::vector<uint8_t> image;
     std::string name;
-    const bool found = locate(path, image, name);
-    if (int id = provide(name, path)) return ret(id);
+    uint16_t version = 0;
+    const bool found = locate(path, image, name, version);
+    if (int id = provide(name, path, version)) return ret(id);
     if (!found) return ret(KE_NOFILE);
     ret(loadImage(std::move(image), path, arg(1) ? 2 : 0, arg(1)));
 }
@@ -439,8 +444,9 @@ bool providedByHle(const std::string& rawName) {
 void load(const std::string& path, const std::string& args, Done done) {
     std::vector<uint8_t> image;
     std::string name;
-    const bool found = locate(path, image, name);
-    if (int id = provide(name, path)) return done(id, 0);
+    uint16_t version = 0;
+    const bool found = locate(path, image, name, version);
+    if (int id = provide(name, path, version)) return done(id, 0);
     if (!found) {
         if (ps2uc::startsWith(toLower(path), "rom")) {
             // A BIOS module we have no replacement for. Pretend it loaded and say so.
@@ -460,13 +466,15 @@ void load(const std::string& path, const std::string& args, Done done) {
 void loadFromMemory(uint32_t addr, const std::string& args, Done done) {
     std::vector<uint8_t> image = imageAt(addr);
     std::string name;
+    uint16_t version = 0;
     try {
         const IrxInfo irx = ps2uc::parseIrx(ElfFile::parse(image, "(buffer)"));
         name = toLower(irx.name);
+        version = irx.version;
     } catch (const std::exception&) {
     }
     if (!name.empty())
-        if (int id = provide(name, name)) return done(id, 0);
+        if (int id = provide(name, name, version)) return done(id, 0);
     const int id = loadImage(std::move(image), "(buffer)");
     if (id < 0) return done(id, 0);
     startModule(id, findModule(id)->name, args, std::move(done));

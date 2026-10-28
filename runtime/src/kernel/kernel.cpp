@@ -635,6 +635,112 @@ void sysLoadExecPS2() {
     if (!requestExec(std::move(argv))) requestExit(1);   // the console would be stuck in its loader
 }
 
+// ---- DECI2 ----------------------------------------------------------------------------
+// The debugger link of development consoles, as far as libkernel's TTY uses
+// it: printf ends in sceTtyWrite, which opens a socket for the TTY protocol,
+// asks to send (ReqSend), and polls until the socket's handler has handed the
+// packet over (ExSend, on a DECI2_WRITE event) and been told it went out
+// (DECI2_WRITEDONE). The host is the other end and prints the text. Events
+// are delivered when the game polls; nothing ever arrives to be read.
+constexpr uint32_t kDeci2Tty = 0x0210;   // the TTY protocol
+constexpr uint64_t kDeci2Write = 3, kDeci2WriteDone = 4;
+constexpr size_t kDeci2TtyHeader = 12;   // DECI2 header (length, protocol, nodes) and the TTY word
+constexpr int kMaxDeci2Sockets = 8;
+
+struct Deci2Socket {
+    bool used = false;
+    uint32_t protocol = 0, opt = 0, handler = 0;
+    bool sendRequested = false, delivering = false;
+    std::vector<uint8_t> packet;   // what the handler has sent of the current packet
+};
+std::array<Deci2Socket, kMaxDeci2Sockets> g_deci2;
+
+Deci2Socket* deci2Socket(uint32_t id) { return id >= 1 && id <= kMaxDeci2Sockets && g_deci2[id - 1].used ? &g_deci2[id - 1] : nullptr; }
+
+// The handler sends the packet in as many pieces as it likes; the first
+// halfword says how long it is.
+void deci2Deliver(Deci2Socket& s) {
+    if (!s.sendRequested || s.delivering) return;
+    s.delivering = true;
+    s.packet.clear();
+    auto length = [&]() -> size_t { return s.packet.size() >= 2 ? static_cast<size_t>(s.packet[0] | (s.packet[1] << 8)) : 0xFFFF; };
+    while (s.used && s.packet.size() < length()) {
+        const size_t before = s.packet.size();
+        const uint64_t args[3] = {kDeci2Write, length() - before, s.opt};
+        callGuest(s.handler, args, 3);
+        if (s.packet.size() == before) break;
+    }
+    if (!s.used) return;
+    if (s.packet.size() < length())
+        PS2_WARN("kernel", "DECI2: the handler sent %zu bytes of a %zu-byte packet", s.packet.size(), length());
+    const size_t end = std::min(s.packet.size(), length());
+    if (s.protocol == kDeci2Tty && end > kDeci2TtyHeader)
+        hostPrint(std::string(s.packet.begin() + static_cast<std::ptrdiff_t>(kDeci2TtyHeader), s.packet.begin() + static_cast<std::ptrdiff_t>(end)));
+    s.sendRequested = false;
+    const uint64_t done[3] = {kDeci2WriteDone, 0, s.opt};
+    callGuest(s.handler, done, 3);
+    s.delivering = false;
+}
+
+// Deci2Call(function, parameter words). libkernel passes the Ex calls, which
+// handlers make, as negative numbers.
+void sysDeci2Call() {
+    const int32_t fn = sarg(0);
+    const uint32_t p = arg(1);
+    Deci2Socket* s = fn == 1 || fn == 0x10 ? nullptr : deci2Socket(read32(p));
+    switch (fn) {
+    case 1: {   // Open {protocol, opt, handler, work area}
+        const uint32_t protocol = read32(p) & 0xFFFF;
+        if (protocol != kDeci2Tty) {
+            char key[48];
+            std::snprintf(key, sizeof key, "DECI2 protocol 0x%04x", protocol);
+            PS2_UNIMPL("kernel", key, "%s: only the TTY is served; the socket is refused", key);
+            return ret(-1);
+        }
+        for (int i = 0; i < kMaxDeci2Sockets; ++i) {
+            Deci2Socket& n = g_deci2[static_cast<size_t>(i)];
+            if (n.used) continue;
+            n = Deci2Socket{};
+            n.used = true;
+            n.protocol = protocol;
+            n.opt = read32(p + 4);
+            n.handler = read32(p + 8);
+            return ret(i + 1);
+        }
+        return ret(-1);
+    }
+    case 2:     // Close {socket}
+        if (!s) return ret(-1);
+        *s = Deci2Socket{};
+        return ret(0);
+    case 3: case 7: case -7:   // ReqSend, ExReqSend {socket, destination node}
+        if (!s) return ret(-1);
+        s->sendRequested = true;
+        return ret(0);
+    case 4:     // Poll {socket}
+        if (!s) return ret(-1);
+        deci2Deliver(*s);
+        return ret(0);
+    case 5: case -5:   // ExRecv {socket, buffer, size}: there is never anything to read
+        return ret(s ? 0 : -1);
+    case 6: case -6: { // ExSend {socket, buffer, size}
+        if (!s) return ret(-1);
+        const uint32_t buf = read32(p + 4), size = read32(p + 8) & 0xFFFF;
+        for (uint32_t i = 0; i < size; ++i) s->packet.push_back(read8(buf + i));
+        return ret(size);
+    }
+    case 0x10:  // kputs {string}
+        hostPrint(readCString(read32(p)));
+        return ret(0);
+    default: {
+        char key[48];
+        std::snprintf(key, sizeof key, "Deci2Call function %d", fn);
+        PS2_UNIMPL("kernel", key, "%s not implemented; returning -1", key);
+        return ret(-1);
+    }
+    }
+}
+
 void sysUnimplemented(int32_t n) {
     char key[96];
     std::snprintf(key, sizeof key, "syscall %d (%s)", n, syscallName(n));
@@ -722,7 +828,7 @@ void dispatchSyscall(int32_t n) {
     case 0x79: ret(iop::sifSetReg(arg(0), arg(1))); break;          // SifSetReg
     case 0x7A: ret(iop::sifGetReg(arg(0))); break;                  // SifGetReg
     case 0x7B: PS2_INFO("kernel", "ExecOSD: exiting"); requestExit(0); break;
-    case 0x7C: ret(0); break;                                       // Deci2Call
+    case 0x7C: sysDeci2Call(); break;
     case 0x7D: ret(0); break;                                       // PSMode
     case 0x7E: ret(0); break;                                       // MachineType
     case 0x7F: ret(kRamSize); break;                                // GetMemorySize
@@ -872,6 +978,7 @@ void init(uint32_t entry, std::vector<std::string> argv) {
     for (auto& t : g_tlb) t = TlbEntry{};
     for (auto& l : g_intcHandlers) l.clear();
     for (auto& l : g_dmacHandlers) l.clear();
+    for (auto& s : g_deci2) s = Deci2Socket{};
     g_needResched = g_dispatchDisabled = false;
     g_interruptDepth = 0;
     g_heapStart = g_heapEnd = 0;

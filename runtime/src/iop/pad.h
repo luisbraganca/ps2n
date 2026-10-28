@@ -27,7 +27,9 @@ struct Input {
 
 void init();     // runtime start-up: reads --pad-script
 void reset();    // IOP reboot: every port closes
-void enable();   // the game loaded a pad module: register the RPC services
+// The game loaded a pad module: register the RPC services. `version` is the
+// module's IRX version, which the version query answers (0: unknown).
+void enable(uint16_t version);
 void onVblank(); // refresh every open port's data in EE memory
 
 // Parses a script line ("120 cross+up lx=255"); for tests.

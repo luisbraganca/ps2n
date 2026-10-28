@@ -107,7 +107,9 @@ std::unique_ptr<RpcServer> makeNullServer(const std::string& name, uint32_t sid)
 // Modules whose services the host provides (pad, memory card, CD/DVD, sound, ...).
 bool isServiceModule(const std::string& moduleName);
 // Enables the services a module provides. Returns false if it is not one.
-bool enableModuleServices(const std::string& moduleName);
+// `version` is the module's IRX version (0x0301 for 3.01), 0 when unknown;
+// services that report their module's version answer with it.
+bool enableModuleServices(const std::string& moduleName, uint16_t version);
 
 // Host path for a PS2 device path ("host0:foo", "cdrom0:\\DATA\\X.BIN;1", "mc0:/save").
 std::string hostPathFor(const std::string& ps2Path);

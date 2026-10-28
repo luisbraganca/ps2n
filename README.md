@@ -80,8 +80,8 @@ What works, and is covered by the test suite (`ctest`):
   `i*` variants), INTC, timers, DMAC (normal and chain mode), GIF and a
   software GS rasterizer with frame output, VIF0/VIF1 (every UNPACK format and
   mode, MPG, MSCAL with the TOP/TOPS double buffer, DIRECT), VU0 and VU1 micro
-  programs on an interpreter that models flag and Q/P timing, XGKICK, and SIO
-  debug output.
+  programs on an interpreter that models flag and Q/P timing, XGKICK, and
+  debug output (the SIO port, and the DECI2 TTY that Sony's `printf` uses).
 - **IOP**: IRX modules run on an R3000A interpreter, over a host-code IOP
   kernel (threads, semaphores, event flags, message boxes, memory pools,
   alarms, interrupts, vblank) and system libraries. The SIF wire protocol
@@ -348,9 +348,10 @@ ctest --test-dir build --output-on-failure
 - `program_*` / `example_*`: assembled programs recompiled at build time and
   run in both recompiled and interpreted mode, compared against recorded
   output: control-flow edge cases, a stripped ELF that needs the interpreter
-  fallback, the kernel scheduler, config bindings (skip, stub, C++ override,
-  instruction patch), `LoadExecPS2` across three executables at the same
-  addresses (one of them not recompiled), a loader that copies the next
+  fallback, the kernel scheduler, `printf` output over the DECI2 TTY (a
+  socket handler that sends in pieces), config bindings (skip, stub, C++
+  override, instruction patch), `LoadExecPS2` across three executables at the
+  same addresses (one of them not recompiled), a loader that copies the next
   program into memory and jumps into it, and a GS drawing compared against a
   recorded frame.
 - `sdk_*`: programs built with the ps2dev toolchain and ps2sdk, run the same

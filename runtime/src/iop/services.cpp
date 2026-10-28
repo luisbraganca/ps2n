@@ -1,6 +1,7 @@
 // Host RPC services: FILEIO (host-backed files), the IOP heap, LOADFILE
-// (module loading), null services for modules whose protocols are not
-// implemented yet, and the list of modules whose services the host provides.
+// (module loading), MTAPMAN (the multitap manager), null services for modules
+// whose protocols are not implemented yet, and the list of modules whose
+// services the host provides.
 #include "iop/iop.h"
 
 #include "iop/cpu.h"
@@ -14,6 +15,7 @@
 
 #include "ps2uc/util.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <set>
@@ -212,6 +214,38 @@ public:
     }
 };
 
+// ---- MTAPMAN (sids 0x80000901-0x80000905) ---------------------------------------------
+// The multitap manager, with no multitap connected. Each sid is one function
+// and the function number is ignored. As in Sony's module (multitap_manager
+// 3.01), the request words come back with the result written over one of them.
+class MtapServer final : public RpcServer {
+public:
+    MtapServer(uint32_t sid, uint16_t version) : RpcServer("MTAPMAN"), sid_(sid), version_(version) {}
+
+    void call(uint32_t, const uint8_t* d, uint32_t size, uint32_t, Reply reply) override {
+        std::vector<uint8_t> out(d, d + size);
+        out.resize(std::max<size_t>(out.size(), 12), 0);
+        auto set = [&](size_t word, int32_t v) { std::memcpy(out.data() + 4 * word, &v, 4); };
+        auto priority = [&](size_t word) {   // what IOP threads may take
+            const int32_t p = i32(out.data(), 4 * word);
+            return p >= 9 && p <= 123;
+        };
+        switch (sid_) {
+        case 0x80000901u: set(1, u32(out.data(), 0) < 4 ? 1 : 0); break;   // PortOpen(port): ports 0-3 open, multitap or not
+        case 0x80000902u: set(1, 1); break;                                 // PortClose(port)
+        case 0x80000903u: set(1, 0); break;                                 // GetConnection(port): no multitap
+        case 0x80000904u: set(2, priority(0) && priority(1) ? 1 : 0); break;   // ChangeThreadPriority(main, sif)
+        case 0x80000905u: set(0, version_); break;                          // GetModVersion: libmtap checks the major
+        default: break;
+        }
+        reply(std::move(out));
+    }
+
+private:
+    uint32_t sid_;
+    uint16_t version_;
+};
+
 // ---- services for modules without a protocol implementation -------------------------------
 class NullServer final : public RpcServer {
 public:
@@ -257,15 +291,17 @@ bool isServiceModule(const std::string& moduleName) {
     return false;
 }
 
-bool enableModuleServices(const std::string& moduleName) {
+bool enableModuleServices(const std::string& moduleName, uint16_t version) {
     const std::string n = toLower(moduleName);
     if (kSio2.count(n) || kMcman.count(n)) return true;   // drivers with no EE-visible service of their own
     if (kPad.count(n)) {
-        pad::enable();
+        pad::enable(version);
         return true;
     }
     if (kMtap.count(n)) {
-        addNull("MTAPMAN", {0x80000901u, 0x80000902u, 0x80000903u});
+        // 3.01 when the module's file gave no version (a BIOS module).
+        for (uint32_t sid = 0x80000901u; sid <= 0x80000905u; ++sid)
+            if (!hasServer(sid)) registerServer(sid, std::make_unique<MtapServer>(sid, version ? version : uint16_t(0x0301)));
         return true;
     }
     if (kMcserv.count(n)) {

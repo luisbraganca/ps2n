@@ -31,6 +31,7 @@ endfunction()
 ps2uc_program_test(control_flow)
 ps2uc_program_test(stripped STRIP)
 ps2uc_program_test(kernel)
+ps2uc_program_test(deci2)
 # Skip, stub, override and patch; --max-vsyncs turns an ignored skip into a failure instead of a hang.
 ps2uc_program_test(bindings SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/bindings_override.cpp" RUN_ARGS --max-vsyncs 100)
 

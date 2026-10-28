@@ -166,7 +166,7 @@ void startTask(Port& p, uint8_t task, uint8_t newId) {
 
 class PadServer final : public RpcServer {
 public:
-    PadServer(const char* name, bool newFormat) : RpcServer(name), newFormat_(newFormat) {}
+    PadServer(const char* name, bool newFormat, uint16_t version) : RpcServer(name), newFormat_(newFormat), version_(version) {}
     uint32_t bufferSize() const override { return 0x100; }
 
     void call(uint32_t, const uint8_t* d, uint32_t, uint32_t recvSize, Reply reply) override {
@@ -209,7 +209,7 @@ public:
         case OLD_GET_PORTMAX: result(12, 2); break;
         case CMD_GET_SLOTMAX:
         case OLD_GET_SLOTMAX: result(12, 1); break;
-        case CMD_GET_MODVER: result(12, 0x0306); break;
+        case CMD_GET_MODVER: result(12, version_); break;   // libpad compares the major with its own
         case CMD_SET_MMODE:
         case OLD_SET_MMODE: {
             const int32_t mode = rd(d, 12), lock = rd(d, 16);
@@ -280,6 +280,7 @@ private:
     }
 
     bool newFormat_;
+    uint16_t version_;
 };
 
 } // namespace
@@ -350,13 +351,14 @@ void reset() {
     g_statFrame = 0;
 }
 
-void enable() {
+void enable(uint16_t version) {
     if (hasServer(0x80000100u)) return;
+    if (!version) version = 0x0306;   // a BIOS module (rom0:XPADMAN) has no file to read it from
     // libpad2 / XPADMAN, and the original PADMAN; each binds a pair of sids.
-    registerServer(0x80000100u, std::make_unique<PadServer>("PADMAN", true));
-    registerServer(0x80000101u, std::make_unique<PadServer>("PADMAN", true));
-    registerServer(0x8000010Fu, std::make_unique<PadServer>("PADMAN (old)", false));
-    registerServer(0x8000011Fu, std::make_unique<PadServer>("PADMAN (old)", false));
+    registerServer(0x80000100u, std::make_unique<PadServer>("PADMAN", true, version));
+    registerServer(0x80000101u, std::make_unique<PadServer>("PADMAN", true, version));
+    registerServer(0x8000010Fu, std::make_unique<PadServer>("PADMAN (old)", false, version));
+    registerServer(0x8000011Fu, std::make_unique<PadServer>("PADMAN (old)", false, version));
 }
 
 void onVblank() {

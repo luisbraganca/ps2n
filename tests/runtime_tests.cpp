@@ -11,8 +11,10 @@
 #include "ps2/recomp.h"
 #include "stubs/format.h"
 
+#include "ps2uc/elf.h"
 #include "ps2uc/util.h"
 
+#include <array>
 #include <bit>
 #include <cfenv>
 #include <cfloat>
@@ -635,6 +637,112 @@ TEST_CASE(iop_reset_with_a_replacement_image) {
     CHECK_EQ(iop::moduleVersion("fileio"), 2300u);
     resetIop("rom0:UDNL rom0:EELOADCNF");                 // the BIOS's modules again
     CHECK_EQ(iop::moduleVersion("fileio"), 1000u);
+    fs::remove_all(dir);
+}
+
+TEST_CASE(iop_power_off_multitap_and_pad_services) {
+    reset();
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "ps2uc_services_test";
+    fs::create_directories(dir);
+    // All the runtime reads from a module it replaces is its IRX header: an
+    // ELF whose one program header points at the .iopmod data.
+    auto writeIrx = [&](const char* file, const char* name, uint16_t version) {
+        std::string irx(0x80, '\0');
+        auto put = [&](size_t off, uint32_t v, size_t n) { std::memcpy(irx.data() + off, &v, n); };
+        irx.replace(0, 7, "\x7f" "ELF\x01\x01\x01", 7);
+        put(16, ps2uc::elf::ET_SCE_IOPRELEXEC, 2);
+        put(18, ps2uc::elf::EM_MIPS, 2);
+        put(28, 52, 4);                                   // e_phoff
+        put(42, 32, 2);                                   // e_phentsize
+        put(44, 1, 2);                                    // e_phnum
+        put(52, ps2uc::elf::PT_SCE_IOPMOD, 4);
+        put(56, 84, 4);
+        put(84, 0xFFFFFFFFu, 4);                          // no module info in the image
+        put(84 + 24, version, 2);
+        irx.replace(84 + 26, std::strlen(name), name);
+        std::ofstream(dir / file, std::ios::binary) << irx;
+    };
+    writeIrx("MTAPMAN.IRX", "multitap_manager", 0x0302);
+    writeIrx("PADMAN.IRX", "padman", 0x0402);
+    g_opt.host0Dir = dir;
+    dmac::init();
+    dmac::setMask(5, true);
+    iop::init();
+
+    EeSif ee;
+    ee.iopCmd = iop::sifGetReg(2);
+    ee.send(0x80000002u, {EeSif::kPktBuf});
+    ee.send(0x80000002u, {0}, 0, 0, 0, 1);
+    ee.receive();                                         // SET_SREG
+    const uint32_t cd = 0x00400400, send = 0x00401000, recv = 0x00402000;
+    uint32_t rpcId = 1;
+    auto bind = [&](uint32_t sid, uint32_t& sd, uint32_t& buf) {
+        ee.send(0x80000009u, {4, 0x00400800, rpcId++, cd, sid});
+        const auto r = ee.receive();
+        sd = r[9];
+        buf = r[10];
+    };
+    auto call = [&](uint32_t sd, uint32_t buf, uint32_t fno, uint32_t ssize, uint32_t rsize) {
+        fillBytes(recv, 0xEE, 128);
+        ee.send(0x8000000Au, {4, 0x00400800, rpcId++, cd, fno, ssize, recv, rsize, 1, sd}, send, buf, ssize);
+        ee.receive();
+    };
+
+    // sceCdInit's power-off request: the server is there from start-up, and
+    // the call it gets is not answered.
+    uint32_t sd = 0, buf = 0;
+    bind(0x80000596u, sd, buf);
+    CHECK(sd != 0);
+    ee.send(0x8000000Au, {4, 0x00400800, rpcId++, cd, 1, 0, 0, 0, 1, sd});
+    CHECK(!(dmac::pending() & (1u << 5)));
+    CHECK_EQ(read32(EeSif::kPktBuf), 0u);
+
+    // Loading the game's MTAPMAN.IRX and PADMAN.IRX enables their services.
+    uint32_t lfSd = 0, lfBuf = 0;
+    bind(0x80000006u, lfSd, lfBuf);
+    auto loadModule = [&](const char* path) {
+        fillBytes(send, 0, 512);
+        writeBytes(send + 8, path, static_cast<uint32_t>(std::strlen(path)));
+        call(lfSd, lfBuf, 0, 512, 8);
+        return static_cast<int32_t>(read32(recv));
+    };
+    CHECK(loadModule("host0:MTAPMAN.IRX") > 0);
+    CHECK(loadModule("host0:PADMAN.IRX") > 0);
+
+    // libmtap 3.0 sends 128 bytes and reads the result from the reply;
+    // ps2sdk's libmtap sends {port} and reads 8 bytes.
+    std::array<uint32_t, 6> sds{}, bufs{};
+    for (uint32_t i = 1; i <= 5; ++i) bind(0x80000900u + i, sds[i], bufs[i]);
+    fillBytes(send, 0, 128);
+    call(sds[1], bufs[1], 1, 128, 128);                   // PortOpen(0)
+    CHECK_EQ(read32(recv + 4), 1u);
+    write32(send, 4);
+    call(sds[1], bufs[1], 1, 4, 8);                       // PortOpen(4): there is no port 4
+    CHECK_EQ(read32(recv), 4u);
+    CHECK_EQ(read32(recv + 4), 0u);
+    write32(send, 1);
+    call(sds[3], bufs[3], 1, 128, 128);                   // GetConnection(1): no multitap
+    CHECK_EQ(read32(recv + 4), 0u);
+    call(sds[2], bufs[2], 1, 128, 128);                   // PortClose(1)
+    CHECK_EQ(read32(recv + 4), 1u);
+    write32(send, 20);
+    write32(send + 4, 40);
+    call(sds[4], bufs[4], 1, 128, 128);                   // ChangeThreadPriority(20, 40)
+    CHECK_EQ(read32(recv + 8), 1u);
+    write32(send + 4, 8);
+    call(sds[4], bufs[4], 1, 128, 128);                   // 8 is not a priority modules may take
+    CHECK_EQ(read32(recv + 8), 0u);
+    call(sds[5], bufs[5], 1, 128, 128);                   // GetModVersion: the IRX's
+    CHECK_EQ(read32(recv), 0x0302u);
+
+    // libpad checks PADMAN's version too (command 0x12, the answer in word 3).
+    uint32_t padSd = 0, padBuf = 0;
+    bind(0x80000100u, padSd, padBuf);
+    fillBytes(send, 0, 128);
+    write32(send, 0x12);
+    call(padSd, padBuf, 1, 128, 128);
+    CHECK_EQ(read32(recv + 12), 0x0402u);
     fs::remove_all(dir);
 }
 

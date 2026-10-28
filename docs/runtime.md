@@ -47,7 +47,8 @@ separators, and the `;1` version suffix of ISO 9660 names is dropped.
 `rom0:ROMVER` reads the console's version string.
 
 **Output.** The game's console output (`printf` stubs, the `_print` syscall,
-the SIO debug port, FILEIO writes to `tty:`) goes to stdout. The runtime's own
+the SIO debug port, FILEIO writes to `tty:`, and the DECI2 TTY and `kputs`
+that Sony's libkernel prints through) goes to stdout. The runtime's own
 messages go to stderr as `[level:category] message`.
 
 **Video.** Built with SDL2 (found automatically; `-DPS2UC_WITH_SDL2=OFF` to
@@ -135,11 +136,20 @@ threads run on one host thread.
 | Video | `SetGsCrt` (NTSC/PAL timing, interlace), `GsGetIMR`, `GsPutIMR`, `SetVSyncFlag`, `Get/SetGsHParam`, `Get/SetGsVParam` |
 | SIF | `SifSetDma`, `SifDmaStat`, `SifSetDChain`, `SifSetReg`, `SifGetReg`, `SifStopDma` |
 | Configuration | `Get/SetOsdConfigParam` (English, 4:3), `Get/SetOsdConfigParam2`, `MachineType`, `PSMode` |
-| Program control | `Exit`, `ExecOSD` (exit), `LoadExecPS2` (starts another executable, see [Several executables](#several-executables); `rom0:` paths such as `rom0:OSDSYS` exit), `_print` (debug output), `SetSyscall` (ignored), `Deci2Call` |
+| Program control | `Exit`, `ExecOSD` (exit), `LoadExecPS2` (starts another executable, see [Several executables](#several-executables); `rom0:` paths such as `rom0:OSDSYS` exit), `_print` (debug output), `SetSyscall` (ignored), `Deci2Call` (see below) |
 
 Not implemented (reported, return 0): `ExecPS2`, event flags
 (`CreateEventFlag` and friends), the TLB entry calls, `SetCPUTimerHandler` and
 `SetCPUTimer`, and any syscall number not listed above.
+
+`Deci2Call` is the link to the debugger of development consoles. Sony's
+libkernel sends `printf` output through it: `sceTtyWrite` opens a socket for
+the TTY protocol, asks to send, and polls until the socket's handler has
+handed the packet over and been told it went out. The runtime plays the
+debugger's part when the game polls: it calls the handler with `DECI2_WRITE`
+until the whole packet has arrived, prints its text, then calls it with
+`DECI2_WRITEDONE`. `kputs` prints directly. Nothing ever arrives to be read,
+and sockets for other protocols are refused (reported).
 
 Interrupt handlers run nested on the interrupt stack, as on the real kernel,
 at safepoints (loop back-edges and syscalls). Thread switches happen when a
@@ -241,11 +251,12 @@ modules are host code:
 | FILEIO (`0x80000001`) | `open`, `close`, `read`, `write`, `lseek`, `remove`, `mkdir`, `rmdir`, `dopen`, `dclose`, `dread`, `getstat`, and `chstat` (accepted, no effect), over the host directories and the disc; `tty:` writes go to stdout. Others (`ioctl`, `format`, driver management) return -1 and are reported. The version query (function 255) answers the module release. Release 2100 (SDK 2.1) has its own `open` layout, a mode and a name of up to 1024 bytes; its `close`, `read`, `write` and `lseek` are the BIOS's, and its other calls are reported. Releases from 2200 on, whose replies are asynchronous, are not implemented: every call is reported. |
 | IOP heap (`0x80000003`) | `SifAllocIopHeap`, `SifFreeIopHeap`, `SifLoadIopHeap` |
 | LOADFILE (`0x80000006`) | module loading from a path or an IOP memory buffer, IOP memory peek/poke, search by name, the version query (the module release); stop and unload are refused (not removable). Loading an EE ELF through the IOP is reported. |
-| CDVDFSV (`0x80000592`, `0x80000593`, `0x80000595`, `0x80000597`, `0x8000059A`, `0x8000059C`) and the `cdvdman` library | resident from start-up, like on the console. See [Discs](#discs). |
-| PADMAN (`0x80000100`/`0x80000101`, and the original PADMAN's `0x8000010F`/`0x8000011F`) | a DualShock 2 in port 1: digital, analog and pressure-sensitive modes, actuator set-up, the per-frame data area libpad reads. See [Controllers](#controllers). |
+| CDVDFSV (`0x80000592`, `0x80000593`, `0x80000595`, `0x80000596`, `0x80000597`, `0x8000059A`, `0x8000059C`) and the `cdvdman` library | resident from start-up, like on the console. See [Discs](#discs). |
+| PADMAN (`0x80000100`/`0x80000101`, and the original PADMAN's `0x8000010F`/`0x8000011F`) | a DualShock 2 in port 1: digital, analog and pressure-sensitive modes, actuator set-up, the per-frame data area libpad reads. The version query answers the IRX version of the module the game loaded (3.06 when it is not a file), whose major libpad checks. See [Controllers](#controllers). |
 | XMCSERV / MCSERV (`0x80000400`) | both protocols. See [Memory cards](#memory-cards). |
 | `libsd` (IOP library) | the SPU2 without sound: registers keep what is written, voice transfers move data to and from a 2 MB sound memory and raise their completion interrupt, looping block transfers (streamed PCM) raise one per half buffer at the 48 kHz playback rate, voices report that they have finished. Sound drivers run; nothing is heard. |
-| MTAPMAN (`0x80000901`-`903`), SDRDRV (`0x80000701`) | null services: they bind, answer every call with zeros, and report it |
+| MTAPMAN (`0x80000901`-`905`) | no multitap connected: ports 0-3 open, `GetConnection` reports none, thread priorities in the valid range (9-123) are accepted, and the version query answers the IRX version of the module the game loaded (3.01 when it is not a file), whose major SDK 2.x's libmtap checks |
+| SDRDRV (`0x80000701`) | null service: it binds, answers every call with zeros, and reports it |
 
 #### Discs
 
@@ -262,9 +273,11 @@ new disc), `sceCdSearchFile`, `sceCdRead` into aligned or unaligned buffers
 `sceCdReadIOPMem`, `sceCdReadChain`, the streaming calls (`sceCdSt*`, with
 the ring buffer always reported full), `sceCdReadClock` (Japan time, like the
 console's clock; `--virtual-clock` starts it on 2001-07-04), and the S-command
-queries. EE reads finish before their RPC completes. IOP modules get the same
-from the `cdvdman` library; their reads finish a little after the call and
-raise the `sceCdCallback` callback, and `sceCdSync` waits for them.
+queries. EE reads finish before their RPC completes. SDK 2.x's `sceCdInit`
+also asks to be told when the power button is pressed (`0x80000596`); that
+call stays pending, as on a console nobody switches off. IOP modules get the
+same from the `cdvdman` library; their reads finish a little after the call
+and raise the `sceCdCallback` callback, and `sceCdSync` waits for them.
 
 Not covered: dual-layer DVDs (layer 1 is not searched), CD audio (reads
 return silence), raw-sector reads (`sceCdRead0`, `sceCdRV`), and the

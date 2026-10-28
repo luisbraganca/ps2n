@@ -2,11 +2,11 @@
 //
 // EE side: the RPC servers libcdvd binds. 0x80000592 init, 0x8000059A and
 // 0x8000059C disc ready, 0x80000593 S-commands (clock, disc type, status,
-// tray, ...), 0x80000595 N-commands (reads, seeks, streaming) and 0x80000597
-// file search. A read lands in EE memory before the reply, so the EE's
-// completion handler finds it in place; the unaligned head and tail that the
-// real server sends separately are written with the rest, and the packet for
-// them says there is nothing to copy.
+// tray, ...), 0x80000595 N-commands (reads, seeks, streaming), 0x80000596
+// power off and 0x80000597 file search. A read lands in EE memory before the
+// reply, so the EE's completion handler finds it in place; the unaligned head
+// and tail that the real server sends separately are written with the rest,
+// and the packet for them says there is nothing to copy.
 //
 // IOP side: the cdvdman library game modules import. Commands finish a little
 // after the call, as on the drive, then raise the sceCdCallback callback;
@@ -363,6 +363,22 @@ public:
     }
 };
 
+// The power button. SDK 2.x's sceCdInit calls function 1 without waiting, and
+// the server (cdvdfsv 2.16) answers when the button is pressed: libcdvd then
+// runs its power-off callback and calls again. There is no power button here,
+// so the call stays pending, as it does on a console that is left on.
+class PowerOffServer final : public RpcServer {
+public:
+    PowerOffServer() : RpcServer("CDVDFSV power off") {}
+    void call(uint32_t fno, const uint8_t*, uint32_t, uint32_t, Reply reply) override {
+        if (fno == 1) {
+            PS2_DEBUG("cdvd", "power-off notification requested; it stays pending");
+            return;
+        }
+        reply(words({1}));
+    }
+};
+
 // The request layout depends on its size: 0x124 (old libraries), 0x128 (with
 // the file's ISO flags), 0x12C (with a layer for sceCdLayerSearchFile). The
 // sceCdlFILE goes back to EE memory even when nothing is found, unchanged.
@@ -643,6 +659,7 @@ void registerServers() {
     registerServer(0x8000059Cu, std::make_unique<ReadyServer>());
     registerServer(0x80000593u, std::make_unique<SCmdServer>());
     registerServer(0x80000595u, std::make_unique<NCmdServer>());
+    registerServer(0x80000596u, std::make_unique<PowerOffServer>());
     registerServer(0x80000597u, std::make_unique<SearchServer>());
 }
 
