@@ -1,0 +1,3 @@
+boot: loading the next program
+next: strlen("abc") = 3
+next: after rewriting strlen: 98

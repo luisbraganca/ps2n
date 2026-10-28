@@ -52,6 +52,7 @@ extern uint64_t g_switchGeneration;
 constexpr uint32_t kTrampolineBase = 0x8FFF0000u;
 constexpr uint32_t kTrampThreadExit = kTrampolineBase + 0x00;   // a thread's entry function returned
 constexpr uint32_t kTrampHostReturn = kTrampolineBase + 0x10;   // nested callGuest() finished
+constexpr uint32_t kTrampExec = kTrampolineBase + 0x20;         // LoadExecPS2: start the next program
 constexpr uint32_t kTrampolineEnd = kTrampolineBase + 0x100;
 inline bool isTrampoline(uint32_t pc) { return pc >= kTrampolineBase && pc < kTrampolineEnd; }
 
@@ -66,6 +67,12 @@ constexpr uint32_t kKernelScratch = 0x00070000u;
 
 // dispatch.cpp
 void initDispatch(const GameInfo& game);
+// LoadExecPS2 loaded another executable: one of the game's recompiled
+// programs, or (null) one without recompiled code, known by its file name.
+void programLoaded(const GameInfo* program, const std::string& name);
+// The game invalidated the instruction cache, as it does after loading code
+// itself: recompiled code is checked against RAM before it runs again.
+void invalidateCompiledCode();
 void dispatch();                       // run guest code at cpu.pc once
 const FunctionInfo* findFunction(uint32_t pc);
 bool hasCompiledEntry(uint32_t pc);    // function start or resume point (with --interpret: a replaced function)
@@ -74,6 +81,13 @@ void writeMissingEntries();
 void requestExit(int code);
 // callGuest() with an explicit stack pointer (0 keeps the current $sp).
 uint64_t callGuestOnStack(uint32_t address, const uint64_t* args, int argCount, uint32_t stack);
+
+// runtime.cpp
+// LoadExecPS2: loads the executable at the PS2 path argv[0] to replace the
+// running program. The switch happens in the dispatcher, once every host frame
+// has unwound (cpu.pc is kTrampExec). False if it cannot be loaded.
+bool requestExec(std::vector<std::string> argv);
+void startPendingProgram();
 
 // interpreter.cpp
 void interpret();                      // from cpu.pc until compiled code takes over

@@ -10,6 +10,8 @@
 #include "log.h"
 #include "stubs/format.h"
 
+#include "ps2uc/util.h"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -85,6 +87,7 @@ bool g_dispatchDisabled = false;
 uint32_t g_heapStart = 0, g_heapEnd = 0;
 uint32_t g_vsyncFlagAddr = 0, g_vsyncCsrAddr = 0;
 uint32_t g_osdConfig = 0;
+std::vector<std::string> g_argv;   // what SetupThread hands the main thread
 
 // TLB entries as the game set them. The memory map always follows the
 // default layout (which is what ps2sdk's crt0 and Sony's kernel install), so
@@ -397,14 +400,10 @@ void sysSetupThread() {
     t.gp = gp;
 
     if (argsAddr) {   // struct sargs { int32 argc; char *argv[16]; char payload[256]; }
-        std::vector<std::string> argv;
-        argv.push_back("host:" + g_opt.elfPath.filename().string());
-        for (const auto& a : g_opt.guestArgs) argv.push_back(a);
-        if (argv.size() > 16) argv.resize(16);
         uint32_t payload = argsAddr + 4 + 16 * 4, used = 0;
         uint32_t argc = 0;
-        for (const auto& a : argv) {
-            if (used + a.size() + 1 > 256) break;
+        for (const auto& a : g_argv) {
+            if (argc == 16 || used + a.size() + 1 > 256) break;
             write32(argsAddr + 4 + 4 * argc, payload + used);
             writeBytes(payload + used, a.c_str(), static_cast<uint32_t>(a.size() + 1));
             used += static_cast<uint32_t>(a.size() + 1);
@@ -624,6 +623,18 @@ void sysProbeTlbEntry() {
 }
 
 // ---- misc -----------------------------------------------------------------------------
+// LoadExecPS2(path, argc, argv): another executable replaces the program, with
+// the path as its argv[0]. rom0: paths (rom0:OSDSYS, the browser) leave the game.
+void sysLoadExecPS2() {
+    std::vector<std::string> argv{readCString(arg(0))};
+    for (int32_t i = 0; i < sarg(1) && argv.size() < 16; ++i) argv.push_back(readCString(read32(arg(2) + 4 * static_cast<uint32_t>(i))));
+    if (ps2uc::startsWith(ps2uc::toLower(argv[0]), "rom0:")) {
+        PS2_INFO("kernel", "LoadExecPS2(\"%s\"): leaving the game", argv[0].c_str());
+        return requestExit(0);
+    }
+    if (!requestExec(std::move(argv))) requestExit(1);   // the console would be stuck in its loader
+}
+
 void sysUnimplemented(int32_t n) {
     char key[96];
     std::snprintf(key, sizeof key, "syscall %d (%s)", n, syscallName(n));
@@ -641,11 +652,7 @@ void dispatchSyscall(int32_t n) {
         PS2_INFO("kernel", "Exit(%d)", sarg(0));
         requestExit(sarg(0));
         break;
-    case 0x06:                                                      // LoadExecPS2
-        PS2_WARN("kernel", "LoadExecPS2(\"%s\") is not supported: recompile the other ELF and run it separately",
-                 readCString(arg(0)).c_str());
-        requestExit(0);
-        break;
+    case 0x06: sysLoadExecPS2(); break;
     case 0x07: sysUnimplemented(n); break;                          // ExecPS2
     case 0x18: case 0xFC: case -0x1E: case -0xFD: sysSetAlarm(); break;
     case 0x19: case 0xFE: case -0x1F: case -0xFF: sysReleaseAlarm(); break;
@@ -694,7 +701,10 @@ void dispatchSyscall(int32_t n) {
     case 0x60: ret(0); break;                                       // KSeg0
     case 0x61: case 0x62: ret(0); break;                            // EnableCache / DisableCache
     case 0x63: case -0x67: ret(static_cast<int32_t>(cop0Read(arg(0)))); break;   // GetCop0
-    case 0x64: case -0x68: ret(0); break;                           // FlushCache
+    case 0x64: case -0x68:                                          // FlushCache, iFlushCache
+        if (arg(0) == 2 || arg(0) == 3) invalidateCompiledCode();   // INVALIDATE_ICACHE, INVALIDATE_CACHE
+        ret(0);
+        break;
     case 0x66: case -0x6A: ret(0); break;                           // CpuConfig
     case 0x6B: ret(0); break;                                       // SifStopDma
     case 0x6C: case 0x6D: sysUnimplemented(n); break;               // SetCPUTimerHandler / SetCPUTimer
@@ -830,6 +840,7 @@ const char* syscallName(int32_t n) {
     case 0x5A: return "Copy";
     case 0x5B: return "GetEntryAddress";
     case 0x64: return "FlushCache";
+    case -0x68: return "iFlushCache";
     case 0x6C: return "SetCPUTimerHandler";
     case 0x6D: return "SetCPUTimer";
     case 0x70: return "GsGetIMR";
@@ -852,13 +863,20 @@ const char* syscallName(int32_t n) {
 } // namespace
 
 // ---- public kernel API ------------------------------------------------------------------
-void init(uint32_t entry) {
+void init(uint32_t entry, std::vector<std::string> argv) {
+    for (auto& a : g_alarms)
+        if (a.used) cancelEvent(a.event);   // a stale event would fire the next program's alarm in that slot
     for (auto& t : g_threads) t = Thread{};
     for (auto& s : g_semas) s = Sema{};
     for (auto& a : g_alarms) a = Alarm{};
     for (auto& t : g_tlb) t = TlbEntry{};
     for (auto& l : g_intcHandlers) l.clear();
     for (auto& l : g_dmacHandlers) l.clear();
+    g_needResched = g_dispatchDisabled = false;
+    g_interruptDepth = 0;
+    g_heapStart = g_heapEnd = 0;
+    g_vsyncFlagAddr = g_vsyncCsrAddr = 0;
+    g_argv = std::move(argv);
     g_osdConfig = 1u << 16;   // English, 4:3, RGB
     // The program starts in thread 1 (thread 0 is the kernel's idle thread).
     Thread& main = g_threads[1];
@@ -974,7 +992,8 @@ void syscall(uint32_t pc) {
                  ru32(regs::A1), ru32(regs::A2), pc);
     clockAdvance(kernel::kSyscallCycles);
     if (!kernel::handleInterruptSyscall(n)) kernel::dispatchSyscall(n);
-    if (g_exitRequested || !kernel::hasRunningThread()) return;
+    // A LoadExecPS2 (kTrampExec) waits for the frames to unwind: the old program does no more work.
+    if (g_exitRequested || !kernel::hasRunningThread() || cpu.pc == kTrampExec) return;
     runDueEvents();
     iop::sync();
     kernel::serviceInterrupts();

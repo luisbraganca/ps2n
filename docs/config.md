@@ -31,6 +31,7 @@ General rules:
 | `elf` | path | required | The EE executable (`SLUS_123.45`, `SCES_...`, a homebrew `.elf`). IRX modules are rejected: they are IOP code (see `ps2-uncompiler irx`). |
 | `ghidra_map` | path | none | A function map, usually written by [tools/ghidra/ExportPs2ucFunctions.java](../tools/ghidra/ExportPs2ucFunctions.java). |
 | `map_files` | array of paths | `[]` | More function maps, same format. |
+| `programs` | array of paths | `[]` | The game's other executables, which it starts with `LoadExecPS2`: each an ELF, or a config file (`.toml`) for that ELF. See [Games with several executables](#games-with-several-executables). |
 
 ### Function maps
 
@@ -49,6 +50,34 @@ Addresses are hexadecimal with or without `0x`, and may carry a Ghidra space
 prefix (`ram:00100230`). Lines starting with `#` are ignored and fields may be
 quoted. This covers the bundled Ghidra script, PS2Recomp's exporter, and
 Ghidra's own *Functions* and *Symbol Table* window exports.
+
+### Games with several executables
+
+Many games are more than one ELF: a small boot program, the one `SYSTEM.CNF`
+names, starts the game proper with `LoadExecPS2`, and further executables
+(game modes, a movie player) start each other the same way. List them in the
+boot program's config and they are recompiled into the same executable:
+
+```toml
+[input]
+elf = "SLES_505.39"                                     # the boot program
+programs = ["ACTION.UK", "driving.toml", "MOVIE.ELF"]
+```
+
+An entry is an ELF, recompiled with the default settings, or a config file
+for that ELF when it needs settings of its own: its `[analysis]` (its own
+`entries_files`, for example), `[stubs]`, `[functions]` and `[[patches]]`
+apply, and its `[output] extra_sources` are built too. The rest of its
+`[output]` comes from the boot program's config. Each program's code goes to a
+folder of the output named after its ELF file (`ACTION_UK/`).
+
+At run time `LoadExecPS2` loads the file the game names, from the disc or
+`host:`, and runs the code recompiled from that very file, recognised by its
+CRC-32. A program the game loads by itself and jumps into is recognised too,
+once its instructions are all found in RAM. An executable that is not listed,
+or whose file changed since it was recompiled, runs on the interpreter
+instead, with a warning. See [runtime.md](runtime.md#several-executables) for
+what carries over.
 
 ## `[output]`
 
@@ -210,6 +239,7 @@ recompile stops with `patch at 0x00100abc expects 0x0c040000 but the ELF has
 | Option | Overrides |
 |---|---|
 | `--elf PATH` | `[input] elf` |
+| `--program PATH` | adds to `[input] programs` (repeatable) |
 | `--out DIR` | `[output] dir` |
 | `--name NAME` | `[output] name` |
 | `--files N` | `[output] files` (and selects multi mode) |

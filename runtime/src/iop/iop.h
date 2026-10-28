@@ -25,6 +25,14 @@ namespace ps2::iop {
 constexpr uint32_t kIopRamSize = 2u << 20;
 
 void init();
+// LoadExecPS2: the IOP restarts with only its resident services, as the BIOS
+// reboots it before loading the next executable. The disc stays inserted.
+void reboot();
+// The SDK release a module on the IOP ("fileio", "loadfile") reports to the
+// EE libraries' version queries: 1000 for the BIOS's, or what the replacement
+// image the game rebooted the IOP with (IOPRPxxx.IMG) gives it, such as 2140.
+// FILEIO's request layouts depend on it.
+uint32_t moduleVersion(const std::string& module);
 uint8_t* ramPtr(uint32_t offset);
 
 // ---- time ------------------------------------------------------------------------------------

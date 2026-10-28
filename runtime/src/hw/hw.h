@@ -36,6 +36,8 @@ void raiseIntc(int cause);
 uint32_t intcPending();       // I_STAT & I_MASK
 void ackIntc(int cause);
 void setIntcMask(int cause, bool enabled);
+// Clears the INTC and DMAC interrupt status and masks (a new program starts).
+void resetInterrupts();
 
 // DMAC
 uint32_t dmacPending();       // channels with CIS and CIM set

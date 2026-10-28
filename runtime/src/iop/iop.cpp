@@ -18,8 +18,11 @@
 #include "log.h"
 #include "ps2/memory.h"
 
+#include "ps2uc/util.h"
+
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <map>
@@ -53,6 +56,8 @@ std::array<uint32_t, 32> g_iopSregs{};
 uint32_t g_mainAddr = 0, g_msflag = 0, g_smflag = 0;
 std::map<uint32_t, uint32_t> g_sysregs;   // SIF_SYSREG_* (0x8000000x) storage
 bool g_rebootPending = false;
+constexpr uint32_t kBiosModuleVersion = 1000;
+std::map<std::string, uint32_t> g_moduleVersions;   // from the replacement image of the last IOP reset
 uint32_t g_eeCmdBuffer = 0;              // EE address of its receive buffer
 uint32_t g_dmaId = 1;
 uint64_t g_iopTime = 0;                  // EE cycles the IOP has caught up to
@@ -212,6 +217,38 @@ void handleOtherData(const uint8_t* pkt) {
 
 void resetIop();
 
+// The SDK release of each module in the replacement images of a reset
+// command ("rom0:UDNL cdrom0:\MODULES\IOPRP214.IMG;1"). Each module in an
+// image carries a 16-byte id, its name padded to 8 characters and its
+// release: "PsIIfileio  2140". An image without ids gives its release in its
+// name instead (IOPRP214 is 2140, IOPRP23 is 2300).
+std::map<std::string, uint32_t> imageModuleVersions(const std::string& resetArg) {
+    std::map<std::string, uint32_t> versions;
+    const std::vector<std::string> words = ps2uc::split(resetArg.c_str(), ' ');
+    for (size_t w = 1; w < words.size(); ++w) {   // words[0] is the loader, rom0:UDNL
+        const std::string& path = words[w];
+        if (path.empty() || ps2uc::startsWith(ps2uc::toLower(path), "rom0:")) continue;   // the BIOS's own (rom0:EELOADCNF)
+        std::vector<uint8_t> image;
+        if (!hostfs::readWholeFile(path, image)) PS2_WARN("iop", "cannot read the IOP replacement image %s", path.c_str());
+        bool ids = false;
+        for (size_t i = 0; i + 16 <= image.size(); ++i) {
+            const char* id = reinterpret_cast<const char*>(image.data() + i);
+            if (std::memcmp(id, "PsII", 4) != 0) continue;
+            if (!std::all_of(id + 4, id + 12, [](char c) { return c >= 0x20 && c < 0x7F; })) continue;
+            if (!std::all_of(id + 12, id + 16, [](char c) { return c >= '0' && c <= '9'; }) || id[12] == '0') continue;
+            versions.emplace(ps2uc::toLower(ps2uc::trim(std::string_view(id + 4, 8))), static_cast<uint32_t>(std::stoul(std::string(id + 12, 4))));
+            ids = true;
+        }
+        unsigned n = 0;
+        const std::string name = ps2uc::toUpper(path.substr(path.find_last_of(":\\/") + 1));
+        if (!ids && std::sscanf(name.c_str(), "IOPRP%u", &n) == 1 && n >= 10 && n < 1000) {
+            versions.emplace("fileio", n < 100 ? n * 100 : n * 10);
+            versions.emplace("loadfile", n < 100 ? n * 100 : n * 10);
+        }
+    }
+    return versions;
+}
+
 void handleCommand(uint32_t pktAddr) {
     const uint8_t* pkt = mem::ram() + pktAddr;
     const uint32_t cid = rd32(pkt + 8), opt = rd32(pkt + 12);
@@ -239,6 +276,9 @@ void handleCommand(uint32_t pktAddr) {
         std::string arg(reinterpret_cast<const char*>(pkt + 24), std::min<uint32_t>(argLen, 80));
         PS2_INFO("iop", "IOP reset requested (\"%s\")", arg.c_str());
         resetIop();
+        g_moduleVersions = imageModuleVersions(arg);
+        if (!g_moduleVersions.empty())
+            PS2_INFO("iop", "replacement image: FILEIO release %u, LOADFILE release %u", moduleVersion("fileio"), moduleVersion("loadfile"));
         g_toEe.clear();
         g_eeCmdBuffer = 0;
         g_rebootPending = true;   // completes when the EE next polls SMFLAG
@@ -281,6 +321,7 @@ void initIopState() {
     g_rpcQueues.clear();
     g_unserved.clear();
     g_iopSregs.fill(0);
+    g_moduleVersions.clear();   // the BIOS's modules, until a reset names a replacement image
     // The SIF command buffer the EE writes into belongs to the kernel area.
     registerBuiltinServers();
 }
@@ -295,6 +336,15 @@ void resetIop() {
 void init() {
     pad::init();
     disc::insert(g_opt.cdrom);
+    reboot();
+}
+
+uint32_t moduleVersion(const std::string& module) {
+    const auto it = g_moduleVersions.find(module);
+    return it == g_moduleVersions.end() ? kBiosModuleVersion : it->second;
+}
+
+void reboot() {
     initIopState();
     g_mainAddr = g_msflag = 0;
     g_smflag = SIF_STAT_SIFINIT | SIF_STAT_CMDINIT | SIF_STAT_BOOTEND;
@@ -303,7 +353,7 @@ void init() {
     g_eeCmdBuffer = 0;
     g_toEe.clear();
     g_dmaId = 1;
-    g_iopTime = 0;
+    g_iopTime = nowCycles();
 }
 
 uint8_t* ramPtr(uint32_t offset) { return mem::ram() + (offset & (kIopRamSize - 1)); }

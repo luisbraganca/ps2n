@@ -6,6 +6,7 @@
 #include "hw/hw.h"
 #include "hw/vif.h"
 #include "internal.h"
+#include "iop/hostfs.h"
 #include "iop/iop.h"
 #include "kernel/kernel.h"
 #include "log.h"
@@ -20,7 +21,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <optional>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32)
 #include <fcntl.h>
@@ -146,6 +149,34 @@ std::filesystem::path findElf(const char* argv0, const GameInfo& game) {
     return p;
 }
 
+// Whether every loadable segment of the ELF fits in RAM.
+bool fitsInRam(const ElfFile& image) {
+    for (const ElfSegment& s : image.segments) {
+        if (s.type != elf::PT_LOAD) continue;
+        const uint32_t phys = toPhysical(s.vaddr);
+        if (phys >= kRamSize || s.memsz > kRamSize - phys || s.filesz > s.memsz) {
+            PS2_ERROR("runtime", "%s: segment at 0x%08x (0x%x bytes) does not fit in RAM", image.name().c_str(), s.vaddr, s.memsz);
+            return false;
+        }
+    }
+    return true;
+}
+
+// Copies the ELF's segments into RAM, then applies the program's [[patches]]:
+// the recompiled code has them built in, RAM needs them for the interpreter
+// and for code that reads its own instructions.
+void loadImage(const ElfFile& image, const GameInfo* program) {
+    for (const ElfSegment& s : image.segments) {
+        if (s.type != elf::PT_LOAD) continue;
+        const uint32_t phys = toPhysical(s.vaddr);
+        std::memcpy(ram + phys, image.bytes().data() + s.offset, s.filesz);
+        std::memset(ram + phys + s.filesz, 0, s.memsz - s.filesz);
+    }
+    if (!program) return;
+    for (size_t i = 0; i < program->patchCount; ++i) write32(program->patches[i].address, program->patches[i].value);
+    if (program->patchCount) PS2_INFO("runtime", "applied %zu instruction patch(es) from the config", program->patchCount);
+}
+
 bool loadElf(const GameInfo& game) {
     try {
         const ElfFile image = ElfFile::load(g_opt.elfPath);
@@ -155,26 +186,37 @@ bool loadElf(const GameInfo& game) {
                      g_opt.elfPath.string().c_str(), image.crc32(), game.elfCrc32);
         if (image.entry != game.entry)
             PS2_WARN("runtime", "ELF entry point 0x%08x differs from the recompiled one (0x%08x)", image.entry, game.entry);
-        for (const ElfSegment& s : image.segments) {
-            if (s.type != elf::PT_LOAD) continue;
-            const uint32_t phys = toPhysical(s.vaddr);
-            if (phys >= kRamSize || s.memsz > kRamSize - phys) {
-                PS2_ERROR("runtime", "segment at 0x%08x (0x%x bytes) does not fit in RAM", s.vaddr, s.memsz);
-                return false;
-            }
-            std::memcpy(ram + phys, image.bytes().data() + s.offset, s.filesz);
-            std::memset(ram + phys + s.filesz, 0, s.memsz - s.filesz);
-        }
-        // The recompiled code already has the patches built in; RAM needs them
-        // for the interpreter and for code that reads its own instructions.
-        for (size_t i = 0; i < game.patchCount; ++i) write32(game.patches[i].address, game.patches[i].value);
+        if (!fitsInRam(image)) return false;
         PS2_INFO("runtime", "loaded %s (entry 0x%08x)", g_opt.elfPath.string().c_str(), image.entry);
-        if (game.patchCount) PS2_INFO("runtime", "applied %zu instruction patch(es) from the config", game.patchCount);
+        loadImage(image, &game);
         return true;
     } catch (const std::exception& e) {
         PS2_ERROR("runtime", "cannot load ELF %s: %s", g_opt.elfPath.string().c_str(), e.what());
         return false;
     }
+}
+
+// The boot program's arguments, as SetupThread hands them over.
+std::vector<std::string> bootArgv() {
+    std::vector<std::string> argv{"host:" + g_opt.elfPath.filename().string()};
+    argv.insert(argv.end(), g_opt.guestArgs.begin(), g_opt.guestArgs.end());
+    return argv;
+}
+
+// A LoadExecPS2 waiting for the old program's host frames to unwind.
+struct PendingExec {
+    ElfFile image;
+    const GameInfo* program;            // null: no recompiled code for it
+    std::string name;                   // its file name, for logs and its missing-entries file
+    std::vector<std::string> argv;
+};
+std::optional<PendingExec> g_pendingExec;
+
+// "cdrom0:\DATA\MAIN.ELF;1" -> "MAIN.ELF"
+std::string fileNameOf(std::string_view path) {
+    if (const auto semi = path.rfind(';'); semi != std::string_view::npos) path = path.substr(0, semi);
+    if (const auto cut = path.find_last_of(":\\/"); cut != std::string_view::npos) path = path.substr(cut + 1);
+    return std::string(path);
 }
 
 void mainLoop() {
@@ -246,6 +288,67 @@ void runGuestThread(void (*fn)()) {
 
 } // namespace
 
+bool requestExec(std::vector<std::string> argv) {
+    const std::string path = argv[0];
+    std::vector<uint8_t> bytes;
+    if (!iop::hostfs::readWholeFile(path, bytes)) {
+        PS2_ERROR("runtime", "LoadExecPS2(\"%s\"): cannot read the file (see --cdrom and --host0)", path.c_str());
+        return false;
+    }
+    std::string name = fileNameOf(path);
+    try {
+        ElfFile image = ElfFile::parse(std::move(bytes), name);
+        if (image.type != elf::ET_EXEC || !fitsInRam(image)) {
+            PS2_ERROR("runtime", "LoadExecPS2(\"%s\"): not an EE executable", path.c_str());
+            return false;
+        }
+        // Recompiled code runs only for the very file it was made from.
+        const GameInfo* program = nullptr;
+        bool sameName = false;
+        for (size_t i = 0; i <= g_game->programCount && !program; ++i) {
+            const GameInfo* p = i == 0 ? g_game : g_game->programs[i - 1];
+            if (p->elfCrc32 == image.crc32()) program = p;
+            else if (ps2uc::toLower(std::filesystem::path(p->defaultElf).filename().string()) == ps2uc::toLower(name)) sameName = true;
+        }
+        if (!program && sameName)
+            PS2_FALLBACK("runtime", "interpreted program " + name,
+                         "LoadExecPS2(\"%s\"): %s is not the file its code was recompiled from; interpreting it", path.c_str(), name.c_str());
+        else if (!program)
+            PS2_FALLBACK("runtime", "interpreted program " + name,
+                         "LoadExecPS2(\"%s\"): %s has no recompiled code; interpreting it (list it in [input] programs and recompile)",
+                         path.c_str(), name.c_str());
+        g_pendingExec = PendingExec{std::move(image), program, std::move(name), std::move(argv)};
+    } catch (const std::exception& e) {
+        PS2_ERROR("runtime", "LoadExecPS2(\"%s\"): %s", path.c_str(), e.what());
+        return false;
+    }
+    cpu.pc = kTrampExec;   // every host frame unwinds; the dispatcher then calls startPendingProgram()
+    return true;
+}
+
+void startPendingProgram() {
+    if (!g_pendingExec) {
+        PS2_ERROR("runtime", "reached the LoadExecPS2 trampoline with no program to start");
+        requestExit(1);
+        return;
+    }
+    PendingExec next = std::move(*g_pendingExec);
+    g_pendingExec.reset();
+    PS2_INFO("runtime", "LoadExecPS2: starting %s (%s), entry 0x%08x", next.name.c_str(), next.program ? "recompiled" : "interpreted",
+             next.image.entry);
+    // As on the console, the kernel drops the old program's threads, handlers
+    // and pending interrupts, and the BIOS reboots the IOP before it loads the
+    // next executable. Memory, the GS and the VUs keep their contents.
+    hw::resetInterrupts();
+    iop::reboot();
+    loadImage(next.image, next.program);
+    cpu = Cpu{};
+    initCop0();
+    programLoaded(next.program, next.name);
+    kernel::init(next.image.entry, std::move(next.argv));
+    ++g_switchGeneration;
+}
+
 int run(int argc, char** argv, const GameInfo& game) {
 #if defined(_WIN32)
     // Guest output is a byte stream; text mode would turn every "\n" into "\r\n".
@@ -265,7 +368,7 @@ int run(int argc, char** argv, const GameInfo& game) {
     iop::init();
     video::init();
     initDispatch(game);
-    kernel::init(game.entry);
+    kernel::init(game.entry, bootArgv());
     hw::startVsync();
 
     std::signal(SIGINT, onInterruptSignal);

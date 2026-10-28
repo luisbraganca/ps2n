@@ -11,6 +11,8 @@
 #include "ps2/recomp.h"
 #include "stubs/format.h"
 
+#include "ps2uc/util.h"
+
 #include <bit>
 #include <cfenv>
 #include <cfloat>
@@ -542,6 +544,100 @@ TEST_CASE(iop_sif_rpc_fileio_and_loadfile) {
     fs::remove_all(dir);
 }
 
+TEST_CASE(iop_reset_with_a_replacement_image) {
+    reset();
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "ps2uc_ioprp_test";
+    fs::create_directories(dir);
+    // All the runtime reads from a replacement image are its modules' ids.
+    std::string image(0x400, '\0');
+    image.replace(0x100, 16, "PsIIfileio  2140");
+    image.replace(0x200, 16, "PsIIloadfile2140");
+    std::ofstream(dir / "IOPRP214.IMG", std::ios::binary) << image;
+    std::ofstream(dir / "IOPRP23.IMG", std::ios::binary) << std::string(0x40, '\0');   // no ids: its name tells
+    std::ofstream(dir / "data.txt") << "hello from the host";
+    g_opt.host0Dir = dir;
+    dmac::init();
+    dmac::setMask(5, true);
+    iop::init();
+    CHECK_EQ(iop::moduleVersion("fileio"), 1000u);   // the BIOS's modules
+
+    EeSif ee;
+    const uint32_t cd = 0x00400400, send = 0x00401000, recv = 0x00402000;
+    uint32_t rpcId = 1;
+    // SifIopReset: the reset command, SMFLAG polled until the IOP is back, SIF set up again.
+    auto resetIop = [&](const std::string& arg) {
+        std::vector<uint32_t> body{static_cast<uint32_t>(arg.size() + 1), 0};
+        std::string bytes = arg;
+        bytes.resize((arg.size() + 4) & ~size_t(3), '\0');
+        for (size_t i = 0; i < bytes.size(); i += 4) {
+            uint32_t w;
+            std::memcpy(&w, bytes.data() + i, 4);
+            body.push_back(w);
+        }
+        ee.iopCmd = iop::sifGetReg(2);
+        ee.send(0x80000003u, body);
+        CHECK(iop::sifGetReg(4) & 0x40000);              // SIF_STAT_BOOTEND
+        ee.send(0x80000002u, {EeSif::kPktBuf});
+        ee.send(0x80000002u, {0}, 0, 0, 0, 1);
+        ee.receive();                                     // SET_SREG
+    };
+    auto bind = [&](uint32_t sid, uint32_t& sd, uint32_t& buf) {
+        ee.send(0x80000009u, {4, 0x00400800, rpcId++, cd, sid});
+        const auto r = ee.receive();
+        sd = r[9];
+        buf = r[10];
+    };
+    auto call = [&](uint32_t sd, uint32_t buf, uint32_t fno, uint32_t ssize, uint32_t rsize) {
+        fillBytes(recv, 0, 16);
+        ee.send(0x8000000Au, {4, 0x00400800, rpcId++, cd, fno, ssize, recv, rsize, 1, sd}, send, buf, ssize);
+        ee.receive();
+    };
+
+    resetIop("rom0:UDNL host0:IOPRP214.IMG");
+    CHECK_EQ(iop::moduleVersion("fileio"), 2140u);
+    CHECK_EQ(iop::moduleVersion("loadfile"), 2140u);
+    uint32_t sd = 0, buf = 0;
+    bind(0x80000001u, sd, buf);
+    call(sd, buf, 255, 0, 4);                             // the version query SDK 2.x's libraries check
+    CHECK(std::memcmp(ram + recv, "2140", 4) == 0);
+    call(sd, buf, 255, 0, 8);
+    CHECK(std::memcmp(ram + recv, "2140....", 8) == 0);
+
+    // open in SDK 2.1's layout, {flags, mode, name}; read and close are unchanged.
+    const char* path = "host0:data.txt";
+    fillBytes(send, 0, 64);
+    write32(send, 1);                                     // O_RDONLY
+    writeBytes(send + 8, path, static_cast<uint32_t>(std::strlen(path)));
+    call(sd, buf, 0, 8 + static_cast<uint32_t>(std::strlen(path)) + 1, 4);
+    const auto fd = static_cast<int32_t>(read32(recv));
+    CHECK(fd >= 3);
+    const uint32_t dest = 0x00403000, fixup = 0x00403100;
+    fillBytes(fixup, 0xEE, 16);
+    write32(send, static_cast<uint32_t>(fd));
+    write32(send + 4, dest);
+    write32(send + 8, 5);
+    write32(send + 12, fixup);
+    call(sd, buf, 2, 16, 4);
+    CHECK_EQ(read32(recv), 5u);
+    CHECK(std::memcmp(ram + dest, "hello", 5) == 0);
+    CHECK_EQ(read32(fixup), 0u);                          // the fix-up packet: no head bytes to copy
+    write32(send, static_cast<uint32_t>(fd));
+    call(sd, buf, 1, 4, 4);
+    CHECK_EQ(read32(recv), 0u);
+
+    uint32_t lfSd = 0, lfBuf = 0;
+    bind(0x80000006u, lfSd, lfBuf);
+    call(lfSd, lfBuf, 255, 0, 4);
+    CHECK(std::memcmp(ram + recv, "2140", 4) == 0);
+
+    resetIop("rom0:UDNL host0:IOPRP23.IMG");
+    CHECK_EQ(iop::moduleVersion("fileio"), 2300u);
+    resetIop("rom0:UDNL rom0:EELOADCNF");                 // the BIOS's modules again
+    CHECK_EQ(iop::moduleVersion("fileio"), 1000u);
+    fs::remove_all(dir);
+}
+
 TEST_CASE(disc_iso9660_from_a_directory_and_an_image) {
     namespace disc = iop::disc;
     namespace fs = std::filesystem;
@@ -626,6 +722,58 @@ TEST_CASE(disc_iso9660_from_a_directory_and_an_image) {
     disc::eject();
     fs::remove_all(dir);
     fs::remove(iso);
+}
+
+namespace {
+void noop() {}
+uint32_t checksumOf(const uint32_t* words, size_t count) {
+    ps2uc::CodeChecksum sum;
+    for (size_t i = 0; i < count; ++i) sum.add(words[i]);
+    return sum.value;
+}
+void writeWords(uint32_t addr, const uint32_t* words, size_t count) {
+    for (size_t i = 0; i < count; ++i) write32(addr + 4 * static_cast<uint32_t>(i), words[i]);
+}
+} // namespace
+
+TEST_CASE(dispatch_checks_programs_against_ram) {
+    // Two programs the game may load by itself at the same address, two functions each.
+    static const uint32_t kX[] = {0x24020001u, 0x03e00008u, 0x24030002u, 0x03e00008u};
+    static const uint32_t kY[] = {0x24020005u, 0x03e00008u, 0x24030006u, 0x03e00008u};
+    static const FunctionInfo bootFns[] = {{0x00100000u, 0x00100008u, &noop, "boot_main", false, 0}};
+    static const FunctionInfo xFns[] = {{0x00200000u, 0x00200008u, &noop, "x_a", false, checksumOf(kX, 2)},
+                                        {0x00200008u, 0x00200010u, &noop, "x_b", false, checksumOf(kX + 2, 2)}};
+    static const FunctionInfo yFns[] = {{0x00200000u, 0x00200008u, &noop, "y_a", false, checksumOf(kY, 2)},
+                                        {0x00200008u, 0x00200010u, &noop, "y_b", false, checksumOf(kY + 2, 2)}};
+    static const GameInfo x = {"x", "X.ELF", 0, 0x00200000u, xFns, 2, nullptr, 0, "test", nullptr, 0, nullptr, 0};
+    static const GameInfo y = {"y", "Y.ELF", 0, 0x00200000u, yFns, 2, nullptr, 0, "test", nullptr, 0, nullptr, 0};
+    static const GameInfo* const others[] = {&x, &y};
+    static const GameInfo boot = {"boot", "BOOT.ELF", 0, 0x00100000u, bootFns, 1, nullptr, 0, "test", nullptr, 0, others, 2};
+    initDispatch(boot);
+    CHECK(hasCompiledEntry(0x00100000u));                // loaded by the runtime: no check needed
+
+    // Half of each program: neither is in RAM as a whole, so neither runs.
+    writeWords(0x00200000u, kX, 2);
+    writeWords(0x00200008u, kY + 2, 2);
+    invalidateCompiledCode();
+    CHECK(!hasCompiledEntry(0x00200000u));
+    CHECK(!hasCompiledEntry(0x00200008u));
+
+    writeWords(0x00200000u, kX, 4);                      // the game loads X and jumps into it
+    invalidateCompiledCode();
+    CHECK(hasCompiledEntry(0x00200000u));
+    CHECK(findFunction(0x00200008u) == &xFns[1]);        // X is the running program now
+
+    writeWords(0x00200000u, kY, 4);                      // then Y over it
+    invalidateCompiledCode();
+    CHECK(hasCompiledEntry(0x00200000u));
+    CHECK(findFunction(0x00200000u) == &yFns[0]);
+
+    write32(0x0020000Cu, 0);                             // Y rewrites its second function
+    invalidateCompiledCode();
+    CHECK(hasCompiledEntry(0x00200000u));                // the first is still Y's
+    CHECK(!hasCompiledEntry(0x00200008u));               // the second runs on the interpreter
+    CHECK(hasCompiledEntry(0x00100000u));                // no checksum: always trusted
 }
 
 TEST_CASE(strict_mode_stops_at_gaps_not_fallbacks) {

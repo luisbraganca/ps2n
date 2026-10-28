@@ -34,7 +34,7 @@ model.
 | `--log-level LEVEL` | `error`, `warn`, `info` (default), `debug`, `trace`. |
 | `--pad-script FILE` | Controller input from a script instead of the keyboard and game controllers. See [Controllers](#controllers). |
 | `--region REGION` | The console's region as `ROMVER` reports it: `usa` (default), `europe`, `japan`, `asia`, `china`. Libraries such as libgraph pick PAL for `europe`. |
-| `--missing-out FILE` | Where to write the addresses that had to be interpreted (default `ps2uc_missing.toml`; an empty string disables it). |
+| `--missing-out FILE` | Where to write the addresses that had to be interpreted (default `ps2uc_missing.toml`; an empty string disables it). The game's other executables get their own file next to it, named after the executable (`ps2uc_missing.MAIN.ELF.toml`). |
 
 Exit code: the value the game passed to `Exit()` (or returned from `main`),
 1 if the ELF could not be loaded or every thread is blocked with nothing left
@@ -74,7 +74,8 @@ That list is the to-do list for a port. The tools for working through it:
 - **Missing code.** Addresses the dispatcher had no recompiled code for are
   interpreted and written to `ps2uc_missing.toml` at exit. Add the file to
   `[analysis] entries_files` and recompile, and the next run uses recompiled
-  code there.
+  code there. Each of the game's other executables has its own file
+  (`ps2uc_missing.MAIN.ELF.toml`), for the `entries_files` of its config.
 - **`--strict`** stops at the first unimplemented path instead of carrying on,
   so the log ends at the first point where emulation went wrong. Interpreted
   code and skipped functions are not unimplemented paths: they run correctly,
@@ -134,7 +135,7 @@ threads run on one host thread.
 | Video | `SetGsCrt` (NTSC/PAL timing, interlace), `GsGetIMR`, `GsPutIMR`, `SetVSyncFlag`, `Get/SetGsHParam`, `Get/SetGsVParam` |
 | SIF | `SifSetDma`, `SifDmaStat`, `SifSetDChain`, `SifSetReg`, `SifGetReg`, `SifStopDma` |
 | Configuration | `Get/SetOsdConfigParam` (English, 4:3), `Get/SetOsdConfigParam2`, `MachineType`, `PSMode` |
-| Program control | `Exit`, `ExecOSD` (exit), `LoadExecPS2` (exits with a warning: recompile the other ELF separately), `_print` (debug output), `SetSyscall` (ignored), `Deci2Call` |
+| Program control | `Exit`, `ExecOSD` (exit), `LoadExecPS2` (starts another executable, see [Several executables](#several-executables); `rom0:` paths such as `rom0:OSDSYS` exit), `_print` (debug output), `SetSyscall` (ignored), `Deci2Call` |
 
 Not implemented (reported, return 0): `ExecPS2`, event flags
 (`CreateEventFlag` and friends), the TLB entry calls, `SetCPUTimerHandler` and
@@ -144,6 +145,43 @@ Interrupt handlers run nested on the interrupt stack, as on the real kernel,
 at safepoints (loop back-edges and syscalls). Thread switches happen when a
 thread blocks, when a handler wakes a higher-priority thread, and on
 `RotateThreadReadyQueue`.
+
+### Several executables
+
+`LoadExecPS2(path, argc, argv)` replaces the running program with another
+executable, as on the console:
+
+- The file is read through the same devices as the game's own files: the disc
+  (`cdrom0:`), `host:` or a memory card. It runs on the code recompiled from
+  that very file, recognised by its CRC-32: the boot program's, or one of
+  `[input] programs` ([config.md](config.md#games-with-several-executables)).
+  Any other executable runs on the interpreter, with a warning.
+- Its main thread gets the path as `argv[0]`, followed by the arguments.
+- The EE kernel starts over: every thread, semaphore, alarm and interrupt or
+  DMA handler of the old program is gone, interrupts are masked and cleared,
+  and the CPU registers are reset. The IOP restarts with only its resident
+  services, as the BIOS reboots it before loading the next executable, so the
+  new program loads its modules again.
+- RAM outside the new program's segments, the scratchpad, the GS and the VUs
+  keep their contents.
+
+Some loaders read the next executable themselves and jump into it, with no
+`LoadExecPS2`. Recompiled code therefore only runs while RAM holds the
+program it was made from: each function carries a checksum of its
+instructions.
+
+- When the game jumps to an address the running program has no code for,
+  the runtime looks for another of the game's programs with code there whose
+  functions are *all* in RAM, and runs that one from then on. Otherwise the
+  code is interpreted.
+- When the game invalidates the instruction cache (`FlushCache(2)`), as it
+  must after loading code, each function is checked against RAM again before
+  it next runs; one that changed runs on the interpreter.
+
+Not covered: `ExecPS2`, which reports and returns; and changes to part of the
+running program (an overlay loaded over its own code). Its functions call
+each other directly, so such a change is only noticed where the dispatcher
+enters the code (function pointers, a resumed thread).
 
 ### Hardware
 
@@ -189,12 +227,20 @@ modules are host code:
 - **SIF**: the wire protocol (SIF0/SIF1 transfers, command packets, RPC bind
   and call, IOP reset), so the game's EE libraries talk to the IOP unmodified,
   whether the server is host code or an IRX module.
+- **Module releases**: games built with SDK 2.x reboot the IOP with a
+  replacement image (`rom0:UDNL cdrom0:\MODULES\IOPRP214.IMG;1`), and their EE
+  libraries refuse to use FILEIO and LOADFILE unless these report the image's
+  release. The runtime does not run the image's modules, but on a reset it
+  reads the release of each from its id in the image (`PsIIfileio  2140`), or
+  from the image's name when it has none (`IOPRP214` is 2140), and the
+  services report and speak that release. Without an image they are the BIOS's,
+  release 1000.
 
 | Service | Status |
 |---|---|
-| FILEIO (`0x80000001`) | `open`, `close`, `read`, `write`, `lseek`, `remove`, `mkdir`, `rmdir`, `dopen`, `dclose`, `dread`, `getstat`, and `chstat` (accepted, no effect), over the host directories and the disc; `tty:` writes go to stdout. Others (`ioctl`, `format`, driver management) return -1 and are reported. |
+| FILEIO (`0x80000001`) | `open`, `close`, `read`, `write`, `lseek`, `remove`, `mkdir`, `rmdir`, `dopen`, `dclose`, `dread`, `getstat`, and `chstat` (accepted, no effect), over the host directories and the disc; `tty:` writes go to stdout. Others (`ioctl`, `format`, driver management) return -1 and are reported. The version query (function 255) answers the module release. Release 2100 (SDK 2.1) has its own `open` layout, a mode and a name of up to 1024 bytes; its `close`, `read`, `write` and `lseek` are the BIOS's, and its other calls are reported. Releases from 2200 on, whose replies are asynchronous, are not implemented: every call is reported. |
 | IOP heap (`0x80000003`) | `SifAllocIopHeap`, `SifFreeIopHeap`, `SifLoadIopHeap` |
-| LOADFILE (`0x80000006`) | module loading from a path or an IOP memory buffer, IOP memory peek/poke, search by name, version; stop and unload are refused (not removable). Loading an EE ELF through the IOP is reported. |
+| LOADFILE (`0x80000006`) | module loading from a path or an IOP memory buffer, IOP memory peek/poke, search by name, the version query (the module release); stop and unload are refused (not removable). Loading an EE ELF through the IOP is reported. |
 | CDVDFSV (`0x80000592`, `0x80000593`, `0x80000595`, `0x80000597`, `0x8000059A`, `0x8000059C`) and the `cdvdman` library | resident from start-up, like on the console. See [Discs](#discs). |
 | PADMAN (`0x80000100`/`0x80000101`, and the original PADMAN's `0x8000010F`/`0x8000011F`) | a DualShock 2 in port 1: digital, analog and pressure-sensitive modes, actuator set-up, the per-frame data area libpad reads. See [Controllers](#controllers). |
 | XMCSERV / MCSERV (`0x80000400`) | both protocols. See [Memory cards](#memory-cards). |

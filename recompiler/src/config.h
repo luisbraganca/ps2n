@@ -34,6 +34,7 @@ struct Config {
     // [input]
     std::filesystem::path elf;
     std::vector<std::filesystem::path> functionMaps;   // ghidra_map + map_files
+    std::vector<std::filesystem::path> programs;       // the game's other executables (ELFs or their configs), started with LoadExecPS2
 
     // [output]
     std::filesystem::path outDir = "out";

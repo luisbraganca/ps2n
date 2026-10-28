@@ -19,5 +19,6 @@ void ack(int channel);
 void setMask(int channel, bool enabled);
 void raise(int channel);
 bool idle();            // CPCOND0
+void resetInterrupts(); // clears every D_STAT status and mask bit
 
 } // namespace ps2::dmac

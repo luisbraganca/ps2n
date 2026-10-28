@@ -526,6 +526,16 @@ void AsmImpl::directive(const std::string& name, std::string_view args) {
         }
         return;
     }
+    if (name == ".incbin") {   // a file's bytes, looked up next to the source, then from the working directory
+        const std::string path = parseString(list.at(0));
+        std::filesystem::path p = std::filesystem::path(file_).parent_path() / path;
+        std::error_code ec;
+        if (!std::filesystem::exists(p, ec)) p = path;
+        if (!std::filesystem::exists(p, ec)) fail(".incbin: cannot find " + path);
+        const std::vector<uint8_t> bytes = readFile(p);
+        emitBytes(bytes.data(), bytes.size());
+        return;
+    }
     if (name == ".space" || name == ".skip" || name == ".zero") {
         const auto n = static_cast<uint32_t>(evalExpr(list.at(0)));
         const auto fill = static_cast<uint8_t>(list.size() > 1 ? evalExpr(list[1]) : 0);

@@ -171,6 +171,16 @@ TEST_CASE(config_array_bindings_and_errors) {
     }
 }
 
+TEST_CASE(config_programs) {
+    const Config c = Config::load(writeTemp("multi.toml", "[input]\nelf = \"boot.elf\"\nprograms = [\"MAIN.ELF\", \"sub/driving.toml\"]\n"));
+    CHECK_EQ(c.programs.size(), size_t(2));
+    CHECK_EQ(c.programs[0], (tempDir() / "MAIN.ELF").lexically_normal());
+    CHECK_EQ(c.programs[1], (tempDir() / "sub" / "driving.toml").lexically_normal());
+    // Folder and namespace names, by CMake's MAKE_C_IDENTIFIER rule.
+    CHECK_EQ(programId("ACTION.UK"), std::string("ACTION_UK"));
+    CHECK_EQ(programId("disc/007-2.ELF"), std::string("_007_2_ELF"));
+}
+
 TEST_CASE(function_map_formats) {
     auto ours = loadFunctionMap(writeTemp("ours.csv", "Name,Start,End,Size\nmain,0x00100000,0x00100040,64\nhelper,0x00100040,0x00100050,16\n"));
     CHECK_EQ(ours.size(), size_t(2));
@@ -381,9 +391,35 @@ TEST_CASE(codegen_writes_project) {
         CHECK(fs::exists(cfg.outDir / f));
     const std::string table = readTextFile(cfg.outDir / "recomp_table.cpp");
     CHECK(table.find("classify_") != std::string::npos);
+    // Each row ends with the checksum the runtime checks RAM against.
+    const Function* cls = byName(p, "classify");
+    CodeChecksum sum;
+    for (uint32_t a = cls->start; a < cls->end; a += 4) sum.add(p.word(a));
+    CHECK(table.find(strprintf("0x%08xu},", sum.value)) != std::string::npos);
     // Regenerating identical output rewrites nothing.
     const GenerateResult again = generate(p, cfg);
     CHECK(again.written.empty());
+}
+
+TEST_CASE(codegen_writes_other_programs) {
+    // A game's executables usually share their addresses: each gets its own folder and namespace.
+    const ElfFile bootElf = assemble(kSwitchProgram);
+    const ElfFile mainElf = assemble(kSwitchProgram);
+    Config cfg = configFor(bootElf);
+    cfg.outDir = tempDir() / "multi";
+    cfg.files = 1;
+    Config mainCfg = configFor(mainElf);
+    mainCfg.name = "MAIN.ELF";
+    mainCfg.files = 1;
+    const Program p = analyze(bootElf, cfg);
+    const Program q = analyze(mainElf, mainCfg);
+    generate(p, cfg, {{&q, &mainCfg, "MAIN_ELF"}});
+    for (const char* f : {"MAIN_ELF/functions.h", "MAIN_ELF/recomp_funcs_000.cpp", "MAIN_ELF/recomp_table.cpp"})
+        CHECK(fs::exists(cfg.outDir / f));
+    CHECK(readTextFile(cfg.outDir / "MAIN_ELF" / "recomp_funcs_000.cpp").find("namespace ps2game_MAIN_ELF {") != std::string::npos);
+    CHECK(readTextFile(cfg.outDir / "MAIN_ELF" / "recomp_table.cpp").find("\"MAIN.ELF\"") != std::string::npos);
+    CHECK(readTextFile(cfg.outDir / "recomp_table.cpp").find("&::ps2game_MAIN_ELF::kGameInfo") != std::string::npos);
+    CHECK(readTextFile(cfg.outDir / "CMakeLists.txt").find("MAIN_ELF/recomp_table.cpp") != std::string::npos);
 }
 
 int main(int argc, char** argv) {

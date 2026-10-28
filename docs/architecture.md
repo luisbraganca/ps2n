@@ -153,6 +153,26 @@ This gives deterministic scheduling, no host-level races, and correct
 semantics for priority preemption, `SleepThread`/`WakeupThread`, semaphores and
 `RotateThreadReadyQueue`.
 
+### Several executables
+
+A game's executables (the boot ELF and those it starts with `LoadExecPS2`)
+are recompiled into one native program. They usually occupy the same
+addresses, so each has its own C++ namespace and function table. `LoadExecPS2`
+loads the next file and sets `cpu.pc` to a trampoline address that is never a
+return address, so every host frame unwinds as it does for an exit. Back in
+the dispatcher, with no guest frames left on the host stack, the runtime
+resets the kernel, the interrupt state and the IOP, loads the new segments,
+selects the function table recompiled from that file (by its CRC-32; none for
+a file without one, which is then interpreted) and starts the new main thread.
+
+A loader can also copy the next program into memory and jump into it without
+telling the kernel. Every function table entry therefore carries a checksum
+of the function's instructions. When the dispatcher reaches code the running
+program does not have, it picks another program of the game whose functions
+all match RAM; after an instruction-cache invalidation it checks each
+function again before running it. Calls between functions of one program
+stay direct and unchecked.
+
 ### Safepoints: interrupts, timers and preemption
 
 Time-driven work (vblank, timers, alarms, DMA completion interrupts) runs at

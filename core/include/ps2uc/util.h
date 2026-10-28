@@ -39,6 +39,14 @@ bool writeFileIfChanged(const std::filesystem::path& path, std::string_view cont
 
 uint32_t crc32(const uint8_t* data, size_t size);
 
+// Fingerprint of a function's instruction words (FNV-1a over 32-bit words).
+// The recompiler stores one per function and the runtime compares it with
+// RAM, to tell whether that function's code is the one in memory.
+struct CodeChecksum {
+    uint32_t value = 2166136261u;
+    void add(uint32_t word) { value = (value ^ word) * 16777619u; }
+};
+
 class Error : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;

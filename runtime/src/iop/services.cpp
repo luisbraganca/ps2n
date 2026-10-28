@@ -14,6 +14,7 @@
 
 #include "ps2uc/util.h"
 
+#include <cstdio>
 #include <cstring>
 #include <set>
 
@@ -41,6 +42,15 @@ std::vector<uint8_t> words(std::initializer_list<int32_t> v) {
     return out;
 }
 
+// The answer to the version query (function 255) that SDK 2.x's EE libraries
+// send FILEIO and LOADFILE and check: the module's release in ASCII, "2140",
+// or "2140...." when they ask for 8 bytes.
+std::vector<uint8_t> versionReply(uint32_t release, uint32_t recvSize) {
+    char text[16];
+    std::snprintf(text, sizeof text, "%04u....", release);
+    return std::vector<uint8_t>(text, text + (recvSize >= 8 ? 8 : 4));
+}
+
 // io_stat_t in EE memory (40 bytes, old ioman layout as FILEIO uses it).
 void writeEeStat(uint32_t addr, const hostfs::Stat& st) {
     fillBytes(addr, 0, 40);
@@ -54,9 +64,22 @@ class FileIoServer final : public RpcServer {
 public:
     FileIoServer() : RpcServer("FILEIO") {}
 
-    void call(uint32_t fno, const uint8_t* d, uint32_t, uint32_t, Reply reply) override {
+    void call(uint32_t fno, const uint8_t* d, uint32_t, uint32_t recvSize, Reply reply) override {
+        const uint32_t release = moduleVersion("fileio");
+        if (fno == 255) return reply(versionReply(release, recvSize));
+        // The requests follow the module's release. 1000 is the BIOS's (and
+        // ps2sdk's) layout. From 2100 (SDK 2.1) open carries a mode and a name
+        // of up to 1024 bytes, while close, read, write and lseek are unchanged
+        // (checked against SDK 2.1.4's EE library); its other calls are not
+        // known yet. Releases from 2200 on reply asynchronously.
+        const bool sdk21 = release >= 2100;
+        if (release >= 2200 || (sdk21 && fno > 4)) {
+            PS2_UNIMPL("fileio", "FILEIO " + std::to_string(release) + " function " + std::to_string(fno),
+                       "FILEIO function %u of release %u is not implemented", fno, release);
+            return reply(words({-1}));
+        }
         switch (fno) {
-        case 0: return reply(words({hostfs::open(cstr(d, 4, 256), i32(d, 0))}));
+        case 0: return reply(words({hostfs::open(sdk21 ? cstr(d, 8, 1024) : cstr(d, 4, 256), i32(d, 0))}));
         case 1: return reply(words({hostfs::close(i32(d, 0))}));
         case 2: return reply(words({read(i32(d, 0), u32(d, 4), i32(d, 8), u32(d, 12))}));
         case 3: return reply(words({write(i32(d, 0), u32(d, 4), i32(d, 8))}));
@@ -180,8 +203,8 @@ public:
             return reply(words({-211, 0}));   // KE_NOT_REMOVABLE
         case 9:    // LF_F_SEARCH_MOD_BY_NAME: {id, dummy, name[252]}
             return reply(words({modules::searchByName(cstr(d, 8, 252))}));
-        case 0xFF: // LF_F_GET_VERSION
-            return reply(words({0x0101}));
+        case 0xFF: // LF_F_GET_VERSION: the module's release in ASCII ("2140")
+            return reply(versionReply(moduleVersion("loadfile"), 4));
         default:
             PS2_UNIMPL("loadfile", "LOADFILE function " + std::to_string(fno), "LOADFILE function %u not implemented", fno);
             return reply(words({-1, 0}));

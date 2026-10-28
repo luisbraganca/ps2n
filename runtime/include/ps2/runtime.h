@@ -15,6 +15,9 @@ struct FunctionInfo {
     RecompFn fn;
     const char* name;
     bool replaced;      // a stub, skip or override from the config: runs even with --interpret
+    // ps2uc::CodeChecksum of the instruction words, patched ones left out,
+    // to check that RAM still holds this code (0: not checked).
+    uint32_t checksum;
 };
 
 // An instruction word the config replaced ([[patches]]), applied to RAM after
@@ -36,6 +39,10 @@ struct GameInfo {
     const char* generator;             // recompiler version string
     const PatchInfo* patches;
     size_t patchCount;
+    // The game's other executables ([input] programs), which it starts with
+    // LoadExecPS2. Only the boot program's table lists them.
+    const GameInfo* const* programs;
+    size_t programCount;
 };
 
 // Loads the ELF, sets up the emulated kernel, hardware and IOP, runs the game.

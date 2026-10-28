@@ -137,10 +137,11 @@ Config Config::load(const std::filesystem::path& file) {
     checkKeys(root, {"input", "output", "analysis", "stubs", "functions", "patches"}, "root");
 
     if (const toml::table* in = root["input"].as_table()) {
-        checkKeys(*in, {"elf", "ghidra_map", "map_files"}, "input");
+        checkKeys(*in, {"elf", "ghidra_map", "map_files", "programs"}, "input");
         c.elf = c.resolve(stringOr(*in, "elf", ""));
         if (auto g = stringOr(*in, "ghidra_map", ""); !g.empty()) c.functionMaps.push_back(c.resolve(g));
         for (const auto& m : stringList(*in, "map_files")) c.functionMaps.push_back(c.resolve(m));
+        for (const auto& p : stringList(*in, "programs")) c.programs.push_back(c.resolve(p));
     }
     if (c.elf.empty()) throw Error(file.string() + ": [input] elf is required");
 

@@ -1,0 +1,8 @@
+boot: argc=1 argv[0]=host:exec_boot.elf
+boot: counter=1
+main: argc=3 argv[0]=host:exec_main.elf argv[1]=one argv[2]=two
+main: three vblanks
+extra: argc=1 argv[0]=host:exec_extra.elf
+boot: argc=2 argv[0]=host:exec_boot.elf argv[1]=again
+boot: counter=1
+boot: done

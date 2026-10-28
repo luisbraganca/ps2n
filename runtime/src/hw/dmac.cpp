@@ -184,6 +184,8 @@ void init() {
     g_enable = 0x1201;
 }
 
+void resetInterrupts() { g_stat = 0; }
+
 uint32_t regRead(uint32_t addr) {
     switch (addr) {
     case 0x1000E000u: return g_ctrl;

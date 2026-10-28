@@ -13,6 +13,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -32,6 +33,7 @@ constexpr const char* kHelp =
     "      --elf PATH              override [input].elf\n"
     "      --out DIR               override [output].dir\n"
     "      --name NAME             override [output].name\n"
+    "      --program PATH          another executable of the game, like [input].programs (repeatable)\n"
     "      --files N               number of recomp_funcs_*.cpp files (fixed, for build systems)\n"
     "      --single                one source file\n"
     "      --no-project            do not write CMakeLists.txt\n"
@@ -89,8 +91,21 @@ Config loadConfigOrElf(const std::string& path) {
     return Config::forElf(path);
 }
 
+ElfFile loadExecutable(const std::filesystem::path& path) {
+    ElfFile elf = ElfFile::load(path);
+    if (elf.isIrx()) throw Error(path.string() + " is an IRX (IOP) module; recompile the EE executable instead (try `ps2-uncompiler irx`)");
+    return elf;
+}
+
+void printSummary(const Config& cfg, const Program& prog) {
+    std::printf("%s: %s\n", cfg.elf.filename().string().c_str(), summarize(prog).c_str());
+    for (size_t i = 0; i < prog.warnings.size() && i < 8; ++i)
+        std::printf("  warning: %s\n", prog.warnings[i].message.c_str());
+    if (prog.warnings.size() > 8) std::printf("  ... %zu more warnings in report.txt\n", prog.warnings.size() - 8);
+}
+
 int cmdRecompile(int argc, char** argv) {
-    const Args a = parseArgs(argc, argv, 2, {"--elf", "--out", "--name", "--files"});
+    const Args a = parseArgs(argc, argv, 2, {"--elf", "--out", "--name", "--files", "--program"});
     if (a.positional.size() != 1) throw Error("recompile needs exactly one config file (see --help)");
     Config cfg = loadConfigOrElf(a.positional[0]);
     if (a.has("--elf")) cfg.elf = std::filesystem::absolute(a.get("--elf"));
@@ -103,21 +118,46 @@ int cmdRecompile(int argc, char** argv) {
     if (a.has("--single")) cfg.singleFile = true;
     if (a.has("--no-project")) cfg.project = false;
     if (a.has("--no-comments")) cfg.comments = false;
+    if (auto it = a.options.find("--program"); it != a.options.end())
+        for (const auto& p : it->second) cfg.programs.push_back(std::filesystem::absolute(p));
     const bool quiet = a.has("--quiet");
 
-    const ElfFile elf = ElfFile::load(cfg.elf);
-    if (elf.isIrx()) throw Error(cfg.elf.string() + " is an IRX (IOP) module; recompile the EE executable instead (try `ps2-uncompiler irx`)");
+    const ElfFile elf = loadExecutable(cfg.elf);
     const Program prog = analyze(elf, cfg);
-    const GenerateResult res = generate(prog, cfg);
+
+    // The game's other executables, each analysed with its own config (or the
+    // defaults) and written to its own folder. Deques keep the addresses that
+    // Program and ExtraProgram point to stable.
+    std::deque<Config> programCfgs;
+    std::deque<ElfFile> programElves;
+    std::deque<Program> programs;
+    std::vector<ExtraProgram> extras;
+    for (const auto& path : cfg.programs) {
+        Config& pc = programCfgs.emplace_back(loadConfigOrElf(path.string()));
+        if (!pc.programs.empty()) throw Error(path.string() + ": [input] programs is only read from the boot program's config");
+        pc.name = pc.elf.filename().string();
+        pc.files = cfg.files;
+        pc.singleFile = cfg.singleFile;
+        pc.comments = cfg.comments;
+        const ElfFile& pe = programElves.emplace_back(loadExecutable(pc.elf));
+        const std::string id = programId(pc.elf);
+        if (pe.crc32() == elf.crc32()) throw Error(pc.elf.string() + " is the boot ELF itself; [input] programs lists the other executables");
+        for (const auto& e : extras) {
+            if (e.prog->elf->crc32() == pe.crc32()) throw Error(pc.elf.string() + " is listed twice in [input] programs");
+            if (e.id == id) throw Error(pc.elf.string() + " and " + e.cfg->elf.string() + " would share the generated name " + id);
+        }
+        extras.push_back({&programs.emplace_back(analyze(pe, pc)), &pc, id});
+    }
+
+    const GenerateResult res = generate(prog, cfg, extras);
     writeFileIfChanged(cfg.outDir / "report.txt", buildReport(prog, cfg));
+    for (const auto& e : extras) writeFileIfChanged(cfg.outDir / e.id / "report.txt", buildReport(*e.prog, *e.cfg));
 
     if (!quiet) {
-        std::printf("%s: %s\n", cfg.elf.filename().string().c_str(), summarize(prog).c_str());
-        for (size_t i = 0; i < prog.warnings.size() && i < 8; ++i)
-            std::printf("  warning: %s\n", prog.warnings[i].message.c_str());
-        if (prog.warnings.size() > 8) std::printf("  ... %zu more warnings in report.txt\n", prog.warnings.size() - 8);
-        std::printf("wrote %zu file(s) to %s (%zu changed)\n", res.sources.size() + 1 + (cfg.project ? 1 : 0), cfg.outDir.string().c_str(),
-                    res.written.size());
+        printSummary(cfg, prog);
+        for (const auto& e : extras) printSummary(*e.cfg, *e.prog);
+        std::printf("wrote %zu file(s) to %s (%zu changed)\n", res.sources.size() + 1 + extras.size() + (cfg.project ? 1 : 0),
+                    cfg.outDir.string().c_str(), res.written.size());
         if (cfg.project)
             std::printf("build:  cmake -S %s -B %s/build && cmake --build %s/build\n", cfg.outDir.string().c_str(),
                         cfg.outDir.string().c_str(), cfg.outDir.string().c_str());

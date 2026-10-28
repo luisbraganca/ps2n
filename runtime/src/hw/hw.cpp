@@ -251,6 +251,10 @@ void setIntcMask(int cause, bool enabled) {
     else g_imask &= ~(1u << cause);
     if (g_istat & g_imask) kernel::kickInterrupts();
 }
+void resetInterrupts() {
+    g_istat = g_imask = 0;
+    dmac::resetInterrupts();
+}
 
 uint32_t dmacPending() { return dmac::pending(); }
 void ackDmac(int channel) { dmac::ack(channel); }

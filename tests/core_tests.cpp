@@ -164,6 +164,25 @@ buf:    .space 64
     CHECK_EQ(w, 0u);
 }
 
+TEST_CASE(assembler_incbin) {
+    // A file next to the source: .incbin embeds its bytes as they are.
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "ps2uc_incbin_test";
+    std::filesystem::create_directories(dir);
+    writeFileIfChanged(dir / "blob.bin", std::string("\x78\x56\x34\x12\x01\x02", 6));
+    Assembler as;
+    as.assemble("        .text\n_start: nop\n        .data\n        .align 4\nblob:   .incbin \"blob.bin\"\nafter:  .byte 7\n",
+                (dir / "incbin.s").string());
+    const ElfFile elf = ElfFile::parse(as.buildElf(), "incbin.elf");
+    uint32_t w = 0;
+    CHECK(elf.read32(*elf.symbolValue("blob"), w));
+    CHECK_EQ(w, 0x12345678u);
+    CHECK_EQ(*elf.symbolValue("after") - *elf.symbolValue("blob"), 6u);
+    Assembler missing;
+    CHECK_THROWS(missing.assemble("        .data\n        .incbin \"no_such_file.bin\"\n", (dir / "missing.s").string()));
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
 TEST_CASE(assembler_reports_errors_with_location) {
     Assembler as;
     try {

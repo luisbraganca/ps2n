@@ -9,10 +9,13 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace ps2::kernel {
 
-void init(uint32_t entry);
+// Resets every kernel object and starts the program at `entry` as the main
+// thread; SetupThread hands it `argv` (argv[0] is the program's path).
+void init(uint32_t entry, std::vector<std::string> argv);
 bool hasRunningThread();
 int currentThread();
 // Nothing can run: wait for (or skip to) the next event and deliver it.

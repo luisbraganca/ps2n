@@ -69,6 +69,10 @@ What works, and is covered by the test suite (`ctest`):
   cards as host directories (MCSERV and XMCSERV), controllers (PADMAN, a
   DualShock 2 driven by the keyboard, game controllers or a script), and
   libsd for sound drivers (silent).
+- **Games with several executables**: the boot ELF and the executables it
+  starts, with `LoadExecPS2` or by loading them itself and jumping in, are
+  recompiled into one native program, which recognises each one as it
+  starts; an executable that was not recompiled runs on the interpreter.
 - **Fallbacks** at every level: an interpreter for code the analysis missed
   (it records the addresses so the next recompile picks them up), logged and
   counted wrappers for unimplemented syscalls, registers and IOP calls, and a
@@ -151,7 +155,9 @@ non-local return, kernel threads and a vblank interrupt handler.
    and Ghidra's own Functions / Symbol Table exports also work.
 3. **Recompile.** `ps2-uncompiler recompile game.toml` writes the C++, a
    `CMakeLists.txt` and `report.txt` (functions, stubs, unresolved indirect
-   jumps, warnings).
+   jumps, warnings). If the game is several executables (the boot ELF starts
+   the game proper with `LoadExecPS2`), list the others in `[input] programs`
+   ([docs/config.md](docs/config.md#games-with-several-executables)).
 4. **Build and run.** `cmake -S out/game -B out/game/build && cmake --build out/game/build`,
    then `out/game/build/game --elf SLUS_123.45 --cdrom <disc image or directory>`.
 5. **Iterate.** The runtime prints a summary of every unimplemented syscall,
@@ -172,7 +178,7 @@ the two runs is a quick way to tell a recompiler bug from a runtime gap.
 ## Command line
 
 ```
-ps2-uncompiler recompile <config.toml> [--elf PATH] [--out DIR] [--name NAME]
+ps2-uncompiler recompile <config.toml> [--elf PATH] [--program PATH]... [--out DIR] [--name NAME]
                          [--files N | --single] [--no-project] [--no-comments] [--quiet]
 ps2-uncompiler analyze <game.elf | config.toml> [--map CSV]... [--list] [--write-config FILE]
 ps2-uncompiler disasm <file.elf> [--function NAME|ADDR] [--range START:END] [--cpp NAME|ADDR]
@@ -197,6 +203,7 @@ The recompiled executable takes runtime options (`--help` lists them): `--elf`,
 [input]
 elf = "SLUS_123.45"
 ghidra_map = "functions.csv"          # optional
+programs = ["MAIN.ELF"]               # optional: executables it starts with LoadExecPS2
 
 [output]
 dir = "out/game"
@@ -320,7 +327,10 @@ ctest --test-dir build --output-on-failure
   run in both recompiled and interpreted mode, compared against recorded
   output: control-flow edge cases, a stripped ELF that needs the interpreter
   fallback, the kernel scheduler, config bindings (skip, stub, C++ override,
-  instruction patch), and a GS drawing compared against a recorded frame.
+  instruction patch), `LoadExecPS2` across three executables at the same
+  addresses (one of them not recompiled), a loader that copies the next
+  program into memory and jumps into it, and a GS drawing compared against a
+  recorded frame.
 - `sdk_*`: programs built with the ps2dev toolchain and ps2sdk, run the same
   two ways: an IRX module with its own RPC server and kernel objects, libsd
   driven from an IRX, libpad and libpadx with scripted input, VU0 and VU1
