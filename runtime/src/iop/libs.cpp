@@ -11,6 +11,7 @@
 #include "iop/kernel.h"
 #include "log.h"
 
+#include <array>
 #include <cctype>
 #include <cstring>
 #include <ctime>

@@ -2,7 +2,10 @@
 
 function(ps2uc_set_warnings target)
     if(MSVC)
-        target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8)
+        # C4324: ps2::Cpu is padded by its alignas on purpose.
+        target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /wd4324)
+        # fopen and friends are used portably; drop the CRT's "use fopen_s" deprecations.
+        target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)
         if(PS2UC_WARNINGS_AS_ERRORS)
             target_compile_options(${target} PRIVATE /WX)
         endif()

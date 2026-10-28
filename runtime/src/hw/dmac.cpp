@@ -130,14 +130,14 @@ void runSpr(int ch) {
     }
     for (uint32_t i = 0; i < c.qwc; ++i) {
         uint64_t q[2];
-        const uint32_t spr = kSprBase | ((c.sadr + i * 16) & 0x3FF0u);
+        const uint32_t sprAddr = kSprBase | ((c.sadr + i * 16) & 0x3FF0u);
         const uint32_t mem = (c.madr & 0x80000000u) ? (kSprBase | ((c.madr + i * 16) & 0x3FF0u)) : (c.madr + i * 16);
         if (ch == hw::DMA_SPR_FROM) {
-            read128(spr, q);
+            read128(sprAddr, q);
             write128(mem, q);
         } else {
             read128(mem, q);
-            write128(spr, q);
+            write128(sprAddr, q);
         }
     }
     c.madr += c.qwc * 16;

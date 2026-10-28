@@ -95,8 +95,9 @@ What is not there yet, roughly in order of importance for real games:
 
 ## Quick start
 
-Requirements: CMake 3.20+, a C++20 compiler (tested with Apple clang 21 on
-arm64), Ninja or Make. SDL2 is optional: it adds a window, which so far has
+Requirements: CMake 3.20+, a C++20 compiler, Ninja or Make. Tested with Apple
+clang 21 on arm64, and on Windows x64 with clang-cl 22 and MSVC 19.51 (Visual
+Studio 2026 Build Tools). SDL2 is optional: it adds a window, which so far has
 only been compile-checked against the SDL2 2.30 headers, not run. Without it,
 frames can be dumped to files, which is what the tests check.
 
@@ -107,6 +108,14 @@ ctest --test-dir build                 # unit tests + end-to-end programs
 
 # The example: assembled, recompiled and compiled as part of the build.
 ./build/examples/hello/hello --elf build/examples/hello/hello.elf
+```
+
+On Windows, configure from a Visual Studio developer prompt ("x64 Native Tools
+Command Prompt" or "Developer PowerShell"). clang-cl is the recommended
+compiler; plain MSVC (`cl`) works too.
+
+```bat
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
 ```
 
 ```

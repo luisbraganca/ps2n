@@ -169,7 +169,7 @@ uint32_t batchOne(uint16_t func, uint16_t entry, uint32_t value, uint32_t rets, 
     case 0x05: mem::write32(value, entry); return 0;                  // WRITEIOP
     case 0x06: write32(value, entry); return 0;                       // WRITEEE
     case 0x07:                                                        // EERETURN: the results so far to EE memory
-        for (uint32_t i = 0; i < entry / 4 && i < index && rets; ++i) write32(value + 4 * i, mem::read32(rets + 4 * i));
+        for (uint32_t i = 0; i < entry / 4u && i < index && rets; ++i) write32(value + 4 * i, mem::read32(rets + 4 * i));
         return 0;
     case 0x11: return (entry & 0xFF00) == kEnvx ? 0 : valueOr(g_params, entry, 0);
     case 0x12: return (entry & 0xFF00) == kEndx ? 0xFFFFFF : valueOr(g_switches, entry, 0);

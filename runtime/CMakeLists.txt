@@ -42,9 +42,14 @@ target_link_libraries(ps2uc_runtime PUBLIC ps2uc_core)
 target_compile_features(ps2uc_runtime PUBLIC cxx_std_20)
 # The EE FPU and the VUs round after a multiply before adding (MADD, MSUB);
 # fusing `a + b * c` into one rounding would change results. Public, because
-# recompiled games compile the inline instruction semantics too.
-target_compile_options(ps2uc_runtime PUBLIC
-    $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:-ffp-contract=off>)
+# recompiled games compile the inline instruction semantics too. clang-cl only
+# takes the option through /clang:; MSVC 2022 and later only fuse with
+# /fp:contract or /fp:fast.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(ps2uc_runtime PUBLIC /clang:-ffp-contract=off)
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(ps2uc_runtime PUBLIC -ffp-contract=off)
+endif()
 ps2uc_set_warnings(ps2uc_runtime)
 
 find_package(Threads REQUIRED)

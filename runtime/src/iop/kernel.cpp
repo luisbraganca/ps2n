@@ -9,6 +9,7 @@
 #include "log.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <deque>
 #include <map>

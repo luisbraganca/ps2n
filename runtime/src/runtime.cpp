@@ -23,6 +23,8 @@
 #include <string>
 
 #if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
 #include <process.h>
 #include <windows.h>
 #else
@@ -245,6 +247,10 @@ void runGuestThread(void (*fn)()) {
 } // namespace
 
 int run(int argc, char** argv, const GameInfo& game) {
+#if defined(_WIN32)
+    // Guest output is a byte stream; text mode would turn every "\n" into "\r\n".
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     if (!parseOptions(argc, argv)) return 0;
     g_opt.elfPath = findElf(argc > 0 ? argv[0] : "", game);
     PS2_INFO("runtime", "%s, recompiled by %s: %zu functions", game.name, game.generator, game.functionCount);

@@ -1,0 +1,3 @@
+# The cdvd test builds a disc from tests/sdk/disc and prints file sizes that
+# count SYSTEM.CNF's CRLF line endings: keep these files byte for byte.
+tests/sdk/disc/** -text

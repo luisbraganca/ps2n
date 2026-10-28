@@ -19,6 +19,7 @@
 #include "ps2/memory.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <deque>
 #include <map>
@@ -143,8 +144,8 @@ void handleBind(const uint8_t* pkt) {
         // Nobody serves this sid yet. The EE's bind loop retries, which gives a
         // module that is starting time to register; after a while a null
         // service answers, so a missing module does not hang the game.
-        const auto [it, first] = g_unserved.try_emplace(sid, nowCycles());
-        if (nowCycles() - it->second > kEeClockHz / 2) {
+        const auto [since, first] = g_unserved.try_emplace(sid, nowCycles());
+        if (nowCycles() - since->second > kEeClockHz / 2) {
             PS2_UNIMPL("iop", "RPC bind to unknown sid",
                        "RPC bind to sid 0x%08x: no module serves it; answering with a null service", sid);
             registerServer(sid, makeNullServer("unknown", sid));

@@ -520,15 +520,21 @@ TEST_CASE(iop_sif_rpc_fileio_and_loadfile) {
     CHECK_EQ(read32(recv), 5u);
     CHECK(std::memcmp(ram + dest, "hello", 5) == 0);
 
+    // close(fd): Windows cannot remove the directory at the end while the file is open.
+    write32(send, static_cast<uint32_t>(fd));
+    ee.send(0x8000000Au, {4, 0x00400800, 10, cd, 1, 4, recv, 4, 1, sd}, send, buf, 4);
+    ee.receive();
+    CHECK_EQ(read32(recv), 0u);
+
     // LOADFILE: SifLoadModule("rom0:XPADMAN") enables the pad service.
-    ee.send(0x80000009u, {4, 0x00400800, 10, cd, 0x80000006u});
+    ee.send(0x80000009u, {4, 0x00400800, 11, cd, 0x80000006u});
     r = ee.receive();
     const uint32_t lfSd = r[9], lfBuf = r[10];
     CHECK(lfSd != 0);
     fillBytes(send, 0, 512);
     const char* mod = "rom0:XPADMAN";
     writeBytes(send + 8, mod, static_cast<uint32_t>(std::strlen(mod)));
-    ee.send(0x8000000Au, {4, 0x00400800, 11, cd, 0, 512, recv, 8, 1, lfSd}, send, lfBuf, 512);
+    ee.send(0x8000000Au, {4, 0x00400800, 12, cd, 0, 512, recv, 8, 1, lfSd}, send, lfBuf, 512);
     ee.receive();
     CHECK(static_cast<int32_t>(read32(recv)) > 0);
     CHECK(iop::hasServer(0x80000100u));
