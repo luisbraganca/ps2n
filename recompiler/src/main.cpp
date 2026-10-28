@@ -1,15 +1,15 @@
-// ps2-uncompiler command line.
+// ps2n command line.
 #include "analysis.h"
 #include "codegen.h"
 #include "config.h"
 #include "report.h"
 #include "version.h"
 
-#include "ps2uc/assembler.h"
-#include "ps2uc/elf.h"
-#include "ps2uc/irx.h"
-#include "ps2uc/r5900.h"
-#include "ps2uc/util.h"
+#include "ps2n/assembler.h"
+#include "ps2n/elf.h"
+#include "ps2n/irx.h"
+#include "ps2n/r5900.h"
+#include "ps2n/util.h"
 
 #include <cstdio>
 #include <cstring>
@@ -21,12 +21,12 @@
 #include <string>
 #include <vector>
 
-using namespace ps2uc;
+using namespace ps2n;
 
 namespace {
 
 constexpr const char* kHelp =
-    "usage: ps2-uncompiler <command> [options]\n"
+    "usage: ps2n <command> [options]\n"
     "\n"
     "commands:\n"
     "  recompile <config.toml>   generate C++ for the ELF named in the config\n"
@@ -93,7 +93,7 @@ Config loadConfigOrElf(const std::string& path) {
 
 ElfFile loadExecutable(const std::filesystem::path& path) {
     ElfFile elf = ElfFile::load(path);
-    if (elf.isIrx()) throw Error(path.string() + " is an IRX (IOP) module; recompile the EE executable instead (try `ps2-uncompiler irx`)");
+    if (elf.isIrx()) throw Error(path.string() + " is an IRX (IOP) module; recompile the EE executable instead (try `ps2n irx`)");
     return elf;
 }
 
@@ -167,11 +167,11 @@ int cmdRecompile(int argc, char** argv) {
 
 std::string starterConfig(const Program& prog, const Config& cfg) {
     std::string s;
-    s += "# Starter config written by `ps2-uncompiler analyze`. See docs/config.md.\n\n";
+    s += "# Starter config written by `ps2n analyze`. See docs/config.md.\n\n";
     s += "[input]\nelf = \"" + cfg.elf.generic_string() + "\"\n";
-    s += "# ghidra_map = \"functions.csv\"   # export with tools/ghidra/ExportPs2ucFunctions.java\n\n";
+    s += "# ghidra_map = \"functions.csv\"   # export with tools/ghidra/ExportPs2nFunctions.java\n\n";
     s += "[output]\ndir = \"out/" + cfg.name + "\"\nname = \"" + cfg.name + "\"\nmode = \"multi\"\ncomments = true\n\n";
-    s += "[analysis]\n# entries = [0x00100000]\n# entries_files = [\"ps2uc_missing.toml\"]   # written by the runtime\n\n";
+    s += "[analysis]\n# entries = [0x00100000]\n# entries_files = [\"ps2n_missing.toml\"]   # written by the runtime\n\n";
     s += "[stubs]\nauto = true\n";
     std::string matched;
     for (const auto& f : prog.functions)
@@ -193,7 +193,7 @@ int cmdAnalyze(int argc, char** argv) {
                 elf.isIrx() ? "IOP module (IRX)" : "executable", elf.entry, elf.sections.size(), elf.symbols.size(), elf.crc32());
     for (const auto& r : elf.codeRanges()) std::printf("  code %-10s 0x%08x-0x%08x %8u bytes\n", r.name.c_str(), r.start, r.end, r.size());
     if (elf.isIrx()) {
-        std::printf("this is an IOP module; use `ps2-uncompiler irx` to inspect it\n");
+        std::printf("this is an IOP module; use `ps2n irx` to inspect it\n");
         return 0;
     }
     const Program prog = analyze(elf, cfg);
@@ -316,7 +316,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (cmd == "version" || cmd == "--version") {
-            std::printf("%s\n", PS2UC_VERSION_STRING);
+            std::printf("%s\n", PS2N_VERSION_STRING);
             return 0;
         }
         if (cmd == "help" || cmd == "--help" || cmd == "-h") {

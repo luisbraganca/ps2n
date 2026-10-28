@@ -1,10 +1,10 @@
 #include "function_map.h"
 
-#include "ps2uc/util.h"
+#include "ps2n/util.h"
 
 #include <sstream>
 
-namespace ps2uc {
+namespace ps2n {
 
 namespace {
 
@@ -116,4 +116,4 @@ std::vector<uint32_t> loadEntriesFile(const std::filesystem::path& file) {
     return out;
 }
 
-} // namespace ps2uc
+} // namespace ps2n

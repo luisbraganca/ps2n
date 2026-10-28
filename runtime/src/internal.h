@@ -29,7 +29,7 @@ struct Options {
     bool strict = false;           // stop at the first unimplemented path (PS2_UNIMPL)
     bool traceSyscalls = false;
     bool traceFunctions = false;
-    std::filesystem::path missingOut = "ps2uc_missing.toml";
+    std::filesystem::path missingOut = "ps2n_missing.toml";
     std::filesystem::path padScript;   // scripted controller input (see iop/pad.h)
     char region = 'A';             // console region in ROMVER: A (USA), E (Europe), J (Japan), H (Asia), C (China)
 };

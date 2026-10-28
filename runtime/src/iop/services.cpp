@@ -13,7 +13,7 @@
 #include "log.h"
 #include "ps2/memory.h"
 
-#include "ps2uc/util.h"
+#include "ps2n/util.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -22,7 +22,7 @@
 
 namespace ps2::iop {
 
-using ps2uc::toLower;
+using ps2n::toLower;
 
 namespace {
 

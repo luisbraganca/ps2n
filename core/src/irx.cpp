@@ -1,7 +1,7 @@
-#include "ps2uc/irx.h"
-#include "ps2uc/util.h"
+#include "ps2n/irx.h"
+#include "ps2n/util.h"
 
-namespace ps2uc {
+namespace ps2n {
 
 namespace {
 
@@ -118,4 +118,4 @@ IrxInfo parseIrx(const ElfFile& elf) {
     return info;
 }
 
-} // namespace ps2uc
+} // namespace ps2n

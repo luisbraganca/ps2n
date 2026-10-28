@@ -5,7 +5,7 @@
 #include "log.h"
 #include "stubs/format.h"
 
-#include "ps2uc/util.h"
+#include "ps2n/util.h"
 
 #include <algorithm>
 #include <cctype>
@@ -19,10 +19,10 @@
 namespace ps2::iop::hostfs {
 
 namespace fs = std::filesystem;
-using ps2uc::split;
-using ps2uc::startsWith;
-using ps2uc::toLower;
-using ps2uc::toUpper;
+using ps2n::split;
+using ps2n::startsWith;
+using ps2n::toLower;
+using ps2n::toUpper;
 
 namespace {
 

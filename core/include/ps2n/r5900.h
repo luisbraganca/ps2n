@@ -10,7 +10,7 @@
 #include <string>
 #include <string_view>
 
-namespace ps2uc::r5900 {
+namespace ps2n::r5900 {
 
 // Classification flags (column 5 of r5900_ops.inc).
 enum : uint32_t {
@@ -41,7 +41,7 @@ enum : uint32_t {
 enum class Op : uint16_t {
     Invalid = 0,
 #define X(op, mn, match, ops, flags, mem) op,
-#include "ps2uc/r5900_ops.inc"
+#include "ps2n/r5900_ops.inc"
 #undef X
     Count
 };
@@ -135,4 +135,4 @@ const char* vuControlName(uint32_t r); // "Status", "MAC", "Clip", "R", "I", "Q"
 std::string disassemble(const Insn& insn);
 inline std::string disassemble(uint32_t raw, uint32_t addr) { return disassemble(Insn(raw, addr)); }
 
-} // namespace ps2uc::r5900
+} // namespace ps2n::r5900

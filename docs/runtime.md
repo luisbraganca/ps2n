@@ -1,6 +1,6 @@
 # Runtime reference
 
-`ps2uc_runtime` is what a recompiled game links against. It loads the game's
+`ps2n_runtime` is what a recompiled game links against. It loads the game's
 data from the original ELF, provides the CPU state and memory map the
 generated code uses, and emulates enough of the rest of the console (EE
 kernel, DMAC, GIF/GS, VIF, timers, SIF and IOP services) for the game to run.
@@ -34,7 +34,7 @@ model.
 | `--log-level LEVEL` | `error`, `warn`, `info` (default), `debug`, `trace`. |
 | `--pad-script FILE` | Controller input from a script instead of the keyboard and game controllers. See [Controllers](#controllers). |
 | `--region REGION` | The console's region as `ROMVER` reports it: `usa` (default), `europe`, `japan`, `asia`, `china`. Libraries such as libgraph pick PAL for `europe`. |
-| `--missing-out FILE` | Where to write the addresses that had to be interpreted (default `ps2uc_missing.toml`; an empty string disables it). The game's other executables get their own file next to it, named after the executable (`ps2uc_missing.MAIN.ELF.toml`). |
+| `--missing-out FILE` | Where to write the addresses that had to be interpreted (default `ps2n_missing.toml`; an empty string disables it). The game's other executables get their own file next to it, named after the executable (`ps2n_missing.MAIN.ELF.toml`). |
 
 Exit code: the value the game passed to `Exit()` (or returned from `main`),
 1 if the ELF could not be loaded or every thread is blocked with nothing left
@@ -51,7 +51,7 @@ the SIO debug port, FILEIO writes to `tty:`, and the DECI2 TTY and `kputs`
 that Sony's libkernel prints through) goes to stdout. The runtime's own
 messages go to stderr as `[level:category] message`.
 
-**Video.** Built with SDL2 (found automatically; `-DPS2UC_WITH_SDL2=OFF` to
+**Video.** Built with SDL2 (found automatically; `-DPS2N_WITH_SDL2=OFF` to
 disable), the runtime opens a window when the game first displays something.
 Without SDL2, or with `--no-window`, use `--dump-frames`; most image viewers
 open PPM files, and ImageMagick or Pillow convert them. The window runs on the
@@ -73,10 +73,10 @@ counted. When the program exits (including Ctrl+C), the counts are printed:
 That list is the to-do list for a port. The tools for working through it:
 
 - **Missing code.** Addresses the dispatcher had no recompiled code for are
-  interpreted and written to `ps2uc_missing.toml` at exit. Add the file to
+  interpreted and written to `ps2n_missing.toml` at exit. Add the file to
   `[analysis] entries_files` and recompile, and the next run uses recompiled
   code there. Each of the game's other executables has its own file
-  (`ps2uc_missing.MAIN.ELF.toml`), for the `entries_files` of its config.
+  (`ps2n_missing.MAIN.ELF.toml`), for the `entries_files` of its config.
 - **`--strict`** stops at the first unimplemented path instead of carrying on,
   so the log ends at the first point where emulation went wrong. Interpreted
   code and skipped functions are not unimplemented paths: they run correctly,
@@ -326,7 +326,7 @@ Button names: `select`, `start`, `up`, `down`, `left`, `right`, `triangle`,
 
 ### Stubs
 
-`ps2-uncompiler stubs` lists the host implementations a config can bind
+`ps2n stubs` lists the host implementations a config can bind
 guest functions to; [config.md](config.md#stubs-replace-functions-with-runtime-implementations)
 describes them.
 

@@ -15,7 +15,7 @@ struct FunctionInfo {
     RecompFn fn;
     const char* name;
     bool replaced;      // a stub, skip or override from the config: runs even with --interpret
-    // ps2uc::CodeChecksum of the instruction words, patched ones left out,
+    // ps2n::CodeChecksum of the instruction words, patched ones left out,
     // to check that RAM still holds this code (0: not checked).
     uint32_t checksum;
 };

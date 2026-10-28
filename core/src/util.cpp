@@ -1,4 +1,4 @@
-#include "ps2uc/util.h"
+#include "ps2n/util.h"
 
 #include <array>
 #include <cctype>
@@ -6,7 +6,7 @@
 #include <fstream>
 #include <sstream>
 
-namespace ps2uc {
+namespace ps2n {
 
 std::string vstrprintf(const char* fmt, va_list ap) {
     va_list copy;
@@ -146,4 +146,4 @@ uint32_t crc32(const uint8_t* data, size_t size) {
     return crc ^ 0xFFFFFFFFu;
 }
 
-} // namespace ps2uc
+} // namespace ps2n

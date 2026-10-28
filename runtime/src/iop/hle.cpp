@@ -2,7 +2,7 @@
 
 #include "log.h"
 
-#include "ps2uc/irx.h"
+#include "ps2n/irx.h"
 
 #include <bit>
 #include <map>
@@ -128,7 +128,7 @@ void unimplementedExport() {
 std::string exportName(const std::string& library, uint32_t index) {
     if (Library* h = findHost(library); h && index < h->names.size() && !h->names[index].empty())
         return library + "::" + h->names[index];
-    if (const char* n = ps2uc::irxKnownExportName(library, index)) return library + "::" + n;
+    if (const char* n = ps2n::irxKnownExportName(library, index)) return library + "::" + n;
     return library + "::#" + std::to_string(index);
 }
 

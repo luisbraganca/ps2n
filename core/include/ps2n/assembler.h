@@ -14,7 +14,7 @@
 #include <string_view>
 #include <vector>
 
-namespace ps2uc {
+namespace ps2n {
 
 struct AsmOptions {
     uint32_t textBase = 0x00100000;   // where .text is linked
@@ -36,7 +36,7 @@ class Assembler {
 public:
     explicit Assembler(AsmOptions options = {});
 
-    // Throws ps2uc::Error ("file:line: message") on the first error.
+    // Throws ps2n::Error ("file:line: message") on the first error.
     void assemble(std::string_view source, std::string_view fileName = "<input>");
     std::vector<uint8_t> buildElf() const;
 
@@ -67,4 +67,4 @@ private:
 // to more than one word (la, li with a 32-bit value) are rejected here.
 bool assembleInstruction(std::string_view line, uint32_t addr, uint32_t& out, std::string* error = nullptr);
 
-} // namespace ps2uc
+} // namespace ps2n

@@ -1,4 +1,4 @@
-// Exports Ghidra's function boundaries for ps2-uncompiler.
+// Exports Ghidra's function boundaries for PS2Native.
 //
 // Writes a CSV ("Name,Start,End,Size", the same layout PS2Recomp uses) and,
 // optionally, a starter config.toml that points at it. Point
@@ -6,12 +6,12 @@
 // priority over the recompiler's own heuristics, which matters most for
 // stripped retail executables.
 //
-// GUI:      Script Manager -> ps2-uncompiler -> ExportPs2ucFunctions.java
+// GUI:      Script Manager -> PS2Native -> ExportPs2nFunctions.java
 // Headless: analyzeHeadless <project_dir> <project> -process <game.elf> \
-//               -postScript ExportPs2ucFunctions.java out/functions.csv [out/config.toml]
+//               -postScript ExportPs2nFunctions.java out/functions.csv [out/config.toml]
 //
-//@category ps2-uncompiler
-//@menupath Tools.ps2-uncompiler.Export Function Map
+//@category PS2Native
+//@menupath Tools.PS2Native.Export Function Map
 
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.Address;
@@ -26,7 +26,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-public class ExportPs2ucFunctions extends GhidraScript {
+public class ExportPs2nFunctions extends GhidraScript {
 
     private static final class Entry {
         final String name;
@@ -52,7 +52,7 @@ public class ExportPs2ucFunctions extends GhidraScript {
             }
         } else {
             csv = askFile("Function map (CSV) to write", "Export");
-            if (askYesNo("ps2-uncompiler", "Also write a starter config.toml next to the CSV?")) {
+            if (askYesNo("PS2Native", "Also write a starter config.toml next to the CSV?")) {
                 toml = new File(csv.getParentFile(), "config.toml");
             }
         }
@@ -79,19 +79,19 @@ public class ExportPs2ucFunctions extends GhidraScript {
         entries.sort(Comparator.comparingLong(e -> e.start));
 
         try (PrintWriter w = new PrintWriter(csv, "UTF-8")) {
-            w.println("# ps2-uncompiler function map exported from Ghidra (" + currentProgram.getName() + ")");
+            w.println("# PS2Native function map exported from Ghidra (" + currentProgram.getName() + ")");
             w.println("Name,Start,End,Size");
             for (Entry e : entries) {
                 w.printf("%s,0x%08X,0x%08X,%d%n", csvField(e.name), e.start, e.end, e.end - e.start);
             }
         }
-        println("ps2-uncompiler: wrote " + entries.size() + " functions to " + csv.getAbsolutePath());
+        println("PS2Native: wrote " + entries.size() + " functions to " + csv.getAbsolutePath());
 
         if (toml != null) {
             String elf = currentProgram.getExecutablePath();
             String name = currentProgram.getName().replaceAll("[^A-Za-z0-9_]", "_");
             try (PrintWriter w = new PrintWriter(toml, "UTF-8")) {
-                w.println("# Starter config written by ExportPs2ucFunctions.java. See docs/config.md.");
+                w.println("# Starter config written by ExportPs2nFunctions.java. See docs/config.md.");
                 w.println();
                 w.println("[input]");
                 w.println("elf = " + tomlString(elf));
@@ -103,7 +103,7 @@ public class ExportPs2ucFunctions extends GhidraScript {
                 w.println("mode = \"multi\"");
                 w.println();
                 w.println("[analysis]");
-                w.println("# entries_files = [\"ps2uc_missing.toml\"]   # written by the runtime");
+                w.println("# entries_files = [\"ps2n_missing.toml\"]   # written by the runtime");
                 w.println();
                 w.println("[stubs]");
                 w.println("auto = true");
@@ -111,7 +111,7 @@ public class ExportPs2ucFunctions extends GhidraScript {
                 w.println("[functions]");
                 w.println("# skip = [\"some_function\"]");
             }
-            println("ps2-uncompiler: wrote " + toml.getAbsolutePath());
+            println("PS2Native: wrote " + toml.getAbsolutePath());
         }
     }
 

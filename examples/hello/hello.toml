@@ -1,8 +1,8 @@
 # Recompilation config for the hello example. The CMake build passes --elf and
 # --out explicitly; these defaults are for running the tool by hand:
 #
-#   ps2-uncompiler assemble examples/hello/hello.s -o examples/hello/hello.elf
-#   ps2-uncompiler recompile examples/hello/hello.toml
+#   ps2n assemble examples/hello/hello.s -o examples/hello/hello.elf
+#   ps2n recompile examples/hello/hello.toml
 #   cmake -S examples/hello/out -B examples/hello/out/build && cmake --build examples/hello/out/build
 #   examples/hello/out/build/hello --elf examples/hello/hello.elf
 

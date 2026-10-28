@@ -1,9 +1,9 @@
 // Disassembler driven by the operand strings in r5900_ops.inc.
 // Output uses GNU assembler syntax so it can be fed back to the assembler.
-#include "ps2uc/r5900.h"
-#include "ps2uc/util.h"
+#include "ps2n/r5900.h"
+#include "ps2n/util.h"
 
-namespace ps2uc::r5900 {
+namespace ps2n::r5900 {
 
 namespace {
 
@@ -180,4 +180,4 @@ std::string disassemble(const Insn& in) {
     return out;
 }
 
-} // namespace ps2uc::r5900
+} // namespace ps2n::r5900

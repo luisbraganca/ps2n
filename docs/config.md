@@ -7,7 +7,7 @@ A game is described by one TOML file. Only `[input] elf` is required:
 elf = "SLUS_123.45"
 ```
 
-`ps2-uncompiler analyze game.elf --write-config game.toml` writes a starter
+`ps2n analyze game.elf --write-config game.toml` writes a starter
 config with the common keys commented in, and lists the functions it already
 bound to runtime stubs.
 
@@ -28,8 +28,8 @@ General rules:
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `elf` | path | required | The EE executable (`SLUS_123.45`, `SCES_...`, a homebrew `.elf`). IRX modules are rejected: they are IOP code (see `ps2-uncompiler irx`). |
-| `ghidra_map` | path | none | A function map, usually written by [tools/ghidra/ExportPs2ucFunctions.java](../tools/ghidra/ExportPs2ucFunctions.java). |
+| `elf` | path | required | The EE executable (`SLUS_123.45`, `SCES_...`, a homebrew `.elf`). IRX modules are rejected: they are IOP code (see `ps2n irx`). |
+| `ghidra_map` | path | none | A function map, usually written by [tools/ghidra/ExportPs2nFunctions.java](../tools/ghidra/ExportPs2nFunctions.java). |
 | `map_files` | array of paths | `[]` | More function maps, same format. |
 | `programs` | array of paths | `[]` | The game's other executables, which it starts with `LoadExecPS2`: each an ELF, or a config file (`.toml`) for that ELF. See [Games with several executables](#games-with-several-executables). |
 
@@ -86,10 +86,10 @@ what carries over.
 | `dir` | path | `out/<elf name>` | Where the generated files go. |
 | `name` | string | ELF name without extension (`SLUS_123.45` gives `SLUS_123`) | Name of the executable and of the CMake project. |
 | `mode` | `"multi"` or `"single"` | `"multi"` | One source file, or several `recomp_funcs_NNN.cpp`. |
-| `files` | integer 0-4096 | `0` | Number of `recomp_funcs_NNN.cpp` files in multi mode. `0` picks one file per ~16,000 instructions. Fix the count when a build system must know the file list before the recompiler runs (`ps2uc_add_recompiled_game` does this). |
+| `files` | integer 0-4096 | `0` | Number of `recomp_funcs_NNN.cpp` files in multi mode. `0` picks one file per ~16,000 instructions. Fix the count when a build system must know the file list before the recompiler runs (`ps2n_add_recompiled_game` does this). |
 | `comments` | bool | `true` | Disassembly comment on every generated line. |
 | `project` | bool | `true` | Write a `CMakeLists.txt` that builds the output against the runtime. Turn off when you add the sources to your own build. |
-| `runtime_dir` | path | the tree the recompiler was built from | ps2-uncompiler source tree the generated `CMakeLists.txt` uses (also settable later as the `PS2UC_ROOT` cache variable). |
+| `runtime_dir` | path | the tree the recompiler was built from | PS2Native source tree the generated `CMakeLists.txt` uses (also settable later as the `PS2N_ROOT` cache variable). |
 | `extra_sources` | array of paths | `[]` | Your own C++ files to compile into the game, typically the functions named in `[functions] override`. |
 
 Generated files:
@@ -118,7 +118,7 @@ config edit rebuilds only what changed.
 | `preempt_loops` | bool | `true` | Every loop back-edge is a safepoint where interrupts, timers, vsync and thread preemption happen. Turning it off speeds up tight loops, but code that spins on memory (a vsync flag, a DMA status) will hang. |
 | `split_gaps` | bool | `true` | Code between known functions that nothing references becomes a function of its own instead of being left out. |
 | `entries` | array of addresses | `[]` | Extra function starts. Inside a function whose size is known (from the config, a map or a symbol) they become mid-function entry points instead of splitting it. |
-| `entries_files` | array of paths | `[]` | Files of extra entries, in the format the runtime writes to `ps2uc_missing.toml` (any `0x...` number outside a `#` comment counts). A file that does not exist yet is a warning, so you can list it before the first run. |
+| `entries_files` | array of paths | `[]` | Files of extra entries, in the format the runtime writes to `ps2n_missing.toml` (any `0x...` number outside a `#` comment counts). A file that does not exist yet is a warning, so you can list it before the first run. |
 
 ### `[[analysis.functions]]`
 
@@ -156,7 +156,7 @@ bind = { "0x00123456" = "ret0", "sceCdInit" = "ret1" }   # target = handler
 bind = ["ret0@0x00123456", "ret1@sceCdInit", "printf"]   # handler@target; a bare name binds the function of that name
 ```
 
-A handler that does not exist is an error. `ps2-uncompiler stubs` lists the
+A handler that does not exist is an error. `ps2n stubs` lists the
 handlers:
 
 | Handler | Replaces |
@@ -234,7 +234,7 @@ recompile stops with `patch at 0x00100abc expects 0x0c040000 but the ELF has
 
 ## Command-line overrides
 
-`ps2-uncompiler recompile` options take precedence over the config file:
+`ps2n recompile` options take precedence over the config file:
 
 | Option | Overrides |
 |---|---|
@@ -264,7 +264,7 @@ mode = "multi"
 extra_sources = ["src/overrides.cpp"]
 
 [analysis]
-entries_files = ["ps2uc_missing.toml"]                  # written by the last run, in the directory it ran in
+entries_files = ["ps2n_missing.toml"]                   # written by the last run, in the directory it ran in
 
 [[analysis.functions]]
 name = "VblankHandler"

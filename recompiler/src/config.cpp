@@ -1,13 +1,13 @@
 #include "config.h"
 
-#include "ps2uc/util.h"
+#include "ps2n/util.h"
 
 #define TOML_EXCEPTIONS 1
 #include <toml.hpp>
 
 #include <sstream>
 
-namespace ps2uc {
+namespace ps2n {
 
 namespace {
 
@@ -227,4 +227,4 @@ Config Config::load(const std::filesystem::path& file) {
     return c;
 }
 
-} // namespace ps2uc
+} // namespace ps2n

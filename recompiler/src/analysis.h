@@ -4,8 +4,8 @@
 
 #include "config.h"
 
-#include "ps2uc/elf.h"
-#include "ps2uc/r5900.h"
+#include "ps2n/elf.h"
+#include "ps2n/r5900.h"
 
 #include <cstdint>
 #include <map>
@@ -14,7 +14,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace ps2uc {
+namespace ps2n {
 
 // Where a function start came from, strongest first.
 enum class Source : uint8_t { Config, Map, Symbol, Entry, ExtraEntry, Jal, DataRef, CodePointer, Prologue, Gap };
@@ -70,4 +70,4 @@ bool isRuntimeStub(const std::string& name);
 
 Program analyze(const ElfFile& elf, const Config& cfg);
 
-} // namespace ps2uc
+} // namespace ps2n

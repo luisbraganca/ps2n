@@ -10,15 +10,15 @@
 #include <string_view>
 #include <vector>
 
-namespace ps2uc {
+namespace ps2n {
 
 #if defined(__GNUC__) || defined(__clang__)
-#define PS2UC_PRINTF(fmt_idx, args_idx) __attribute__((format(printf, fmt_idx, args_idx)))
+#define PS2N_PRINTF(fmt_idx, args_idx) __attribute__((format(printf, fmt_idx, args_idx)))
 #else
-#define PS2UC_PRINTF(fmt_idx, args_idx)
+#define PS2N_PRINTF(fmt_idx, args_idx)
 #endif
 
-std::string strprintf(const char* fmt, ...) PS2UC_PRINTF(1, 2);
+std::string strprintf(const char* fmt, ...) PS2N_PRINTF(1, 2);
 std::string vstrprintf(const char* fmt, va_list ap);
 
 std::string hex32(uint32_t v);            // "0x0012ab40"
@@ -52,4 +52,4 @@ public:
     using std::runtime_error::runtime_error;
 };
 
-} // namespace ps2uc
+} // namespace ps2n

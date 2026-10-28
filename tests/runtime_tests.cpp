@@ -11,8 +11,8 @@
 #include "ps2/recomp.h"
 #include "stubs/format.h"
 
-#include "ps2uc/elf.h"
-#include "ps2uc/util.h"
+#include "ps2n/elf.h"
+#include "ps2n/util.h"
 
 #include <array>
 #include <bit>
@@ -472,7 +472,7 @@ struct EeSif {
 TEST_CASE(iop_sif_rpc_fileio_and_loadfile) {
     reset();
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / "ps2uc_iop_test";
+    const fs::path dir = fs::temp_directory_path() / "ps2n_iop_test";
     fs::create_directories(dir);
     std::ofstream(dir / "data.txt") << "hello from the host";
     g_opt.host0Dir = dir;
@@ -549,7 +549,7 @@ TEST_CASE(iop_sif_rpc_fileio_and_loadfile) {
 TEST_CASE(iop_reset_with_a_replacement_image) {
     reset();
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / "ps2uc_ioprp_test";
+    const fs::path dir = fs::temp_directory_path() / "ps2n_ioprp_test";
     fs::create_directories(dir);
     // All the runtime reads from a replacement image are its modules' ids.
     std::string image(0x400, '\0');
@@ -643,7 +643,7 @@ TEST_CASE(iop_reset_with_a_replacement_image) {
 TEST_CASE(iop_power_off_multitap_and_pad_services) {
     reset();
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / "ps2uc_services_test";
+    const fs::path dir = fs::temp_directory_path() / "ps2n_services_test";
     fs::create_directories(dir);
     // All the runtime reads from a module it replaces is its IRX header: an
     // ELF whose one program header points at the .iopmod data.
@@ -651,12 +651,12 @@ TEST_CASE(iop_power_off_multitap_and_pad_services) {
         std::string irx(0x80, '\0');
         auto put = [&](size_t off, uint32_t v, size_t n) { std::memcpy(irx.data() + off, &v, n); };
         irx.replace(0, 7, "\x7f" "ELF\x01\x01\x01", 7);
-        put(16, ps2uc::elf::ET_SCE_IOPRELEXEC, 2);
-        put(18, ps2uc::elf::EM_MIPS, 2);
+        put(16, ps2n::elf::ET_SCE_IOPRELEXEC, 2);
+        put(18, ps2n::elf::EM_MIPS, 2);
         put(28, 52, 4);                                   // e_phoff
         put(42, 32, 2);                                   // e_phentsize
         put(44, 1, 2);                                    // e_phnum
-        put(52, ps2uc::elf::PT_SCE_IOPMOD, 4);
+        put(52, ps2n::elf::PT_SCE_IOPMOD, 4);
         put(56, 84, 4);
         put(84, 0xFFFFFFFFu, 4);                          // no module info in the image
         put(84 + 24, version, 2);
@@ -749,8 +749,8 @@ TEST_CASE(iop_power_off_multitap_and_pad_services) {
 TEST_CASE(disc_iso9660_from_a_directory_and_an_image) {
     namespace disc = iop::disc;
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / "ps2uc_disc_test";
-    const fs::path iso = fs::temp_directory_path() / "ps2uc_disc_test.iso";
+    const fs::path dir = fs::temp_directory_path() / "ps2n_disc_test";
+    const fs::path iso = fs::temp_directory_path() / "ps2n_disc_test.iso";
     fs::remove_all(dir);
     fs::create_directories(dir / "data" / "sub");
     const std::string cnf = "BOOT2 = cdrom0:\\SLUS_000.00;1\r\nVER = 1.00\r\n";
@@ -835,7 +835,7 @@ TEST_CASE(disc_iso9660_from_a_directory_and_an_image) {
 namespace {
 void noop() {}
 uint32_t checksumOf(const uint32_t* words, size_t count) {
-    ps2uc::CodeChecksum sum;
+    ps2n::CodeChecksum sum;
     for (size_t i = 0; i < count; ++i) sum.add(words[i]);
     return sum.value;
 }

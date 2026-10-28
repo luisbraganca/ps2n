@@ -2,13 +2,13 @@
 
 #include "function_map.h"
 
-#include "ps2uc/util.h"
+#include "ps2n/util.h"
 
 #include <algorithm>
 #include <cctype>
 #include <optional>
 
-namespace ps2uc {
+namespace ps2n {
 
 using namespace r5900;
 
@@ -398,7 +398,7 @@ private:
         for (const auto& [ref, handler] : cfg_.stubBindings) {
             if (!isRuntimeStub(handler))
                 throw Error("stub handler '" + handler + "' (for " + ref.text + ") does not exist in the runtime; "
-                            "`ps2-uncompiler stubs` lists the available ones");
+                            "`ps2n stubs` lists the available ones");
             if (Function* f = resolve(ref, "stub")) {
                 f->binding = Binding::Stub;
                 f->handler = handler;
@@ -627,4 +627,4 @@ Program analyze(const ElfFile& elf, const Config& cfg) {
     return p;
 }
 
-} // namespace ps2uc
+} // namespace ps2n

@@ -6,22 +6,22 @@
 #include "config.h"
 #include "function_map.h"
 
-#include "ps2uc/assembler.h"
-#include "ps2uc/elf.h"
-#include "ps2uc/util.h"
+#include "ps2n/assembler.h"
+#include "ps2n/elf.h"
+#include "ps2n/util.h"
 
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 
-using namespace ps2uc;
+using namespace ps2n;
 namespace fs = std::filesystem;
 
 namespace {
 
 fs::path tempDir() {
     static const fs::path d = [] {
-        fs::path p = fs::temp_directory_path() / ("ps2uc_tests_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        fs::path p = fs::temp_directory_path() / ("ps2n_tests_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         fs::create_directories(p);
         return p;
     }();

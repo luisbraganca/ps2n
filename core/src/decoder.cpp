@@ -2,18 +2,18 @@
 // "EE Core Instruction Set Manual" (and matches rabbitizer's R5900 tables).
 // Encodings the EE does not implement (DMULT, LL/SC, LDC1, ...) decode to
 // Op::Invalid so the recompiler reports them instead of guessing.
-#include "ps2uc/r5900.h"
+#include "ps2n/r5900.h"
 
 #include <array>
 
-namespace ps2uc::r5900 {
+namespace ps2n::r5900 {
 
 namespace {
 
 constexpr OpInfo kInfo[] = {
     {Op::Invalid, "(invalid)", 0, "", 0, 0},
 #define X(op, mn, match, ops, flags, mem) {Op::op, mn, match, ops, flags, mem},
-#include "ps2uc/r5900_ops.inc"
+#include "ps2n/r5900_ops.inc"
 #undef X
 };
 static_assert(sizeof(kInfo) / sizeof(kInfo[0]) == static_cast<size_t>(Op::Count));
@@ -514,4 +514,4 @@ const char* vuControlName(uint32_t r) {
     }
 }
 
-} // namespace ps2uc::r5900
+} // namespace ps2n::r5900

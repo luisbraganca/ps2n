@@ -1,17 +1,17 @@
 // Decoder, disassembler, assembler, ELF and IRX tests.
 #include "testing.h"
 
-#include "ps2uc/assembler.h"
-#include "ps2uc/elf.h"
-#include "ps2uc/irx.h"
-#include "ps2uc/r5900.h"
-#include "ps2uc/util.h"
+#include "ps2n/assembler.h"
+#include "ps2n/elf.h"
+#include "ps2n/irx.h"
+#include "ps2n/r5900.h"
+#include "ps2n/util.h"
 
 #include <cstring>
 #include <random>
 
-using namespace ps2uc;
-using namespace ps2uc::r5900;
+using namespace ps2n;
+using namespace ps2n::r5900;
 
 namespace {
 
@@ -166,7 +166,7 @@ buf:    .space 64
 
 TEST_CASE(assembler_incbin) {
     // A file next to the source: .incbin embeds its bytes as they are.
-    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "ps2uc_incbin_test";
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "ps2n_incbin_test";
     std::filesystem::create_directories(dir);
     writeFileIfChanged(dir / "blob.bin", std::string("\x78\x56\x34\x12\x01\x02", 6));
     Assembler as;

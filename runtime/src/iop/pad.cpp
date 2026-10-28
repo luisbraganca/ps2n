@@ -8,7 +8,7 @@
 #include "ps2/memory.h"
 #include "video/video.h"
 
-#include "ps2uc/util.h"
+#include "ps2n/util.h"
 
 #include <array>
 #include <cstring>
@@ -300,7 +300,7 @@ bool parseScriptLine(const std::string& raw, uint64_t& frame, Input& in) {
     while (ss >> tok) {
         const auto eq = tok.find('=');
         if (eq != std::string::npos) {
-            const std::string key = ps2uc::toLower(tok.substr(0, eq));
+            const std::string key = ps2n::toLower(tok.substr(0, eq));
             const auto v = static_cast<uint8_t>(std::strtoul(tok.c_str() + eq + 1, nullptr, 0));
             if (key == "lx") in.lx = v;
             else if (key == "ly") in.ly = v;
@@ -310,7 +310,7 @@ bool parseScriptLine(const std::string& raw, uint64_t& frame, Input& in) {
             continue;
         }
         if (tok == "-" || tok == "none") continue;
-        for (const auto& part : ps2uc::split(ps2uc::toLower(tok), '+')) {
+        for (const auto& part : ps2n::split(ps2n::toLower(tok), '+')) {
             auto it = names.find(part);
             if (it == names.end()) return false;
             in.buttons |= it->second;

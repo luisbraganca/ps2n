@@ -7,9 +7,9 @@
 #include "iop/kernel.h"
 #include "log.h"
 
-#include "ps2uc/elf.h"
-#include "ps2uc/irx.h"
-#include "ps2uc/util.h"
+#include "ps2n/elf.h"
+#include "ps2n/irx.h"
+#include "ps2n/util.h"
 
 #include <algorithm>
 #include <memory>
@@ -18,9 +18,9 @@
 
 namespace ps2::iop::modules {
 
-using ps2uc::ElfFile;
-using ps2uc::IrxInfo;
-using ps2uc::toLower;
+using ps2n::ElfFile;
+using ps2n::IrxInfo;
+using ps2n::toLower;
 using namespace hle;
 
 namespace {
@@ -96,7 +96,7 @@ void relocate(const ElfFile& elf, uint32_t base) {
     const auto& b = elf.bytes();
     auto u32 = [&](size_t o) { return static_cast<uint32_t>(b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (static_cast<uint32_t>(b[o + 3]) << 24)); };
     for (const auto& s : elf.sections) {
-        if (s.type != ps2uc::elf::SHT_REL) continue;
+        if (s.type != ps2n::elf::SHT_REL) continue;
         const uint32_t count = s.size / 8;
         if (s.offset + static_cast<size_t>(count) * 8 > b.size()) continue;
         auto relOffset = [&](uint32_t i) { return u32(s.offset + 8 * static_cast<size_t>(i)); };
@@ -150,14 +150,14 @@ int loadImage(std::vector<uint8_t> bytes, const std::string& path, int allocMode
     IrxInfo irx;
     try {
         elf = std::make_unique<ElfFile>(ElfFile::parse(std::move(bytes), path));
-        irx = ps2uc::parseIrx(*elf);
+        irx = ps2n::parseIrx(*elf);
     } catch (const std::exception& e) {
         PS2_WARN("iop", "%s is not an IRX module (%s)", path.c_str(), e.what());
         return KE_ILLEGAL_OBJECT;
     }
-    const ps2uc::ElfSegment* seg = nullptr;
+    const ps2n::ElfSegment* seg = nullptr;
     for (const auto& s : elf->segments)
-        if (s.type == ps2uc::elf::PT_LOAD) seg = &s;
+        if (s.type == ps2n::elf::PT_LOAD) seg = &s;
     if (!seg || seg->offset + static_cast<size_t>(seg->filesz) > elf->bytes().size()) return KE_ILLEGAL_OBJECT;
 
     const uint32_t memsz = std::max(seg->memsz, irx.textSize + irx.dataSize + irx.bssSize);
@@ -263,7 +263,7 @@ bool locate(const std::string& path, std::vector<uint8_t>& image, std::string& n
     version = 0;
     if (!hostfs::readWholeFile(path, image)) return false;
     try {
-        const IrxInfo irx = ps2uc::parseIrx(ElfFile::parse(image, path));
+        const IrxInfo irx = ps2n::parseIrx(ElfFile::parse(image, path));
         if (!irx.name.empty()) name = toLower(irx.name);
         version = irx.version;
     } catch (const std::exception&) {
@@ -448,7 +448,7 @@ void load(const std::string& path, const std::string& args, Done done) {
     const bool found = locate(path, image, name, version);
     if (int id = provide(name, path, version)) return done(id, 0);
     if (!found) {
-        if (ps2uc::startsWith(toLower(path), "rom")) {
+        if (ps2n::startsWith(toLower(path), "rom")) {
             // A BIOS module we have no replacement for. Pretend it loaded and say so.
             PS2_UNIMPL("iop", "IOP module without HLE: " + name,
                        "IOP module %s is in the BIOS, which is not available, and the HLE kernel does not provide it; "
@@ -468,7 +468,7 @@ void loadFromMemory(uint32_t addr, const std::string& args, Done done) {
     std::string name;
     uint16_t version = 0;
     try {
-        const IrxInfo irx = ps2uc::parseIrx(ElfFile::parse(image, "(buffer)"));
+        const IrxInfo irx = ps2n::parseIrx(ElfFile::parse(image, "(buffer)"));
         name = toLower(irx.name);
         version = irx.version;
     } catch (const std::exception&) {

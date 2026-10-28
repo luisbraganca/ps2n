@@ -13,7 +13,7 @@
 #include "log.h"
 #include "ps2/memory.h"
 
-#include "ps2uc/util.h"
+#include "ps2n/util.h"
 
 #include <array>
 #include <chrono>
@@ -105,7 +105,7 @@ bool present(int port, int slot) {
 std::vector<std::string> resolve(int port, const std::string& path) {
     const std::string full = !path.empty() && path[0] == '/' ? path : g_cards[port].cwd + "/" + path;
     std::vector<std::string> parts;
-    for (const std::string& p : ps2uc::split(full, '/')) {
+    for (const std::string& p : ps2n::split(full, '/')) {
         if (p.empty() || p == ".") continue;
         if (p == "..") {
             if (!parts.empty()) parts.pop_back();

@@ -1,8 +1,8 @@
-#include "ps2uc/assembler.h"
+#include "ps2n/assembler.h"
 
-#include "ps2uc/elf.h"
-#include "ps2uc/r5900.h"
-#include "ps2uc/util.h"
+#include "ps2n/elf.h"
+#include "ps2n/r5900.h"
+#include "ps2n/util.h"
 
 #include <algorithm>
 #include <cctype>
@@ -11,7 +11,7 @@
 #include <set>
 #include <unordered_map>
 
-namespace ps2uc {
+namespace ps2n {
 
 using r5900::Op;
 
@@ -1137,4 +1137,4 @@ bool assembleInstruction(std::string_view line, uint32_t addr, uint32_t& out, st
     }
 }
 
-} // namespace ps2uc
+} // namespace ps2n

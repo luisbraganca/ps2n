@@ -2,11 +2,11 @@
 
 #include "version.h"
 
-#include "ps2uc/util.h"
+#include "ps2n/util.h"
 
 #include <sstream>
 
-namespace ps2uc {
+namespace ps2n {
 
 namespace {
 size_t countBinding(const Program& p, Binding b) {
@@ -28,7 +28,7 @@ std::string summarize(const Program& p) {
 
 std::string buildReport(const Program& p, const Config& cfg) {
     std::ostringstream r;
-    r << PS2UC_VERSION_STRING << " recompilation report\n\n";
+    r << PS2N_VERSION_STRING << " recompilation report\n\n";
     r << "input        " << cfg.elf.string() << "\n";
     r << strprintf("crc32        %08x\nentry        0x%08x\n", p.elf->crc32(), p.elf->entry);
     for (const auto& range : p.elf->codeRanges())
@@ -81,4 +81,4 @@ std::string buildReport(const Program& p, const Config& cfg) {
     return r.str();
 }
 
-} // namespace ps2uc
+} // namespace ps2n

@@ -10,7 +10,7 @@
 #include "log.h"
 #include "stubs/format.h"
 
-#include "ps2uc/util.h"
+#include "ps2n/util.h"
 
 #include <algorithm>
 #include <array>
@@ -628,7 +628,7 @@ void sysProbeTlbEntry() {
 void sysLoadExecPS2() {
     std::vector<std::string> argv{readCString(arg(0))};
     for (int32_t i = 0; i < sarg(1) && argv.size() < 16; ++i) argv.push_back(readCString(read32(arg(2) + 4 * static_cast<uint32_t>(i))));
-    if (ps2uc::startsWith(ps2uc::toLower(argv[0]), "rom0:")) {
+    if (ps2n::startsWith(ps2n::toLower(argv[0]), "rom0:")) {
         PS2_INFO("kernel", "LoadExecPS2(\"%s\"): leaving the game", argv[0].c_str());
         return requestExit(0);
     }

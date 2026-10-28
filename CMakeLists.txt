@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(ps2-uncompiler
+project(PS2Native
     VERSION 0.1.0
     DESCRIPTION "Static recompiler that turns PlayStation 2 ELF executables into C++"
     LANGUAGES C CXX)
@@ -14,28 +14,28 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
 endif()
 
-option(PS2UC_BUILD_TESTS    "Build the unit and end-to-end tests" ON)
-option(PS2UC_BUILD_EXAMPLES "Build the example games (recompiled at build time)" ON)
-option(PS2UC_WARNINGS_AS_ERRORS "Treat compiler warnings as errors in project code" OFF)
-option(PS2UC_WITH_SDL2 "Open a window for GS output when SDL2 is available" ON)
+option(PS2N_BUILD_TESTS    "Build the unit and end-to-end tests" ON)
+option(PS2N_BUILD_EXAMPLES "Build the example games (recompiled at build time)" ON)
+option(PS2N_WARNINGS_AS_ERRORS "Treat compiler warnings as errors in project code" OFF)
+option(PS2N_WITH_SDL2 "Open a window for GS output when SDL2 is available" ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-include(Ps2ucWarnings)
+include(Ps2nWarnings)
 
 # Lets the recompiler point generated projects back at this source tree.
-set(PS2UC_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+set(PS2N_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_subdirectory(core)
 add_subdirectory(recompiler)
 add_subdirectory(runtime)
 
-include(Ps2ucRecompile)
+include(Ps2nRecompile)
 
-if(PS2UC_BUILD_TESTS)
+if(PS2N_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
 
-if(PS2UC_BUILD_EXAMPLES)
+if(PS2N_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()

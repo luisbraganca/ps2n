@@ -1,10 +1,10 @@
-#include "ps2uc/elf.h"
-#include "ps2uc/util.h"
+#include "ps2n/elf.h"
+#include "ps2n/util.h"
 
 #include <algorithm>
 #include <cstring>
 
-namespace ps2uc {
+namespace ps2n {
 
 namespace {
 
@@ -233,6 +233,6 @@ std::optional<uint32_t> ElfFile::gpValue() const {
     return std::nullopt;
 }
 
-uint32_t ElfFile::crc32() const { return ps2uc::crc32(bytes_.data(), bytes_.size()); }
+uint32_t ElfFile::crc32() const { return ps2n::crc32(bytes_.data(), bytes_.size()); }
 
-} // namespace ps2uc
+} // namespace ps2n

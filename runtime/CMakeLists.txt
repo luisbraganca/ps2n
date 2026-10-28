@@ -1,8 +1,8 @@
-# ps2uc_runtime: everything a recompiled game links against. Generated code
+# ps2n_runtime: everything a recompiled game links against. Generated code
 # only includes ps2/recomp.h (instruction semantics + control-flow entry
 # points) and ps2/runtime.h (the table types and ps2::run).
 
-add_library(ps2uc_runtime STATIC
+add_library(ps2n_runtime STATIC
     src/clock.cpp
     src/cop0.cpp
     src/dispatch.cpp
@@ -34,38 +34,38 @@ add_library(ps2uc_runtime STATIC
     src/stubs/stubs.cpp
     src/video/video.cpp
 )
-add_library(ps2uc::runtime ALIAS ps2uc_runtime)
-target_include_directories(ps2uc_runtime
+add_library(ps2n::runtime ALIAS ps2n_runtime)
+target_include_directories(ps2n_runtime
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(ps2uc_runtime PUBLIC ps2uc_core)
-target_compile_features(ps2uc_runtime PUBLIC cxx_std_20)
+target_link_libraries(ps2n_runtime PUBLIC ps2n_core)
+target_compile_features(ps2n_runtime PUBLIC cxx_std_20)
 # The EE FPU and the VUs round after a multiply before adding (MADD, MSUB);
 # fusing `a + b * c` into one rounding would change results. Public, because
 # recompiled games compile the inline instruction semantics too. clang-cl only
 # takes the option through /clang:; MSVC 2022 and later only fuse with
 # /fp:contract or /fp:fast.
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
-    target_compile_options(ps2uc_runtime PUBLIC /clang:-ffp-contract=off)
+    target_compile_options(ps2n_runtime PUBLIC /clang:-ffp-contract=off)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    target_compile_options(ps2uc_runtime PUBLIC -ffp-contract=off)
+    target_compile_options(ps2n_runtime PUBLIC -ffp-contract=off)
 endif()
-ps2uc_set_warnings(ps2uc_runtime)
+ps2n_set_warnings(ps2n_runtime)
 
 find_package(Threads REQUIRED)
-target_link_libraries(ps2uc_runtime PUBLIC Threads::Threads)
+target_link_libraries(ps2n_runtime PUBLIC Threads::Threads)
 
-if(PS2UC_WITH_SDL2)
+if(PS2N_WITH_SDL2)
     find_package(SDL2 CONFIG QUIET)
     if(SDL2_FOUND)
-        message(STATUS "ps2uc runtime: SDL2 ${SDL2_VERSION} found, window output enabled")
-        target_compile_definitions(ps2uc_runtime PRIVATE PS2UC_HAVE_SDL2=1)
+        message(STATUS "ps2n runtime: SDL2 ${SDL2_VERSION} found, window output enabled")
+        target_compile_definitions(ps2n_runtime PRIVATE PS2N_HAVE_SDL2=1)
         if(TARGET SDL2::SDL2)
-            target_link_libraries(ps2uc_runtime PRIVATE SDL2::SDL2)
+            target_link_libraries(ps2n_runtime PRIVATE SDL2::SDL2)
         else()
-            target_link_libraries(ps2uc_runtime PRIVATE SDL2::SDL2-static)
+            target_link_libraries(ps2n_runtime PRIVATE SDL2::SDL2-static)
         endif()
     else()
-        message(STATUS "ps2uc runtime: SDL2 not found, building headless (frames can still be dumped with --dump-frames)")
+        message(STATUS "ps2n runtime: SDL2 not found, building headless (frames can still be dumped with --dump-frames)")
     endif()
 endif()

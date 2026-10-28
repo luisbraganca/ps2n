@@ -12,8 +12,8 @@
 #include "log.h"
 #include "video/video.h"
 
-#include "ps2uc/elf.h"
-#include "ps2uc/util.h"
+#include "ps2n/elf.h"
+#include "ps2n/util.h"
 
 #include <atomic>
 #include <csignal>
@@ -36,9 +36,9 @@
 
 namespace ps2 {
 
-using ps2uc::ElfFile;
-using ps2uc::ElfSegment;
-namespace elf = ps2uc::elf;
+using ps2n::ElfFile;
+using ps2n::ElfSegment;
+namespace elf = ps2n::elf;
 
 Options g_opt;
 
@@ -78,7 +78,7 @@ constexpr const char* kUsage =
     "  --pad-script FILE     controller input from a script instead of the keyboard\n"
     "  --region REGION       console region: usa (default), europe, japan, asia, china\n"
     "  --missing-out FILE    where to record interpreted entry points\n"
-    "                        (default: ps2uc_missing.toml; empty disables)\n";
+    "                        (default: ps2n_missing.toml; empty disables)\n";
 
 bool parseOptions(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
@@ -116,7 +116,7 @@ bool parseOptions(int argc, char** argv) {
         else if (a == "--missing-out") g_opt.missingOut = value();
         else if (a == "--pad-script") g_opt.padScript = value();
         else if (a == "--region") {
-            const std::string r = ps2uc::toLower(value());
+            const std::string r = ps2n::toLower(value());
             if (r == "usa" || r == "us" || r == "a") g_opt.region = 'A';
             else if (r == "europe" || r == "eu" || r == "e") g_opt.region = 'E';
             else if (r == "japan" || r == "jp" || r == "j") g_opt.region = 'J';
@@ -308,7 +308,7 @@ bool requestExec(std::vector<std::string> argv) {
         for (size_t i = 0; i <= g_game->programCount && !program; ++i) {
             const GameInfo* p = i == 0 ? g_game : g_game->programs[i - 1];
             if (p->elfCrc32 == image.crc32()) program = p;
-            else if (ps2uc::toLower(std::filesystem::path(p->defaultElf).filename().string()) == ps2uc::toLower(name)) sameName = true;
+            else if (ps2n::toLower(std::filesystem::path(p->defaultElf).filename().string()) == ps2n::toLower(name)) sameName = true;
         }
         if (!program && sameName)
             PS2_FALLBACK("runtime", "interpreted program " + name,

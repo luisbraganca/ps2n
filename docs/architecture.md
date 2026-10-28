@@ -6,11 +6,11 @@ the pieces are shaped the way they are.
 ## Pipeline
 
 ```
-          ┌──────────── ps2-uncompiler (recompiler/) ────────────┐
+          ┌───────────────── ps2n (recompiler/) ─────────────────┐
 game.elf ─┤ ElfFile ─► analyze() ─► generate() ─► C++ + CMakeLists │
           └──────────────────────────────────────────────────────┘
                          │
-config.toml ─────────────┘          ps2uc_runtime (runtime/) ─┐
+config.toml ─────────────┘           ps2n_runtime (runtime/) ─┐
 Ghidra map (optional)                                          ▼
                                                   native executable
 ```
@@ -27,7 +27,7 @@ Ghidra map (optional)                                          ▼
 
 ## Decoding: one table, three consumers
 
-`core/include/ps2uc/r5900_ops.inc` lists every R5900 instruction once: its
+`core/include/ps2n/r5900_ops.inc` lists every R5900 instruction once: its
 mnemonic, its encoding with operand fields zeroed, its operand syntax, flags
 (branch, load, link, likely, ...) and memory access size. From it:
 
@@ -208,7 +208,7 @@ the same `ops::` functions. It runs:
 It hands control back as soon as it reaches an address that has recompiled
 code. Calls from interpreted code into recompiled functions are direct host
 calls with the same return-address check. Every address it had to start at is
-written to `ps2uc_missing.toml` at exit, so the next recompile can include it.
+written to `ps2n_missing.toml` at exit, so the next recompile can include it.
 
 ## Memory
 

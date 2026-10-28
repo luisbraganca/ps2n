@@ -5,10 +5,10 @@
 
 #include <string>
 
-namespace ps2uc {
+namespace ps2n {
 
 std::string buildReport(const Program& prog, const Config& cfg);
 // One-paragraph summary for the console.
 std::string summarize(const Program& prog);
 
-} // namespace ps2uc
+} // namespace ps2n

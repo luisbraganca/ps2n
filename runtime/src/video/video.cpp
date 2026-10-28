@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-#ifdef PS2UC_HAVE_SDL2
+#ifdef PS2N_HAVE_SDL2
 #include <SDL.h>
 #endif
 
@@ -55,7 +55,7 @@ void dumpPpm(const gs::Frame& f, uint64_t index) {
     std::fclose(fp);
 }
 
-#ifdef PS2UC_HAVE_SDL2
+#ifdef PS2N_HAVE_SDL2
 SDL_Window* g_window = nullptr;
 SDL_Renderer* g_renderer = nullptr;
 SDL_Texture* g_texture = nullptr;
@@ -148,7 +148,7 @@ void present(const gs::Frame& f) {
             g_sdlFailed = true;
             return;
         }
-        const std::string title = std::string(g_game ? g_game->name : "ps2uc") + " (ps2-uncompiler)";
+        const std::string title = std::string(g_game ? g_game->name : "ps2n") + " (PS2Native)";
         g_window = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 640, 448,
                                     SDL_WINDOW_RESIZABLE);
         g_renderer = g_window ? SDL_CreateRenderer(g_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC) : nullptr;
@@ -172,7 +172,7 @@ void present(const gs::Frame& f) {
 #endif
 
 bool windowEnabled() {
-#ifdef PS2UC_HAVE_SDL2
+#ifdef PS2N_HAVE_SDL2
     return g_opt.window;
 #else
     return false;
@@ -212,7 +212,7 @@ void onVsync() {
 }
 
 void hostLoop(const std::atomic<bool>& guestDone) {
-#ifndef PS2UC_HAVE_SDL2
+#ifndef PS2N_HAVE_SDL2
     (void)guestDone;
 #else
     if (!g_opt.window) return;
@@ -236,7 +236,7 @@ void hostLoop(const std::atomic<bool>& guestDone) {
 }
 
 void shutdown() {
-#ifdef PS2UC_HAVE_SDL2
+#ifdef PS2N_HAVE_SDL2
     if (g_texture) SDL_DestroyTexture(g_texture);
     if (g_renderer) SDL_DestroyRenderer(g_renderer);
     if (g_window) SDL_DestroyWindow(g_window);

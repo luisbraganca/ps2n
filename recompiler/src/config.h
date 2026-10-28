@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace ps2uc {
+namespace ps2n {
 
 // A function referenced from the config: by symbol name or by address.
 struct FunctionRef {
@@ -43,7 +43,7 @@ struct Config {
     int files = 0;                     // multi-file: fixed file count (0 = by size)
     bool comments = true;
     bool project = true;               // write CMakeLists.txt + main
-    std::filesystem::path runtimeDir;  // ps2-uncompiler source tree for the generated CMakeLists
+    std::filesystem::path runtimeDir;  // PS2Native source tree for the generated CMakeLists
     std::vector<std::filesystem::path> extraSources;   // user code (overrides) added to the generated project
 
     // [analysis]
@@ -78,4 +78,4 @@ struct Config {
 
 FunctionRef parseFunctionRef(const std::string& text);
 
-} // namespace ps2uc
+} // namespace ps2n

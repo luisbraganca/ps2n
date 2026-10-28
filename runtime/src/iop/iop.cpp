@@ -18,7 +18,7 @@
 #include "log.h"
 #include "ps2/memory.h"
 
-#include "ps2uc/util.h"
+#include "ps2n/util.h"
 
 #include <algorithm>
 #include <array>
@@ -224,10 +224,10 @@ void resetIop();
 // name instead (IOPRP214 is 2140, IOPRP23 is 2300).
 std::map<std::string, uint32_t> imageModuleVersions(const std::string& resetArg) {
     std::map<std::string, uint32_t> versions;
-    const std::vector<std::string> words = ps2uc::split(resetArg.c_str(), ' ');
+    const std::vector<std::string> words = ps2n::split(resetArg.c_str(), ' ');
     for (size_t w = 1; w < words.size(); ++w) {   // words[0] is the loader, rom0:UDNL
         const std::string& path = words[w];
-        if (path.empty() || ps2uc::startsWith(ps2uc::toLower(path), "rom0:")) continue;   // the BIOS's own (rom0:EELOADCNF)
+        if (path.empty() || ps2n::startsWith(ps2n::toLower(path), "rom0:")) continue;   // the BIOS's own (rom0:EELOADCNF)
         std::vector<uint8_t> image;
         if (!hostfs::readWholeFile(path, image)) PS2_WARN("iop", "cannot read the IOP replacement image %s", path.c_str());
         bool ids = false;
@@ -236,11 +236,11 @@ std::map<std::string, uint32_t> imageModuleVersions(const std::string& resetArg)
             if (std::memcmp(id, "PsII", 4) != 0) continue;
             if (!std::all_of(id + 4, id + 12, [](char c) { return c >= 0x20 && c < 0x7F; })) continue;
             if (!std::all_of(id + 12, id + 16, [](char c) { return c >= '0' && c <= '9'; }) || id[12] == '0') continue;
-            versions.emplace(ps2uc::toLower(ps2uc::trim(std::string_view(id + 4, 8))), static_cast<uint32_t>(std::stoul(std::string(id + 12, 4))));
+            versions.emplace(ps2n::toLower(ps2n::trim(std::string_view(id + 4, 8))), static_cast<uint32_t>(std::stoul(std::string(id + 12, 4))));
             ids = true;
         }
         unsigned n = 0;
-        const std::string name = ps2uc::toUpper(path.substr(path.find_last_of(":\\/") + 1));
+        const std::string name = ps2n::toUpper(path.substr(path.find_last_of(":\\/") + 1));
         if (!ids && std::sscanf(name.c_str(), "IOPRP%u", &n) == 1 && n >= 10 && n < 1000) {
             versions.emplace("fileio", n < 100 ? n * 100 : n * 10);
             versions.emplace("loadfile", n < 100 ? n * 100 : n * 10);

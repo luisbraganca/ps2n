@@ -4,7 +4,7 @@
 #include "kernel/kernel.h"
 #include "log.h"
 
-#include "ps2uc/util.h"
+#include "ps2n/util.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -65,7 +65,7 @@ void initProgram(Program& p, const GameInfo* info, const std::string& name, bool
     p.info = info;
     p.name = name;
     // The boot program's interpreted entry points go to --missing-out, another
-    // program's next to it, named after it (ps2uc_missing.MAIN.ELF.toml).
+    // program's next to it, named after it (ps2n_missing.MAIN.ELF.toml).
     const std::filesystem::path& out = g_opt.missingOut;
     p.missing = &g_missing[out.empty() || boot ? out : out.parent_path() / (out.stem().string() + "." + name + out.extension().string())];
     if (!info) return;
@@ -105,7 +105,7 @@ bool inRam(const Program& p, const FunctionInfo& f) {
     if (!f.checksum) return true;
     const PatchInfo* patches = p.info->patches;
     const PatchInfo* patchesEnd = patches + p.info->patchCount;
-    ps2uc::CodeChecksum sum;
+    ps2n::CodeChecksum sum;
     for (uint32_t a = f.start; a < f.end; a += 4) {
         const PatchInfo* q = std::lower_bound(patches, patchesEnd, a, [](const PatchInfo& x, uint32_t addr) { return x.address < addr; });
         if (q != patchesEnd && q->address == a) continue;
@@ -215,7 +215,7 @@ void writeMissingEntries() {
         if (entries.empty() || file.empty()) continue;
         std::ofstream out(file);
         if (!out) continue;
-        out << "# Addresses ps2uc had to interpret during the last run.\n"
+        out << "# Addresses ps2n had to interpret during the last run.\n"
             << "# Point [analysis].entries_files at this file and recompile to turn them into entry points.\n"
             << "entries = [\n";
         for (uint32_t a : entries) {

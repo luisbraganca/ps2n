@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace ps2uc {
+namespace ps2n {
 
 struct GenerateResult {
     std::vector<std::filesystem::path> written;     // files whose content changed
@@ -36,4 +36,4 @@ GenerateResult generate(const Program& prog, const Config& cfg, const std::vecto
 // The C++ text of one recompiled function (exposed for tests and `disasm --cpp`).
 std::string emitFunction(const Program& prog, const Function& f, bool comments);
 
-} // namespace ps2uc
+} // namespace ps2n

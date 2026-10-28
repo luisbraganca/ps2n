@@ -1,18 +1,18 @@
-# ps2-uncompiler
+# PS2Native
 
-A static recompiler for PlayStation 2 executables. It reads an Emotion Engine
-(R5900) ELF, finds its functions, translates every instruction into plain C++,
-and links the result against a runtime that stands in for the rest of the
-console: the EE kernel, the hardware registers, the GS, and the IOP. The output
-is an ordinary native program you build with CMake.
+PS2Native (`ps2n`) is a static recompiler for PlayStation 2 executables. It
+reads an Emotion Engine (R5900) ELF, finds its functions, translates every
+instruction into plain C++, and links the result against a runtime that stands
+in for the rest of the console: the EE kernel, the hardware registers, the GS,
+and the IOP. The output is an ordinary native program you build with CMake.
 
 ```
-game.elf ──► ps2-uncompiler recompile ──► C++ (one statement per instruction)
-                                              │
-                         ps2uc runtime ───────┤  kernel, memory map, DMAC/GIF/GS,
-                                              │  VIF + VU, timers, SIF, the IOP,
-                                              ▼  fallback interpreter
-                                        native executable
+game.elf ──► ps2n recompile ──► C++ (one statement per instruction)
+                                    │
+                ps2n runtime ───────┤  kernel, memory map, DMAC/GIF/GS,
+                                    │  VIF + VU, timers, SIF, the IOP,
+                                    ▼  fallback interpreter
+                              native executable
 ```
 
 Generated code reads like the assembly it came from:
@@ -168,14 +168,14 @@ non-local return, kernel threads and a vblank interrupt handler.
 ## Porting a game
 
 1. **Look at the ELF.**
-   `ps2-uncompiler analyze SLUS_123.45 --write-config game.toml` prints the
+   `ps2n analyze SLUS_123.45 --write-config game.toml` prints the
    code ranges and what the analysis finds, and writes a starter config.
 2. **(Recommended for stripped games) export Ghidra's function map.** Run
-   [tools/ghidra/ExportPs2ucFunctions.java](tools/ghidra/ExportPs2ucFunctions.java)
+   [tools/ghidra/ExportPs2nFunctions.java](tools/ghidra/ExportPs2nFunctions.java)
    in Ghidra and set `[input] ghidra_map` to the CSV. Ghidra's boundaries take
    priority over the recompiler's heuristics. CSVs from PS2Recomp's exporter
    and Ghidra's own Functions / Symbol Table exports also work.
-3. **Recompile.** `ps2-uncompiler recompile game.toml` writes the C++, a
+3. **Recompile.** `ps2n recompile game.toml` writes the C++, a
    `CMakeLists.txt` and `report.txt` (functions, stubs, unresolved indirect
    jumps, warnings). If the game is several executables (the boot ELF starts
    the game proper with `LoadExecPS2`), list the others in `[input] programs`
@@ -185,7 +185,7 @@ non-local return, kernel threads and a vblank interrupt handler.
 5. **Iterate.** The runtime prints a summary of every unimplemented syscall,
    hardware register, IOP call and interpreted address when it exits (Ctrl+C
    works too). From there:
-   - addresses it had to interpret are written to `ps2uc_missing.toml`; add
+   - addresses it had to interpret are written to `ps2n_missing.toml`; add
      that file to `[analysis] entries_files` and recompile;
    - replace library functions with host stubs (`[stubs] bind`), or with your
      own C++ (`[functions] override`), or stub out functions that block
@@ -200,13 +200,13 @@ the two runs is a quick way to tell a recompiler bug from a runtime gap.
 ## Command line
 
 ```
-ps2-uncompiler recompile <config.toml> [--elf PATH] [--program PATH]... [--out DIR] [--name NAME]
-                         [--files N | --single] [--no-project] [--no-comments] [--quiet]
-ps2-uncompiler analyze <game.elf | config.toml> [--map CSV]... [--list] [--write-config FILE]
-ps2-uncompiler disasm <file.elf> [--function NAME|ADDR] [--range START:END] [--cpp NAME|ADDR]
-ps2-uncompiler irx <module.irx>          # IOP module name, version, imports, exports
-ps2-uncompiler assemble <in.s> -o <out.elf> [--base ADDR] [--strip]
-ps2-uncompiler stubs                     # runtime stub handlers available for binding
+ps2n recompile <config.toml> [--elf PATH] [--program PATH]... [--out DIR] [--name NAME]
+               [--files N | --single] [--no-project] [--no-comments] [--quiet]
+ps2n analyze <game.elf | config.toml> [--map CSV]... [--list] [--write-config FILE]
+ps2n disasm <file.elf> [--function NAME|ADDR] [--range START:END] [--cpp NAME|ADDR]
+ps2n irx <module.irx>          # IOP module name, version, imports, exports
+ps2n assemble <in.s> -o <out.elf> [--base ADDR] [--strip]
+ps2n stubs                     # runtime stub handlers available for binding
 ```
 
 `disasm --cpp NAME` prints the C++ the recompiler would generate for one
@@ -233,7 +233,7 @@ mode = "multi"                        # or "single"
 files = 16                            # fixed file count (handy for build systems)
 
 [analysis]
-entries_files = ["ps2uc_missing.toml"]
+entries_files = ["ps2n_missing.toml"]
 
 [stubs]
 auto = true                           # bind symbols named like runtime stubs (printf, memcpy, ...)
@@ -253,9 +253,9 @@ Every key is documented in [docs/config.md](docs/config.md).
 
 ## How it works
 
-- **Decoding** is driven by one table ([r5900_ops.inc](core/include/ps2uc/r5900_ops.inc))
+- **Decoding** is driven by one table ([r5900_ops.inc](core/include/ps2n/r5900_ops.inc))
   shared by the decoder, the disassembler and the assembler; a second table
-  ([r5900_sem.inc](core/include/ps2uc/r5900_sem.inc)) maps each instruction to
+  ([r5900_sem.inc](core/include/ps2n/r5900_sem.inc)) maps each instruction to
   the runtime function that implements it. The recompiler turns those rows into
   source text, the interpreter into calls, so both execute identical semantics.
 - **Instruction semantics** live in the runtime headers
@@ -296,8 +296,8 @@ takes a different route, these are the reasons:
 
 Also worth knowing:
 
-- **Generated code is a build artifact.** `ps2uc_add_recompiled_game()`
-  ([cmake/Ps2ucRecompile.cmake](cmake/Ps2ucRecompile.cmake)) recompiles at build
+- **Generated code is a build artifact.** `ps2n_add_recompiled_game()`
+  ([cmake/Ps2nRecompile.cmake](cmake/Ps2nRecompile.cmake)) recompiles at build
   time; the recompiler only rewrites files whose content changed, so
   incremental builds stay incremental.
 - **Fail loudly, keep running.** Unimplemented paths are logged the first few
@@ -316,9 +316,9 @@ summary.
 ## Project layout
 
 ```
-core/         ELF and IRX readers, R5900 decoder / disassembler / assembler (ps2uc_core)
-recompiler/   analysis, code generation, config, CLI (ps2uc_recomp, ps2-uncompiler)
-runtime/      what recompiled games link against (ps2uc_runtime)
+core/         ELF and IRX readers, R5900 decoder / disassembler / assembler (ps2n_core)
+recompiler/   analysis, code generation, config, CLI (ps2n_recomp, ps2n)
+runtime/      what recompiled games link against (ps2n_runtime)
   include/ps2/  generated-code API: cpu.h, memory.h, ops_*.h, recomp.h, runtime.h
   src/          dispatcher, interpreter, VU, kernel/, hw/ (DMAC, GS, VIF), iop/ (IOP CPU, kernel, services), stubs/, video/
 tools/ghidra/ function-map exporter for Ghidra

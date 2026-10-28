@@ -16,7 +16,7 @@
 /tests/sdk/sdtest/*.elf
 
 # Written by recompiled programs at run time
-ps2uc_missing.toml
+ps2n_missing.toml
 memcards/
 
 .DS_Store

@@ -10,11 +10,11 @@
 #include "kernel/kernel.h"
 #include "log.h"
 
-#include "ps2uc/r5900.h"
+#include "ps2n/r5900.h"
 
 namespace ps2 {
 
-namespace r5900 = ps2uc::r5900;
+namespace r5900 = ps2n::r5900;
 using r5900::Insn;
 using r5900::Op;
 
@@ -42,7 +42,7 @@ bool execSimple(const Insn& in) {
         ops::fn args;   \
         return true;
     switch (in.op) {
-#include "ps2uc/r5900_sem.inc"
+#include "ps2n/r5900_sem.inc"
     case Op::SYNC:
     case Op::CACHE:
     case Op::PREF:

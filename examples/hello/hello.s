@@ -1,6 +1,6 @@
 # hello.s - a small PS2 program for the end-to-end example.
 #
-# Assembled with `ps2-uncompiler assemble` (no PS2 toolchain needed) into an
+# Assembled with `ps2n assemble` (no PS2 toolchain needed) into an
 # ordinary EE ELF. It starts the way real programs do (SetupThread,
 # SetupHeap, main, Exit) and exercises the parts of the pipeline that matter:
 # loops, recursion, a switch jump table, function pointers, HI/LO multiply/

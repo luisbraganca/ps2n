@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace ps2uc {
+namespace ps2n {
 
 namespace elf {
 constexpr uint16_t ET_EXEC = 2;
@@ -140,4 +140,4 @@ private:
     const ElfSegment* segmentFor(uint32_t vaddr) const;
 };
 
-} // namespace ps2uc
+} // namespace ps2n

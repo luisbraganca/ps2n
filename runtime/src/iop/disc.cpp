@@ -2,7 +2,7 @@
 
 #include "log.h"
 
-#include "ps2uc/util.h"
+#include "ps2n/util.h"
 
 #include <algorithm>
 #include <chrono>
@@ -14,7 +14,7 @@
 namespace ps2::iop::disc {
 
 namespace fs = std::filesystem;
-using ps2uc::toUpper;
+using ps2n::toUpper;
 
 namespace {
 

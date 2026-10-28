@@ -2,14 +2,14 @@
 // tables that the IOP kernel's loadcore links at load time.
 #pragma once
 
-#include "ps2uc/elf.h"
+#include "ps2n/elf.h"
 
 #include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
 
-namespace ps2uc {
+namespace ps2n {
 
 struct IrxImport {
     std::string library;   // e.g. "sysmem"
@@ -37,10 +37,10 @@ struct IrxInfo {
     std::vector<IrxExportTable> exports;
 };
 
-// Throws ps2uc::Error if the file is not an IRX module.
+// Throws ps2n::Error if the file is not an IRX module.
 IrxInfo parseIrx(const ElfFile& elf);
 
 // Name of export `index` of an IOP library from the built-in table, or nullptr.
 const char* irxKnownExportName(std::string_view library, uint32_t index);
 
-} // namespace ps2uc
+} // namespace ps2n

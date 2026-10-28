@@ -14,7 +14,7 @@
 #include <cstring>
 #include <string>
 
-static_assert(sizeof(void*) == 8, "ps2uc runtime requires a 64-bit host");
+static_assert(sizeof(void*) == 8, "ps2n runtime requires a 64-bit host");
 
 namespace ps2 {
 
