@@ -37,6 +37,28 @@ L_001001a4:
 
 ## Status
 
+The recompiler covers the whole Emotion Engine instruction set, and the
+runtime runs this repository's test programs and ps2sdk homebrew. No retail
+game is playable yet. In the first one being brought up, 007: Agent Under
+Fire, the boot loader loads the game's IOP modules and starts the movie
+player, which runs recompiled.
+
+| Area | Progress | Count |
+|---|---|--:|
+| EE instructions: R5900, MMI, COP0, FPU, VU0 macro mode | `██████████` 100% | 359 / 359 |
+| VU micro instructions, VU0 and VU1 | `██████████` 100% | all |
+| EE kernel syscalls* | `█████████░` 88% | 127 / 145 |
+| IOP system library functions* | `████████░░` 77% | 428 / 557 |
+
+<sub>* Of the syscalls ps2sdk's `syscallnr.h` names (reserved numbers left
+out), and of the functions the project knows for 26 IOP system libraries
+(ps2sdk's export tables in [irx_exports.inc](core/src/irx_exports.inc), plus
+those the runtime declares), not of every function in every Sony module.
+Calls the runtime accepts with no effect, where no emulated hardware stands
+behind them, count as implemented. Counted on 2026-10-28;
+[docs/runtime.md](docs/runtime.md#what-is-covered) describes what each area
+covers.</sub>
+
 What works, and is covered by the test suite (`ctest`):
 
 - **The whole R5900 instruction set**: the MIPS III base the EE implements, the
