@@ -1,0 +1,5 @@
+skip: hang returned 0
+stub: get_magic returned -1
+override: triple(7) = 700
+patch: patched_value returned 2
+patch: instruction word 0x24020002

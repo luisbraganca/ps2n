@@ -1,0 +1,7 @@
+# The test build passes --elf and --out; this config only holds the bindings.
+[input]
+elf = "bin/mc.elf"
+
+[stubs]
+auto = true
+exclude = ["SifLoadModule"]   # load through the real LOADFILE RPC, not the host shortcut

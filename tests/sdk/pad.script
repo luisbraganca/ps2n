@@ -1,0 +1,8 @@
+# Controller input for the pad tests: from this vblank on, these buttons are held.
+# frame  buttons            sticks
+40       cross
+44       -
+50       up+square          lx=255
+56       -                  lx=0 ly=255
+60       start+select
+64       -

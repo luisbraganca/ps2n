@@ -1,0 +1,9 @@
+rpctest: start, argc 3: alpha beta
+ee: load ok
+ee: bound
+ee: sum = 10
+rpctest: worker done, arg 42
+ee: worker ticks 3, flag bits 0x2, message 1, alarms 3
+ee: iop says 20+22=42
+ee: memory 1/1, vblank 1
+ee: nowait sum = 26

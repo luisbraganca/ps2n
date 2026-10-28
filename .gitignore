@@ -1,0 +1,22 @@
+# Build trees
+/build*/
+/out/
+
+# Outputs of running the hello example by hand (see examples/hello/hello.toml)
+/examples/hello/out/
+/examples/hello/hello.elf
+
+# Intermediates of rebuilding the ps2sdk test programs (tests/sdk/Makefile)
+/tests/sdk/obj/
+/tests/sdk/rpctest/obj/
+/tests/sdk/rpctest/*.irx
+/tests/sdk/rpctest/*.elf
+/tests/sdk/sdtest/obj/
+/tests/sdk/sdtest/*.irx
+/tests/sdk/sdtest/*.elf
+
+# Written by recompiled programs at run time
+ps2uc_missing.toml
+memcards/
+
+.DS_Store

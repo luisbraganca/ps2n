@@ -1,0 +1,33 @@
+vu0 normalize 0: 1.2000 1.6000 0.0000 1.0000 length 5.0000
+vu0 normalize 1: 1.1547 1.1547 1.1547 2.0000 length 1.7321
+vu0 normalize 2: 0.0000 -2.0000 0.0000 3.0000 length 2.0000
+vu0 normalize 3: 0.6667 1.3333 1.3333 4.0000 length 3.0000
+vu0 loop counter 0
+vu0 flags: mac 00a1 status 00c3 after div 08e3 clip 260
+vu0 div by zero: q 7f7fffff
+vu0 clip tests: fceq 1 fcand 1 fcor 1
+vu0 integer: and 0230 or 1ff4 sub edcc mfir ffffedcc mtir 5678
+vu0 bal: link ok, delay slots 1235 0ff2
+vu0 sqd: a1 a2 a3 a4, iswr 39 31 a2
+vu0 e bit: vi03 77
+unpack S-32: 11223344 11223344 11223344 11223344
+unpack V2-16: fffffffe 0000012c, unsigned 0000fffe 0000012c
+unpack V3-32: 1 2 3 / 4 5 6
+unpack V4-5: 8 128 248 128
+unpack V4-8: -128 127 -1 1
+unpack offset mode: 101 202 303 404
+unpack difference mode: 101 201 301 401 / 103 203 303 403
+unpack masked: 1 203 7 aaaaaaaa
+unpack skipping: 00000005 bbbbbbbb 00000006 bbbbbbbb
+vif1: base 16 offset 24 tops 40 top 16 dbf 1 itops 5 itop 5
+vu1 log pointer 318
+vu1 vertex 0: xyz 31808 33216 17600 (100.0000 140.0000) color 255.0 0.0 0.0 length 2.291
+vu1 vertex 1: xyz 33088 31872 17600 (180.0000 56.0000) color 0.0 255.0 0.0 length 2.236
+vu1 vertex 2: xyz 32608 33216 17600 (150.0000 140.0000) color 0.0 0.0 255.0 length 4.153
+vu1 vertex 3: xyz 34048 32320 17600 (240.0000 84.0000) color 200.0 200.0 0.0 length 1.061
+vu1 vertex 4: xyz 34688 32320 17600 (280.0000 84.0000) color 255.0 128.0 0.0 length 1.146
+vu1 vertex 5: xyz 34688 31424 17600 (280.0000 28.0000) color 128.0 255.0 64.0 length 1.346
+vu1 vertex 6: xyz 32288 32544 17600 (130.0000 98.0000) color 0.0 128.0 255.0 length 4.153
+vu1 vertex 7: xyz 32768 32544 17600 (160.0000 98.0000) color 0.0 128.0 255.0 length 4.039
+vu1 vertex 8: xyz 32288 33216 17600 (130.0000 140.0000) color 0.0 128.0 255.0 length 4.243
+done

@@ -1,0 +1,10 @@
+delay slot entry: 105
+delay slot entry: 110
+bal: get-pc delta 0, local subroutine x2 = 14
+tail: jump 1002, branch 1050
+fallthrough: 3, direct 12
+jalr $t1: 77
+likely+link: 11, not-taken bltzal ra delta 0
+recursion: sum(1..20000) = 200010000
+computed goto: 2000 1000
+syscall loop: 4

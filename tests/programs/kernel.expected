@@ -1,0 +1,19 @@
+A started and went to sleep
+A woke up
+main after waking A
+B slept twice without blocking
+main woke after B
+three vblank signals received
+alarm woke main
+C 0
+D 0
+C 1
+D 1
+C 2
+D 2
+rotation done
+E signalled while suspended
+E resumed
+E status after exit: 16
+F wait result -425
+timer advanced: 1

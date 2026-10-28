@@ -1,0 +1,18 @@
+init 1
+mmode 1
+disk ready 2
+disk type 0x14
+tray check: changed 1, then 0
+search SYSTEM.CNF: 1 size 57 name SYSTEM.CNF;1
+search MISSING.BIN: 0
+search DATA\PATTERN.TXT: 1 size 5000 name PATTERN.TXT;1
+read 3 sectors: 1, data ok, error 0
+read 1 sector to buffer+3: 1, data ok, around ee ee
+status 0x0a
+stream init 1
+stream start 1
+stream read 2 (error 0), data ok
+stream read 1 (error 0), data ok
+stream stop 1
+clock 1: 2001-07-04
+cdrom0: read 26 at 1000, data ok

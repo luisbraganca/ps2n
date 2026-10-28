@@ -1,0 +1,6 @@
+# Default config for test programs (the build passes --elf/--out/--files).
+[input]
+elf = "program.elf"
+
+[stubs]
+auto = true

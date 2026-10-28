@@ -1,0 +1,12 @@
+pad: init, 2 ports, 1 slots
+pad: stable, current id 4, 2 modes: 4 7
+pad: dualshock mode, id 7, 2 actuators
+pad: pressure mode
+pad: buttons 0x0000 lx 128 ly 128 cross pressure 0
+pad: buttons 0x4000 lx 128 ly 128 cross pressure 255
+pad: buttons 0x0000 lx 128 ly 128 cross pressure 0
+pad: buttons 0x8010 lx 255 ly 128 cross pressure 0
+pad: buttons 0x0000 lx 0 ly 255 cross pressure 0
+pad: buttons 0x0009 lx 128 ly 128 cross pressure 0
+pad: buttons 0x0000 lx 128 ly 128 cross pressure 0
+pad: done

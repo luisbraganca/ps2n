@@ -1,0 +1,15 @@
+# Config for bindings.s: every way a config can replace guest code.
+[input]
+elf = "bindings.elf"
+
+[stubs]
+bind = ["retm1@get_magic"]                   # the "handler@function" list form
+
+[functions]
+skip = ["hang"]
+override = { triple = "triple_override" }    # defined in bindings_override.cpp
+
+[[patches]]
+address = 0x00100004                         # patched_value's delay slot
+value = 0x24020002                           # li $v0, 2
+expect = 0x24020001                          # li $v0, 1

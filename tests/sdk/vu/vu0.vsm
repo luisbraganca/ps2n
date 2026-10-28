@@ -1,0 +1,130 @@
+; VU0 micro programs for the vu test (main.c runs them with VCALLMS and
+; VCALLMSR after uploading them through VIF0). Assembled with dvp-as; each
+; line is an upper (FMAC) and a lower instruction issued together.
+
+        .vu
+        .align 4
+        .global Vu0CodeStart
+        .global Vu0Flags
+        .global Vu0Link
+        .global Vu0CodeEnd
+Vu0CodeStart:
+
+; Normalizes VI01 vectors from qw 0 on into qw 8 on (times VF10, w kept) and
+; writes their lengths to qw 16 on. VI01 and VF10 come from the EE (CTC2,
+; QMTC2). Q: an RSQRT result read by the instruction that starts a SQRT.
+        NOP                         iaddiu VI02,VI00,0
+        NOP                         iaddiu VI03,VI00,8
+        NOP                         iaddiu VI04,VI00,16
+normLoop:
+        NOP                         lqi VF01,(VI02++)
+        mul.xyz VF02,VF01,VF01      NOP
+        addy.x VF03,VF02,VF02y      NOP
+        addz.x VF03,VF03,VF02z      NOP
+        NOP                         rsqrt Q,VF00w,VF03x
+        NOP                         waitq
+        mulq.xyz VF04,VF01,Q        sqrt Q,VF03x
+        mul.xyz VF04,VF04,VF10      NOP
+        NOP                         move.w VF04,VF01
+        NOP                         sqi VF04,(VI03++)
+        NOP                         waitq
+        addq.x VF05,VF00,Q          iaddi VI01,VI01,-1
+        NOP                         sq.x VF05,0(VI04)
+        NOP                         iaddiu VI04,VI04,1
+        NOP                         ibne VI01,VI00,normLoop
+        NOP                         NOP
+        NOP[E]                      NOP
+        NOP                         NOP
+
+; Flags, integer operations, subroutine calls and the E bit. Inputs at
+; qw 24-28, results at qw 32-41.
+Vu0Flags:
+        NOP                         lq VF01,24(VI00)
+        NOP                         lq VF11,25(VI00)
+        NOP                         lq VF12,26(VI00)
+        NOP                         lq VF13,27(VI00)
+        NOP                         lq VF15,28(VI00)
+        NOP                         fsset 0
+        NOP                         fcset 0
+        NOP                         iaddi VI06,VI00,-1
+        NOP                         NOP
+        NOP                         NOP
+        NOP                         NOP
+        NOP                         NOP
+        ; MAC and status flags reach the flag registers 4 cycles later.
+        sub.xyzw VF06,VF00,VF01     NOP
+        NOP                         NOP
+        NOP                         NOP
+        NOP                         NOP
+        NOP                         NOP
+        NOP                         fmand VI05,VI06
+        NOP                         fsand VI07,0xfff
+        ; Division by zero: Q = +max, D and its sticky bit set.
+        NOP                         div Q,VF00w,VF00x
+        NOP                         waitq
+        NOP                         NOP
+        NOP                         NOP
+        NOP                         NOP
+        NOP                         NOP
+        NOP                         fsand VI08,0xfff
+        addq.x VF07,VF00,Q          NOP
+        ; Clipping judgments: (3,-3,0) and (0,0,-5) against w = 2.
+        clipw.xyz VF12xyz,VF11w     NOP
+        clipw.xyz VF13xyz,VF11w     NOP
+        NOP                         NOP
+        NOP                         NOP
+        NOP                         NOP
+        NOP                         NOP
+        NOP                         fcget VI09
+        NOP                         fceq VI01,0x260
+        NOP                         iaddiu VI02,VI00,32
+        NOP                         isw.x VI05,0(VI02)
+        NOP                         isw.y VI07,0(VI02)
+        NOP                         isw.z VI08,0(VI02)
+        NOP                         isw.w VI09,0(VI02)
+        NOP                         sq.x VF07,1(VI02)
+        NOP                         isw.y VI01,1(VI02)
+        NOP                         fcand VI01,0x20
+        NOP                         isw.z VI01,1(VI02)
+        NOP                         fcor VI01,0xfffd9f
+        NOP                         isw.w VI01,1(VI02)
+        ; Integer ALU, 16-bit wraparound, MFIR/MTIR.
+        NOP                         iaddiu VI10,VI00,0x1234
+        NOP                         iaddiu VI11,VI00,0x0ff0
+        NOP                         iand VI12,VI10,VI11
+        NOP                         ior VI13,VI10,VI11
+        NOP                         isub VI14,VI00,VI10
+        NOP                         isw.x VI12,2(VI02)
+        NOP                         isw.y VI13,2(VI02)
+        NOP                         isw.z VI14,2(VI02)
+        NOP                         mfir.x VF14,VI14
+        NOP                         mtir VI05,VF15x
+        NOP                         sq.x VF14,3(VI02)
+        NOP                         isw.y VI05,3(VI02)
+        ; BAL links to the instruction after its delay slot; JR returns there.
+        NOP                         bal VI15,subroutine
+        NOP                         iaddiu VI10,VI10,1
+Vu0Link:
+        NOP                         isw.x VI15,4(VI02)
+        NOP                         isw.y VI10,4(VI02)
+        NOP                         isw.z VI11,4(VI02)
+        ; LQD / SQD pre-decrement, LQI / SQI post-increment, ILWR / ISWR.
+        NOP                         iaddiu VI03,VI00,38
+        NOP                         lqi VF16,(VI03++)
+        NOP                         sqd VF16,(--VI02)
+        NOP                         iaddiu VI04,VI00,39
+        NOP                         iswr.x VI03,(VI04)
+        NOP                         ilwr.y VI05,(VI02)
+        NOP                         iswr.y VI02,(VI04)
+        NOP                         iswr.z VI05,(VI04)
+        ; The E bit ends the program after its delay slot.
+        NOP[E]                      NOP
+        NOP                         iaddiu VI03,VI00,77
+        NOP                         iaddiu VI03,VI00,99
+
+subroutine:
+        NOP                         jr VI15
+        NOP                         iaddiu VI11,VI11,2
+
+        .align 4
+Vu0CodeEnd:

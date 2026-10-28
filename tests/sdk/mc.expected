@@ -1,0 +1,29 @@
+modules 1 1 1
+init 0
+getinfo port 1: -1 type 2 free 8000 format 1
+getinfo port 1: 0 type 2 free 8000 format 1
+getinfo port 2: -10 type 0 free -1 format 0
+mkdir 0, again -4
+create ok
+write 100
+close 0
+getinfo port 1: 0 type 2 free 7996 format 1
+read 100: ABCDEFGHIJ...STUV
+seek 30, read 4: EFGH
+write to a read-only file -5
+list /*: 1
+  PS2UCTEST    attr 8427 size 0
+list /PS2UCTEST/*: 3
+  .            attr 8427 size 0
+  ..           attr 8427 size 0
+  DATA.BIN     attr 8497 size 100
+chdir 0: /PS2UCTEST
+open relative ok
+chdir .. 0: /
+rename 0
+list /PS2UCTEST/R*: 1
+  RENAMED.BIN  attr 8497 size 100
+delete a full directory -6
+delete 0, 0
+open deleted -4
+getinfo port 1: 0 type 2 free 8000 format 1

@@ -1,0 +1,6 @@
+# The test build passes --elf and --out; this config only holds the bindings.
+[input]
+elf = "bin/vu.elf"
+
+[stubs]
+auto = true
