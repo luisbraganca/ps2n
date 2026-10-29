@@ -4,6 +4,7 @@
 #include "hw/dmac.h"
 #include "hw/gs.h"
 #include "hw/hw.h"
+#include "hw/ipu.h"
 #include "hw/vif.h"
 #include "internal.h"
 #include "iop/hostfs.h"
@@ -365,6 +366,7 @@ int run(int argc, char** argv, const GameInfo& game) {
     gs::init();
     dmac::init();
     vif::init();
+    ipu::init();
     iop::init();
     video::init();
     initDispatch(game);

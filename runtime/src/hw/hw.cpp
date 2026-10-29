@@ -1,10 +1,11 @@
 // EE register file: INTC, timers, SIO, SIF/MCH registers, vsync timing, and
-// routing of everything else to the DMAC, GS, GIF and VIF models.
+// routing of everything else to the DMAC, GS, GIF, VIF and IPU models.
 #include "hw/hw.h"
 
 #include "clock.h"
 #include "hw/dmac.h"
 #include "hw/gs.h"
+#include "hw/ipu.h"
 #include "hw/vif.h"
 #include "internal.h"
 #include "iop/iop.h"
@@ -162,6 +163,7 @@ void unknownRegister(const char* what, uint32_t addr, uint64_t value) {
 
 uint32_t readEe32(uint32_t a) {
     if (a < 0x10002000u) return timerRead(static_cast<int>((a >> 11) & 3), a & 0x7F0);
+    if (a < 0x10003000u) return ipu::regRead(a);
     if (a >= 0x10003000u && a < 0x10003800u) return gs::gifRegRead(a);
     if (a >= 0x10003800u && a < 0x10004000u) return vif::regRead(a);
     if (a >= 0x10008000u && a < 0x1000F000u) return dmac::regRead(a);
@@ -183,6 +185,7 @@ uint32_t readEe32(uint32_t a) {
 
 void writeEe32(uint32_t a, uint32_t v) {
     if (a < 0x10002000u) return timerWrite(static_cast<int>((a >> 11) & 3), a & 0x7F0, v);
+    if (a < 0x10003000u) return ipu::regWrite(a, v);
     if (a >= 0x10003000u && a < 0x10003800u) return gs::gifRegWrite(a, v);
     if (a >= 0x10003800u && a < 0x10004000u) return vif::regWrite(a, v);
     if (a >= 0x10008000u && a < 0x1000F000u) return dmac::regWrite(a, v);
@@ -282,17 +285,19 @@ void write64(uint32_t phys, uint64_t v) {
     writeEe32(phys + 4, static_cast<uint32_t>(v >> 32));
 }
 void read128(uint32_t phys, uint64_t out[2]) {
+    if (phys == 0x10007000u) return ipu::fifoRead(out);   // IPU output FIFO
     out[0] = read64(phys);
     out[1] = read64(phys + 8);
 }
 void write128(uint32_t phys, const uint64_t v[2]) {
-    // FIFOs: VIF0 0x10004000, VIF1 0x10005000, GIF 0x10006000
+    // FIFOs: VIF0 0x10004000, VIF1 0x10005000, GIF 0x10006000, IPU input 0x10007010
     switch (phys & 0xFFFFF000u) {
     case 0x10004000u: return vif::fifoWrite(0, v);
     case 0x10005000u: return vif::fifoWrite(1, v);
     case 0x10006000u: return gs::gifFifoWrite(v);
     case 0x10007000u:
-        PS2_UNIMPL("hw", "IPU FIFO write", "IPU (MPEG decoder) FIFO write ignored");
+        if (phys == 0x10007010u) return ipu::fifoWrite(v);
+        PS2_UNIMPL("hw", "IPU output FIFO write", "write to the IPU output FIFO (0x%08x) ignored", phys);
         return;
     default:
         write64(phys, v[0]);

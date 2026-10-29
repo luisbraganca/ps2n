@@ -2,11 +2,13 @@
 
 #include "hw/gs.h"
 #include "hw/hw.h"
+#include "hw/ipu.h"
 #include "hw/vif.h"
 #include "kernel/kernel.h"
 #include "log.h"
 #include "ps2/memory.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -21,11 +23,18 @@ constexpr const char* kName[10] = {"VIF0", "VIF1", "GIF", "IPU_FROM", "IPU_TO", 
 
 struct Channel {
     uint32_t chcr = 0, madr = 0, qwc = 0, tadr = 0, asr0 = 0, asr1 = 0, sadr = 0;
+    bool running = false;   // an IPU channel's transfer in progress
+    bool lastTag = false;   // toIPU chain: the current tag's data ends the transfer
 };
 
 Channel g_ch[10];
 uint32_t g_ctrl = 0, g_stat = 0, g_pcr = 0, g_sqwc = 0, g_rbsr = 0, g_rbor = 0, g_stadr = 0;
 uint32_t g_enable = 0x1201;
+
+bool held() { return (g_enable & 0x10000u) != 0; }   // D_ENABLE.CPND: every channel suspended
+
+// A DMA address: bit 31 selects the scratchpad.
+uint32_t memAddress(uint32_t addr) { return (addr & 0x80000000u) ? (kSprBase | (addr & 0x3FF0u)) : (addr & 0x01FFFFF0u); }
 
 int channelOf(uint32_t addr) {
     for (int i = 9; i >= 0; --i)
@@ -51,6 +60,12 @@ void deliver(int ch, const uint64_t* data, size_t qwc) {
     case hw::DMA_VIF0: vif::transfer(0, data, qwc); break;
     case hw::DMA_VIF1: vif::transfer(1, data, qwc); break;
     case hw::DMA_GIF: gs::gifTransfer(data, qwc, 3); break;
+    case hw::DMA_SPR_TO: {   // chain mode: into the scratchpad from SADR on
+        Channel& c = g_ch[ch];
+        for (size_t i = 0; i < qwc; ++i) write128(kSprBase | ((c.sadr + static_cast<uint32_t>(i) * 16) & 0x3FF0u), data + i * 2);
+        c.sadr = (c.sadr + static_cast<uint32_t>(qwc) * 16) & 0x3FF0u;
+        break;
+    }
     default: break;
     }
 }
@@ -83,6 +98,8 @@ void runChain(int ch) {
             // The upper 64 bits of the tag are VIF codes, executed before the data.
             const uint64_t q[2] = {0, tag[1]};
             vif::transferTagWords(ch == hw::DMA_VIF0 ? 0 : 1, q);
+        } else if (tte && ch == hw::DMA_SPR_TO) {
+            deliver(ch, tag, 1);   // the whole tag goes to the scratchpad first
         }
         bool done = false;
         uint32_t dataAddr = ta + 16;
@@ -123,9 +140,8 @@ void runSpr(int ch) {
         PS2_UNIMPL("dmac", "SPR_FROM chain mode", "scratchpad DMA (from SPR) in chain mode is not implemented");
         return;
     }
-    if (mode == 1) {   // SPR_TO source chain: data goes to SADR sequentially
-        // Reuse the chain walker by temporarily redirecting delivery.
-        PS2_UNIMPL("dmac", "SPR_TO chain mode", "scratchpad DMA (to SPR) in chain mode is not implemented");
+    if (mode == 1) {   // SPR_TO source chain: the data goes to SADR sequentially
+        runChain(ch);
         return;
     }
     for (uint32_t i = 0; i < c.qwc; ++i) {
@@ -145,10 +161,79 @@ void runSpr(int ch) {
     c.qwc = 0;
 }
 
+void finish(int ch) {
+    g_ch[ch].chcr &= ~0x100u;   // STR off: done
+    g_ch[ch].running = false;
+    raise(ch);
+}
+
+// Source chain tags that end the transfer once their data has gone: refe,
+// end, or an IRQ tag with TIE set (the tag sits in CHCR's upper half).
+bool tagEnds(uint32_t chcr) {
+    const uint32_t id = (chcr >> 28) & 7;
+    return id == 0 || id == 7 || ((chcr >> 31) && (chcr & 0x80u));
+}
+
+// toIPU in chain mode: reads the next tag. False when the transfer is over.
+bool nextToIpuTag(Channel& c) {
+    if (((c.chcr >> 2) & 3) != 1 || c.lastTag) return false;
+    uint64_t tag[2];
+    read128(memAddress(c.tadr), tag);
+    const uint32_t qwc = static_cast<uint32_t>(tag[0] & 0xFFFF);
+    const uint32_t id = static_cast<uint32_t>((tag[0] >> 28) & 7);
+    const uint32_t addr = static_cast<uint32_t>((tag[0] >> 32) & 0xFFFFFFF0u);
+    int asp = static_cast<int>((c.chcr >> 4) & 3);
+    bool end = false;
+    c.chcr = (c.chcr & 0xFFFFu) | (static_cast<uint32_t>(tag[0]) & 0xFFFF0000u);
+    c.qwc = qwc;
+    switch (id) {
+    case 0: c.madr = addr; c.tadr += 16; end = true; break;                    // refe
+    case 1: c.madr = c.tadr + 16; c.tadr = c.madr + qwc * 16; break;           // cnt
+    case 2: c.madr = c.tadr + 16; c.tadr = addr; break;                        // next
+    case 3: case 4: c.madr = addr; c.tadr += 16; break;                        // ref / refs
+    case 5:                                                                     // call
+        c.madr = c.tadr + 16;
+        (asp == 0 ? c.asr0 : c.asr1) = c.madr + qwc * 16;
+        c.tadr = addr;
+        end = ++asp > 2;
+        break;
+    case 6:                                                                     // ret
+        c.madr = c.tadr + 16;
+        if (asp > 0) c.tadr = --asp == 0 ? c.asr0 : c.asr1;
+        else end = true;
+        break;
+    default: c.madr = c.tadr + 16; end = true; break;                          // end
+    }
+    c.chcr = (c.chcr & ~0x30u) | (static_cast<uint32_t>(asp & 3) << 4);
+    c.lastTag = end || tagEnds(c.chcr);
+    return true;
+}
+
+// toIPU's current data is used up: reads tags until there is more, or ends
+// the transfer, as the DMAC does as soon as it reaches the end.
+void settleToIpu() {
+    Channel& c = g_ch[hw::DMA_IPU_TO];
+    for (int guard = 0; c.running && c.qwc == 0 && guard < 4096; ++guard)
+        if (!nextToIpuTag(c)) finish(hw::DMA_IPU_TO);
+    if (c.running && c.qwc == 0) {   // a loop of empty tags: the console would spin here forever
+        PS2_UNIMPL("dmac", "toIPU chain without data", "toIPU DMA chain at 0x%08x has no data in 4096 tags; ending it", c.tadr);
+        finish(hw::DMA_IPU_TO);
+    }
+}
+
 void start(int ch) {
     Channel& c = g_ch[ch];
     const uint32_t mode = (c.chcr >> 2) & 3;
     PS2_TRACE("dmac", "%s start chcr=0x%08x madr=0x%08x qwc=%u tadr=0x%08x", kName[ch], c.chcr, c.madr, c.qwc, c.tadr);
+    if (ch == hw::DMA_IPU_FROM || ch == hw::DMA_IPU_TO) {
+        // The IPU pulls and pushes the data; the transfer ends when it has all gone.
+        c.running = true;
+        c.lastTag = mode == 1 && c.qwc > 0 && tagEnds(c.chcr);   // restarted mid-tag
+        if (ch == hw::DMA_IPU_TO) settleToIpu();
+        else if (c.qwc == 0) finish(ch);
+        ipu::run();
+        return;
+    }
     switch (ch) {
     case hw::DMA_VIF0:
     case hw::DMA_VIF1:
@@ -233,7 +318,8 @@ void regWrite(uint32_t addr, uint32_t v) {
     switch (addr - kBase[ch]) {
     case 0x00:
         c.chcr = (c.chcr & 0xFFFF0000u) | (v & 0xFFFFu);
-        if ((v & 0x100u) && !(g_enable & 0x10000u)) start(ch);
+        if (!(v & 0x100u)) c.running = false;   // STR off stops an IPU transfer
+        else if (!held() && !c.running) start(ch);
         return;
     case 0x10: c.madr = v; return;
     case 0x20: c.qwc = v & 0xFFFF; return;
@@ -246,7 +332,46 @@ void regWrite(uint32_t addr, uint32_t v) {
 }
 
 uint32_t enableRegRead(uint32_t) { return g_enable; }
-void enableRegWrite(uint32_t, uint32_t v) { g_enable = v; }
+void enableRegWrite(uint32_t, uint32_t v) {
+    const bool released = held() && !(v & 0x10000u);
+    g_enable = v;
+    if (!released) return;
+    // Channels started while the DMAC was held begin now; IPU transfers resume.
+    for (int ch = 0; ch < 10; ++ch)
+        if ((g_ch[ch].chcr & 0x100u) && !g_ch[ch].running) start(ch);
+    ipu::run();
+}
+
+uint32_t toIpu(uint64_t* dst, uint32_t max) {
+    Channel& c = g_ch[hw::DMA_IPU_TO];
+    uint32_t moved = 0;
+    while (moved < max && c.running && !held()) {
+        if (c.qwc == 0) {
+            settleToIpu();
+            continue;
+        }
+        const uint32_t n = std::min(max - moved, c.qwc);
+        for (uint32_t i = 0; i < n; ++i) read128(memAddress(c.madr + i * 16), dst + size_t{moved + i} * 2);
+        c.madr += n * 16;
+        c.qwc -= n;
+        moved += n;
+        if (c.qwc == 0) settleToIpu();
+    }
+    return moved;
+}
+
+bool toIpuReady() { return g_ch[hw::DMA_IPU_TO].running && !held(); }
+
+uint32_t fromIpu(const uint64_t* src, uint32_t count) {
+    Channel& c = g_ch[hw::DMA_IPU_FROM];
+    if (!c.running || held()) return 0;
+    const uint32_t n = std::min(count, c.qwc);
+    for (uint32_t i = 0; i < n; ++i) write128(memAddress(c.madr + i * 16), src + size_t{i} * 2);
+    c.madr += n * 16;
+    c.qwc -= n;
+    if (c.qwc == 0) finish(hw::DMA_IPU_FROM);
+    return n;
+}
 
 uint32_t pending() { return (g_stat & 0x3FF) & ((g_stat >> 16) & 0x3FF); }
 void ack(int channel) { g_stat &= ~(1u << channel); }

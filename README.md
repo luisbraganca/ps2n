@@ -40,8 +40,9 @@ L_001001a4:
 The recompiler covers the whole Emotion Engine instruction set, and the
 runtime runs this repository's test programs and ps2sdk homebrew. No retail
 game is playable yet. In the first one being brought up, 007: Agent Under
-Fire, the boot loader loads the game's IOP modules and starts the movie
-player, which runs recompiled.
+Fire, the recompiled movie player shows the language selection screen and
+plays the intro movies (decoded by the IPU, without sound), then starts the
+game proper, which runs on the interpreter so far.
 
 | Area | Progress | Count |
 |---|---|--:|
@@ -80,8 +81,10 @@ What works, and is covered by the test suite (`ctest`):
   `i*` variants), INTC, timers, DMAC (normal and chain mode), GIF and a
   software GS rasterizer with frame output, VIF0/VIF1 (every UNPACK format and
   mode, MPG, MSCAL with the TOP/TOPS double buffer, DIRECT), VU0 and VU1 micro
-  programs on an interpreter that models flag and Q/P timing, XGKICK, and
-  debug output (the SIO port, and the DECI2 TTY that Sony's `printf` uses).
+  programs on an interpreter that models flag and Q/P timing, XGKICK, the IPU
+  (MPEG-2 macroblock decoding and colour conversion, fed and drained by DMA as
+  on the console), and debug output (the SIO port, and the DECI2 TTY that
+  Sony's `printf` uses).
 - **IOP**: IRX modules run on an R3000A interpreter, over a host-code IOP
   kernel (threads, semaphores, event flags, message boxes, memory pools,
   alarms, interrupts, vblank) and system libraries. The SIF wire protocol
@@ -113,9 +116,8 @@ What is not there yet, roughly in order of importance for real games:
 - **Sound**: libsd runs without an SPU2, so drivers work and nothing is heard.
   SPU2 emulation (ADPCM voices, envelopes, reverb, mixing) and an audio output
   are the next big step.
-- IPU (MPEG video), GS texture filtering and mipmaps, local-to-host GS
-  transfers, TLB remapping, dual-layer DVDs, the multitap, network and hard
-  disk.
+- GS texture filtering and mipmaps, local-to-host GS transfers, TLB
+  remapping, dual-layer DVDs, the multitap, network and hard disk.
 - **VU speed**: micro programs are interpreted and finish the moment they
   start. A VU recompiler on the same model would make VU-heavy games faster.
 
@@ -320,7 +322,7 @@ core/         ELF and IRX readers, R5900 decoder / disassembler / assembler (ps2
 recompiler/   analysis, code generation, config, CLI (ps2n_recomp, ps2n)
 runtime/      what recompiled games link against (ps2n_runtime)
   include/ps2/  generated-code API: cpu.h, memory.h, ops_*.h, recomp.h, runtime.h
-  src/          dispatcher, interpreter, VU, kernel/, hw/ (DMAC, GS, VIF), iop/ (IOP CPU, kernel, services), stubs/, video/
+  src/          dispatcher, interpreter, VU, kernel/, hw/ (DMAC, GS, VIF, IPU), iop/ (IOP CPU, kernel, services), stubs/, video/
 tools/ghidra/ function-map exporter for Ghidra
 examples/     the end-to-end example
 tests/        unit tests and end-to-end programs (assembled or built with ps2sdk, recompiled, run twice)

@@ -3,7 +3,7 @@
 `ps2n_runtime` is what a recompiled game links against. It loads the game's
 data from the original ELF, provides the CPU state and memory map the
 generated code uses, and emulates enough of the rest of the console (EE
-kernel, DMAC, GIF/GS, VIF, timers, SIF and IOP services) for the game to run.
+kernel, DMAC, GIF/GS, VIF, IPU, timers, SIF and IOP services) for the game to run.
 This page lists what it covers, how to run and debug a game, and where to add
 what is missing. [architecture.md](architecture.md) explains the execution
 model.
@@ -197,20 +197,22 @@ enters the code (function pointers, a resumed thread).
 
 | Unit | Covered |
 |---|---|
-| INTC | `I_STAT`, `I_MASK`; the sources raised so far are GS, VBLANK start/end and timers 0-3 (DMA completion goes through the DMAC interrupt) |
+| INTC | `I_STAT`, `I_MASK`; the sources raised so far are GS, VBLANK start/end, timers 0-3 and the IPU (DMA completion goes through the DMAC interrupt) |
 | Timers | all four: count, mode, compare, hold; compare and overflow interrupts |
 | Vsync | NTSC or PAL timing from `SetGsCrt`; VBLANK start/end interrupts, GS `CSR.VSINT` |
 | SIO | the debug TX register (`0x1000F180`) prints to stdout |
-| DMAC | channel and global registers, `D_STAT` interrupts, `CPCOND0`; VIF0, VIF1 and GIF in normal and source-chain mode (tags `refe`, `cnt`, `next`, `ref`, `refs`, `call`, `ret`, `end`), scratchpad to/from RAM in normal mode. SIF transfers go through the SIF syscalls. Other channels complete immediately and are reported. |
+| DMAC | channel and global registers, `D_STAT` interrupts, `CPCOND0`, the `D_ENABLEW` hold (a channel started while held runs on release); VIF0, VIF1, GIF and RAM-to-scratchpad in normal and source-chain mode (tags `refe`, `cnt`, `next`, `ref`, `refs`, `call`, `ret`, `end`), scratchpad to RAM in normal mode. The IPU channels (3 and 4; 4 also in source-chain mode) move data only as the IPU's FIFOs take or give it, so they stay in progress until the IPU has used their data. SIF transfers go through the SIF syscalls. Other channels complete immediately and are reported. |
 | VIF | VIF0 and VIF1: `UNPACK` into VU memory (every format, write masks with `STROW`/`STCOL`, the `STMOD` offset and difference modes, skipping and filling writes, `TOPS`-relative addresses), `MPG` uploads, `MSCAL`/`MSCALF`/`MSCNT` (VIF1 flips the `TOP`/`TOPS` double buffer), VIF1 `DIRECT`/`DIRECTHL` to the GIF, and the register codes (`STCYCL`, `OFFSET`, `BASE`, `ITOP`, `STMOD`, `STMASK`, `STROW`, `STCOL`, `MSKPATH3`, `MARK`, `FLUSH*`) |
 | VU | micro mode for VU0 (`VCALLMS`, `VCALLMSR`) and VU1 (`MSCAL`, `CMSAR1`): an interpreter that keeps what micro code can observe of the pipeline. MAC, status and clip flags arrive 4 cycles after the instruction that set them, Q (DIV/SQRT/RSQRT) and P (VU1 EFU) after their latencies (`WAITQ`/`WAITP` and register hazards stall), branches have a delay slot, the E bit ends a program after one more instruction, upper and lower instructions read their inputs before either writes, `XGKICK` sends GIF packets down PATH1, and VU0 reaches VU1's registers at `0x4000`. A program runs to completion when it is started. |
 | GIF | `PACKED`, `REGLIST` and `IMAGE` modes from PATH2 (VIF1) and PATH3 (DMA channel 2 or the FIFO), PATH3 masking |
 | GS | privileged registers (`PMODE`, `SMODE2`, `DISPFB1/2`, `DISPLAY1/2`, `CSR` with `SIGNAL`/`FINISH`/`LABEL` events, `IMR`); a software rasterizer for points, lines, line strips, triangles, strips, fans and sprites with flat and Gouraud shading, textures in every pixel format including 4/8-bit CLUT and `TEXA`, the four texture functions, `REPEAT`/`CLAMP`/`REGION_CLAMP` wrapping, fog, alpha test with `AFAIL`, depth test, alpha blending with `PABE` and `FBA`, scissoring, frame-buffer masks; host-to-local and local-to-local transfers; display read-out from circuit 1, or circuit 2 when only it is enabled (the two are not merged) |
+| IPU | the MPEG-2 decoder, every command: `BCLR`, `IDEC`, `BDEC`, `VDEC`, `FDEC`, `SETIQ`, `SETVQ`, `CSC`, `PACK`, `SETTH`. Decoding follows ISO/IEC 13818-2: the Annex B code tables, zigzag and alternate scan, inverse quantisation with MPEG-2 mismatch control or MPEG-1 rounding, an inverse DCT within IEEE 1180's error limits, frame and field DCT, `SCD`/`ECD`. CSC is ITU-R BT.601 with the alpha thresholds of `SETTH` and dithered RGB16. Input and output go through the 8-qword FIFOs at `0x10007010`/`0x10007000`, which DMA channels 4 and 3 fill and empty as the IPU uses them; a command that runs out of data waits, and `IPU_BP` (BP, IFC, FP), `IPU_TOP` and the channels' `MADR`/`QWC` show where it stopped. Each finished command raises the IPU interrupt. |
 
-Not covered yet: IPU, SPU2 (sound is silent), GS local-to-host transfers,
+Not covered yet: SPU2 (sound is silent), GS local-to-host transfers,
 bilinear texture filtering and mipmaps, dithering and anti-aliasing,
-scratchpad chain-mode DMA, VIF1 GS-to-memory transfers, and VU programs
-running alongside the EE (they finish the moment they start).
+scratchpad-to-RAM DMA in chain mode, VIF1 GS-to-memory transfers, the IPU's
+speed (a command takes no emulated time), and VU programs running alongside
+the EE (they finish the moment they start).
 
 ### IOP
 
@@ -338,7 +340,7 @@ generated code does not need to be regenerated.
 | To add | Where |
 |---|---|
 | A syscall | `dispatchSyscall()` and `syscallName()` in [kernel/kernel.cpp](../runtime/src/kernel/kernel.cpp). Arguments are `arg(0)`..., results go through `ret()`. Interrupt-context variants use negative numbers. |
-| A hardware register | `readEe32()`/`writeEe32()` in [hw/hw.cpp](../runtime/src/hw/hw.cpp), or the DMAC, VIF and GS files next to it. |
+| A hardware register | `readEe32()`/`writeEe32()` in [hw/hw.cpp](../runtime/src/hw/hw.cpp), or the DMAC, VIF, GS and IPU files next to it. |
 | An IOP service | Subclass `iop::RpcServer` ([iop/iop.h](../runtime/src/iop/iop.h)): `call(fno, data, size, recvSize, reply)` receives the send buffer and sends the reply bytes through `reply`, now or later. Register it with `registerServer(sid, ...)`: from `enableModuleServices()` in [iop/services.cpp](../runtime/src/iop/services.cpp) so it appears when the game loads the module, or from `registerBuiltinServers()` in [iop/iop.cpp](../runtime/src/iop/iop.cpp) for services resident in the BIOS. |
 | An IOP library function | `defineLibrary(name, version, {{index, "name", fn}, ...})` ([iop/hle.h](../runtime/src/iop/hle.h)): `fn` reads its arguments with `arg(i)` and returns with `ret()`; `kernel::blockCurrent()` and `wakeThread()` let it wait, `kernel::callHandler()` calls back into module code, and `scheduleEvent()` ([clock.h](../runtime/src/clock.h)) runs host code later in emulated time. The kernel libraries are in [iop/kernel.cpp](../runtime/src/iop/kernel.cpp) and [iop/libs.cpp](../runtime/src/iop/libs.cpp). |
 | A stub | A `PS2_STUB(name, summary)` line in [stub_list.inc](../runtime/include/ps2/stub_list.inc) and `void ps2::stub::name_()` in [stubs/stubs.cpp](../runtime/src/stubs/stubs.cpp). The recompiler reads the same list, so configs can bind the new name once it is rebuilt. |

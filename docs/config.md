@@ -277,7 +277,7 @@ exclude = ["memcpy"]                                    # this game's memcpy is 
 bind = { "sceMcInit" = "ret0" }
 
 [functions]
-skip = ["sceIpuInit", "MoviePlay"]                      # IPU video is not emulated
+skip = ["MoviePlay"]                                    # go straight past the intro movies
 override = { "0x00140000" = "game_draw_hud" }
 
 [[patches]]

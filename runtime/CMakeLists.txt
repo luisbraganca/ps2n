@@ -14,6 +14,8 @@ add_library(ps2n_runtime STATIC
     src/hw/dmac.cpp
     src/hw/gs.cpp
     src/hw/hw.cpp
+    src/hw/ipu.cpp
+    src/hw/mpeg.cpp
     src/hw/vif.cpp
     src/iop/cdvd.cpp
     src/iop/cpu.cpp

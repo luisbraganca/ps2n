@@ -3,6 +3,8 @@
 
 #include "hw/dmac.h"
 #include "hw/gs.h"
+#include "hw/ipu.h"
+#include "hw/mpeg.h"
 #include "internal.h"
 #include "iop/disc.h"
 #include "iop/hostfs.h"
@@ -22,6 +24,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <numbers>
 #include <set>
 
 using namespace ps2;
@@ -419,6 +422,371 @@ TEST_CASE(gs_swizzle_is_a_bijection_per_page) {
     CHECK_EQ(gs::debugAddress(0x00, 0, 1, 0, 8), 128u);
     CHECK_EQ(gs::debugAddress(0x00, 0, 1, 2, 0), 4u);
     CHECK_EQ(gs::debugAddress(0x00, 0, 1, 0, 1), 2u);
+}
+
+namespace {
+
+// An MPEG bitstream written code by code ("0101 1", spaces ignored).
+struct Bits {
+    std::vector<uint8_t> bytes;
+    int used = 8;   // bits used in the last byte
+    Bits& operator<<(const char* code) {
+        for (const char* p = code; *p; ++p) {
+            if (*p == ' ') continue;
+            if (used == 8) {
+                bytes.push_back(0);
+                used = 0;
+            }
+            if (*p == '1') bytes.back() = static_cast<uint8_t>(bytes.back() | (0x80 >> used));
+            ++used;
+        }
+        return *this;
+    }
+    // Stores the stream zero-padded to whole qwords; returns how many.
+    uint32_t store(uint32_t addr) const {
+        const uint32_t qwc = static_cast<uint32_t>((bytes.size() + 15) / 16);
+        fillBytes(addr, 0, qwc * 16);
+        writeBytes(addr, bytes.data(), static_cast<uint32_t>(bytes.size()));
+        return qwc;
+    }
+};
+
+constexpr uint32_t kIpuCmd = 0x10002000, kIpuCtrl = 0x10002010, kIpuBp = 0x10002020, kIpuTop = 0x10002030;
+constexpr uint32_t kIpuInFifo = 0x10007010;
+constexpr uint32_t kD3 = 0x1000B000, kD4 = 0x1000B400, kDmaStat = 0x1000E010;
+
+void resetIpu() {
+    dmac::init();
+    ipu::init();
+    write32(kIpuCtrl, 0x40000000);   // RST
+}
+
+// A normal-mode transfer: toIPU reads memory, fromIPU writes it.
+void startDma(uint32_t channel, uint32_t madr, uint32_t qwc) {
+    write32(channel + 0x10, madr);
+    write32(channel + 0x20, qwc);
+    write32(channel, channel == kD4 ? 0x101u : 0x100u);
+}
+
+double idctCos(int a, int b) {
+    static const std::array<double, 64> table = [] {
+        std::array<double, 64> t{};
+        for (int i = 0; i < 64; ++i) t[static_cast<size_t>(i)] = std::cos((2 * (i / 8) + 1) * (i % 8) * std::numbers::pi / 16);
+        return t;
+    }();
+    return table[static_cast<size_t>(a * 8 + b)];
+}
+
+// The double-precision inverse DCT IEEE 1180 measures against, rounded and saturated.
+void referenceIdct(const int16_t in[64], int16_t out[64]) {
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 8; ++x) {
+            double s = 0;
+            for (int v = 0; v < 8; ++v)
+                for (int u = 0; u < 8; ++u)
+                    s += (u ? 1.0 : std::sqrt(0.5)) * (v ? 1.0 : std::sqrt(0.5)) * in[v * 8 + u] * idctCos(x, u) * idctCos(y, v);
+            out[y * 8 + x] = static_cast<int16_t>(std::clamp(std::floor(s / 4 + 0.5), -256.0, 255.0));
+        }
+}
+
+// What BDEC should output (RAW16) for six blocks of coefficients. With field
+// DCT the first two luminance blocks hold the even lines, the others the odd.
+std::vector<int16_t> expectedRaw16(const int16_t coefficients[6][64], bool fieldDct = false) {
+    int16_t px[6][64];
+    for (int b = 0; b < 6; ++b) referenceIdct(coefficients[b], px[b]);
+    std::vector<int16_t> mb(384);
+    for (int y = 0; y < 16; ++y)
+        for (int x = 0; x < 16; ++x) {
+            const int block = (fieldDct ? y % 2 : y / 8) * 2 + x / 8;
+            const int row = fieldDct ? y / 2 : y % 8;
+            mb[static_cast<size_t>(y * 16 + x)] = px[block][row * 8 + x % 8];
+        }
+    for (int i = 0; i < 64; ++i) {
+        mb[static_cast<size_t>(256 + i)] = px[4][i];
+        mb[static_cast<size_t>(320 + i)] = px[5][i];
+    }
+    return mb;
+}
+
+std::vector<int16_t> readRaw16(uint32_t addr) {
+    std::vector<int16_t> mb(384);
+    readBytes(addr, mb.data(), 768);
+    return mb;
+}
+
+// "" when equal, else the first difference (index: got/expected).
+std::string firstDifference(const std::vector<int16_t>& got, const std::vector<int16_t>& want) {
+    for (size_t i = 0; i < got.size() && i < want.size(); ++i)
+        if (got[i] != want[i]) return std::to_string(i) + ": " + std::to_string(got[i]) + "/" + std::to_string(want[i]);
+    return got.size() == want.size() ? "" : "sizes differ";
+}
+
+} // namespace
+
+TEST_CASE(ipu_vlc_commands_and_fifo_registers) {
+    resetIpu();
+    CHECK_EQ(read32(kIpuCtrl), 0u);
+    Bits b;
+    b << "1" << "0000 0001 000" << "00010" << "0011" << "11"   // increment 1, escape, P macroblock_type, motion -2, dmvector -1
+      << "1101 1110 1010 1101 1011 1110 1110 1111";           // 0xDEADBEEF
+    b.store(0x01100000);
+    uint64_t q[2];
+    read128(0x01100000, q);
+    write128(kIpuInFifo, q);
+    CHECK_EQ(read32(kIpuBp), 0x10000u);   // FP 1, IFC 0, BP 0
+
+    write32(kIpuCmd, 0x30000000);         // VDEC macroblock_address_increment
+    CHECK_EQ(read32(kIpuCmd), 0x00010001u);   // code length 1, value 1
+    CHECK_EQ(read32(kIpuCmd + 4), 0u);        // not busy
+    write32(kIpuCmd, 0x30000000);
+    CHECK_EQ(read32(kIpuCmd), 0x000B0023u);   // macroblock_escape
+    write32(kIpuCtrl, 2u << 24);              // P picture
+    write32(kIpuCmd, 0x34000000);             // VDEC macroblock_type
+    CHECK_EQ(read32(kIpuCmd), 0x0005001Au);   // quant, forward motion, pattern
+    write32(kIpuCmd, 0x38000000);             // VDEC motion_code
+    CHECK_EQ(read32(kIpuCmd), 0x0004FFFEu);
+    write32(kIpuCmd, 0x3C000000);             // VDEC dmvector
+    CHECK_EQ(read32(kIpuCmd), 0x0002FFFFu);
+    CHECK_EQ(read32(kIpuBp), 0x10000u | 23u);
+    CHECK_EQ(read32(kIpuTop), 0xDEADBEEFu);
+    CHECK_EQ(read32(kIpuTop + 4), 0u);        // 32 bits ready
+    CHECK((read32(0x1000F000) >> 8) & 1);     // each command raises the IPU interrupt
+
+    write32(kIpuCmd, 0x40000008);             // FDEC after skipping 8 bits: shows, does not consume
+    CHECK_EQ(read32(kIpuCmd), 0xADBEEF00u);
+    CHECK_EQ(read32(kIpuBp) & 0x7F, 31u);
+    write32(kIpuCmd, 0x40000018);             // past the rest of 0xDEADBEEF
+    CHECK_EQ(read32(kIpuCmd), 0u);
+    write32(kIpuCmd, 0x30000000);             // eleven zeros are no address increment: ECD
+    CHECK_EQ(read32(kIpuCtrl) & 0x80004000u, 0x4000u);
+
+    // A command that runs out of data waits; BP shows how far it got.
+    write32(kIpuCmd, 0x4000003F);             // skip 63 bits to 118, then FDEC needs 32
+    CHECK_EQ(read32(kIpuCtrl) >> 31, 1u);
+    CHECK_EQ(read32(kIpuTop + 4), 0x80000000u);
+    CHECK_EQ(read32(kIpuBp), 0x10000u | 118u);
+    const uint64_t more[2] = {0xFFFFFFFFull, 0};
+    write128(kIpuInFifo, more);
+    CHECK_EQ(read32(kIpuCtrl) >> 31, 0u);
+    CHECK_EQ(read32(kIpuCmd), 0x003FFFFFu);   // 10 zero bits, then the next qword's ones
+    CHECK_EQ(read32(kIpuBp), 0x20000u | 118u);
+
+    write32(kIpuCmd, 0x00000045);             // BCLR: empty FIFO, BP 69
+    CHECK_EQ(read32(kIpuBp), 69u);
+}
+
+TEST_CASE(ipu_bdec_decodes_macroblocks_through_dma) {
+    resetIpu();
+    write32(kIpuCtrl, 1u << 24);   // I picture, MPEG-2, zigzag, 8-bit DC, linear quantiser scale
+    Bits b;
+    // Intra macroblock: each block a DC difference, the second block one AC coefficient too.
+    b << "101 111" << "10"         // Y0: size 3, +7 -> 135
+      << "01 00" << "111" << "10"  // Y1: size 2, -3 -> 132; run 0 level -1
+      << "100" << "10" << "100" << "10"   // Y2, Y3: no difference
+      << "01 0" << "10"            // Cb: chroma size 1, -1 -> 127
+      << "00" << "10";             // Cr: 128
+    // Non-intra macroblock: coded_block_pattern 32 (first block only), "1s" first coefficient.
+    b << "1010" << "11" << "10";
+    // Intra again, for alternate scan and field DCT: Y0 128 with run 0 level +1, Y1 135, Y2 and Y3 132.
+    b << "100 110 10" << "101 111 10" << "01 00 10" << "100 10" << "00 10" << "00 10";
+    const uint32_t qwc = b.store(0x01100000);
+    startDma(kD4, 0x01100000, qwc);
+    CHECK((read32(kDmaStat) >> 4) & 1);       // all of it fits in the FIFO: the transfer is done
+
+    write32(kIpuCmd, 0x2C080000);             // BDEC intra, DC reset, quantiser_scale_code 8
+    CHECK_EQ(read32(kIpuCtrl) & 0x800000F0u, 0x80000080u);   // busy with a full output FIFO
+    startDma(kD3, 0x01200000, 48);
+    CHECK_EQ(read32(kIpuCtrl) >> 31, 0u);
+    CHECK((read32(kDmaStat) >> 3) & 1);
+    int16_t intra[6][64] = {};
+    const int16_t dc[6] = {135, 132, 132, 132, 127, 128};
+    for (int i = 0; i < 6; ++i) {
+        intra[i][0] = static_cast<int16_t>(dc[i] * 8);
+        intra[i][63] = 1;   // mismatch control: every block's sum is even
+    }
+    intra[1][1] = -16;      // 2 * -1 * 16 (default intra matrix) * 16 (scale) / 32
+    CHECK_EQ(firstDifference(readRaw16(0x01200000), expectedRaw16(intra)), "");
+
+    write32(kIpuCmd, 0x20080000);             // BDEC non-intra
+    startDma(kD3, 0x01300000, 48);
+    CHECK_EQ((read32(kIpuCtrl) >> 8) & 0x3F, 32u);   // CBP
+    CHECK_EQ((read32(kIpuCtrl) >> 15) & 1, 0u);       // a macroblock follows, not a start code
+    int16_t inter[6][64] = {};
+    inter[0][0] = -24;      // (2 * -1 - 1) * 16 * 16 / 32
+    inter[0][63] = 1;
+    CHECK_EQ(firstDifference(readRaw16(0x01300000), expectedRaw16(inter)), "");
+
+    write32(kIpuCtrl, 1u << 24 | 1u << 20);   // alternate scan
+    write32(kIpuCmd, 0x2E080000);             // BDEC intra, DC reset, field DCT
+    startDma(kD3, 0x01400000, 48);
+    CHECK((read32(kIpuCtrl) >> 15) & 1);      // SCD: zero bits follow
+    int16_t field[6][64] = {};
+    const int16_t fieldDc[6] = {128, 135, 132, 132, 128, 128};
+    for (int i = 0; i < 6; ++i) {
+        field[i][0] = static_cast<int16_t>(fieldDc[i] * 8);
+        field[i][63] = 1;
+    }
+    field[0][8] = 16;       // the second coefficient in alternate scan is the second row's first
+    CHECK_EQ(firstDifference(readRaw16(0x01400000), expectedRaw16(field, true)), "");
+}
+
+TEST_CASE(ipu_csc_converts_with_alpha_thresholds) {
+    resetIpu();
+    uint8_t raw8[384];
+    std::fill_n(raw8, 128, uint8_t{16});         // black above
+    std::fill_n(raw8 + 128, 128, uint8_t{235});  // white below
+    std::fill_n(raw8 + 256, 128, uint8_t{128});
+    writeBytes(0x01100000, raw8, sizeof raw8);
+    write32(kIpuCmd, 0x90000001);   // SETTH: TH0 1, TH1 0
+    startDma(kD4, 0x01100000, 24);
+    write32(kIpuCmd, 0x70000001);   // CSC, one macroblock, RGB32
+    startDma(kD3, 0x01200000, 64);
+    CHECK_EQ(read32(0x01200000), 0u);                    // below TH0: transparent black
+    CHECK_EQ(read32(0x01200000 + 255 * 4), 0x80FFFFFFu);
+
+    write32(kIpuCmd, 0x90000000);
+    startDma(kD4, 0x01100000, 24);
+    write32(kIpuCmd, 0x78000001);   // RGB16
+    startDma(kD3, 0x01300000, 32);
+    CHECK_EQ(read16(0x01300000), 0u);
+    CHECK_EQ(read16(0x01300000 + 255 * 2), 0x7FFFu);
+    CHECK_EQ(read32(kIpuCtrl) >> 31, 0u);
+
+    uint8_t red[384];   // ITU-R BT.601 red
+    std::fill_n(red, 256, uint8_t{81});
+    std::fill_n(red + 256, 64, uint8_t{90});
+    std::fill_n(red + 320, 64, uint8_t{240});
+    uint32_t px[256];
+    mpeg::yuvToRgb32(red, px, 0, 0);
+    CHECK_EQ(px[0], 0x800000FEu);
+}
+
+TEST_CASE(ipu_resumes_split_and_chained_streams) {
+    // One intra macroblock whose first block holds 62 escape-coded coefficients
+    // (12 qwords, more than the FIFOs hold), decoded from one transfer, two
+    // transfers, a DMA chain, and with the DMAC held. Every way gives the same output.
+    Bits b;
+    b << "100";
+    for (int i = 1; i <= 62; ++i) b << (i % 2 ? "000001 000000 000000000011" : "000001 000000 111111111101");   // run 0, level +3 / -3
+    b << "10" << "100 10" << "100 10" << "100 10" << "00 10" << "00 10";
+    const uint32_t qwc = b.store(0x01100000);
+    CHECK(qwc > 10);
+
+    resetIpu();
+    write32(kIpuCtrl, 1u << 24);
+    startDma(kD4, 0x01100000, qwc);
+    write32(kIpuCmd, 0x2C080000);
+    startDma(kD3, 0x01200000, 48);
+    const std::vector<int16_t> whole = readRaw16(0x01200000);
+    int16_t coefficients[6][64] = {};
+    int sum = 1024;
+    for (int i = 1; i <= 62; ++i) {   // 2 * +-3 * W * 16 / 32 along the zigzag
+        const int at = mpeg::kZigzag[i];
+        coefficients[0][at] = static_cast<int16_t>((i % 2 ? 3 : -3) * mpeg::kDefaultIntraMatrix[at]);
+        sum += coefficients[0][at];
+    }
+    for (int i = 0; i < 6; ++i) coefficients[i][0] = 1024;
+    coefficients[0][63] = static_cast<int16_t>((sum & 1) ? 0 : 1);
+    for (int i = 1; i < 6; ++i) coefficients[i][63] = 1;
+    CHECK_EQ(firstDifference(whole, expectedRaw16(coefficients)), "");
+
+    resetIpu();
+    write32(kIpuCtrl, 1u << 24);
+    startDma(kD3, 0x01300000, 48);
+    startDma(kD4, 0x01100000, 2);
+    write32(kIpuCmd, 0x2C080000);
+    CHECK_EQ(read32(kIpuCtrl) >> 31, 1u);              // waiting for data
+    CHECK((read32(kDmaStat) >> 4) & 1);                // after taking all the DMA had
+    CHECK_EQ(read32(kIpuBp) & 0xF00u, 0u);             // IFC 0: the decoder holds what is left
+    startDma(kD4, 0x01100000 + 32, qwc - 2);
+    CHECK_EQ(read32(kIpuCtrl) >> 31, 0u);
+    CHECK_EQ(firstDifference(readRaw16(0x01300000), whole), "");
+
+    // A chain: ref to the first two qwords, then refe to the rest.
+    resetIpu();
+    write32(kIpuCtrl, 1u << 24);
+    const uint64_t tags[4] = {0x30000002ull | (0x01100000ull << 32), 0, (qwc - 2) | (0x01100020ull << 32), 0};
+    writeBytes(0x01400000, tags, sizeof tags);
+    write32(kD4 + 0x20, 0);
+    write32(kD4 + 0x30, 0x01400000);
+    write32(kD4, 0x105);   // chain mode
+    write32(kIpuCmd, 0x2C080000);
+    startDma(kD3, 0x01500000, 48);
+    CHECK((read32(kDmaStat) >> 4) & 1);
+    CHECK_EQ(firstDifference(readRaw16(0x01500000), whole), "");
+
+    // Held by D_ENABLEW, a channel started then waits for the release, and one
+    // already running stops moving data.
+    resetIpu();
+    write32(kIpuCtrl, 1u << 24);
+    write32(0x1000F590, 0x11201);
+    startDma(kD4, 0x01100000, qwc);
+    CHECK_EQ(read32(kIpuBp), 0u);
+    write32(0x1000F590, 0x1201);
+    CHECK_EQ(read32(kIpuBp), 0x20800u);               // the FIFOs are full: FP 2, IFC 8
+    startDma(kD3, 0x01600000, 48);
+    write32(0x1000F590, 0x11201);
+    write32(kIpuCmd, 0x2C080000);
+    CHECK_EQ(read32(kIpuCtrl) >> 31, 1u);              // needs the last two qwords...
+    CHECK_EQ(read32(kD4 + 0x20), 2u);                  // ...which the held channel keeps
+    write32(0x1000F590, 0x1201);
+    CHECK_EQ(read32(kIpuCtrl) >> 31, 0u);
+    CHECK_EQ(firstDifference(readRaw16(0x01600000), whole), "");
+}
+
+TEST_CASE(dmac_to_scratchpad_chain) {
+    dmac::init();
+    write32(kDmaStat, read32(kDmaStat) & 0x3FF);   // clear status bits
+    // cnt with two qwords after the tag, then end with one.
+    const uint64_t list[10] = {0x10000002ull, 0, 1, 2, 3, 4, 0x70000001ull, 0, 5, 6};
+    writeBytes(0x01100000, list, sizeof list);
+    write32(0x1000D480, 0x100);        // SADR
+    write32(0x1000D430, 0x01100000);   // TADR
+    write32(0x1000D420, 0);
+    write32(0x1000D400, 0x105);        // chain mode
+    CHECK_EQ(read64(0x70000100), 1ull);
+    CHECK_EQ(read64(0x70000118), 4ull);
+    CHECK_EQ(read64(0x70000128), 6ull);   // the end tag's qword
+    CHECK_EQ(read32(0x1000D480), 0x130u);
+    CHECK((read32(kDmaStat) >> 9) & 1);
+}
+
+TEST_CASE(mpeg_idct_meets_ieee_1180) {
+    // IEEE 1180: random pixel blocks, forward-transformed in double precision and
+    // rounded, must come back within 1 of the double inverse, with small mean errors.
+    uint32_t seed = 1;
+    const auto random = [&](int lo, int hi) {
+        seed = seed * 1103515245u + 12345u;
+        return lo + static_cast<int>((seed >> 16) % static_cast<uint32_t>(hi - lo + 1));
+    };
+    const int ranges[3][2] = {{-256, 255}, {-5, 5}, {-300, 300}};
+    for (const auto& range : ranges) {
+        double squared = 0;
+        int peak = 0;
+        for (int n = 0; n < 2000; ++n) {
+            double pixels[64];
+            for (double& p : pixels) p = random(range[0], range[1]);
+            int16_t f[64];
+            for (int v = 0; v < 8; ++v)
+                for (int u = 0; u < 8; ++u) {
+                    double s = 0;
+                    for (int y = 0; y < 8; ++y)
+                        for (int x = 0; x < 8; ++x) s += pixels[y * 8 + x] * idctCos(x, u) * idctCos(y, v);
+                    s *= (u ? 1.0 : std::sqrt(0.5)) * (v ? 1.0 : std::sqrt(0.5)) / 4;
+                    f[v * 8 + u] = static_cast<int16_t>(std::clamp(std::floor(s + 0.5), -2048.0, 2047.0));
+                }
+            int16_t got[64], want[64];
+            mpeg::idct(f, got);
+            referenceIdct(f, want);
+            for (int i = 0; i < 64; ++i) {
+                const int e = got[i] - want[i];
+                peak = std::max(peak, std::abs(e));
+                squared += e * e;
+            }
+        }
+        CHECK(peak <= 1);
+        CHECK(squared / (2000 * 64) <= 0.02);
+    }
 }
 
 
