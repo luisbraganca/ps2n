@@ -174,10 +174,14 @@ tests/                           core_tests.cpp, recompiler_tests.cpp, runtime_t
 
 ## Keeping the docs in step
 
-- README `## Status` holds each game's stage, the table by area and its
-  hand-counted figures. Keep it honest: list what is missing, not only what
-  can be counted. Recount when syscalls or IOP exports change, and update the
-  date:
+- README `## Status` holds each game's stage and a progress bar per area.
+  Most bars count the items of their checklist (the collapsed "What each bar
+  counts" block, every item weighing the same). When a feature lands, tick its
+  item, then update the row's count, its percentage and its bar: ten cells,
+  rounded to the nearest. Keep it honest: a gap goes on its list as soon as it
+  is known, not only once it is fixed. The instruction, syscall and IOP
+  function rows are counted instead. Recount them when syscalls or IOP exports
+  change, and update the date:
   - Syscalls: `case` labels in `dispatchSyscall`/`handleInterruptSyscall`
     whose line does not call `sysUnimplemented`, out of the 145 numbers
     ps2sdk's `syscallnr.h` names (aliases resolved, reserved numbers left

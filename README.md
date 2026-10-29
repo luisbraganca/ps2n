@@ -57,32 +57,158 @@ Playable, Perfect.
 
 ### By area
 
-| Area | State | Notes |
-|---|---|---|
-| EE instruction set | Done | All 359 instructions: R5900, MMI, COP0, FPU, VU0 macro mode. Recompiled code and the interpreter share one implementation. |
-| Analysis and code generation | Working | Stripped ELFs, Ghidra maps, jump tables, games made of several executables. Used on test programs, homebrew and one retail game (8,076 functions in Agent Under Fire's main executable). Code overlays are not supported. |
-| EE kernel | Working | 127 of the 145 syscalls ps2sdk names. Missing: event flags, `ExecPS2`, the TLB calls, CPU timers. |
-| IOP | Partial | IRX modules run on an R3000A interpreter; the IOP kernel and Sony's system modules are host code, with 428 of the 557 functions known for 26 libraries. Missing: FILEIO's asynchronous protocol (SDK 2.2 and later, which most later games use), the `mcman` library (0 of 40), network, hard disk, USB. |
-| Graphics (GS) | Partial | A software rasterizer at the PS2's resolution, drawing large primitives on several threads: right in the first game's menus, and at full speed there on an Intel i5-14600KF with 8 drawing threads. Per-pixel work is still plain scalar code. Missing: texture filtering and mipmaps, dithering, anti-aliasing, reading GS memory back to the EE, a GPU renderer. |
-| Vector units | Partial | Every micro instruction, interpreted with the pipeline effects micro code can observe. A program finishes the moment it starts, so it never runs alongside the EE. No VU recompiler. |
-| Movies (IPU) | Working | Every command, following the MPEG-2 standard. Commands take no emulated time. |
-| Sound (SPU2) | Not started | A stand-in for libsd keeps sound drivers running (transfers, interrupts, voice status), but there is no SPU2: nothing is mixed and nothing is heard. |
-| Discs | Working | ISO images or directories, through libcdvd and the IOP's cdvdman. Missing: dual-layer DVDs, CD audio, raw sector reads. |
-| Memory cards | Working | A directory per card, behind MCSERV and XMCSERV. |
-| Window and controllers | Working | An SDL2 window (4:3, deinterlaced, fullscreen); a DualShock 2 per port from the keyboard or game controllers, with PCSX2's bindings, settings pages and vibration. Missing: multitap, other controller types. |
-| Widescreen, higher resolutions | Not started | See the [roadmap](#roadmap). |
+| Area | Progress | Count | Biggest gaps |
+|---|---|--:|---|
+| Games playable | `░░░░░░░░░░` 0% | 0 / 1 | Agent Under Fire reaches its menus; a mission is untested |
+| EE instructions | `██████████` 100% | 359 / 359 | |
+| Recompiler | `█████████░` 89% | 8 / 9 | overlays |
+| EE kernel syscalls | `█████████░` 88% | 127 / 145 | event flags, `ExecPS2`, the TLB, CPU timers |
+| DMA, interrupts, timers | `█████░░░░░` 50% | 4 / 8 | MFIFO, stall control, transfer timing |
+| Graphics (GS) | `██████░░░░` 60% | 12 / 20 | filtering, mipmaps, the CLUT buffer, reading back to the EE |
+| Vector units | `███████░░░` 71% | 5 / 7 | running alongside the EE, a VU recompiler |
+| Movies (IPU) | `████████░░` 83% | 5 / 6 | timing |
+| Sound (SPU2) | `░░░░░░░░░░` 0% | 0 / 10 | all of it: nothing is mixed or heard |
+| IOP library functions | `████████░░` 77% | 428 / 557 | `mcman` (0 / 40), `dmacman`, `intrman`, `sifman` |
+| IOP services | `████████░░` 75% | 9 / 12 | FILEIO for SDK 2.2 and later, used by most later games |
+| Discs and memory cards | `█████░░░░░` 50% | 5 / 10 | dual-layer DVDs, drive timing |
+| Controllers and window | `███████░░░` 69% | 9 / 13 | multitap, other devices, speed settings |
+| Widescreen, upscaling | `░░░░░░░░░░` 0% | 0 / 5 | all of it (see the [roadmap](#roadmap)) |
 
-**Done**: complete and tested. **Working**: does its job in the tests and in
-the one game tried so far; other games will find gaps. **Partial**: large
-pieces missing. [docs/runtime.md](docs/runtime.md#what-is-covered) details
-every area.
+<details>
+<summary><b>What each bar counts</b></summary>
 
-<sub>The counts are made by hand, last on 2026-10-28. Syscalls are counted
-against the numbers ps2sdk's `syscallnr.h` names (reserved ones left out), and
-IOP functions against the export tables the project knows
-([irx_exports.inc](core/src/irx_exports.inc), plus those the runtime
-declares), not every function of every Sony module. Calls the runtime accepts
-with no effect count as implemented.</sub>
+**Recompiler**: 8 of 9
+- [x] Function discovery: ELF symbols, Ghidra maps, call targets, code and data pointers, prologues
+- [x] Jump tables, as `switch` statements
+- [x] Delay slots (and jumps into them), branch-likely, tail calls, fall-through between functions
+- [x] Resume points, so threads, interrupts and longjmp can re-enter a function mid-way
+- [x] Games made of several executables
+- [x] Programs a loader copies in and jumps into, recognised by their code in RAM
+- [x] Missed code runs on the interpreter and is recorded for the next recompile
+- [x] Config bindings: stubs, skips, C++ overrides, instruction patches
+- [ ] Overlays: code replaced while its program runs
+
+**DMA, interrupts, timers**: 4 of 8
+- [x] The interrupt controller
+- [x] Timers 0-3, with compare and overflow interrupts
+- [x] Vsync timing, NTSC and PAL
+- [x] DMA in normal and chain mode: VIF0, VIF1, GIF, IPU, RAM to scratchpad
+- [ ] Scratchpad to RAM in chain mode
+- [ ] MFIFO, the ring buffer from scratchpad to VIF1 or the GIF
+- [ ] Stall control and interleaved transfers
+- [ ] Transfer timing: a transfer ends the moment it starts
+
+**Graphics (GS)**: 12 of 20
+- [x] Display: both circuits, their merging, interlaced frames and fields
+- [x] GIF: paths 1-3, PACKED, REGLIST and IMAGE, PATH3 masking
+- [x] Points, lines, triangles, strips, fans, sprites
+- [x] Flat and Gouraud shading
+- [x] Every colour texture format, with 4- and 8-bit CLUTs and TEXA
+- [ ] Depth buffers sampled as textures
+- [x] The four texture functions and every wrap mode
+- [x] Fog
+- [x] Alpha test
+- [x] Depth test
+- [x] Alpha blending, with PABE, FBA and colour clamping
+- [x] Scissoring and frame-buffer masks
+- [x] Transfers into GS memory and within it
+- [ ] The CLUT buffer: CLD load conditions and the CSM2 layout
+- [ ] Bilinear filtering
+- [ ] Mipmaps
+- [ ] Destination alpha test
+- [ ] Dithering
+- [ ] Anti-aliasing
+- [ ] Transfers from GS memory back to the EE
+
+**Vector units**: 5 of 7
+- [x] VU0 macro mode
+- [x] Every micro instruction, upper and lower, on VU0 and VU1
+- [x] The pipeline as micro code sees it: flag delays, Q and P latencies, stalls, delay slots, the E bit
+- [x] VIF: every UNPACK format and mode, MPG, MSCAL and the double buffer, DIRECT
+- [x] XGKICK to the GIF
+- [ ] Micro programs running alongside the EE, with their timing
+- [ ] A VU recompiler
+
+**Movies (IPU)**: 5 of 6
+- [x] Every command: BCLR, IDEC, BDEC, VDEC, FDEC, SETIQ, SETVQ, CSC, PACK, SETTH
+- [x] MPEG-2 decoding to the standard: code tables, scans, quantisation, an IEEE 1180 inverse DCT
+- [x] Colour conversion: BT.601, alpha thresholds, dithered RGB16
+- [x] FIFOs fed and drained by DMA, as on the console
+- [x] The IPU interrupt
+- [ ] Timing: a command takes no emulated time
+
+**Sound (SPU2)**: 0 of 10. libsd's calls are answered (they count under IOP
+library functions), so sound drivers run, but none of this exists:
+- [ ] ADPCM voice decoding
+- [ ] Pitch, looping, key on and off
+- [ ] ADSR envelopes
+- [ ] Volumes and volume sweeps
+- [ ] Noise
+- [ ] Reverb
+- [ ] Both cores, mixed
+- [ ] Streamed PCM input
+- [ ] Interrupts at a sound memory address
+- [ ] Audio output, in time with the game
+
+**IOP services**: 9 of 12
+- [x] SIF: transfers, command packets, RPC bind and call, IOP reset
+- [x] Module loading: IRX relocation and linking, LOADFILE
+- [x] Replacement IOP images: each module's release reported
+- [x] FILEIO, the BIOS's protocol (release 1000)
+- [x] FILEIO release 2100 (SDK 2.1): open, close, read, write, seek
+- [ ] FILEIO release 2200 and later (SDK 2.2 on), whose replies are asynchronous
+- [x] The IOP heap
+- [x] CDVDFSV: reads, search, streaming, S-commands
+- [x] MCSERV and XMCSERV
+- [x] PADMAN
+- [ ] MTAPMAN with a multitap connected
+- [ ] Network, hard disk, USB and i.LINK
+
+**Discs and memory cards**: 5 of 10
+- [x] ISO images, with 2048- or 2352-byte sectors
+- [x] A directory presented as a disc
+- [ ] Dual-layer DVDs
+- [ ] Drive timing: seeks and reads take no time
+- [ ] Raw sector reads and CD audio
+- [x] A host directory per memory card
+- [x] The card's file system: 8 MB, 1 KB clusters, three open files, its error codes
+- [x] A newly inserted card, reported once
+- [ ] File times and attributes
+- [ ] PCSX2's memory card files (`.ps2`)
+
+**Controllers and window**: 9 of 13
+- [x] DualShock 2: digital, analog and pressure-sensitive modes
+- [x] Vibration
+- [x] Keyboard and SDL game controllers, bound the way PCSX2 binds them
+- [x] Hotkeys
+- [x] Settings kept in PCSX2's file format
+- [ ] Multitap
+- [ ] Other devices: guitars, light guns, USB keyboards and mice
+- [ ] Input profiles and macros
+- [x] A window, fullscreen, the picture at 4:3
+- [x] Deinterlacing: adaptive, weave, bob
+- [x] Pause menu and settings pages
+- [x] Screenshots, frame dumps and on-screen messages
+- [ ] Speed settings: turbo and slow-motion speeds
+
+**Widescreen, upscaling**: 0 of 5
+- [ ] An aspect ratio setting: 4:3, 16:9, stretch
+- [ ] Widescreen patches (PCSX2's pnach files)
+- [ ] No-interlacing patches
+- [ ] A GPU renderer
+- [ ] Higher internal resolution
+
+</details>
+
+<sub>Each item weighs the same, so a bar says how much of its list is done,
+not how much work is left: one missing item, such as FILEIO's newer
+protocol, can stop most games. Instructions, syscalls and IOP functions are
+counted instead, last on 2026-10-29: syscalls against the numbers ps2sdk's
+`syscallnr.h` names (reserved ones left out), IOP functions against the export
+tables the project knows ([irx_exports.inc](core/src/irx_exports.inc), plus
+those the runtime declares), not every function of every Sony module. Calls
+the runtime accepts with no effect count as implemented.
+[docs/runtime.md](docs/runtime.md#what-is-covered) details every area.</sub>
 
 **Speed.** Recompiled code is fast: a tight integer loop runs at about 1.8
 billion guest instructions per second on an Apple M3, about 10 times the
