@@ -1,4 +1,9 @@
-# PS2Native
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/branding/logos/ps2native-horizontal-dark.png">
+    <img src="assets/branding/logos/ps2native-horizontal-light.png" alt="PS2Native" width="420">
+  </picture>
+</h1>
 
 PS2Native (`ps2n`) is a static recompiler for PlayStation 2 executables. It
 reads an Emotion Engine (R5900) ELF, finds its functions, translates every
@@ -465,6 +470,7 @@ tools/ghidra/ function-map exporter for Ghidra
 examples/     the end-to-end example
 tests/        unit tests and end-to-end programs
 docs/         the documentation below
+assets/       the logo and icons (branding/), and the Windows executables' icon (ps2n.rc)
 third_party/  toml++ (MIT), Dear ImGui 1.92.9b (MIT)
 ```
 
@@ -476,6 +482,8 @@ third_party/  toml++ (MIT), Dear ImGui 1.92.9b (MIT)
   runtime covers, and where to add what is missing.
 - [docs/config.md](docs/config.md): every key of a game's config.
 - [docs/input.md](docs/input.md): controllers, the settings file and hotkeys.
+- [assets/branding](assets/branding/README.md): the logo and icons, and which
+  to use where.
 
 ## Testing
 

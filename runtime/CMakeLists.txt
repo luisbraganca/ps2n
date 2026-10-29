@@ -60,6 +60,13 @@ ps2n_set_warnings(ps2n_runtime)
 find_package(Threads REQUIRED)
 target_link_libraries(ps2n_runtime PUBLIC Threads::Threads)
 
+# Every executable linked with the runtime (a game, the runtime tests) gets
+# the PS2Native icon. An interface source, so that generated game projects
+# get it without a change to their CMakeLists.txt.
+if(WIN32)
+    target_sources(ps2n_runtime INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/../assets/ps2n.rc")
+endif()
+
 # Here rather than in the top-level project, so that generated game projects,
 # which add this directory themselves, get the window too.
 option(PS2N_WITH_SDL2 "Open a window for GS output when SDL2 is available" ON)

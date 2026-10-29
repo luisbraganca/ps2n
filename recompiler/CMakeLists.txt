@@ -20,6 +20,9 @@ target_compile_definitions(ps2n_recomp PUBLIC
 ps2n_set_warnings(ps2n_recomp)
 
 add_executable(ps2n src/main.cpp)
+if(WIN32)
+    target_sources(ps2n PRIVATE ${PS2N_SOURCE_DIR}/assets/ps2n.rc)   # the icon
+endif()
 target_link_libraries(ps2n PRIVATE ps2n_recomp)
 ps2n_set_warnings(ps2n)
 

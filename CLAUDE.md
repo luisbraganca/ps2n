@@ -60,6 +60,8 @@ runtime/src/                     runtime.cpp (options, start-up), dispatch.cpp, 
   video/ input/ ui/ settings.cpp SDL window, input manager, ImGui overlay, ps2n.ini
 tests/                           core_tests.cpp, recompiler_tests.cpp, runtime_tests.cpp,
                                  programs/ (assembly programs), sdk/ (programs built with ps2sdk)
+assets/                          branding/ (logo and icons; its README says which to use where),
+                                 ps2n.rc (the icon of ps2n.exe and of every runtime executable)
 ```
 
 ## Rules the design depends on
@@ -146,6 +148,9 @@ tests/                           core_tests.cpp, recompiler_tests.cpp, runtime_t
   `disasm` on the game's own IRX modules are the best protocol reference.
 - `--gs-threads 1` draws on the guest thread alone, which rules the draw
   threads out when a frame looks wrong.
+- A run with a window writes the user's settings
+  (`%APPDATA%\PS2Native\ps2n.ini`) when there are none yet and a controller
+  is connected. Give test runs `--settings` with a scratch file.
 - Speed work must not change what a game draws. Run the same scripted
   `--virtual-clock` session with `--dump-frames DIR --dump-every N` before
   and after: the frames must match bit for bit, and the gaps between the
