@@ -75,6 +75,8 @@ constexpr const char* kUsage =
     "  --no-window           do not open a window (SDL builds)\n"
     "  --deinterlace MODE    adaptive (default), weave or bob, for games that\n"
     "                        show interlaced fields\n"
+    "  --gs-threads N        threads that draw a large primitive together\n"
+    "                        (default 0: half the host's, at most 8; 1: one)\n"
     "  --fpu-round MODE      zero (default, like the EE) or nearest\n"
     "  --strict              stop at the first unimplemented path (exit code 4)\n"
     "  --trace-syscalls      log every syscall\n"
@@ -117,6 +119,7 @@ bool parseOptions(int argc, char** argv) {
         else if (a == "--dump-frames") g_opt.dumpFrames = value();
         else if (a == "--dump-every") g_opt.dumpEvery = static_cast<uint32_t>(std::strtoul(value().c_str(), nullptr, 0));
         else if (a == "--no-window") g_opt.window = false;
+        else if (a == "--gs-threads") gs::setDrawThreads(static_cast<int>(std::strtol(value().c_str(), nullptr, 0)));
         else if (a == "--deinterlace") {
             const std::string m = ps2n::toLower(value());
             if (m == "adaptive") gs::setDeinterlace(gs::Deinterlace::Adaptive);

@@ -1,0 +1,1 @@
+the vblank handler cleared the flag before the timeout

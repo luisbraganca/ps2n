@@ -41,9 +41,10 @@ L_001001a4:
 translates code, is the furthest along: it covers the whole EE instruction set
 and has recompiled a retail game. Most of the work left is in the runtime,
 which stands in for the rest of the console. There is no sound at all, the
-graphics come from a software renderer that cannot keep full speed even in the
-first game's menus, the vector units never run alongside the EE, and the IOP
-services cover what the first game needed.
+graphics come from a software renderer that keeps full speed in the first
+game's menus only by drawing on several threads (measured on one 14-core
+desktop CPU; nothing heavier has been tried), the vector units never run
+alongside the EE, and the IOP services cover what the first game needed.
 
 ### Games
 
@@ -52,7 +53,7 @@ Playable, Perfect.
 
 | Game | Stage | Notes |
 |---|---|---|
-| 007: Agent Under Fire (Europe, SLES-50539) | Menus | All three executables run recompiled. The language selection, the intro movies (without sound), the title screen and the main menu work, and so does the controller. Starting a mission is untested, and the driving missions' executable is not recompiled yet. |
+| 007: Agent Under Fire (Europe, SLES-50539) | Menus | All three executables run recompiled. The language selection, the intro movies (without sound), the title screen and the main menu work, at full speed, and so does the controller. Starting a mission is untested, and the driving missions' executable is not recompiled yet. |
 
 ### By area
 
@@ -62,7 +63,7 @@ Playable, Perfect.
 | Analysis and code generation | Working | Stripped ELFs, Ghidra maps, jump tables, games made of several executables. Used on test programs, homebrew and one retail game (8,076 functions in Agent Under Fire's main executable). Code overlays are not supported. |
 | EE kernel | Working | 127 of the 145 syscalls ps2sdk names. Missing: event flags, `ExecPS2`, the TLB calls, CPU timers. |
 | IOP | Partial | IRX modules run on an R3000A interpreter; the IOP kernel and Sony's system modules are host code, with 428 of the 557 functions known for 26 libraries. Missing: FILEIO's asynchronous protocol (SDK 2.2 and later, which most later games use), the `mcman` library (0 of 40), network, hard disk, USB. |
-| Graphics (GS) | Partial | A software rasterizer at the PS2's resolution, drawing on the game's thread: right in the first game's menus, but below full speed there. Missing: texture filtering and mipmaps, dithering, anti-aliasing, reading GS memory back to the EE, a GPU renderer. |
+| Graphics (GS) | Partial | A software rasterizer at the PS2's resolution, drawing large primitives on several threads: right in the first game's menus, and at full speed there on an Intel i5-14600KF with 8 drawing threads. Per-pixel work is still plain scalar code. Missing: texture filtering and mipmaps, dithering, anti-aliasing, reading GS memory back to the EE, a GPU renderer. |
 | Vector units | Partial | Every micro instruction, interpreted with the pipeline effects micro code can observe. A program finishes the moment it starts, so it never runs alongside the EE. No VU recompiler. |
 | Movies (IPU) | Working | Every command, following the MPEG-2 standard. Commands take no emulated time. |
 | Sound (SPU2) | Not started | A stand-in for libsd keeps sound drivers running (transfers, interrupts, voice status), but there is no SPU2: nothing is mixed and nothing is heard. |
@@ -86,9 +87,14 @@ with no effect count as implemented.</sub>
 **Speed.** Recompiled code is fast: a tight integer loop runs at about 1.8
 billion guest instructions per second on an Apple M3, about 10 times the
 interpreter and well above the EE's 294.9 MHz. Whole games are held back by
-the rest of the emulation: in Agent Under Fire the intro movies run at 98% of
-full speed and the title screen at about 75%, most likely limited by the
-software GS.
+the rest of the emulation. In Agent Under Fire the intro movies, the title
+screen and the main menu now run at 98% of full speed (measured as vblanks per
+second, on an Intel i5-14600KF); the last 2% is the vblank clock, which
+schedules each vblank from when the previous one was handled rather than when
+it was due. Before the GS drew large primitives on 8 threads, the title screen
+dropped to 14.5 vblanks per second; before a polling loop split across two
+functions could take interrupts, it timed out on every frame, and the main menu
+ran at 3 to 5 vblanks per second in a deterministic run.
 
 **Platforms.** Developed and tested on Windows x64, with clang-cl and MSVC.
 The project started on macOS (Apple silicon), which has not been rebuilt
@@ -102,8 +108,10 @@ Roughly in order:
    missions' executable, and fix what the game reaches next.
 2. **Sound**: emulate the SPU2 (ADPCM voices, envelopes, reverb, the two cores
    and their streamed input) and play the result through SDL.
-3. **Graphics speed**: the rasterizer decodes the drawing state for every
-   pixel and draws on the game's thread. A faster software renderer first,
+3. **Graphics speed**: the rasterizer now decodes the drawing state once per
+   primitive and draws large primitives on several threads, enough for the
+   first game's menus. Per pixel it still divides and interpolates in plain
+   scalar code. A faster software renderer next (stepped interpolation, SIMD),
    then a GPU renderer, which higher resolutions also need.
 4. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
    `ExecPS2`, dual-layer discs, code overlays, and a second game to bring up.
@@ -120,8 +128,8 @@ Roughly in order:
      PCSX2's aspect ratio setting (4:3, 16:9, stretch). The same path brings
      PCSX2's no-interlacing patches, for games that draw fields.
    - **Higher internal resolution.** Drawing at a multiple of the PS2's
-     resolution needs the GPU renderer: the software rasterizer is already
-     below full speed at the original resolution, and its work grows with the
+     resolution needs the GPU renderer: the software rasterizer has little
+     room to spare at the original resolution, and its work grows with the
      square of the scale (PCSX2's software renderer does not upscale either).
      Upscaling also brings the problems PCSX2 handles with per-game fixes:
      half-pixel offsets, seams between sprites, and effects that read the
@@ -353,8 +361,8 @@ ctest --test-dir build --output-on-failure
 |---|---|
 | `core` | Every table row decodes to itself, 10,000+ random instructions round-trip through the disassembler and assembler, known encodings, ELF and IRX parsing. |
 | `recompiler` | Config parsing and errors, function map formats, jump tables, stripped-ELF discovery, bindings, patches, code generation. |
-| `runtime` | Instruction semantics against independently computed results (sign extension, R5900 division, unaligned access, MMI lanes, FPU clamping, VU0 flags), guest printf, the GS (swizzling, depth, fields, both circuits, deinterlacing), the IPU's commands, FIFOs and DMA (against a reference IDCT), scratchpad DMA, SIF RPC end to end, IOP resets and services, discs, recognising programs in RAM, `--strict`, controller input and settings. |
-| `program_*` | Assembly programs recompiled at build time and run twice, recompiled and interpreted, against recorded output or a recorded frame: control-flow edge cases, a stripped ELF that needs the interpreter, the kernel scheduler, `printf` over the DECI2 TTY, config bindings, `LoadExecPS2` across three executables, a loader that jumps into the next program. |
+| `runtime` | Instruction semantics against independently computed results (sign extension, R5900 division, unaligned access, MMI lanes, FPU clamping, VU0 flags), guest printf, the GS (swizzling against the manual's block tables, depth, fields, both circuits, deinterlacing, drawing on threads matching one thread byte for byte, triangle coverage), the IPU's commands, FIFOs and DMA (against a reference IDCT), scratchpad DMA, SIF RPC end to end, IOP resets and services, discs, recognising programs in RAM, `--strict`, controller input and settings. |
+| `program_*` | Assembly programs recompiled at build time and run twice, recompiled and interpreted, against recorded output or a recorded frame: control-flow edge cases, a stripped ELF that needs the interpreter, a polling loop split in two that must still take a vblank interrupt, the kernel scheduler, `printf` over the DECI2 TTY, config bindings, `LoadExecPS2` across three executables, a loader that jumps into the next program. |
 | `sdk_*` | Programs built with ps2sdk, run the same two ways: an IRX with its own RPC server, libsd, libpad and libpadx, VU0 and VU1 micro programs, libcdvd, libmc. The binaries are checked in under `tests/sdk/bin` ([tests/sdk/README.md](tests/sdk/README.md)). |
 
 ## Legal

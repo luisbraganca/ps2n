@@ -179,7 +179,11 @@ Time-driven work (vblank, timers, alarms, DMA completion interrupts) runs at
 safepoints:
 
 - every loop back-edge decrements a counter (`PS2_BACKEDGE`); every 2048
-  back-edges `ps2::safepoint()` runs due events and delivers interrupts;
+  back-edges `ps2::safepoint()` runs due events and delivers interrupts. A
+  backward jump into another function counts too: an entry point found
+  later (an interrupt that returned mid-loop) can split a loop in two, and a
+  loop that polls memory for an interrupt handler's write must still take
+  that interrupt;
 - every syscall does the same on its way out.
 
 Interrupt handlers (INTC and DMAC handlers registered by the game, alarm

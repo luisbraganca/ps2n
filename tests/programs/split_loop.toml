@@ -1,0 +1,10 @@
+# Config for split_loop.s: an entry point inside wait_flag's loop, as the
+# runtime records when an interrupt returns there, splits the loop in two.
+[input]
+elf = "split_loop.elf"
+
+[analysis]
+entries = [0x00100114]
+
+[stubs]
+auto = true

@@ -41,7 +41,8 @@ Configured trees (Ninja, git-ignored). Reuse them:
   one process (see Tests), so run the whole suite before finishing.
 - The CLI is `<tree>/recompiler/ps2n.exe`. A generated game project builds
   the same way. A runtime change needs a rebuild of the game, not a new
-  recompile.
+  recompile. A code generator change needs both: `ps2n recompile
+  <config.toml>`, then the rebuild.
 
 ## Where things are
 
@@ -52,7 +53,7 @@ recompiler/src/                  analysis.cpp (function discovery), codegen.cpp,
 runtime/include/ps2/ops_*.h      instruction semantics, shared by generated code and the interpreter
 runtime/src/                     runtime.cpp (options, start-up), dispatch.cpp, interpreter.cpp, vu.cpp, clock.cpp
   kernel/kernel.cpp              EE syscalls
-  hw/                            hw.cpp (EE registers), dmac, gs (rasterizer, display), vif, ipu, mpeg
+  hw/                            hw.cpp (EE registers), dmac, gs (rasterizer, draw threads, display), vif, ipu, mpeg
   iop/                           cpu (R3000A), kernel, libs, hle (host libraries), modules (IRX loading),
                                  iop.cpp (SIF, RPC), services (FILEIO, LOADFILE, ...), cdvd, disc,
                                  memcard, pad, sound (libsd stand-in), hostfs (device paths)
@@ -74,9 +75,25 @@ tests/                           core_tests.cpp, recompiler_tests.cpp, runtime_t
   guest state in host locals across a call, and it is what lets every guest
   thread run on one host thread. Host code that needs guest code (an
   override, a handler) calls it through `callGuest`, a nested dispatch loop.
+- Interrupts, timers, alarms and preemption run at safepoints: loop
+  back-edges (`PS2_BACKEDGE`) and syscalls. A backward jump into another
+  function is a back-edge too. Entry points found later split loops into
+  tail calls, and a loop that polls memory for an interrupt handler's write
+  hangs if its back-edge is not a safepoint (`tests/programs/split_loop`).
 - Instruction semantics live only in `ops_*.h`, never in emitted text, so
   recompiled and interpreted code cannot disagree. Keep `-ffp-contract=off`:
   the EE and the VUs round between the multiply and the add.
+- The guest thread runs with the host FPU rounding toward zero, as the EE
+  does (`--fpu-round`), and the GS rasterizer's float math inherits that
+  mode. A host thread doing guest-visible float work must take the caller's
+  mode (`fegetround`), as the GS draw threads do; without it, colours come
+  out one step off.
+- Drawing on several threads (`--gs-threads`) must give exactly what one
+  thread gives, or runs stop being reproducible. Threads share a large
+  primitive by bands of rows. A primitive whose memory overlaps (texture or
+  CLUT over its frame or depth buffer, frame over depth) is drawn by one
+  thread, as is one in a texture format the rasterizer does not support.
+  `gs_threads_draw_what_one_thread_draws` checks this.
 - Generated code embeds no game data; the runtime loads the ELF at start-up.
 - Report every gap. `PS2_UNIMPL(category, key, ...)` is for missing or wrong
   emulation (counted, printed in the exit summary, stops `--strict`), and
@@ -94,13 +111,16 @@ tests/                           core_tests.cpp, recompiler_tests.cpp, runtime_t
 - `tests/runtime_tests.cpp`: every `TEST_CASE` runs in one process, over the
   same guest RAM, in file order. The IOP/SIF tests expect zero at 0x00400000
   (the EE command buffer), and the IPU/DMA tests use 0x01100000-0x016FFFFF.
-  Give a new test its own region. The input manager is process-wide too:
-  restore what you change.
+  Give a new test its own region. The input manager, the GS settings
+  (`gs::setDrawThreads`, `gs::setDeinterlace`) and the host rounding mode
+  are process-wide too: restore what you change.
 - End-to-end tests run each program twice, recompiled and `--interpret`,
   against `.expected` output, plus a SHA-256 of a dumped frame for drawing
-  tests. New assembly programs go in `tests/programs` (`ps2n_program_test`).
-  The ps2sdk programs are prebuilt in `tests/sdk/bin`. Rebuilding them needs
-  the ps2dev toolchain, which is not installed: ask first.
+  tests. New assembly programs go in `tests/programs` (`ps2n_program_test`);
+  a `<name>.toml` beside one replaces `default.toml`, for extra entry points
+  or bindings. The ps2sdk programs are prebuilt in `tests/sdk/bin`.
+  Rebuilding them needs the ps2dev toolchain, which is not installed: ask
+  first.
 - New behaviour gets tests, and the tests get checked by planting bugs.
   Commit messages report it as "N planted bugs are each caught". Two traps:
   - Restore a planted file so it gets a new modification time
@@ -110,7 +130,7 @@ tests/                           core_tests.cpp, recompiler_tests.cpp, runtime_t
     compile, and the old binary then "passes". Check `$LASTEXITCODE` after
     every build, and write mutations that keep everything used.
 
-## Debugging a game
+## Debugging and measuring a game
 
 - A fault in both modes is a runtime gap. A fault only in recompiled code
   (not under `--interpret`) is a recompiler bug.
@@ -124,6 +144,13 @@ tests/                           core_tests.cpp, recompiler_tests.cpp, runtime_t
   executable). Add them to `[analysis] entries_files` and recompile.
 - `ps2n disasm --cpp NAME` shows one function's translation. `ps2n irx` and
   `disasm` on the game's own IRX modules are the best protocol reference.
+- `--gs-threads 1` draws on the guest thread alone, which rules the draw
+  threads out when a frame looks wrong.
+- Speed work must not change what a game draws. Run the same scripted
+  `--virtual-clock` session with `--dump-frames DIR --dump-every N` before
+  and after: the frames must match bit for bit, and the gaps between the
+  files' write times give vblanks per second. In real time, full speed on
+  PAL reads about 49, not 50 (README, Speed).
 - Confirm a cause with a run before stating it.
 
 ## Working rules
@@ -160,8 +187,8 @@ tests/                           core_tests.cpp, recompiler_tests.cpp, runtime_t
     `defineLibrary` entry. An entry is implemented when its function is not
     `nullptr` or is set with `setExport`.
   - EE instructions: the `X(` rows of `r5900_ops.inc`.
-- Update docs/runtime.md's coverage tables, docs/config.md for config keys
-  and docs/input.md for input and hotkeys.
+- Update docs/runtime.md's option and coverage tables, docs/config.md for
+  config keys and docs/input.md for input and hotkeys.
 - Style: short declarative sentences, British spelling (behaviour, colour,
   recognise), and say what is not covered.
 - Commit messages: a one-line summary of what changed (parts joined with

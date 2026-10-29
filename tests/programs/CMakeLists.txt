@@ -30,6 +30,9 @@ endfunction()
 
 ps2n_program_test(control_flow)
 ps2n_program_test(stripped STRIP)
+# A polling loop that an extra entry point splits across two functions: its
+# back-edge must still be a safepoint, or the vblank interrupt never comes.
+ps2n_program_test(split_loop STRIP)
 ps2n_program_test(kernel)
 ps2n_program_test(deci2)
 # Skip, stub, override and patch; --max-vsyncs turns an ignored skip into a failure instead of a hang.

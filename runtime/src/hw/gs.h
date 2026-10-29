@@ -56,6 +56,11 @@ void setDeinterlace(Deinterlace mode);   // any thread
 Deinterlace deinterlace();
 const char* deinterlaceName(Deinterlace mode);
 
+// Threads that draw a large primitive together (each takes bands of rows;
+// the picture is the same as one thread's): 0 picks half the host's threads,
+// at most 8; 1 draws everything on the GS's own thread.
+void setDrawThreads(int n);
+
 // Direct access for tests and tools.
 uint32_t readPixel32(uint32_t fbp, uint32_t fbw, uint32_t psm, int x, int y);
 // Index of the memory unit holding pixel (x, y): a word for 32/24-bit

@@ -19,6 +19,7 @@
 #include "ps2n/elf.h"
 #include "ps2n/util.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cfenv>
@@ -29,6 +30,7 @@
 #include <fstream>
 #include <numbers>
 #include <set>
+#include <vector>
 
 using namespace ps2;
 using namespace ps2::ops;
@@ -427,6 +429,37 @@ TEST_CASE(gs_swizzle_is_a_bijection_per_page) {
     CHECK_EQ(gs::debugAddress(0x00, 0, 1, 0, 1), 2u);
 }
 
+TEST_CASE(gs_swizzle_blocks_follow_the_manual) {
+    // Each block's number within its page, row by row of blocks, as the GS
+    // User's Manual draws them; the Z layouts swap block groups (^ 0x18).
+    static constexpr int kCt32[4][8] = {{0, 1, 4, 5, 16, 17, 20, 21}, {2, 3, 6, 7, 18, 19, 22, 23},
+                                        {8, 9, 12, 13, 24, 25, 28, 29}, {10, 11, 14, 15, 26, 27, 30, 31}};
+    static constexpr int kCt16[8][4] = {{0, 2, 8, 10}, {1, 3, 9, 11}, {4, 6, 12, 14}, {5, 7, 13, 15},
+                                        {16, 18, 24, 26}, {17, 19, 25, 27}, {20, 22, 28, 30}, {21, 23, 29, 31}};
+    static constexpr int kCt16s[8][4] = {{0, 2, 16, 18}, {1, 3, 17, 19}, {8, 10, 24, 26}, {9, 11, 25, 27},
+                                         {4, 6, 20, 22}, {5, 7, 21, 23}, {12, 14, 28, 30}, {13, 15, 29, 31}};
+    struct Layout {
+        uint32_t psm, bw, blockW, blockH, units;   // units: memory units per block
+        int cols;
+        const int* table;
+        int flip;
+    };
+    const Layout layouts[] = {
+        {0x00, 1, 8, 8, 64, 8, &kCt32[0][0], 0},       {0x30, 1, 8, 8, 64, 8, &kCt32[0][0], 0x18},     // CT32, Z32
+        {0x02, 1, 16, 8, 128, 4, &kCt16[0][0], 0},     {0x32, 1, 16, 8, 128, 4, &kCt16[0][0], 0x18},   // CT16, Z16
+        {0x0A, 1, 16, 8, 128, 4, &kCt16s[0][0], 0},    {0x3A, 1, 16, 8, 128, 4, &kCt16s[0][0], 0x18},  // CT16S, Z16S
+        {0x13, 2, 16, 16, 256, 8, &kCt32[0][0], 0},    {0x14, 2, 32, 16, 512, 4, &kCt16[0][0], 0},     // T8, T4
+    };
+    for (const Layout& l : layouts) {
+        for (int i = 0; i < 32; ++i) {
+            const int bx = i % l.cols, by = i / l.cols;
+            const uint32_t a = gs::debugAddress(l.psm, 0, l.bw, static_cast<uint32_t>(bx) * l.blockW, static_cast<uint32_t>(by) * l.blockH);
+            CHECK_EQ(a / l.units, static_cast<uint32_t>(l.table[i] ^ l.flip));
+            CHECK_EQ(a % l.units, 0u);   // the block's first unit
+        }
+    }
+}
+
 namespace {
 
 // GS register writes as one PACKED A+D packet down PATH3.
@@ -578,6 +611,150 @@ TEST_CASE(gs_deinterlaces_fields) {
     gs::onVblankStart();
     l = field(even);
     CHECK_EQ(l[1], rgb(even[0]));
+}
+
+namespace {
+
+// Host-to-local transfer: w x h pixels to the top left of a buffer at block
+// `dbp`, from words packing them as the format does (one per word for
+// PSMCT32, four per word for PSMT8).
+void gsUpload(uint32_t dbp, uint32_t dbw, uint32_t psm, int w, int h, const std::vector<uint32_t>& words) {
+    gsWrite({{0x50, static_cast<uint64_t>(dbp) << 32 | static_cast<uint64_t>(dbw) << 48 | static_cast<uint64_t>(psm) << 56},
+             {0x51, 0}, {0x52, static_cast<uint64_t>(w) | static_cast<uint64_t>(h) << 32}, {0x53, 0}});
+    std::vector<uint64_t> q = {static_cast<uint64_t>((words.size() + 3) / 4) | 1ull << 15 | 2ull << 58, 0};   // IMAGE
+    auto at = [&](size_t i) { return static_cast<uint64_t>(i < words.size() ? words[i] : 0); };
+    for (size_t i = 0; i < words.size(); i += 4) {
+        q.push_back(at(i) | at(i + 1) << 32);
+        q.push_back(at(i + 2) | at(i + 3) << 32);
+    }
+    gs::gifTransfer(q.data(), q.size() / 2, 3);
+}
+
+std::vector<uint32_t> pseudoRandom(size_t n, uint32_t seed) {
+    std::vector<uint32_t> v(n);
+    for (uint32_t& w : v) w = seed = seed * 1664525u + 1013904223u;
+    return v;
+}
+
+uint64_t bits64(float f) { return std::bit_cast<uint32_t>(f); }
+
+// A scene of large primitives, drawn by `threads` threads under the EE's
+// round-to-zero (the guest thread's, which the drawing inherits). Returns
+// the frame buffer and the depth buffer.
+std::vector<uint32_t> drawScene(int threads) {
+    gs::init();
+    gs::setDrawThreads(threads);
+    const int mode = std::fegetround();
+    std::fesetround(FE_TOWARDZERO);
+    // A 64x64 PSMCT32 texture at page 64, a 64x64 PSMT8 one at page 72 and its
+    // 256-entry CLUT at page 80.
+    gsUpload(64 * 32, 1, 0x00, 64, 64, pseudoRandom(64 * 64, 1));
+    gsUpload(72 * 32, 2, 0x13, 64, 64, pseudoRandom(64 * 64 / 4, 2));
+    gsUpload(80 * 32, 1, 0x00, 16, 16, pseudoRandom(256, 3));
+    const uint64_t frame = 4ull << 16;                              // FRAME_1: page 0, 256 wide, PSMCT32
+    gsWrite({{0x4C, frame}, {0x4E, 32},                             // ZBUF_1: page 32, PSMZ32
+             {0x40, 255ull << 16 | 127ull << 48}, {0x18, 0}, {0x1A, 1},
+             {0x3D, 0x204060},                                       // FOGCOL
+             {0x42, 0x44},                                           // ALPHA_1: (Cs - Cd) * As + Cd
+             {0x47, 1ull << 16 | 1ull << 17},                        // TEST_1: depth ALWAYS
+             {0x00, 6}, {0x01, 0x80302010}, {0x05, xyz(0, 0, 0)}, {0x05, xyz(256, 128, 0)}});
+    // A Gouraud triangle, perspective-textured, fogged and blended, depth GEQUAL.
+    const uint64_t tex32 = 2048 | 1ull << 14 | 6ull << 26 | 6ull << 30 | 1ull << 34;   // TBP0, TBW 1, 64x64, TCC, modulate
+    gsWrite({{0x06, tex32}, {0x08, 0}, {0x47, 1ull << 16 | 2ull << 17},
+             {0x00, 3 | 1 << 3 | 1 << 4 | 1 << 5 | 1 << 6},
+             {0x02, bits64(0.0f) | bits64(0.0f) << 32}, {0x01, 0x80FF4020 | bits64(1.0f) << 32}, {0x04, xyz(0, 0, 0x100000) | 0x10ull << 56},
+             {0x02, bits64(2.0f) | bits64(0.5f) << 32}, {0x01, 0x6020FF40 | bits64(2.0f) << 32}, {0x04, xyz(256, 8, 0x300000) | 0xF0ull << 56},
+             {0x02, bits64(0.25f) | bits64(1.5f) << 32}, {0x01, 0x404080FF | bits64(1.5f) << 32}, {0x04, xyz(16, 128, 0x200000) | 0x80ull << 56}});
+    // A sprite from the CLUT texture, by texel coordinates, behind an alpha test.
+    const uint64_t tex8 = 2304 | 2ull << 14 | 0x13ull << 20 | 6ull << 26 | 6ull << 30 | 1ull << 34 | 1ull << 35 | 2560ull << 37;
+    gsWrite({{0x06, tex8}, {0x08, 0}, {0x47, 1 | 6 << 1 | 0x40 << 4 | 1ull << 16 | 1ull << 17},
+             {0x00, 6 | 1 << 4 | 1 << 8}, {0x03, 0}, {0x05, xyz(32, 16, 0x400000)},
+             {0x03, (64 * 16) | static_cast<uint64_t>(64 * 16) << 16}, {0x05, xyz(224, 112, 0x400000)}});
+    // A sprite copying the frame onto itself four rows down: it reads rows it
+    // writes, so it must be drawn by one thread whatever the setting.
+    const uint64_t texFrame = 0 | 4ull << 14 | 8ull << 26 | 7ull << 30 | 1ull << 34 | 1ull << 35;
+    gsWrite({{0x06, texFrame}, {0x08, 0}, {0x47, 0},
+             {0x00, 6 | 1 << 4 | 1 << 8}, {0x03, 0}, {0x05, xyz(0, 4, 0)},
+             {0x03, (256 * 16) | static_cast<uint64_t>(124 * 16) << 16}, {0x05, xyz(256, 128, 0)}});
+    std::vector<uint32_t> out;
+    for (int y = 0; y < 128; ++y)
+        for (int x = 0; x < 256; ++x) {
+            out.push_back(gs::readPixel32(0, 4, 0x00, x, y));
+            out.push_back(gs::readPixel32(32, 4, 0x30, x, y));
+        }
+    std::fesetround(mode);
+    gs::setDrawThreads(0);
+    return out;
+}
+
+} // namespace
+
+TEST_CASE(gs_threads_draw_what_one_thread_draws) {
+    const std::vector<uint32_t> one = drawScene(1);
+    CHECK(std::set<uint32_t>(one.begin(), one.end()).size() > 1000);   // the scene is not a flat fill
+    for (int threads : {3, 4}) {
+        const std::vector<uint32_t> many = drawScene(threads);
+        size_t differ = 0;
+        for (size_t i = 0; i < one.size(); ++i) differ += one[i] != many[i];
+        CHECK_EQ(differ, size_t(0));
+    }
+}
+
+TEST_CASE(gs_triangles_cover_what_the_float_test_covers) {
+    // Rows are narrowed to spans from exact edge functions; the pixels inside
+    // must be exactly those the float weights and the edge rule select over
+    // the whole bounding box. Random triangles in 12.4 coordinates, both
+    // windings, from slivers to ones reaching 4096 pixels (where the float
+    // products round), seen through a 512x512 scissor.
+    gs::init();
+    gsWrite({{0x4C, 8ull << 16}, {0x40, 511ull << 16 | 511ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
+    uint32_t seed = 12345;
+    auto next = [&](uint32_t range) {
+        seed = seed * 1664525u + 1013904223u;
+        return (seed >> 8) % range;
+    };
+    struct V {
+        float x, y;
+    };
+    int drawn = 0;
+    for (int t = 0; t < 60; ++t) {
+        const uint32_t span = (t < 20 ? 64 : t < 40 ? 512 : 4096) * 16;   // in sixteenths of a pixel
+        uint32_t X[3], Y[3];
+        for (int i = 0; i < 3; ++i) {
+            X[i] = next(span);
+            Y[i] = next(span);
+        }
+        if (t % 7 == 0) Y[2] = Y[1] + next(3);   // a near-horizontal edge
+        gsWrite({{0x00, 6}, {0x01, 0}, {0x05, xyz(0, 0, 0)}, {0x05, xyz(512, 512, 0)}});
+        gsWrite({{0x00, 3}, {0x01, 0x80FFFFFF},
+                 {0x05, X[0] | static_cast<uint64_t>(Y[0]) << 16}, {0x05, X[1] | static_cast<uint64_t>(Y[1]) << 16},
+                 {0x05, X[2] | static_cast<uint64_t>(Y[2]) << 16}});
+        const V v0{X[0] / 16.0f, Y[0] / 16.0f}, v1{X[1] / 16.0f, Y[1] / 16.0f}, v2{X[2] / 16.0f, Y[2] / 16.0f};
+        const float area = (v1.x - v0.x) * (v2.y - v0.y) - (v2.x - v0.x) * (v1.y - v0.y);
+        const int minX = std::max(static_cast<int>(std::floor(std::min({v0.x, v1.x, v2.x}))), 0);
+        const int maxX = std::min(static_cast<int>(std::ceil(std::max({v0.x, v1.x, v2.x}))), 511);
+        const int minY = std::max(static_cast<int>(std::floor(std::min({v0.y, v1.y, v2.y}))), 0);
+        const int maxY = std::min(static_cast<int>(std::ceil(std::max({v0.y, v1.y, v2.y}))), 511);
+        size_t mismatches = 0;
+        for (int y = minY; y <= maxY; ++y) {
+            for (int x = minX; x <= maxX; ++x) {
+                bool covered = false;
+                if (area != 0) {
+                    const float px = static_cast<float>(x), py = static_cast<float>(y);
+                    const float w0 = ((v1.x - px) * (v2.y - py) - (v2.x - px) * (v1.y - py)) / area;
+                    const float w1 = ((v2.x - px) * (v0.y - py) - (v0.x - px) * (v2.y - py)) / area;
+                    const float w2 = 1.0f - w0 - w1;
+                    covered = w0 >= 0 && w1 >= 0 && w2 >= 0 &&
+                              !((w0 == 0 && w1 + w2 == 1 && py == std::max(v1.y, v2.y)) ||
+                                (px == maxX && (w0 == 0 || w1 == 0 || w2 == 0) && maxX != minX));
+                }
+                drawn += covered;
+                mismatches += covered != (gs::readPixel32(0, 8, 0x00, x, y) != 0);
+            }
+        }
+        CHECK_EQ(mismatches, size_t(0));
+    }
+    CHECK(drawn > 100000);
 }
 
 namespace {

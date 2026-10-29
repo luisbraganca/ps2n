@@ -300,10 +300,13 @@ private:
         emitSimple(ds, true, indent);
     }
 
-    // Jump (no link) to `target` from the instruction at `from`.
+    // Jump (no link) to `target` from the instruction at `from`. A jump back
+    // closes a loop, and a loop's back-edge is a safepoint (time passes,
+    // interrupts are taken) even when it lands in another function: entry
+    // points found later (an interrupt returning mid-loop) split loops.
     void emitJump(uint32_t target, uint32_t from, const std::string& indent) {
+        if (target <= from && p_.config->preemptLoops) out_ += indent + "PS2_BACKEDGE(" + hex(target) + ");\n";
         if (inside(target)) {
-            if (target <= from && p_.config->preemptLoops) out_ += indent + "PS2_BACKEDGE(" + hex(target) + ");\n";
             out_ += indent + "goto " + label(target) + ";\n";
             return;
         }

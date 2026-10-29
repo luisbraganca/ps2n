@@ -9,8 +9,11 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <cfenv>
 #include <cmath>
 #include <cstring>
+#include <thread>
+#include <vector>
 
 namespace ps2::gs {
 
@@ -44,27 +47,51 @@ constexpr uint32_t ct4(uint32_t x, uint32_t y) {
 
 bool isZ(uint32_t psm) { return (psm & 0x30) == 0x30; }
 
+// The swizzles as tables: each pixel's offset within its page (64x32 pixels
+// for 32-bit formats, 64x64 for 16-bit, 128x64 for 8-bit, 128x128 for 4-bit),
+// in the format's units, filled once from the formulas above. A pixel's
+// address is then its page's first unit plus one table entry.
+struct Swizzle {
+    uint16_t c32[2][32][64];    // words; [1] the Z layout (blocks ^ 0x18)
+    uint16_t c16[4][64][64];    // halfwords; [s | z << 1]
+    uint16_t c8[64][128];       // bytes
+    uint16_t c4[128][128];      // nibbles
+    Swizzle() {
+        for (uint32_t y = 0; y < 128; ++y) {
+            for (uint32_t x = 0; x < 128; ++x) {
+                if (y < 32 && x < 64)
+                    for (uint32_t z = 0; z < 2; ++z) c32[z][y][x] = static_cast<uint16_t>((bt32(x >> 3, y >> 3) ^ (z ? 0x18 : 0)) * 64 + ct32(x & 7, y & 7));
+                if (y < 64 && x < 64) {
+                    for (uint32_t v = 0; v < 4; ++v) {
+                        const uint32_t block = (v & 1) ? bt16s(x >> 4, y >> 3) : bt16(x >> 4, y >> 3);
+                        c16[v][y][x] = static_cast<uint16_t>((block ^ ((v & 2) ? 0x18 : 0)) * 128 + ct16(x & 15, y & 7));
+                    }
+                }
+                if (y < 64) c8[y][x] = static_cast<uint16_t>(bt32(x >> 4, y >> 4) * 256 + ct8(x & 15, y & 15));
+                c4[y][x] = static_cast<uint16_t>(bt16(x >> 5, y >> 4) * 512 + ct4(x & 31, y & 15));
+            }
+        }
+    }
+};
+const Swizzle g_swizzle;
+
 // Word index of a 32-bit pixel (CT32/CT24/Z32/Z24 and the T8H/T4HL/T4HH host words).
 uint32_t addr32(uint32_t bp, uint32_t bw, uint32_t x, uint32_t y, bool z) {
     const uint32_t page = (y >> 5) * std::max(bw, 1u) + (x >> 6);
-    uint32_t block = bt32((x >> 3) & 7, (y >> 3) & 3);
-    if (z) block ^= 0x18;
-    return (bp * 64 + page * 2048 + block * 64 + ct32(x & 7, y & 7)) & 0xFFFFF;
+    return (bp * 64 + page * 2048 + g_swizzle.c32[z][y & 31][x & 63]) & 0xFFFFF;
 }
 // Halfword index of a 16-bit pixel.
 uint32_t addr16(uint32_t bp, uint32_t bw, uint32_t x, uint32_t y, bool s, bool z) {
     const uint32_t page = (y >> 6) * std::max(bw, 1u) + (x >> 6);
-    uint32_t block = s ? bt16s((x >> 4) & 3, (y >> 3) & 7) : bt16((x >> 4) & 3, (y >> 3) & 7);
-    if (z) block ^= 0x18;
-    return (bp * 128 + page * 4096 + block * 128 + ct16(x & 15, y & 7)) & 0x1FFFFF;
+    return (bp * 128 + page * 4096 + g_swizzle.c16[(s ? 1 : 0) | (z ? 2 : 0)][y & 63][x & 63]) & 0x1FFFFF;
 }
 uint32_t addr8(uint32_t bp, uint32_t bw, uint32_t x, uint32_t y) {
     const uint32_t page = (y >> 6) * std::max(bw >> 1, 1u) + (x >> 7);
-    return (bp * 256 + page * 8192 + bt32((x >> 4) & 7, (y >> 4) & 3) * 256 + ct8(x & 15, y & 15)) & 0x3FFFFF;
+    return (bp * 256 + page * 8192 + g_swizzle.c8[y & 63][x & 127]) & 0x3FFFFF;
 }
 uint32_t addr4(uint32_t bp, uint32_t bw, uint32_t x, uint32_t y) {
     const uint32_t page = (y >> 7) * std::max(bw >> 1, 1u) + (x >> 7);
-    return (bp * 512 + page * 16384 + bt16((x >> 5) & 3, (y >> 4) & 7) * 512 + ct4(x & 31, y & 15)) & 0x7FFFFF;
+    return (bp * 512 + page * 16384 + g_swizzle.c4[y & 127][x & 127]) & 0x7FFFFF;
 }
 
 uint8_t* vramBytes() { return reinterpret_cast<uint8_t*>(g_vram); }
@@ -314,10 +341,38 @@ Env currentEnv() {
     return e;
 }
 
-uint32_t clutLookup(uint32_t index, uint64_t tex0, uint32_t psm) {
-    const auto cbp = static_cast<uint32_t>(field(tex0, 37, 14));
-    const auto cpsm = static_cast<uint32_t>(field(tex0, 51, 4));
-    const auto csa = static_cast<uint32_t>(field(tex0, 56, 5));
+// What a primitive's pixels need, decoded from the registers when they
+// change rather than for every pixel.
+struct Draw {
+    Env e;
+    bool tex, fst, gouraud;              // PRIM: TME, FST, IIP
+    uint32_t tbp, tbw, tpsm;             // TEX0
+    int tw, th;                          // texture size, texels
+    float twf, thf;
+    uint32_t tfx;                        // modulate, decal, highlight, highlight2
+    bool tcc;
+    uint32_t wms, wmt;                   // CLAMP
+    int minu, maxu, minv, maxv;
+    uint32_t ta0, ta1;                   // TEXA
+    bool aem;
+    uint32_t cbp, cpsm, csa;             // the CLUT
+    bool ate;                            // alpha test
+    uint32_t atst, aref, afail;
+    bool zte;                            // depth test
+    uint32_t ztst, zmax;
+    bool fge;                            // fog
+    uint32_t fogr, fogg, fogb;
+    bool abe, pabe, colclamp;            // blending
+    uint64_t ba, bb, bc, bd;
+    uint32_t fix;
+    bool fb16;                           // a 16-bit frame buffer, and its mask
+    uint32_t fbmsk16;
+};
+Draw g_draw;
+bool g_drawDirty = true;   // a drawing register changed since g_draw was decoded
+
+uint32_t clutLookup(const Draw& d, uint32_t index) {
+    const uint32_t psm = d.tpsm, cbp = d.cbp, cpsm = d.cpsm, csa = d.csa;
     uint32_t x, y;
     if (psm == PSMT8 || psm == PSMT8H) {
         const uint32_t i = (index & 0xE7) | ((index & 0x08) << 1) | ((index & 0x10) >> 1);   // CSM1 order
@@ -346,48 +401,35 @@ uint32_t wrapCoord(int c, int size, uint32_t mode, int minv, int maxv) {
     }
 }
 
-uint32_t sampleTexture(const Env& e, float u, float v) {
-    const uint64_t tex0 = e.tex0;
-    const auto tbp = static_cast<uint32_t>(field(tex0, 0, 14));
-    const auto tbw = static_cast<uint32_t>(field(tex0, 14, 6));
-    const auto psm = static_cast<uint32_t>(field(tex0, 20, 6));
-    const int tw = 1 << std::min<int>(10, static_cast<int>(field(tex0, 26, 4)));
-    const int th = 1 << std::min<int>(10, static_cast<int>(field(tex0, 30, 4)));
-    const uint64_t cl = e.clamp;
-    const uint32_t x = wrapCoord(static_cast<int>(std::floor(u)), tw, static_cast<uint32_t>(field(cl, 0, 2)),
-                                 static_cast<int>(field(cl, 4, 10)), static_cast<int>(field(cl, 14, 10)));
-    const uint32_t y = wrapCoord(static_cast<int>(std::floor(v)), th, static_cast<uint32_t>(field(cl, 2, 2)),
-                                 static_cast<int>(field(cl, 24, 10)), static_cast<int>(field(cl, 34, 10)));
-    const uint64_t texa = g_regs[TEXA];
-    const auto ta0 = static_cast<uint32_t>(field(texa, 0, 8)), ta1 = static_cast<uint32_t>(field(texa, 32, 8));
-    const bool aem = field(texa, 15, 1) != 0;
-    switch (psm) {
-    case PSMCT32: return readRaw(tbp, tbw, psm, x, y);
+uint32_t sampleTexture(const Draw& d, float u, float v) {
+    const uint32_t x = wrapCoord(static_cast<int>(std::floor(u)), d.tw, d.wms, d.minu, d.maxu);
+    const uint32_t y = wrapCoord(static_cast<int>(std::floor(v)), d.th, d.wmt, d.minv, d.maxv);
+    switch (d.tpsm) {
+    case PSMCT32: return readRaw(d.tbp, d.tbw, d.tpsm, x, y);
     case PSMCT24: {
-        const uint32_t c = readRaw(tbp, tbw, psm, x, y);
-        return c | ((aem && c == 0) ? 0 : ta0 << 24);
+        const uint32_t c = readRaw(d.tbp, d.tbw, d.tpsm, x, y);
+        return c | ((d.aem && c == 0) ? 0 : d.ta0 << 24);
     }
-    case PSMCT16: case PSMCT16S: return expand16(readRaw(tbp, tbw, psm, x, y), ta0, ta1, aem);
+    case PSMCT16: case PSMCT16S: return expand16(readRaw(d.tbp, d.tbw, d.tpsm, x, y), d.ta0, d.ta1, d.aem);
     case PSMT8: case PSMT4: case PSMT8H: case PSMT4HL: case PSMT4HH:
-        return clutLookup(readRaw(tbp, tbw, psm, x, y), tex0, psm);
+        return clutLookup(d, readRaw(d.tbp, d.tbw, d.tpsm, x, y));
     default:
-        PS2_UNIMPL("gs", "texture format", "texture format 0x%x is not supported", psm);
+        PS2_UNIMPL("gs", "texture format", "texture format 0x%x is not supported", d.tpsm);
         return 0xFFFFFFFFu;
     }
 }
 
-bool alphaTestPass(uint64_t test, uint32_t a) {
-    if (!field(test, 0, 1)) return true;
-    const auto aref = static_cast<uint32_t>(field(test, 4, 8));
-    switch (field(test, 1, 3)) {
+bool alphaTestPass(const Draw& d, uint32_t a) {
+    if (!d.ate) return true;
+    switch (d.atst) {
     case 0: return false;
     case 1: return true;
-    case 2: return a < aref;
-    case 3: return a <= aref;
-    case 4: return a == aref;
-    case 5: return a >= aref;
-    case 6: return a > aref;
-    default: return a != aref;
+    case 2: return a < d.aref;
+    case 3: return a <= d.aref;
+    case 4: return a == d.aref;
+    case 5: return a >= d.aref;
+    case 6: return a > d.aref;
+    default: return a != d.aref;
     }
 }
 
@@ -399,20 +441,76 @@ uint32_t zMax(uint32_t zpsm) {
     }
 }
 
+const Draw& currentDraw() {
+    if (!g_drawDirty) return g_draw;
+    g_drawDirty = false;
+    Draw& d = g_draw;
+    d.e = currentEnv();
+    const Env& e = d.e;
+    d.tex = field(e.prim, 4, 1) != 0;
+    d.fst = field(e.prim, 8, 1) != 0;
+    d.gouraud = field(e.prim, 3, 1) != 0;
+    d.tbp = static_cast<uint32_t>(field(e.tex0, 0, 14));
+    d.tbw = static_cast<uint32_t>(field(e.tex0, 14, 6));
+    d.tpsm = static_cast<uint32_t>(field(e.tex0, 20, 6));
+    d.tw = 1 << std::min<int>(10, static_cast<int>(field(e.tex0, 26, 4)));
+    d.th = 1 << std::min<int>(10, static_cast<int>(field(e.tex0, 30, 4)));
+    d.twf = static_cast<float>(d.tw);
+    d.thf = static_cast<float>(d.th);
+    d.tcc = field(e.tex0, 34, 1) != 0;
+    d.tfx = static_cast<uint32_t>(field(e.tex0, 35, 2));
+    d.wms = static_cast<uint32_t>(field(e.clamp, 0, 2));
+    d.wmt = static_cast<uint32_t>(field(e.clamp, 2, 2));
+    d.minu = static_cast<int>(field(e.clamp, 4, 10));
+    d.maxu = static_cast<int>(field(e.clamp, 14, 10));
+    d.minv = static_cast<int>(field(e.clamp, 24, 10));
+    d.maxv = static_cast<int>(field(e.clamp, 34, 10));
+    const uint64_t texa = g_regs[TEXA];
+    d.ta0 = static_cast<uint32_t>(field(texa, 0, 8));
+    d.ta1 = static_cast<uint32_t>(field(texa, 32, 8));
+    d.aem = field(texa, 15, 1) != 0;
+    d.cbp = static_cast<uint32_t>(field(e.tex0, 37, 14));
+    d.cpsm = static_cast<uint32_t>(field(e.tex0, 51, 4));
+    d.csa = static_cast<uint32_t>(field(e.tex0, 56, 5));
+    d.ate = field(e.test, 0, 1) != 0;
+    d.atst = static_cast<uint32_t>(field(e.test, 1, 3));
+    d.aref = static_cast<uint32_t>(field(e.test, 4, 8));
+    d.afail = static_cast<uint32_t>(field(e.test, 12, 2));
+    d.zte = field(e.test, 16, 1) != 0;
+    d.ztst = static_cast<uint32_t>(field(e.test, 17, 2));
+    d.zmax = zMax(e.zpsm);
+    d.fge = field(e.prim, 5, 1) != 0;
+    const uint64_t fc = g_regs[FOGCOL];
+    d.fogr = static_cast<uint32_t>(field(fc, 0, 8));
+    d.fogg = static_cast<uint32_t>(field(fc, 8, 8));
+    d.fogb = static_cast<uint32_t>(field(fc, 16, 8));
+    d.abe = field(e.prim, 6, 1) != 0;
+    d.pabe = field(g_regs[PABE], 0, 1) != 0;
+    d.colclamp = field(g_regs[COLCLAMP], 0, 1) != 0;
+    d.ba = field(e.alpha, 0, 2);
+    d.bb = field(e.alpha, 2, 2);
+    d.bc = field(e.alpha, 4, 2);
+    d.bd = field(e.alpha, 6, 2);
+    d.fix = static_cast<uint32_t>(field(e.alpha, 32, 8));
+    d.fb16 = e.fpsm == PSMCT16 || e.fpsm == PSMCT16S;
+    d.fbmsk16 = pack16(e.fbmsk);
+    return d;
+}
+
 // Shades and writes one pixel. Colour components are 0..255 floats.
-void plot(const Env& e, int x, int y, uint32_t z, float r, float g, float b, float a, float u, float v, float fog, bool textured) {
+void plot(const Draw& dr, int x, int y, uint32_t z, float r, float g, float b, float a, float u, float v, float fog, bool textured) {
+    const Env& e = dr.e;
     if (x < e.scx0 || x > e.scx1 || y < e.scy0 || y > e.scy1) return;
-    const uint64_t prim = e.prim;
     uint32_t cr = static_cast<uint32_t>(std::clamp(r, 0.f, 255.f));
     uint32_t cg = static_cast<uint32_t>(std::clamp(g, 0.f, 255.f));
     uint32_t cb = static_cast<uint32_t>(std::clamp(b, 0.f, 255.f));
     uint32_t ca = static_cast<uint32_t>(std::clamp(a, 0.f, 255.f));
 
     if (textured) {
-        const uint32_t t = sampleTexture(e, u, v);
+        const uint32_t t = sampleTexture(dr, u, v);
         const uint32_t tr = t & 0xFF, tg = (t >> 8) & 0xFF, tb = (t >> 16) & 0xFF, ta = t >> 24;
-        const bool tcc = field(e.tex0, 34, 1) != 0;
-        switch (field(e.tex0, 35, 2)) {
+        const bool tcc = dr.tcc;
+        switch (dr.tfx) {
         case 0:   // MODULATE
             cr = std::min(255u, (tr * cr) >> 7);
             cg = std::min(255u, (tg * cg) >> 7);
@@ -439,29 +537,26 @@ void plot(const Env& e, int x, int y, uint32_t z, float r, float g, float b, flo
             break;
         }
     }
-    if (field(prim, 5, 1)) {   // fog
-        const uint64_t fc = g_regs[FOGCOL];
+    if (dr.fge) {   // fog
         const auto f = static_cast<uint32_t>(std::clamp(fog, 0.f, 255.f));
-        cr = (f * cr + (255 - f) * static_cast<uint32_t>(field(fc, 0, 8))) >> 8;
-        cg = (f * cg + (255 - f) * static_cast<uint32_t>(field(fc, 8, 8))) >> 8;
-        cb = (f * cb + (255 - f) * static_cast<uint32_t>(field(fc, 16, 8))) >> 8;
+        cr = (f * cr + (255 - f) * dr.fogr) >> 8;
+        cg = (f * cg + (255 - f) * dr.fogg) >> 8;
+        cb = (f * cb + (255 - f) * dr.fogb) >> 8;
     }
 
     bool writeFb = true, writeZ = !e.zmsk, writeA = true;
-    if (!alphaTestPass(e.test, ca)) {
-        switch (field(e.test, 12, 2)) {   // AFAIL
+    if (!alphaTestPass(dr, ca)) {
+        switch (dr.afail) {
         case 0: return;
         case 1: writeZ = false; break;
         case 2: writeFb = false; break;
         default: writeZ = false; writeA = false; break;
         }
     }
-    const bool zte = field(e.test, 16, 1) != 0;
-    if (zte) {
-        const uint32_t zm = zMax(e.zpsm);
-        const uint32_t zc = std::min(z, zm);
+    if (dr.zte) {
+        const uint32_t zc = std::min(z, dr.zmax);
         const uint32_t zd = readRaw(e.zbp, e.fbw, e.zpsm, static_cast<uint32_t>(x), static_cast<uint32_t>(y));
-        switch (field(e.test, 17, 2)) {
+        switch (dr.ztst) {
         case 0: return;
         case 1: break;
         case 2: if (zc < zd) return; break;
@@ -472,80 +567,118 @@ void plot(const Env& e, int x, int y, uint32_t z, float r, float g, float b, flo
     if (!writeFb) return;
 
     const uint32_t dst = readRaw(e.fbp, e.fbw, e.fpsm, static_cast<uint32_t>(x), static_cast<uint32_t>(y));
-    const uint32_t d = (e.fpsm == PSMCT16 || e.fpsm == PSMCT16S) ? expand16(dst) : dst;
-    const bool pabe = field(g_regs[PABE], 0, 1) != 0;
-    if (field(prim, 6, 1) && !(pabe && !(ca & 0x80))) {   // alpha blending
-        const uint64_t al = e.alpha;
-        const uint32_t dr = d & 0xFF, dg = (d >> 8) & 0xFF, db = (d >> 16) & 0xFF, da = d >> 24;
+    const uint32_t d = dr.fb16 ? expand16(dst) : dst;
+    if (dr.abe && !(dr.pabe && !(ca & 0x80))) {   // alpha blending
+        const uint32_t dR = d & 0xFF, dG = (d >> 8) & 0xFF, dB = (d >> 16) & 0xFF, da = d >> 24;
         auto pick = [&](uint64_t sel, uint32_t s, uint32_t dd) -> int { return sel == 0 ? int(s) : sel == 1 ? int(dd) : 0; };
-        const uint64_t A = field(al, 0, 2), B = field(al, 2, 2), C = field(al, 4, 2), D = field(al, 6, 2);
-        const int c = C == 0 ? int(ca) : C == 1 ? int(da) : int(field(al, 32, 8));
+        const int c = dr.bc == 0 ? int(ca) : dr.bc == 1 ? int(da) : int(dr.fix);
         auto blend = [&](uint32_t s, uint32_t dd) {
-            int v = ((pick(A, s, dd) - pick(B, s, dd)) * c >> 7) + pick(D, s, dd);
-            return field(g_regs[COLCLAMP], 0, 1) ? static_cast<uint32_t>(std::clamp(v, 0, 255)) : static_cast<uint32_t>(v & 0xFF);
+            int v = ((pick(dr.ba, s, dd) - pick(dr.bb, s, dd)) * c >> 7) + pick(dr.bd, s, dd);
+            return dr.colclamp ? static_cast<uint32_t>(std::clamp(v, 0, 255)) : static_cast<uint32_t>(v & 0xFF);
         };
-        cr = blend(cr, dr);
-        cg = blend(cg, dg);
-        cb = blend(cb, db);
+        cr = blend(cr, dR);
+        cg = blend(cg, dG);
+        cb = blend(cb, dB);
     }
     if (e.fba) ca |= 0x80;
     uint32_t out = cr | (cg << 8) | (cb << 16) | (ca << 24);
     if (!writeA) out = (out & 0x00FFFFFF) | (d & 0xFF000000);
-    if (e.fpsm == PSMCT16 || e.fpsm == PSMCT16S) {
-        const uint32_t m = pack16(e.fbmsk);
+    if (dr.fb16) {
+        const uint32_t m = dr.fbmsk16;
         writeRaw(e.fbp, e.fbw, e.fpsm, static_cast<uint32_t>(x), static_cast<uint32_t>(y), (pack16(out) & ~m) | (dst & m));
     } else {
         writeRaw(e.fbp, e.fbw, e.fpsm, static_cast<uint32_t>(x), static_cast<uint32_t>(y), (out & ~e.fbmsk) | (dst & e.fbmsk));
     }
 }
 
-bool textured(const Env& e) { return field(e.prim, 4, 1) != 0; }
-bool fst(const Env& e) { return field(e.prim, 8, 1) != 0; }
-
-void texCoord(const Env& e, float s, float t, float q, float u, float v, float& outU, float& outV) {
-    if (fst(e)) {
+void texCoord(const Draw& d, float s, float t, float q, float u, float v, float& outU, float& outV) {
+    if (d.fst) {
         outU = u;
         outV = v;
         return;
     }
-    const float tw = static_cast<float>(1 << std::min<int>(10, static_cast<int>(field(e.tex0, 26, 4))));
-    const float th = static_cast<float>(1 << std::min<int>(10, static_cast<int>(field(e.tex0, 30, 4))));
     const float iq = q != 0 ? 1.0f / q : 1.0f;
-    outU = s * iq * tw;
-    outV = t * iq * th;
+    outU = s * iq * d.twf;
+    outV = t * iq * d.thf;
 }
 
-void drawSprite(const Env& e, const Vertex& a, const Vertex& b) {
+// Several threads can draw one primitive, each taking every parts-th band
+// of four rows (see drawOnThreads).
+bool myRow(int y, int part, int parts) { return parts == 1 || ((y >> 2) % parts) == part; }
+
+struct Box {
+    int x0, x1, y0, y1;   // inclusive, after the scissor
+};
+Box spriteBox(const Draw& d, const Vertex& a, const Vertex& b) {
+    const Env& e = d.e;
     const float x0 = std::min(a.x, b.x), x1 = std::max(a.x, b.x);
     const float y0 = std::min(a.y, b.y), y1 = std::max(a.y, b.y);
-    const int ix0 = std::max(static_cast<int>(std::ceil(x0)), e.scx0), ix1 = std::min(static_cast<int>(std::ceil(x1)) - 1, e.scx1);
-    const int iy0 = std::max(static_cast<int>(std::ceil(y0)), e.scy0), iy1 = std::min(static_cast<int>(std::ceil(y1)) - 1, e.scy1);
-    const bool tex = textured(e);
+    return {std::max(static_cast<int>(std::ceil(x0)), e.scx0), std::min(static_cast<int>(std::ceil(x1)) - 1, e.scx1),
+            std::max(static_cast<int>(std::ceil(y0)), e.scy0), std::min(static_cast<int>(std::ceil(y1)) - 1, e.scy1)};
+}
+Box triangleBox(const Draw& d, const Vertex& v0, const Vertex& v1, const Vertex& v2) {
+    const Env& e = d.e;
+    return {std::max(static_cast<int>(std::floor(std::min({v0.x, v1.x, v2.x}))), e.scx0),
+            std::min(static_cast<int>(std::ceil(std::max({v0.x, v1.x, v2.x}))), e.scx1),
+            std::max(static_cast<int>(std::floor(std::min({v0.y, v1.y, v2.y}))), e.scy0),
+            std::min(static_cast<int>(std::ceil(std::max({v0.y, v1.y, v2.y}))), e.scy1)};
+}
+
+void drawSprite(const Draw& d, const Vertex& a, const Vertex& b, int part, int parts) {
+    const Box box = spriteBox(d, a, b);
+    const int ix0 = box.x0, ix1 = box.x1, iy0 = box.y0, iy1 = box.y1;
+    const bool tex = d.tex;
     float ua, va, ub, vb;
-    texCoord(e, a.s, a.t, a.q, a.u, a.v, ua, va);
-    texCoord(e, b.s, b.t, b.q, b.u, b.v, ub, vb);
+    texCoord(d, a.s, a.t, a.q, a.u, a.v, ua, va);
+    texCoord(d, b.s, b.t, b.q, b.u, b.v, ub, vb);
     const float dx = b.x - a.x, dy = b.y - a.y;
     for (int y = iy0; y <= iy1; ++y) {
+        if (!myRow(y, part, parts)) continue;
         const float fy = dy != 0 ? (static_cast<float>(y) - a.y) / dy : 0;
         for (int x = ix0; x <= ix1; ++x) {
             const float fx = dx != 0 ? (static_cast<float>(x) - a.x) / dx : 0;
-            plot(e, x, y, b.z, b.r, b.g, b.b, b.a, ua + (ub - ua) * fx, va + (vb - va) * fy, b.fog, tex);
+            plot(d, x, y, b.z, b.r, b.g, b.b, b.a, ua + (ub - ua) * fx, va + (vb - va) * fy, b.fog, tex);
         }
     }
 }
 
-void drawTriangle(const Env& e, const Vertex& v0, const Vertex& v1, const Vertex& v2) {
+// The edge function (p.x - px) * (q.y - py) - (q.x - px) * (p.y - py) as
+// a * px + b * py + c. Vertices are 12.4 fixed point, so doubles hold every
+// product exactly.
+struct Edge {
+    double a, b, c;
+};
+Edge edgeFunction(const Vertex& p, const Vertex& q, double sign) {
+    return Edge{sign * (static_cast<double>(p.y) - q.y), sign * (static_cast<double>(q.x) - p.x),
+                sign * (static_cast<double>(p.x) * q.y - static_cast<double>(q.x) * p.y)};
+}
+
+void drawTriangle(const Draw& d, const Vertex& v0, const Vertex& v1, const Vertex& v2, int part, int parts) {
     const float area = (v1.x - v0.x) * (v2.y - v0.y) - (v2.x - v0.x) * (v1.y - v0.y);
     if (area == 0) return;
-    const int minX = std::max(static_cast<int>(std::floor(std::min({v0.x, v1.x, v2.x}))), e.scx0);
-    const int maxX = std::min(static_cast<int>(std::ceil(std::max({v0.x, v1.x, v2.x}))), e.scx1);
-    const int minY = std::max(static_cast<int>(std::floor(std::min({v0.y, v1.y, v2.y}))), e.scy0);
-    const int maxY = std::min(static_cast<int>(std::ceil(std::max({v0.y, v1.y, v2.y}))), e.scy1);
-    const bool gouraud = field(e.prim, 3, 1) != 0;
-    const bool tex = textured(e);
-    const bool persp = tex && !fst(e);
+    const Box box = triangleBox(d, v0, v1, v2);
+    const int minX = box.x0, maxX = box.x1, minY = box.y0, maxY = box.y1;
+    const bool gouraud = d.gouraud;
+    const bool tex = d.tex;
+    const bool persp = tex && !d.fst;
+    // Each row tests only the span its exact edge functions allow, widened by
+    // a margin of area units that the float test's rounding cannot cross:
+    // pixels outside it fail that test anyway (some weight is negative).
+    constexpr double kMargin = 64.0;
+    const double sign = area > 0 ? 1.0 : -1.0;
+    const Edge edges[3] = {edgeFunction(v1, v2, sign), edgeFunction(v2, v0, sign), edgeFunction(v0, v1, sign)};
     for (int y = minY; y <= maxY; ++y) {
-        for (int x = minX; x <= maxX; ++x) {
+        if (!myRow(y, part, parts)) continue;
+        double lo = minX, hi = maxX;
+        bool empty = false;
+        for (const Edge& g : edges) {   // inside (or nearly): a * px + k >= 0
+            const double k = g.b * y + g.c + kMargin;
+            if (g.a > 0) lo = std::max(lo, std::ceil(-k / g.a) - 1.0);
+            else if (g.a < 0) hi = std::min(hi, std::floor(-k / g.a) + 1.0);
+            else if (k < 0) empty = true;
+        }
+        if (empty || lo > hi) continue;
+        for (int x = static_cast<int>(lo); x <= static_cast<int>(hi); ++x) {
             const float px = static_cast<float>(x), py = static_cast<float>(y);
             const float w0 = ((v1.x - px) * (v2.y - py) - (v2.x - px) * (v1.y - py)) / area;
             const float w1 = ((v2.x - px) * (v0.y - py) - (v0.x - px) * (v2.y - py)) / area;
@@ -557,8 +690,11 @@ void drawTriangle(const Env& e, const Vertex& v0, const Vertex& v1, const Vertex
             auto lerp = [&](float a, float b, float c) { return a * w0 + b * w1 + c * w2; };
             // Depth in double, relative to the first vertex: a float keeps 24 of Z's 32 bits, so
             // layers drawn at one depth fought each other under GEQUAL, and a flat triangle stays exact.
-            const double zd = static_cast<double>(v0.z) + w1 * (static_cast<double>(v1.z) - v0.z) + w2 * (static_cast<double>(v2.z) - v0.z);
-            const auto z = static_cast<uint32_t>(std::clamp(zd, 0.0, 4294967295.0));
+            uint32_t z = 0;   // only the depth test reads it
+            if (d.zte) {
+                const double zd = static_cast<double>(v0.z) + w1 * (static_cast<double>(v1.z) - v0.z) + w2 * (static_cast<double>(v2.z) - v0.z);
+                z = static_cast<uint32_t>(std::clamp(zd, 0.0, 4294967295.0));
+            }
             float r = v2.r, g = v2.g, b = v2.b, a = v2.a;
             if (gouraud) {
                 r = lerp(v0.r, v1.r, v2.r);
@@ -570,28 +706,188 @@ void drawTriangle(const Env& e, const Vertex& v0, const Vertex& v1, const Vertex
             if (tex) {
                 if (persp) {
                     const float s = lerp(v0.s, v1.s, v2.s), t = lerp(v0.t, v1.t, v2.t), q = lerp(v0.q, v1.q, v2.q);
-                    texCoord(e, s, t, q, 0, 0, u, v);
+                    texCoord(d, s, t, q, 0, 0, u, v);
                 } else {
                     u = lerp(v0.u, v1.u, v2.u);
                     v = lerp(v0.v, v1.v, v2.v);
                 }
             }
-            plot(e, x, y, z, r, g, b, a, u, v, lerp(v0.fog, v1.fog, v2.fog), tex);
+            plot(d, x, y, z, r, g, b, a, u, v, d.fge ? lerp(v0.fog, v1.fog, v2.fog) : 0.0f, tex);
         }
     }
 }
 
-void drawLine(const Env& e, const Vertex& a, const Vertex& b) {
+void drawLine(const Draw& d, const Vertex& a, const Vertex& b) {
     const int steps = static_cast<int>(std::max(std::fabs(b.x - a.x), std::fabs(b.y - a.y)));
     for (int i = 0; i <= steps; ++i) {
         const float f = steps ? static_cast<float>(i) / static_cast<float>(steps) : 0;
-        const Vertex& c = field(e.prim, 3, 1) ? (f < 0.5f ? a : b) : b;
-        plot(e, static_cast<int>(a.x + (b.x - a.x) * f), static_cast<int>(a.y + (b.y - a.y) * f), b.z, c.r, c.g, c.b, c.a, 0, 0, b.fog, false);
+        const Vertex& c = d.gouraud ? (f < 0.5f ? a : b) : b;
+        plot(d, static_cast<int>(a.x + (b.x - a.x) * f), static_cast<int>(a.y + (b.y - a.y) * f), b.z, c.r, c.g, c.b, c.a, 0, 0, b.fog, false);
     }
 }
 
+// ---- drawing on several threads ----------------------------------------------------
+// A large primitive is drawn by several threads at once, each taking every
+// Nth band of four rows. Each pixel is still shaded by one thread, and the
+// primitive is finished before the next one starts, so the picture is the
+// one a single thread draws. A primitive whose pixels could see another
+// thread's is drawn by one thread: a texture or CLUT in memory it draws
+// into, or frame and depth buffers that overlap.
+
+using RowJob = void (*)(const void* job, int part, int parts);
+
+class DrawThreads {
+public:
+    ~DrawThreads() { stop(); }
+    void setCount(int n) {
+        stop();
+        want_ = n;
+    }
+    int count() {
+        if (want_ <= 0) want_ = static_cast<int>(std::clamp(std::thread::hardware_concurrency() / 2, 1u, 8u));
+        return want_;
+    }
+    // job(part, count()) for every part: part 0 on this thread, the others on
+    // helpers, which round floats as this thread does (the EE's rounding,
+    // which the guest thread uses and the drawing inherits). Returns when all are done.
+    void run(RowJob job, const void* ctx) {
+        const int parts = count();
+        start(parts - 1);
+        job_ = job;
+        ctx_ = ctx;
+        parts_ = parts;
+        rounding_ = std::fegetround();
+        pending_.store(parts - 1);
+        epoch_.fetch_add(1);
+        epoch_.notify_all();
+        job(ctx, 0, parts);
+        for (int p = pending_.load(); p != 0; p = pending_.load()) pending_.wait(p);
+    }
+
+private:
+    void start(int helpers) {
+        if (static_cast<int>(threads_.size()) == helpers) return;
+        stop();
+        const uint32_t now = epoch_.load();
+        for (int part = 1; part <= helpers; ++part) threads_.emplace_back([this, part, now] { work(part, now); });
+    }
+    void work(int part, uint32_t seen) {
+        for (;;) {
+            epoch_.wait(seen);
+            seen = epoch_.load();
+            if (stopping_) return;
+            if (std::fegetround() != rounding_) std::fesetround(rounding_);
+            job_(ctx_, part, parts_);
+            if (pending_.fetch_sub(1) == 1) pending_.notify_one();
+        }
+    }
+    void stop() {
+        if (threads_.empty()) return;
+        stopping_ = true;
+        epoch_.fetch_add(1);
+        epoch_.notify_all();
+        for (std::thread& t : threads_) t.join();
+        threads_.clear();
+        stopping_ = false;
+    }
+
+    std::vector<std::thread> threads_;
+    std::atomic<uint32_t> epoch_{0};
+    std::atomic<int> pending_{0};
+    std::atomic<bool> stopping_{false};
+    RowJob job_ = nullptr;
+    const void* ctx_ = nullptr;
+    int parts_ = 1;
+    int rounding_ = FE_TONEAREST;
+    int want_ = 0;   // 0: half the host's threads, at most 8
+};
+DrawThreads g_drawThreads;
+
+// The words of local memory that pixels (0..w-1, 0..h-1) of a buffer can
+// address: from its first block to the end of the last page they reach.
+struct Span {
+    uint64_t lo, hi;
+};
+Span footprint(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t w, uint32_t h) {
+    uint32_t pw = 64, ph = 32, wide = std::max(bw, 1u);   // 32-bit layouts, T8H/T4HL/T4HH too
+    switch (psm) {
+    case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S: ph = 64; break;
+    case PSMT8: pw = 128; ph = 64; wide = std::max(bw >> 1, 1u); break;
+    case PSMT4: pw = 128; ph = 128; wide = std::max(bw >> 1, 1u); break;
+    default: break;
+    }
+    const uint64_t pages = static_cast<uint64_t>((std::max(h, 1u) - 1) / ph) * wide + (std::max(w, 1u) - 1) / pw + 1;
+    return {static_cast<uint64_t>(bp) * 64, static_cast<uint64_t>(bp) * 64 + pages * 2048};
+}
+bool meets(Span a, Span b) {
+    constexpr uint64_t kWords = uint64_t(1) << 20;
+    if (a.hi > kWords || b.hi > kWords) return true;   // wraps round the end of memory: assume the worst
+    return a.lo < b.hi && b.lo < a.hi;
+}
+
+// How many threads draw a primitive covering `box`: one, or all of them.
+int drawParts(const Draw& d, const Box& box) {
+    constexpr int64_t kMinPixels = 8192;   // smaller ones cost less than waking the helpers
+    if (box.x1 < box.x0 || box.y1 < box.y0) return 1;
+    if (static_cast<int64_t>(box.x1 - box.x0 + 1) * (box.y1 - box.y0 + 1) < kMinPixels || box.y1 - box.y0 < 16) return 1;
+    const int n = g_drawThreads.count();
+    if (n <= 1) return 1;
+    const Env& e = d.e;
+    const auto w = static_cast<uint32_t>(box.x1 + 1), h = static_cast<uint32_t>(box.y1 + 1);
+    const Span frame = footprint(e.fbp, e.fbw, e.fpsm, w, h);
+    const Span depth = footprint(e.zbp, e.fbw, e.zpsm, w, h);
+    if (d.zte && meets(frame, depth)) return 1;
+    if (d.tex) {
+        switch (d.tpsm) {
+        case PSMCT32: case PSMCT24: case PSMCT16: case PSMCT16S: break;
+        case PSMT8: case PSMT4: case PSMT8H: case PSMT4HL: case PSMT4HH: {
+            const Span clut{static_cast<uint64_t>(d.cbp) * 64, static_cast<uint64_t>(d.cbp) * 64 + 2048};
+            if (meets(clut, frame) || (d.zte && meets(clut, depth))) return 1;
+            break;
+        }
+        default: return 1;   // reported as unsupported, from one thread
+        }
+        // Region clamp and repeat can reach past the texture's size, up to 1024.
+        const auto tw = static_cast<uint32_t>(d.wms >= 2 ? 1024 : d.tw), th = static_cast<uint32_t>(d.wmt >= 2 ? 1024 : d.th);
+        const Span texels = footprint(d.tbp, d.tbw, d.tpsm, tw, th);
+        if (meets(texels, frame) || (d.zte && meets(texels, depth))) return 1;
+    }
+    return n;
+}
+
+void triangle(const Draw& d, const Vertex& v0, const Vertex& v1, const Vertex& v2) {
+    if (drawParts(d, triangleBox(d, v0, v1, v2)) == 1) {
+        drawTriangle(d, v0, v1, v2, 0, 1);
+        return;
+    }
+    struct Job {
+        const Draw* d;
+        const Vertex *v0, *v1, *v2;
+    } job{&d, &v0, &v1, &v2};
+    g_drawThreads.run([](const void* p, int part, int parts) {
+        const auto* j = static_cast<const Job*>(p);
+        drawTriangle(*j->d, *j->v0, *j->v1, *j->v2, part, parts);
+    }, &job);
+}
+
+void sprite(const Draw& d, const Vertex& a, const Vertex& b) {
+    if (drawParts(d, spriteBox(d, a, b)) == 1) {
+        drawSprite(d, a, b, 0, 1);
+        return;
+    }
+    struct Job {
+        const Draw* d;
+        const Vertex *a, *b;
+    } job{&d, &a, &b};
+    g_drawThreads.run([](const void* p, int part, int parts) {
+        const auto* j = static_cast<const Job*>(p);
+        drawSprite(*j->d, *j->a, *j->b, part, parts);
+    }, &job);
+}
+
 void kick(bool draw) {
-    const Env e = currentEnv();
+    const Draw& d = currentDraw();
+    const Env& e = d.e;
     const uint64_t xyz = g_regs[XYZ2];
     Vertex v;
     v.x = static_cast<float>(static_cast<int>(field(xyz, 0, 16)) - e.ofx) / 16.0f;
@@ -612,31 +908,31 @@ void kick(bool draw) {
     if (g_queueCount < 3) g_queue[g_queueCount++] = v;
     switch (type) {
     case 0:   // point
-        if (draw) plot(e, static_cast<int>(v.x), static_cast<int>(v.y), v.z, v.r, v.g, v.b, v.a, 0, 0, v.fog, false);
+        if (draw) plot(d, static_cast<int>(v.x), static_cast<int>(v.y), v.z, v.r, v.g, v.b, v.a, 0, 0, v.fog, false);
         g_queueCount = 0;
         break;
     case 1:   // line
         if (g_queueCount == 2) {
-            if (draw) drawLine(e, g_queue[0], g_queue[1]);
+            if (draw) drawLine(d, g_queue[0], g_queue[1]);
             g_queueCount = 0;
         }
         break;
     case 2:   // line strip
         if (g_queueCount == 2) {
-            if (draw) drawLine(e, g_queue[0], g_queue[1]);
+            if (draw) drawLine(d, g_queue[0], g_queue[1]);
             g_queue[0] = g_queue[1];
             g_queueCount = 1;
         }
         break;
     case 3:   // triangle
         if (g_queueCount == 3) {
-            if (draw) drawTriangle(e, g_queue[0], g_queue[1], g_queue[2]);
+            if (draw) triangle(d, g_queue[0], g_queue[1], g_queue[2]);
             g_queueCount = 0;
         }
         break;
     case 4:   // triangle strip
         if (g_queueCount == 3) {
-            if (draw) drawTriangle(e, g_queue[0], g_queue[1], g_queue[2]);
+            if (draw) triangle(d, g_queue[0], g_queue[1], g_queue[2]);
             g_queue[0] = g_queue[1];
             g_queue[1] = g_queue[2];
             g_queueCount = 2;
@@ -644,14 +940,14 @@ void kick(bool draw) {
         break;
     case 5:   // triangle fan
         if (g_queueCount == 3) {
-            if (draw) drawTriangle(e, g_queue[0], g_queue[1], g_queue[2]);
+            if (draw) triangle(d, g_queue[0], g_queue[1], g_queue[2]);
             g_queue[1] = g_queue[2];
             g_queueCount = 2;
         }
         break;
     case 6:   // sprite
         if (g_queueCount == 2) {
-            if (draw) drawSprite(e, g_queue[0], g_queue[1]);
+            if (draw) sprite(d, g_queue[0], g_queue[1]);
             g_queueCount = 0;
         }
         break;
@@ -663,6 +959,10 @@ void kick(bool draw) {
 
 void writeReg(uint32_t reg, uint64_t v) {
     reg &= 0xFF;
+    switch (reg) {   // vertex data and image data leave the drawing state (g_draw) alone
+    case RGBAQ: case ST: case UV: case XYZF2: case XYZ2: case XYZF3: case XYZ3: case FOG: case HWREG: break;
+    default: g_drawDirty = true; break;
+    }
     switch (reg) {
     case PRIM:
         g_regs[PRIM] = v & 0x7FF;
@@ -827,6 +1127,7 @@ void init() {
     g_csr = 0x551B4000ull;
     g_imr = 0x7F00;
     g_history = FieldHistory{};
+    g_drawDirty = true;
     g_queueCount = 0;
     for (auto& p : g_paths) p = GifPath{};
     g_regs[PRMODECONT] = 1;
@@ -1115,5 +1416,7 @@ const char* deinterlaceName(Deinterlace mode) {
     default: return "?";
     }
 }
+
+void setDrawThreads(int n) { g_drawThreads.setCount(n); }
 
 } // namespace ps2::gs
