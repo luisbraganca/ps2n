@@ -40,9 +40,10 @@ L_001001a4:
 The recompiler covers the whole Emotion Engine instruction set, and the
 runtime runs this repository's test programs and ps2sdk homebrew. No retail
 game is playable yet. In the first one being brought up, 007: Agent Under
-Fire, the recompiled movie player shows the language selection screen and
-plays the intro movies (decoded by the IPU, without sound), then starts the
-game proper, which runs on the interpreter so far.
+Fire, all three executables run recompiled: the movie player shows the
+language selection screen and plays the intro movies (decoded by the IPU,
+without sound), then the game proper shows its title screen and main menu,
+where the controller works.
 
 | Area | Progress | Count |
 |---|---|--:|

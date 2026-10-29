@@ -143,6 +143,8 @@ uint32_t pack16(uint32_t c) {
 // ===========================================================================
 uint64_t g_regs[0x100];
 uint64_t g_priv[0x10];   // PMODE ... BGCOLOR, indexed by (addr >> 4) & 0xF
+constexpr const char* kPrivName[0x10] = {"PMODE", "SMODE1", "SMODE2", "SRFSH", "SYNCH1", "SYNCH2", "SYNCV", "DISPFB1",
+                                         "DISPLAY1", "DISPFB2", "DISPLAY2", "EXTBUF", "EXTDATA", "EXTWRITE", "BGCOLOR", "0xF0"};
 uint64_t g_csr = 0x551B4000ull;   // FIFO empty, REV 0x1B, ID 0x55
 uint64_t g_imr = 0x7F00;
 uint64_t g_siglblid = 0;
@@ -535,7 +537,10 @@ void drawTriangle(const Env& e, const Vertex& v0, const Vertex& v1, const Vertex
             if ((w0 == 0 && w1 + w2 == 1 && py == std::max(v1.y, v2.y)) || (px == maxX && (w0 == 0 || w1 == 0 || w2 == 0) && maxX != minX))
                 continue;
             auto lerp = [&](float a, float b, float c) { return a * w0 + b * w1 + c * w2; };
-            const auto z = static_cast<uint32_t>(std::clamp(lerp(static_cast<float>(v0.z), static_cast<float>(v1.z), static_cast<float>(v2.z)), 0.f, 4294967295.f));
+            // Depth in double, relative to the first vertex: a float keeps 24 of Z's 32 bits, so
+            // layers drawn at one depth fought each other under GEQUAL, and a flat triangle stays exact.
+            const double zd = static_cast<double>(v0.z) + w1 * (static_cast<double>(v1.z) - v0.z) + w2 * (static_cast<double>(v2.z) - v0.z);
+            const auto z = static_cast<uint32_t>(std::clamp(zd, 0.0, 4294967295.0));
             float r = v2.r, g = v2.g, b = v2.b, a = v2.a;
             if (gouraud) {
                 r = lerp(v0.r, v1.r, v2.r);
@@ -845,7 +850,12 @@ void privWrite(uint32_t addr, uint64_t v) {
         }
         return;
     }
-    g_priv[(addr >> 4) & 0xF] = v;
+    const uint32_t reg = (addr >> 4) & 0xF;
+    // Display set-up changes, not the page flips of double buffering (DISPFB's FBP).
+    const uint64_t ignored = (reg == 0x7 || reg == 0x9) ? 0x1FFull : 0;
+    if (((g_priv[reg] ^ v) & ~ignored) != 0)
+        PS2_DEBUG("gs", "%s = 0x%016llx", kPrivName[reg], static_cast<unsigned long long>(v));
+    g_priv[reg] = v;
 }
 
 void privWrite32(uint32_t addr, uint32_t v) {
@@ -907,29 +917,98 @@ uint32_t debugAddress(uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32
     }
 }
 
+namespace {
+
+// A CRTC read-out circuit: where its picture sits on screen (DISPLAY, in video
+// clocks and lines) and where it is read from (DISPFB).
+struct Circuit {
+    uint32_t fbp = 0, fbw = 0, psm = 0;
+    int dbx = 0, dby = 0;
+    int dx = 0, dy = 0, magh = 1, magv = 1;
+    int width = 0, height = 0;   // video clocks and lines
+    bool valid = false;
+};
+
+Circuit readCircuit(int i) {
+    const uint64_t dispfb = g_priv[i == 0 ? 0x7 : 0x9], display = g_priv[i == 0 ? 0x8 : 0xA];
+    Circuit c;
+    c.fbp = static_cast<uint32_t>(field(dispfb, 0, 9));
+    c.fbw = static_cast<uint32_t>(field(dispfb, 9, 6));
+    c.psm = static_cast<uint32_t>(field(dispfb, 15, 5));
+    c.dbx = static_cast<int>(field(dispfb, 32, 11));
+    c.dby = static_cast<int>(field(dispfb, 43, 11));
+    c.dx = static_cast<int>(field(display, 0, 12));
+    c.dy = static_cast<int>(field(display, 12, 11));
+    c.magh = static_cast<int>(field(display, 23, 4)) + 1;
+    c.magv = static_cast<int>(field(display, 27, 2)) + 1;
+    c.width = static_cast<int>(field(display, 32, 12)) + 1;
+    c.height = static_cast<int>(field(display, 44, 11)) + 1;
+    c.valid = c.width / c.magh > 0 && c.width / c.magh <= 2048 && c.height / c.magv <= 2048;
+    return c;
+}
+
+// The circuit's pixel at a screen position, if it covers it. Interlaced FRAME
+// mode (FFMD) shows one field per vblank: half the lines, read one after the
+// other, each covering two display lines, the odd field one line lower.
+bool circuitPixel(const Circuit& c, int clock, int line, bool perField, int odd, uint32_t& px) {
+    if (clock < c.dx || line < c.dy || clock >= c.dx + c.width || line >= c.dy + c.height) return false;
+    const int x = (clock - c.dx) / c.magh;
+    int y = (line - c.dy) / c.magv;
+    if (perField) y = std::clamp((y - odd) / 2, 0, std::max(c.height / c.magv / 2, 1) - 1);
+    px = readPixel32(c.fbp, c.fbw, c.psm, c.dbx + x, c.dby + y);
+    return true;
+}
+
+} // namespace
+
 bool currentFrame(Frame& out) {
-    const uint64_t pmode = g_priv[0x0];
-    const int circuit = (pmode & 1) ? 0 : (pmode & 2) ? 1 : -1;
-    if (circuit < 0) return false;
-    const uint64_t dispfb = g_priv[circuit == 0 ? 0x7 : 0x9];
-    const uint64_t display = g_priv[circuit == 0 ? 0x8 : 0xA];
-    const uint64_t smode2 = g_priv[0x2];
-    const auto fbp = static_cast<uint32_t>(field(dispfb, 0, 9));
-    const auto fbw = static_cast<uint32_t>(field(dispfb, 9, 6));
-    const auto psm = static_cast<uint32_t>(field(dispfb, 15, 5));
-    const auto dbx = static_cast<int>(field(dispfb, 32, 11)), dby = static_cast<int>(field(dispfb, 43, 11));
-    const int magh = static_cast<int>(field(display, 23, 4)) + 1, magv = static_cast<int>(field(display, 27, 2)) + 1;
-    int w = (static_cast<int>(field(display, 32, 12)) + 1) / magh;
-    int h = (static_cast<int>(field(display, 44, 11)) + 1) / magv;
-    if ((smode2 & 1) && (smode2 & 2)) h /= 2;   // interlaced field mode: one field's worth of lines
+    const uint64_t pmode = g_priv[0x0], smode2 = g_priv[0x2];
+    const Circuit c1 = readCircuit(0), c2 = readCircuit(1);
+    const bool en1 = (pmode & 1) && c1.valid, en2 = (pmode & 2) && c2.valid;
+    if (!en1 && !en2) return false;
+    const bool perField = (smode2 & 1) && (smode2 & 2);
+    const int odd = perField ? static_cast<int>((g_csr >> 13) & 1) : 0;
+    // The screen covers both pictures when both circuits show; a pixel is the
+    // narrower circuit's.
+    int x0 = 1 << 20, y0 = 1 << 20, x1 = 0, y1 = 0, clocks = 16;
+    for (const Circuit* c : {en1 ? &c1 : nullptr, en2 ? &c2 : nullptr}) {
+        if (!c) continue;
+        x0 = std::min(x0, c->dx);
+        y0 = std::min(y0, c->dy);
+        x1 = std::max(x1, c->dx + c->width);
+        y1 = std::max(y1, c->dy + c->height);
+        clocks = std::min(clocks, c->magh);
+    }
+    const int w = (x1 - x0) / clocks, h = y1 - y0;
     if (w <= 0 || h <= 0 || w > 2048 || h > 2048) return false;
+    // Circuit 1 blends over circuit 2, or over the background colour with SLBG
+    // (how games fade), by its pixels' alpha (0x80 = opaque) or by ALP (MMOD).
+    // Circuit 1 alone without SLBG, and circuit 2 alone, show as they are.
+    const bool mmod = (pmode >> 5) & 1, slbg = (pmode >> 7) & 1;
+    const auto alp = static_cast<uint32_t>(field(pmode, 8, 8));
+    const uint32_t bgcolor = static_cast<uint32_t>(g_priv[0xE]) & 0xFFFFFFu;
+    const bool blend = en1 && (en2 || slbg);
     out.width = w;
     out.height = h;
     out.pixels.resize(static_cast<size_t>(w) * static_cast<size_t>(h));
     for (int y = 0; y < h; ++y)
-        for (int x = 0; x < w; ++x)
-            out.pixels[static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)] =
-                readPixel32(fbp, fbw, psm, dbx + x, dby + y) | 0xFF000000u;
+        for (int x = 0; x < w; ++x) {
+            const int clock = x0 + x * clocks, line = y0 + y;
+            uint32_t p1 = 0, p2 = 0, px = 0;
+            const bool has1 = en1 && circuitPixel(c1, clock, line, perField, odd, p1);
+            const bool has2 = en2 && circuitPixel(c2, clock, line, perField, odd, p2);
+            if (!blend) {
+                px = has1 ? p1 : p2;
+            } else {
+                const uint32_t bg = slbg ? bgcolor : (has2 ? p2 : 0);
+                const uint32_t a = !has1 ? 0 : mmod ? alp : std::min<uint32_t>((p1 >> 24) * 2, 255);
+                for (int shift = 0; shift < 24; shift += 8) {
+                    const uint32_t s = (p1 >> shift) & 0xFF, d = (bg >> shift) & 0xFF;
+                    px |= ((s * a + d * (255 - a)) / 255) << shift;
+                }
+            }
+            out.pixels[static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)] = px | 0xFF000000u;
+        }
     return true;
 }
 

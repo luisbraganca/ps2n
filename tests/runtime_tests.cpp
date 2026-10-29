@@ -426,6 +426,87 @@ TEST_CASE(gs_swizzle_is_a_bijection_per_page) {
 
 namespace {
 
+// GS register writes as one PACKED A+D packet down PATH3.
+void gsWrite(std::initializer_list<std::pair<uint32_t, uint64_t>> regs) {
+    std::vector<uint64_t> q = {regs.size() | 1ull << 15 | 1ull << 60, 0xE};   // NLOOP, EOP, NREG 1; A+D
+    for (const auto& [reg, data] : regs) {
+        q.push_back(data);
+        q.push_back(reg);
+    }
+    gs::gifTransfer(q.data(), q.size() / 2, 3);
+}
+uint64_t xyz(int x, int y, uint32_t z) { return static_cast<uint64_t>(x * 16) | static_cast<uint64_t>(y * 16) << 16 | static_cast<uint64_t>(z) << 32; }
+// A flat sprite over [x0, x1) x [y0, y1) in the current context.
+void gsRect(int x0, int y0, int x1, int y1, uint32_t rgba) {
+    gsWrite({{0x00, 6}, {0x01, rgba}, {0x05, xyz(x0, y0, 0)}, {0x05, xyz(x1, y1, 0)}});
+}
+
+} // namespace
+
+TEST_CASE(gs_layers_at_one_depth_do_not_fight) {
+    // A float keeps 24 bits of Z: 0x89ABCDEF became 0x89ABCE00, and a sprite
+    // drawn at the triangle's own depth failed GEQUAL against it.
+    gs::init();
+    constexpr uint32_t kZ = 0x89ABCDEFu;
+    gsWrite({{0x4C, 1ull << 16},                              // FRAME_1: page 0, 64 wide, PSMCT32
+             {0x4E, 16},                                      // ZBUF_1: page 16, PSMZ32
+             {0x40, 63ull << 16 | 63ull << 48},               // SCISSOR_1: 64x64
+             {0x18, 0}, {0x1A, 1},                            // XYOFFSET_1, PRMODECONT
+             {0x47, 1ull << 16 | 1ull << 17},                 // TEST_1: Z test ALWAYS
+             {0x00, 6}, {0x01, 0x80000000}, {0x05, xyz(0, 0, 0)}, {0x05, xyz(64, 64, 0)},
+             {0x47, 1ull << 16 | 2ull << 17},                 // Z test GEQUAL
+             {0x00, 3}, {0x01, 0x800000FF}, {0x05, xyz(0, 0, kZ)}, {0x05, xyz(64, 0, kZ)}, {0x05, xyz(0, 64, kZ)},
+             {0x00, 6}, {0x01, 0x8000FF00}, {0x05, xyz(0, 0, kZ)}, {0x05, xyz(32, 32, kZ)}});
+    for (int y = 0; y < 32; y += 3)
+        for (int x = 0; x < 32; x += 3) CHECK_EQ(gs::readPixel32(0, 1, 0, x, y), 0x8000FF00u);
+}
+
+TEST_CASE(gs_display_doubles_fields_and_merges_circuits) {
+    gs::init();
+    gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
+    const uint32_t rows[4] = {0x80000010, 0x80000020, 0x80000030, 0x80000040};
+    for (int y = 0; y < 4; ++y) gsRect(0, y, 64, y + 1, rows[y]);       // page 0: four coloured lines
+    gsWrite({{0x4C, 2 | 1ull << 16}});                                   // page 2: blue opaque, then clear
+    gsRect(0, 0, 8, 4, 0x80FF0000);
+    gsRect(8, 0, 16, 4, 0x00FFFFFF);
+    auto pixel = [](const gs::Frame& f, int x, int y) { return f.pixels[static_cast<size_t>(y * f.width + x)]; };
+
+    // Interlaced FRAME mode: each line of the field covers two display lines.
+    gs::privWrite(0x12000020, 3);                                        // SMODE2: INT, FFMD
+    gs::privWrite(0x12000000, 0x6);                                      // PMODE: circuit 2
+    gs::privWrite(0x12000090, 1 << 9);                                   // DISPFB2: page 0, 64 wide
+    gs::privWrite(0x120000A0, 63ull << 32 | 7ull << 44);                 // DISPLAY2: 64 clocks, 8 lines
+    gs::Frame f;
+    CHECK(gs::currentFrame(f));
+    CHECK_EQ(f.width, 64);
+    CHECK_EQ(f.height, 8);
+    for (int y = 0; y < 8; ++y) CHECK_EQ(pixel(f, 5, y), rows[y / 2] | 0xFF000000u);
+
+    // Both circuits: circuit 1 (16 clocks at x 32) over circuit 2, by its pixels' alpha.
+    gs::privWrite(0x12000020, 0);
+    gs::privWrite(0x120000A0, 63ull << 32 | 3ull << 44);
+    gs::privWrite(0x12000070, 2 | 1 << 9);                              // DISPFB1: page 2
+    gs::privWrite(0x12000080, 32 | 15ull << 32 | 3ull << 44);           // DISPLAY1
+    gs::privWrite(0x12000000, 0x7);                                      // PMODE: both, MMOD 0, SLBG 0
+    CHECK(gs::currentFrame(f));
+    CHECK_EQ(f.width, 64);
+    CHECK_EQ(pixel(f, 34, 1), 0xFFFF0000u);                              // circuit 1, alpha 0x80
+    CHECK_EQ(pixel(f, 42, 1), rows[1] | 0xFF000000u);                    // alpha 0: circuit 2 shows
+    CHECK_EQ(pixel(f, 5, 1), rows[1] | 0xFF000000u);                     // outside circuit 1
+
+    // Circuit 1 alone fades towards BGCOLOR with SLBG; without it ALP does nothing.
+    gs::privWrite(0x120000E0, 0xFF);                                     // BGCOLOR: red
+    gs::privWrite(0x12000000, 0x1 | 0x4 | 1 << 5 | 1 << 7 | 0x80 << 8);  // EN1, MMOD, SLBG, ALP 0x80
+    CHECK(gs::currentFrame(f));
+    CHECK_EQ(f.width, 16);
+    CHECK_EQ(pixel(f, 2, 0), 0xFF80007Fu);                               // half blue, half red
+    gs::privWrite(0x12000000, 0x1 | 0x4 | 1 << 5 | 0x80 << 8);           // ps2sdk's default PMODE
+    CHECK(gs::currentFrame(f));
+    CHECK_EQ(pixel(f, 2, 0), 0xFFFF0000u);
+}
+
+namespace {
+
 // An MPEG bitstream written code by code ("0101 1", spaces ignored).
 struct Bits {
     std::vector<uint8_t> bytes;
