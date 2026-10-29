@@ -37,105 +37,104 @@ L_001001a4:
 
 ## Status
 
-The recompiler covers the whole Emotion Engine instruction set, and the
-runtime runs this repository's test programs and ps2sdk homebrew. No retail
-game is playable yet. In the first one being brought up, 007: Agent Under
-Fire, all three executables run recompiled: the movie player shows the
-language selection screen and plays the intro movies (decoded by the IPU,
-without sound), then the game proper shows its title screen and main menu,
-where the controller works.
+**Early development: no game is playable yet.** The recompiler, the part that
+translates code, is the furthest along: it covers the whole EE instruction set
+and has recompiled a retail game. Most of the work left is in the runtime,
+which stands in for the rest of the console. There is no sound at all, the
+graphics come from a software renderer that cannot keep full speed even in the
+first game's menus, the vector units never run alongside the EE, and the IOP
+services cover what the first game needed.
 
-| Area | Progress | Count |
-|---|---|--:|
-| EE instructions: R5900, MMI, COP0, FPU, VU0 macro mode | `██████████` 100% | 359 / 359 |
-| VU micro instructions, VU0 and VU1 | `██████████` 100% | all |
-| EE kernel syscalls* | `█████████░` 88% | 127 / 145 |
-| IOP system library functions* | `████████░░` 77% | 428 / 557 |
+### Games
 
-<sub>* Of the syscalls ps2sdk's `syscallnr.h` names (reserved numbers left
-out), and of the functions the project knows for 26 IOP system libraries
-(ps2sdk's export tables in [irx_exports.inc](core/src/irx_exports.inc), plus
-those the runtime declares), not of every function in every Sony module.
-Calls the runtime accepts with no effect, where no emulated hardware stands
-behind them, count as implemented. Counted on 2026-10-28;
-[docs/runtime.md](docs/runtime.md#what-is-covered) describes what each area
-covers.</sub>
+Rated on PCSX2's compatibility scale: Nothing, Intro, Menus, In-game,
+Playable, Perfect.
 
-What works, and is covered by the test suite (`ctest`):
+| Game | Stage | Notes |
+|---|---|---|
+| 007: Agent Under Fire (Europe, SLES-50539) | Menus | All three executables run recompiled. The language selection, the intro movies (without sound), the title screen and the main menu work, and so does the controller. Starting a mission is untested, and the driving missions' executable is not recompiled yet. |
 
-- **The whole R5900 instruction set**: the MIPS III base the EE implements, the
-  R5900 extensions (three-operand MULT/MADD, pipeline-1 HI1/LO1, SA register),
-  all 128-bit MMI instructions, COP0, the single-precision FPU with the EE's
-  non-IEEE behaviour (no infinities or NaNs, clamping, flush-to-zero), and VU0
-  macro mode with MAC/status/clip flags. Encodings were cross-checked against
-  rabbitizer's R5900 tables; corner cases (divide by zero, LWL/LWR merging,
-  MMI lane layouts, VU flag updates) against PCSX2's interpreter.
-- **Analysis**: function starts from ELF symbols, Ghidra maps, the entry point,
-  JAL targets, data pointers, lui/addiu code pointers and prologues; switch
-  jump tables; delay slots (including jumps into them), branch-likely, tail
-  calls, fall-through between functions.
-- **Execution model** that keeps guest threads, interrupts, setjmp/longjmp and
-  tail calls correct while the generated code stays plain direct calls (see
-  [docs/architecture.md](docs/architecture.md)).
-- **Runtime**: an HLE EE kernel (threads, semaphores, interrupt and DMA
-  handlers, alarms; over 100 syscall numbers including the interrupt-context
-  `i*` variants), INTC, timers, DMAC (normal and chain mode), GIF and a
-  software GS rasterizer with frame output, VIF0/VIF1 (every UNPACK format and
-  mode, MPG, MSCAL with the TOP/TOPS double buffer, DIRECT), VU0 and VU1 micro
-  programs on an interpreter that models flag and Q/P timing, XGKICK, the IPU
-  (MPEG-2 macroblock decoding and colour conversion, fed and drained by DMA as
-  on the console), and debug output (the SIO port, and the DECI2 TTY that
-  Sony's `printf` uses).
-- **IOP**: IRX modules run on an R3000A interpreter, over a host-code IOP
-  kernel (threads, semaphores, event flags, message boxes, memory pools,
-  alarms, interrupts, vblank) and system libraries. The SIF wire protocol
-  connects the game's EE libraries to RPC servers in modules or on the host:
-  files on host directories, the IOP heap, module loading, the CD/DVD drive
-  over an ISO image or a directory (libcdvd: search, reads, streaming), memory
-  cards as host directories (MCSERV and XMCSERV), controllers (PADMAN, a
-  DualShock 2 driven by the keyboard, game controllers or a script), and
-  libsd for sound drivers (silent).
-- **Window and input** (with SDL2): the picture at the television's 4:3,
-  deinterlaced (adaptive, weave or bob), fullscreen, and controller input
-  modelled on PCSX2's: bindings in its INI
-  format, a pause menu with its Controller Settings pages (binding capture,
-  automatic mapping, deadzones, pressure, vibration, hotkeys), drawn with
-  Dear ImGui ([docs/input.md](docs/input.md)).
-- **Games with several executables**: the boot ELF and the executables it
-  starts, with `LoadExecPS2` or by loading them itself and jumping in, are
-  recompiled into one native program, which recognises each one as it
-  starts; an executable that was not recompiled runs on the interpreter.
-- **Fallbacks** at every level: an interpreter for code the analysis missed
-  (it records the addresses so the next recompile picks them up), logged and
-  counted wrappers for unimplemented syscalls, registers and IOP calls, and a
-  summary of everything unimplemented at exit.
+### By area
 
-Speed: recompiled code runs a tight integer loop at about 1.8 billion guest
-instructions per second on an Apple M3 (Release build), roughly 10× the
-interpreter and well above the EE's 294.9 MHz.
+| Area | State | Notes |
+|---|---|---|
+| EE instruction set | Done | All 359 instructions: R5900, MMI, COP0, FPU, VU0 macro mode. Recompiled code and the interpreter share one implementation. |
+| Analysis and code generation | Working | Stripped ELFs, Ghidra maps, jump tables, games made of several executables. Used on test programs, homebrew and one retail game (8,076 functions in Agent Under Fire's main executable). Code overlays are not supported. |
+| EE kernel | Working | 127 of the 145 syscalls ps2sdk names. Missing: event flags, `ExecPS2`, the TLB calls, CPU timers. |
+| IOP | Partial | IRX modules run on an R3000A interpreter; the IOP kernel and Sony's system modules are host code, with 428 of the 557 functions known for 26 libraries. Missing: FILEIO's asynchronous protocol (SDK 2.2 and later, which most later games use), the `mcman` library (0 of 40), network, hard disk, USB. |
+| Graphics (GS) | Partial | A software rasterizer at the PS2's resolution, drawing on the game's thread: right in the first game's menus, but below full speed there. Missing: texture filtering and mipmaps, dithering, anti-aliasing, reading GS memory back to the EE, a GPU renderer. |
+| Vector units | Partial | Every micro instruction, interpreted with the pipeline effects micro code can observe. A program finishes the moment it starts, so it never runs alongside the EE. No VU recompiler. |
+| Movies (IPU) | Working | Every command, following the MPEG-2 standard. Commands take no emulated time. |
+| Sound (SPU2) | Not started | A stand-in for libsd keeps sound drivers running (transfers, interrupts, voice status), but there is no SPU2: nothing is mixed and nothing is heard. |
+| Discs | Working | ISO images or directories, through libcdvd and the IOP's cdvdman. Missing: dual-layer DVDs, CD audio, raw sector reads. |
+| Memory cards | Working | A directory per card, behind MCSERV and XMCSERV. |
+| Window and controllers | Working | An SDL2 window (4:3, deinterlaced, fullscreen); a DualShock 2 per port from the keyboard or game controllers, with PCSX2's bindings, settings pages and vibration. Missing: multitap, other controller types. |
+| Widescreen, higher resolutions | Not started | See the [roadmap](#roadmap). |
 
-What is not there yet, roughly in order of importance for real games:
+**Done**: complete and tested. **Working**: does its job in the tests and in
+the one game tried so far; other games will find gaps. **Partial**: large
+pieces missing. [docs/runtime.md](docs/runtime.md#what-is-covered) details
+every area.
 
-- **Retail games**: everything so far was validated with programs written for
-  this repository and with ps2sdk homebrew (`tests/sdk`). Commercial games use
-  Sony's libraries, whose protocols the services follow, but expect gaps in
-  the less common RPC calls and IOP library functions.
-- **Sound**: libsd runs without an SPU2, so drivers work and nothing is heard.
-  SPU2 emulation (ADPCM voices, envelopes, reverb, mixing) and an audio output
-  are the next big step.
-- GS texture filtering and mipmaps, local-to-host GS transfers, TLB
-  remapping, dual-layer DVDs, the multitap, network and hard disk.
-- **VU speed**: micro programs are interpreted and finish the moment they
-  start. A VU recompiler on the same model would make VU-heavy games faster.
+<sub>The counts are made by hand, last on 2026-10-28. Syscalls are counted
+against the numbers ps2sdk's `syscallnr.h` names (reserved ones left out), and
+IOP functions against the export tables the project knows
+([irx_exports.inc](core/src/irx_exports.inc), plus those the runtime
+declares), not every function of every Sony module. Calls the runtime accepts
+with no effect count as implemented.</sub>
+
+**Speed.** Recompiled code is fast: a tight integer loop runs at about 1.8
+billion guest instructions per second on an Apple M3, about 10 times the
+interpreter and well above the EE's 294.9 MHz. Whole games are held back by
+the rest of the emulation: in Agent Under Fire the intro movies run at 98% of
+full speed and the title screen at about 75%, most likely limited by the
+software GS.
+
+**Platforms.** Developed and tested on Windows x64, with clang-cl and MSVC.
+The project started on macOS (Apple silicon), which has not been rebuilt
+since the move to Windows. Linux is untested.
+
+## Roadmap
+
+Roughly in order:
+
+1. **Agent Under Fire in game**: start a mission, recompile the driving
+   missions' executable, and fix what the game reaches next.
+2. **Sound**: emulate the SPU2 (ADPCM voices, envelopes, reverb, the two cores
+   and their streamed input) and play the result through SDL.
+3. **Graphics speed**: the rasterizer decodes the drawing state for every
+   pixel and draws on the game's thread. A faster software renderer first,
+   then a GPU renderer, which higher resolutions also need.
+4. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
+   `ExecPS2`, dual-layer discs, code overlays, and a second game to bring up.
+5. **Vector units**: run micro programs alongside the EE, with their timing,
+   and recompile them like EE code.
+6. **Widescreen and higher resolutions**, the way PCSX2 does them:
+   - **16:9.** PS2 games compute their own projection, so there is no general
+     switch. PCSX2 applies per-game widescreen patches (`.pnach` files) that
+     change each game's own field of view, and shows the picture at 16:9. A
+     recompiled game keeps every guest address, so those patches carry over.
+     Patches to code become `[[patches]]`, applied at recompile time because
+     the code is compiled ahead of time; patches to data are written into RAM
+     at start-up or every vsync, as PCSX2 writes them. The window gets
+     PCSX2's aspect ratio setting (4:3, 16:9, stretch). The same path brings
+     PCSX2's no-interlacing patches, for games that draw fields.
+   - **Higher internal resolution.** Drawing at a multiple of the PS2's
+     resolution needs the GPU renderer: the software rasterizer is already
+     below full speed at the original resolution, and its work grows with the
+     square of the scale (PCSX2's software renderer does not upscale either).
+     Upscaling also brings the problems PCSX2 handles with per-game fixes:
+     half-pixel offsets, seams between sprites, and effects that read the
+     picture back at its original size.
 
 ## Quick start
 
-Requirements: CMake 3.20+, a C++20 compiler, Ninja or Make. Tested with Apple
-clang 21 on arm64, and on Windows x64 with clang-cl 22 and MSVC 19.51 (Visual
-Studio 2026 Build Tools). SDL2 is optional: it adds a window with keyboard and
-game controller input, run so far on Windows with SDL2 2.32 (see
-[docs/runtime.md](docs/runtime.md#running-a-recompiled-game) for its Windows package).
-Without it, frames can be dumped to files, which is what the tests check.
+Requirements: CMake 3.20+, a C++20 compiler, and Ninja or Make; on Windows,
+the Visual Studio 2026 Build Tools. SDL2 is optional: it adds the window and
+keyboard and game controller input
+([docs/runtime.md](docs/runtime.md#running-a-recompiled-game) names the
+Windows package). Without it, frames can be dumped to files, which is what the
+tests check.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -153,6 +152,8 @@ compiler; plain MSVC (`cl`) works too.
 ```bat
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
 ```
+
+The example prints:
 
 ```
 Hello from a recompiled PS2 program!
@@ -188,10 +189,12 @@ non-local return, kernel threads and a vblank interrupt handler.
 3. **Recompile.** `ps2n recompile game.toml` writes the C++, a
    `CMakeLists.txt` and `report.txt` (functions, stubs, unresolved indirect
    jumps, warnings). If the game is several executables (the boot ELF starts
-   the game proper with `LoadExecPS2`), list the others in `[input] programs`
+   the game proper with `LoadExecPS2`, or loads it and jumps in), list the
+   others in `[input] programs`
    ([docs/config.md](docs/config.md#games-with-several-executables)).
 4. **Build and run.** `cmake -S out/game -B out/game/build && cmake --build out/game/build`,
-   then `out/game/build/game --elf SLUS_123.45 --cdrom <disc image or directory>`.
+   then `out/game/build/game --elf SLUS_123.45 --cdrom <disc image or directory>`
+   (add `--region europe` for a PAL game).
 5. **Iterate.** The runtime prints a summary of every unimplemented syscall,
    hardware register, IOP call and interpreted address when it exits (Ctrl+C
    works too). From there:
@@ -222,13 +225,12 @@ ps2n stubs                     # runtime stub handlers available for binding
 `disasm --cpp NAME` prints the C++ the recompiler would generate for one
 function, which is the quickest way to check a translation.
 
-The recompiled executable takes runtime options (`--help` lists them): `--elf`,
-`--host0`, `--cdrom`, `--memcards`, `--interpret`, `--virtual-clock`
-(deterministic time), `--no-throttle`, `--max-vsyncs N`,
-`--dump-frames DIR`, `--no-window`, `--deinterlace`, `--strict`, `--trace-syscalls`,
-`--trace-functions`, `--log-level`, `--missing-out`, `--pad-script`,
-`--settings`, `--region`. [docs/runtime.md](docs/runtime.md) describes them,
-and [docs/input.md](docs/input.md) the controller settings.
+The recompiled game takes runtime options; `--help` lists them and
+[docs/runtime.md](docs/runtime.md#running-a-recompiled-game) describes them.
+The common ones are `--cdrom` (an ISO image or a directory), `--region europe`
+for PAL games, `--memcards DIR`, `--interpret`, `--strict`, `--virtual-clock`
+(reproducible runs), `--pad-script FILE`, `--dump-frames DIR`,
+`--trace-syscalls` and `--log-level`.
 
 ## Configuration
 
@@ -236,7 +238,7 @@ and [docs/input.md](docs/input.md) the controller settings.
 [input]
 elf = "SLUS_123.45"
 ghidra_map = "functions.csv"          # optional
-programs = ["MAIN.ELF"]               # optional: executables it starts with LoadExecPS2
+programs = ["MAIN.ELF"]               # optional: the game's other executables
 
 [output]
 dir = "out/game"
@@ -316,14 +318,6 @@ Also worth knowing:
 - **Patches check what they replace** (`expect`), so a config written for one
   release of a game cannot silently corrupt another.
 
-[AnyPS5](https://github.com/boykopovar/AnyPS5) was also suggested as a
-reference. The PS5 runs x86-64 natively, so AnyPS5 is a relinker (it converts
-the executable format and swaps in native system libraries) and does no
-instruction translation; its core technique does not carry over to MIPS. Two
-ideas did: replacing library functions by symbol name with native
-implementations, and logging each unimplemented path a few times plus an exit
-summary.
-
 ## Project layout
 
 ```
@@ -331,13 +325,23 @@ core/         ELF and IRX readers, R5900 decoder / disassembler / assembler (ps2
 recompiler/   analysis, code generation, config, CLI (ps2n_recomp, ps2n)
 runtime/      what recompiled games link against (ps2n_runtime)
   include/ps2/  generated-code API: cpu.h, memory.h, ops_*.h, recomp.h, runtime.h
-  src/          dispatcher, interpreter, VU, kernel/, hw/ (DMAC, GS, VIF, IPU), iop/ (IOP CPU, kernel, services), stubs/, video/, input/, ui/
+  src/          dispatcher, interpreter, VU, kernel/ (EE syscalls), hw/ (DMAC, GS, VIF, IPU),
+                iop/ (IOP CPU, kernel, services), stubs/, video/, input/, ui/
 tools/ghidra/ function-map exporter for Ghidra
 examples/     the end-to-end example
-tests/        unit tests and end-to-end programs (assembled or built with ps2sdk, recompiled, run twice)
-docs/         architecture, config reference, runtime coverage, controller input
+tests/        unit tests and end-to-end programs
+docs/         the documentation below
 third_party/  toml++ (MIT), Dear ImGui 1.92.9b (MIT)
 ```
+
+## Documentation
+
+- [docs/architecture.md](docs/architecture.md): the execution model, and why it
+  was chosen.
+- [docs/runtime.md](docs/runtime.md): running and debugging a game, what the
+  runtime covers, and where to add what is missing.
+- [docs/config.md](docs/config.md): every key of a game's config.
+- [docs/input.md](docs/input.md): controllers, the settings file and hotkeys.
 
 ## Testing
 
@@ -345,35 +349,13 @@ third_party/  toml++ (MIT), Dear ImGui 1.92.9b (MIT)
 ctest --test-dir build --output-on-failure
 ```
 
-- `core`: every table row decodes to itself, 10,000+ random instructions
-  round-trip through disassembler and assembler, known encodings, ELF and IRX
-  parsing.
-- `recompiler`: config parsing and errors, function map formats, jump tables,
-  stripped-ELF discovery, bindings, patches, code generation.
-- `runtime`: instruction semantics with independently computed expectations
-  (sign extension, R5900 division, unaligned access at every alignment, MMI
-  lane layouts, FPU clamping, VU0 flags), guest printf, GS swizzling, the
-  SIF RPC protocol end to end (bind, FILEIO open/read of a host file,
-  LOADFILE), the disc layer (a directory and the ISO image built from it, the
-  ROMVER file), `--strict`, deinterlacing, and controller input (PCSX2-format
-  bindings and settings, what the DualShock 2 reads, hotkey chords, the
-  Analog button and vibration through PADMAN).
-- `program_*` / `example_*`: assembled programs recompiled at build time and
-  run in both recompiled and interpreted mode, compared against recorded
-  output: control-flow edge cases, a stripped ELF that needs the interpreter
-  fallback, the kernel scheduler, `printf` output over the DECI2 TTY (a
-  socket handler that sends in pieces), config bindings (skip, stub, C++
-  override, instruction patch), `LoadExecPS2` across three executables at the
-  same addresses (one of them not recompiled), a loader that copies the next
-  program into memory and jumps into it, and a GS drawing compared against a
-  recorded frame.
-- `sdk_*`: programs built with the ps2dev toolchain and ps2sdk, run the same
-  two ways: an IRX module with its own RPC server and kernel objects, libsd
-  driven from an IRX, libpad and libpadx with scripted input, VU0 and VU1
-  micro programs (flags, timing, branches, VIF UNPACK modes, XGKICK, checked
-  against a recorded frame), libcdvd on a disc built from a directory, and
-  libmc on an empty card. The binaries are checked in under `tests/sdk/bin`;
-  `make -C tests/sdk` rebuilds them (see [tests/sdk/README.md](tests/sdk/README.md)).
+| Suite | What it covers |
+|---|---|
+| `core` | Every table row decodes to itself, 10,000+ random instructions round-trip through the disassembler and assembler, known encodings, ELF and IRX parsing. |
+| `recompiler` | Config parsing and errors, function map formats, jump tables, stripped-ELF discovery, bindings, patches, code generation. |
+| `runtime` | Instruction semantics against independently computed results (sign extension, R5900 division, unaligned access, MMI lanes, FPU clamping, VU0 flags), guest printf, the GS (swizzling, depth, fields, both circuits, deinterlacing), the IPU's commands, FIFOs and DMA (against a reference IDCT), scratchpad DMA, SIF RPC end to end, IOP resets and services, discs, recognising programs in RAM, `--strict`, controller input and settings. |
+| `program_*` | Assembly programs recompiled at build time and run twice, recompiled and interpreted, against recorded output or a recorded frame: control-flow edge cases, a stripped ELF that needs the interpreter, the kernel scheduler, `printf` over the DECI2 TTY, config bindings, `LoadExecPS2` across three executables, a loader that jumps into the next program. |
+| `sdk_*` | Programs built with ps2sdk, run the same two ways: an IRX with its own RPC server, libsd, libpad and libpadx, VU0 and VU1 micro programs, libcdvd, libmc. The binaries are checked in under `tests/sdk/bin` ([tests/sdk/README.md](tests/sdk/README.md)). |
 
 ## Legal
 
@@ -392,5 +374,9 @@ Instruction encodings were checked against
 [rabbitizer](https://github.com/Decompollaborate/rabbitizer)'s tables, edge-case
 semantics and the GS memory layout against [PCSX2](https://github.com/PCSX2/pcsx2),
 and kernel and SIF structures follow [ps2sdk](https://github.com/ps2dev/ps2sdk)'s
-headers. [PS2Recomp](https://github.com/ran-j/PS2Recomp) and
-[N64Recomp](https://github.com/N64Recomp/N64Recomp) showed the way.
+headers. [Play!](https://github.com/jpd002/Play-) was a reference for IOP
+service protocols and a cross-check for the IPU's code tables.
+[AnyPS5](https://github.com/boykopovar/AnyPS5) gave two ideas: replacing
+library functions by name with native code, and logging each unimplemented
+path a few times with a summary at exit. [PS2Recomp](https://github.com/ran-j/PS2Recomp)
+and [N64Recomp](https://github.com/N64Recomp/N64Recomp) showed the way.

@@ -116,10 +116,16 @@ That list is the to-do list for a port. The tools for working through it:
 
 ### CPU
 
-The whole R5900 instruction set runs in recompiled and interpreted code:
-MIPS III, the R5900 extensions, 128-bit MMI, COP0, the FPU and VU0 macro mode
-(see the [README](../README.md#status) for details). Instruction semantics
-live in `runtime/include/ps2/ops_*.h` and are shared by both modes.
+The whole R5900 instruction set runs in recompiled and interpreted code: the
+MIPS III base the EE implements, the R5900 extensions (three-operand
+MULT/MADD, pipeline-1 HI1/LO1, the SA register), all 128-bit MMI
+instructions, COP0, the single-precision FPU with the EE's non-IEEE behaviour
+(see [architecture.md](architecture.md#floating-point)), and VU0 macro mode
+with MAC, status and clip flags. Encodings were cross-checked against
+rabbitizer's R5900 tables, and corner cases (division by zero, LWL/LWR
+merging, MMI lane layouts, VU flag updates) against PCSX2's interpreter.
+Instruction semantics live in `runtime/include/ps2/ops_*.h` and are shared by
+both modes.
 
 Guest exceptions are not delivered: integer overflow leaves the destination
 unchanged, trap and `BREAK` instructions are reported and execution continues,
