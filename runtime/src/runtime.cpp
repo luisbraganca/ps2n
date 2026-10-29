@@ -6,11 +6,13 @@
 #include "hw/hw.h"
 #include "hw/ipu.h"
 #include "hw/vif.h"
+#include "input/input.h"
 #include "internal.h"
 #include "iop/hostfs.h"
 #include "iop/iop.h"
 #include "kernel/kernel.h"
 #include "log.h"
+#include "settings.h"
 #include "video/video.h"
 
 #include "ps2n/elf.h"
@@ -71,12 +73,17 @@ constexpr const char* kUsage =
     "  --dump-frames DIR     write displayed frames as PPM files\n"
     "  --dump-every N        only dump every Nth frame\n"
     "  --no-window           do not open a window (SDL builds)\n"
+    "  --deinterlace MODE    adaptive (default), weave or bob, for games that\n"
+    "                        show interlaced fields\n"
     "  --fpu-round MODE      zero (default, like the EE) or nearest\n"
     "  --strict              stop at the first unimplemented path (exit code 4)\n"
     "  --trace-syscalls      log every syscall\n"
     "  --trace-functions     log every dispatched function\n"
     "  --log-level LEVEL     error, warn, info (default), debug, trace\n"
     "  --pad-script FILE     controller input from a script instead of the keyboard\n"
+    "                        and game controllers\n"
+    "  --settings FILE       controller bindings and hotkeys (default: ps2n.ini next to\n"
+    "                        the executable, else the per-user one)\n"
     "  --region REGION       console region: usa (default), europe, japan, asia, china\n"
     "  --missing-out FILE    where to record interpreted entry points\n"
     "                        (default: ps2n_missing.toml; empty disables)\n";
@@ -110,12 +117,23 @@ bool parseOptions(int argc, char** argv) {
         else if (a == "--dump-frames") g_opt.dumpFrames = value();
         else if (a == "--dump-every") g_opt.dumpEvery = static_cast<uint32_t>(std::strtoul(value().c_str(), nullptr, 0));
         else if (a == "--no-window") g_opt.window = false;
+        else if (a == "--deinterlace") {
+            const std::string m = ps2n::toLower(value());
+            if (m == "adaptive") gs::setDeinterlace(gs::Deinterlace::Adaptive);
+            else if (m == "weave") gs::setDeinterlace(gs::Deinterlace::Weave);
+            else if (m == "bob") gs::setDeinterlace(gs::Deinterlace::Bob);
+            else {
+                std::fprintf(stderr, "unknown deinterlace mode %s (adaptive, weave or bob)\n", m.c_str());
+                std::exit(2);
+            }
+        }
         else if (a == "--fpu-round") g_opt.fpuRoundToZero = value() != "nearest";
         else if (a == "--strict") g_opt.strict = true;
         else if (a == "--trace-syscalls") g_opt.traceSyscalls = true;
         else if (a == "--trace-functions") g_opt.traceFunctions = true;
         else if (a == "--missing-out") g_opt.missingOut = value();
         else if (a == "--pad-script") g_opt.padScript = value();
+        else if (a == "--settings") g_opt.settingsFile = value();
         else if (a == "--region") {
             const std::string r = ps2n::toLower(value());
             if (r == "usa" || r == "us" || r == "a") g_opt.region = 'A';
@@ -138,6 +156,23 @@ bool parseOptions(int argc, char** argv) {
         }
     }
     return true;
+}
+
+// The folder of the running executable, where a portable ps2n.ini lives.
+std::filesystem::path executableDir(const char* argv0) {
+#if defined(_WIN32)
+    (void)argv0;
+    std::wstring buf(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD n = GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+        if (n == 0) return {};
+        if (n < buf.size()) return std::filesystem::path(buf.substr(0, n)).parent_path();
+        buf.resize(buf.size() * 2);
+    }
+#else
+    std::error_code ec;
+    return std::filesystem::absolute(argv0, ec).parent_path();
+#endif
 }
 
 std::filesystem::path findElf(const char* argv0, const GameInfo& game) {
@@ -368,6 +403,10 @@ int run(int argc, char** argv, const GameInfo& game) {
     vif::init();
     ipu::init();
     iop::init();
+    // Bindings come from the settings file when someone is there to press
+    // them; headless runs (the tests) keep the defaults whatever the file says.
+    if (g_opt.window || !g_opt.settingsFile.empty())
+        input::init(settings::locate(executableDir(argc > 0 ? argv[0] : ""), g_opt.settingsFile));
     video::init();
     initDispatch(game);
     kernel::init(game.entry, bootArgv());

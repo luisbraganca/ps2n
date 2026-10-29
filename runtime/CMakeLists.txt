@@ -10,6 +10,7 @@ add_library(ps2n_runtime STATIC
     src/log.cpp
     src/memory.cpp
     src/runtime.cpp
+    src/settings.cpp
     src/vu.cpp
     src/hw/dmac.cpp
     src/hw/gs.cpp
@@ -17,6 +18,8 @@ add_library(ps2n_runtime STATIC
     src/hw/ipu.cpp
     src/hw/mpeg.cpp
     src/hw/vif.cpp
+    src/input/input.cpp
+    src/input/manager.cpp
     src/iop/cdvd.cpp
     src/iop/cpu.cpp
     src/iop/disc.cpp
@@ -57,17 +60,60 @@ ps2n_set_warnings(ps2n_runtime)
 find_package(Threads REQUIRED)
 target_link_libraries(ps2n_runtime PUBLIC Threads::Threads)
 
+# Here rather than in the top-level project, so that generated game projects,
+# which add this directory themselves, get the window too.
+option(PS2N_WITH_SDL2 "Open a window for GS output when SDL2 is available" ON)
 if(PS2N_WITH_SDL2)
     find_package(SDL2 CONFIG QUIET)
     if(SDL2_FOUND)
         message(STATUS "ps2n runtime: SDL2 ${SDL2_VERSION} found, window output enabled")
         target_compile_definitions(ps2n_runtime PRIVATE PS2N_HAVE_SDL2=1)
         if(TARGET SDL2::SDL2)
-            target_link_libraries(ps2n_runtime PRIVATE SDL2::SDL2)
+            set(sdl2_target SDL2::SDL2)
+            # Windows looks for SDL2.dll next to the executable (see
+            # ps2n_copy_runtime_dlls); global so other directories can name it.
+            get_target_property(sdl2_type SDL2::SDL2 TYPE)
+            if(WIN32 AND sdl2_type STREQUAL "SHARED_LIBRARY")
+                set_target_properties(SDL2::SDL2 PROPERTIES IMPORTED_GLOBAL TRUE)
+                set_property(GLOBAL APPEND PROPERTY PS2N_RUNTIME_DLLS SDL2::SDL2)
+            endif()
         else()
-            target_link_libraries(ps2n_runtime PRIVATE SDL2::SDL2-static)
+            set(sdl2_target SDL2::SDL2-static)
         endif()
+        # Dear ImGui 1.92.9b (third_party/imgui, unmodified) draws the
+        # settings overlay in the window. Third-party code: no project warnings.
+        set(imgui_dir "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/imgui")
+        add_library(ps2n_imgui STATIC
+            ${imgui_dir}/imgui.cpp
+            ${imgui_dir}/imgui_draw.cpp
+            ${imgui_dir}/imgui_tables.cpp
+            ${imgui_dir}/imgui_widgets.cpp
+            ${imgui_dir}/backends/imgui_impl_sdl2.cpp
+            ${imgui_dir}/backends/imgui_impl_sdlrenderer2.cpp)
+        target_include_directories(ps2n_imgui SYSTEM PUBLIC ${imgui_dir} ${imgui_dir}/backends)
+        target_compile_definitions(ps2n_imgui PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS IMGUI_DEFINE_MATH_OPERATORS)
+        # clang-cl: SDL 2's SDL_endian.h defines _m_prefetch itself unless
+        # <intrin.h> came first, and recent clang rejects that (it is a
+        # builtin there). Public, so the runtime's files that include SDL get it too.
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+            target_compile_options(ps2n_imgui PUBLIC /FIintrin.h)
+        endif()
+        target_link_libraries(ps2n_imgui PUBLIC ${sdl2_target})
+        target_link_libraries(ps2n_runtime PRIVATE ${sdl2_target} ps2n_imgui)
+        target_sources(ps2n_runtime PRIVATE src/input/sdl.cpp src/ui/overlay.cpp)
     else()
         message(STATUS "ps2n runtime: SDL2 not found, building headless (frames can still be dumped with --dump-frames)")
     endif()
 endif()
+
+# Every executable that links the runtime calls this: it copies the DLLs the
+# runtime depends on (SDL2.dll from the SDL2-devel-*-VC package) next to the
+# executable after each build. It does nothing where there are none.
+function(ps2n_copy_runtime_dlls target)
+    get_property(dlls GLOBAL PROPERTY PS2N_RUNTIME_DLLS)
+    foreach(dll IN LISTS dlls)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${dll}>" "$<TARGET_FILE_DIR:${target}>"
+            VERBATIM)
+    endforeach()
+endfunction()

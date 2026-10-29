@@ -1,5 +1,6 @@
 #include "clock.h"
 
+#include <atomic>
 #include <chrono>
 #include <thread>
 #include <vector>
@@ -16,10 +17,12 @@ struct Event {
 };
 
 bool g_virtual = false;
-bool g_noThrottle = false;
+std::atomic<bool> g_noThrottle{false};
 uint64_t g_virtualNow = 0;
 uint64_t g_skipped = 0;    // cycles skipped while idle in no-throttle mode
 std::chrono::steady_clock::time_point g_start;
+std::chrono::steady_clock::time_point g_pausedAt;
+bool g_paused = false;
 std::vector<Event> g_events;   // small; kept sorted by time
 uint64_t g_nextId = 1;
 uint64_t g_nextWhen = UINT64_MAX;
@@ -37,6 +40,7 @@ void clockInit(bool virtualClock, bool noThrottle) {
     g_virtualNow = 0;
     g_skipped = 0;
     g_start = std::chrono::steady_clock::now();
+    g_paused = false;
     g_events.clear();
     g_nextWhen = UINT64_MAX;
 }
@@ -64,6 +68,21 @@ void clockWaitUntil(uint64_t target) {
         std::this_thread::sleep_for(std::chrono::nanoseconds(ns));
     }
 }
+
+void clockPause() {
+    if (g_paused) return;
+    g_paused = true;
+    g_pausedAt = std::chrono::steady_clock::now();
+}
+
+void clockResume() {
+    if (!g_paused) return;
+    g_paused = false;
+    g_start += std::chrono::steady_clock::now() - g_pausedAt;
+}
+
+void clockSetNoThrottle(bool on) { g_noThrottle = on; }
+bool clockNoThrottle() { return g_noThrottle; }
 
 uint64_t scheduleEvent(uint64_t when, EventFn fn, uint64_t param) {
     const uint64_t id = g_nextId++;

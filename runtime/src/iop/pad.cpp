@@ -1,12 +1,12 @@
 #include "iop/pad.h"
 
 #include "hw/hw.h"
+#include "input/input.h"
 #include "internal.h"
 #include "iop/iop.h"
 #include "iop/kernel.h"
 #include "log.h"
 #include "ps2/memory.h"
-#include "video/video.h"
 
 #include "ps2n/util.h"
 
@@ -57,6 +57,7 @@ struct Port {
     uint8_t modeOffs = 0, lock = 0;
     uint8_t actAlign[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     uint8_t actDirect[6] = {};
+    bool analogHeld = false;   // the Analog button, last frame
 };
 
 std::array<Port, 2> g_ports;
@@ -72,29 +73,36 @@ int32_t rd(const uint8_t* d, size_t off) {
 }
 void wr(std::vector<uint8_t>& b, size_t off, int32_t v) { std::memcpy(b.data() + off, &v, 4); }
 
-Input currentInput(int port) {
+// A script line as the pad shows it: full pressure on every button held,
+// the analog triggers' own values on L2/R2.
+input::PadState scriptState(const Input& in) {
+    input::PadState s;
+    s.connected = in.connected;
+    s.buttons = in.buttons;
+    s.lx = in.lx;
+    s.ly = in.ly;
+    s.rx = in.rx;
+    s.ry = in.ry;
+    static constexpr uint16_t kPressureOrder[12] = {RIGHT, LEFT, UP, DOWN, TRIANGLE, CIRCLE, CROSS, SQUARE, L1, R1, L2, R2};
+    for (size_t i = 0; i < 12; ++i) s.pressure[i] = (in.buttons & kPressureOrder[i]) ? 0xFF : 0;
+    if (in.l2) s.pressure[10] = in.l2;
+    if (in.r2) s.pressure[11] = in.r2;
+    return s;
+}
+
+input::PadState currentInput(int port) {
     if (g_haveScript) {
-        if (port != 0) return Input{false};
+        if (port != 0) return input::PadState{};
         const uint64_t frame = hw::vsyncCount();
         auto it = g_script.upper_bound(frame);
-        if (it == g_script.begin()) return Input{};
-        return std::prev(it)->second;
+        if (it == g_script.begin()) return scriptState(Input{});
+        return scriptState(std::prev(it)->second);
     }
-    const video::HostPad h = video::hostPad(port);
-    Input in;
-    in.connected = h.connected;
-    in.buttons = h.buttons;
-    in.lx = h.lx;
-    in.ly = h.ly;
-    in.rx = h.rx;
-    in.ry = h.ry;
-    in.l2 = h.l2;
-    in.r2 = h.r2;
-    return in;
+    return input::padState(port);
 }
 
 // The 32 bytes libpad's padRead returns: ok, mode id, the controller's response.
-void buttonData(const Port& p, const Input& in, uint8_t out[32]) {
+void buttonData(const Port& p, const input::PadState& in, uint8_t out[32]) {
     std::memset(out, 0, 32);
     out[1] = p.modeId;
     const uint16_t raw = static_cast<uint16_t>(~in.buttons);   // active low on the wire
@@ -104,14 +112,35 @@ void buttonData(const Port& p, const Input& in, uint8_t out[32]) {
     out[5] = in.ry;
     out[6] = in.lx;
     out[7] = in.ly;
-    auto pressure = [&](uint16_t b, uint8_t analog = 0) -> uint8_t { return analog ? analog : (in.buttons & b) ? 0xFF : 0; };
-    const uint8_t pr[12] = {pressure(RIGHT), pressure(LEFT), pressure(UP), pressure(DOWN), pressure(TRIANGLE), pressure(CIRCLE),
-                            pressure(CROSS), pressure(SQUARE), pressure(L1), pressure(R1), pressure(L2, in.l2), pressure(R2, in.r2)};
-    std::memcpy(out + 8, pr, 12);
+    std::memcpy(out + 8, in.pressure.data(), 12);
     out[31] = 0x5A;
 }
 
-void writePort(Port& p, const Input& in) {
+// The Analog button switches between digital and analog mode, as on the
+// controller itself, unless the game locked the mode.
+void analogButton(Port& p, size_t port, bool held) {
+    const bool press = held && !p.analogHeld;
+    p.analogHeld = held;
+    if (!press || p.lock == 3) return;
+    p.modeOffs = p.modeId == ID_DIGITAL ? 1 : 0;
+    p.modeId = p.modeOffs ? ID_ANALOG : ID_DIGITAL;
+    PS2_INFO("pad", "analog light is now %s for port %zu", p.modeOffs ? "on" : "off", port + 1);
+}
+
+// What the game asked the motors to do: each of the six actuator bytes
+// drives the motor its alignment names (0 the small one, on or off; 1 the
+// large one, a speed).
+void vibration(const Port& p, size_t port) {
+    bool small = false;
+    uint8_t large = 0;
+    for (size_t i = 0; i < 6; ++i) {
+        if (p.actAlign[i] == 0) small = (p.actDirect[i] & 1) != 0;
+        else if (p.actAlign[i] == 1) large = p.actDirect[i];
+    }
+    input::setVibration(static_cast<int>(port), small, large);
+}
+
+void writePort(Port& p, const input::PadState& in) {
     const bool present = in.connected;
     const uint8_t state = present ? p.state : STATE_DISCONN;
     uint8_t data[32];
@@ -365,8 +394,14 @@ void onVblank() {
     uint32_t openMask[2] = {0, 0};
     for (size_t i = 0; i < g_ports.size(); ++i) {
         Port& p = g_ports[i];
-        if (!p.open || !p.area) continue;
+        if (!p.open || !p.area) {
+            input::setVibration(static_cast<int>(i), false, 0);
+            continue;
+        }
         openMask[i] = 1;
+        const input::PadState in = currentInput(static_cast<int>(i));
+        analogButton(p, i, in.connected && in.analogHeld);
+        vibration(p, i);
         if (p.busy > 0 && --p.busy == 0) {   // the pending task finishes
             p.state = STATE_STABLE;
             p.modeId = p.pendingId;
@@ -375,7 +410,7 @@ void onVblank() {
         } else if (p.busy > 0 && p.state != STATE_STABLE) {
             p.state = STATE_EXECCMD;
         }
-        writePort(p, currentInput(static_cast<int>(i)));
+        writePort(p, in);
     }
     if (g_statBuf) {   // open_slot[2] {frame, openSlots[2]}, double-buffered like the pad data
         uint8_t b[128] = {};

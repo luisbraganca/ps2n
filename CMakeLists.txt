@@ -17,7 +17,6 @@ endif()
 option(PS2N_BUILD_TESTS    "Build the unit and end-to-end tests" ON)
 option(PS2N_BUILD_EXAMPLES "Build the example games (recompiled at build time)" ON)
 option(PS2N_WARNINGS_AS_ERRORS "Treat compiler warnings as errors in project code" OFF)
-option(PS2N_WITH_SDL2 "Open a window for GS output when SDL2 is available" ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(Ps2nWarnings)

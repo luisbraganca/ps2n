@@ -31,6 +31,7 @@ struct Options {
     bool traceFunctions = false;
     std::filesystem::path missingOut = "ps2n_missing.toml";
     std::filesystem::path padScript;   // scripted controller input (see iop/pad.h)
+    std::filesystem::path settingsFile;   // --settings: the bindings file (see settings.h)
     char region = 'A';             // console region in ROMVER: A (USA), E (Europe), J (Japan), H (Asia), C (China)
 };
 

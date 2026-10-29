@@ -40,7 +40,21 @@ struct Frame {
     std::vector<uint32_t> pixels;   // R, G, B, A bytes in memory order
 };
 // The image the display circuits currently show. False if the display is off.
+// Call it once per vsync (it remembers the fields it showed): in FIELD mode
+// (SMODE2 interlaced, FFMD 1) each vsync shows one field, half the picture's
+// lines, and the other half comes from deinterlacing, as PCSX2 offers it.
 bool currentFrame(Frame& out);
+
+enum class Deinterlace : uint8_t {
+    Adaptive,   // what stayed still since the last field of this parity: the previous field's lines
+                // (the whole picture, steady); what moved: interpolated from this field
+    Weave,      // the previous field's lines everywhere: steady, but moving edges comb
+    Bob,        // this field's lines doubled, as the PS2 sends it: still edges shake by a line
+    Count
+};
+void setDeinterlace(Deinterlace mode);   // any thread
+Deinterlace deinterlace();
+const char* deinterlaceName(Deinterlace mode);
 
 // Direct access for tests and tools.
 uint32_t readPixel32(uint32_t fbp, uint32_t fbw, uint32_t psm, int x, int y);

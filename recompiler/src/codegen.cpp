@@ -651,6 +651,7 @@ GenerateResult generate(const Program& prog, const Config& cfg, const std::vecto
         c << ")\n"
           << "target_include_directories(" << cfg.name << " PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})\n"
           << "target_link_libraries(" << cfg.name << " PRIVATE ps2n_runtime)\n"
+          << "ps2n_copy_runtime_dlls(" << cfg.name << ")\n"
           << "ps2n_set_generated_warnings(" << cfg.name << ")\n";
         put("CMakeLists.txt", c.str());
     }

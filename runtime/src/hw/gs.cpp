@@ -6,6 +6,8 @@
 #include "video/video.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstring>
@@ -149,6 +151,22 @@ uint64_t g_csr = 0x551B4000ull;   // FIFO empty, REV 0x1B, ID 0x55
 uint64_t g_imr = 0x7F00;
 uint64_t g_siglblid = 0;
 bool g_path3Masked = false;
+
+// Deinterlacing (FIELD mode): the mode, the vsyncs so far (which tell
+// consecutive fields apart) and the two fields shown before this one, newest first.
+std::atomic<Deinterlace> g_deinterlace{Deinterlace::Adaptive};
+uint64_t g_fieldCount = 0;
+struct ShownField {
+    std::vector<uint32_t> pixels;
+    int odd = 0;
+    uint64_t when = 0;
+    bool valid = false;
+};
+struct FieldHistory {
+    int width = 0, lines = 0;
+    std::array<ShownField, 2> fields;
+};
+FieldHistory g_history;
 
 enum Reg : uint32_t {
     PRIM = 0x00, RGBAQ = 0x01, ST = 0x02, UV = 0x03, XYZF2 = 0x04, XYZ2 = 0x05, TEX0_1 = 0x06, TEX0_2 = 0x07,
@@ -808,6 +826,7 @@ void init() {
     std::memset(g_priv, 0, sizeof g_priv);
     g_csr = 0x551B4000ull;
     g_imr = 0x7F00;
+    g_history = FieldHistory{};
     g_queueCount = 0;
     for (auto& p : g_paths) p = GifPath{};
     g_regs[PRMODECONT] = 1;
@@ -870,6 +889,7 @@ void privWrite32(uint32_t addr, uint32_t v) {
 void onVblankStart() {
     g_csr |= 8;             // VSINT
     g_csr ^= 1ull << 13;    // FIELD toggles every field
+    ++g_fieldCount;
     updateGsInterrupt();
     video::onVsync();
 }
@@ -950,6 +970,66 @@ Circuit readCircuit(int i) {
 // The circuit's pixel at a screen position, if it covers it. Interlaced FRAME
 // mode (FFMD) shows one field per vblank: half the lines, read one after the
 // other, each covering two display lines, the odd field one line lower.
+// ---- Deinterlacing -----------------------------------------------------------
+
+// The same colour, give or take what rounding and dithering change.
+bool still(uint32_t a, uint32_t b) {
+    for (int s = 0; s < 24; s += 8) {
+        const int d = static_cast<int>((a >> s) & 0xFF) - static_cast<int>((b >> s) & 0xFF);
+        if (d > 16 || d < -16) return false;
+    }
+    return true;
+}
+
+uint32_t average(uint32_t a, uint32_t b) {
+    uint32_t px = 0xFF000000u;
+    for (int s = 0; s < 24; s += 8) px |= ((((a >> s) & 0xFF) + ((b >> s) & 0xFF) + 1) / 2) << s;
+    return px;
+}
+
+// Fills `out` (w x h) from the current field `cur` (`lines` lines, on the
+// display lines of parity `odd`) and the fields before it.
+void deinterlaceField(Frame& out, std::vector<uint32_t>&& cur, int w, int h, int lines, int odd) {
+    FieldHistory& hist = g_history;
+    if (hist.width != w || hist.lines != lines) hist = FieldHistory{w, lines, {}};
+    const ShownField& prev = hist.fields[0];
+    const ShownField& prev2 = hist.fields[1];
+    const bool havePrev = prev.valid && prev.odd != odd && prev.when + 1 == g_fieldCount;
+    const bool havePrev2 = havePrev && prev2.valid && prev2.odd == odd && prev2.when + 2 == g_fieldCount;
+    const Deinterlace mode = g_deinterlace;
+    const auto row = [&](const std::vector<uint32_t>& f, int k) {
+        return f.data() + static_cast<size_t>(std::clamp(k, 0, lines - 1)) * static_cast<size_t>(w);
+    };
+    for (int y = 0; y < h; ++y) {
+        uint32_t* o = out.pixels.data() + static_cast<size_t>(y) * static_cast<size_t>(w);
+        if ((y & 1) == odd) {
+            std::copy_n(row(cur, (y - odd) / 2), w, o);
+            continue;
+        }
+        // A line this field lacks: between its lines above and below.
+        const int above = y > 0 ? (y - 1 - odd) / 2 : (y + 1 - odd) / 2;
+        const int below = y + 1 < h ? (y + 1 - odd) / 2 : above;
+        const uint32_t* a = row(cur, above);
+        const uint32_t* b = row(cur, below);
+        if (mode == Deinterlace::Bob || !havePrev) {
+            std::copy_n(a, w, o);
+            continue;
+        }
+        const uint32_t* p = row(prev.pixels, (y - (1 - odd)) / 2);
+        if (mode == Deinterlace::Weave) {
+            std::copy_n(p, w, o);
+            continue;
+        }
+        // Adaptive: still where this field matches the last one of its parity.
+        const uint32_t* pa = havePrev2 ? row(prev2.pixels, above) : nullptr;
+        const uint32_t* pb = havePrev2 ? row(prev2.pixels, below) : nullptr;
+        for (int x = 0; x < w; ++x)
+            o[x] = pa && still(a[x], pa[x]) && still(b[x], pb[x]) ? p[x] : average(a[x], b[x]);
+    }
+    hist.fields[1] = std::move(hist.fields[0]);
+    hist.fields[0] = ShownField{std::move(cur), odd, g_fieldCount, true};
+}
+
 bool circuitPixel(const Circuit& c, int clock, int line, bool perField, int odd, uint32_t& px) {
     if (clock < c.dx || line < c.dy || clock >= c.dx + c.width || line >= c.dy + c.height) return false;
     const int x = (clock - c.dx) / c.magh;
@@ -988,28 +1068,52 @@ bool currentFrame(Frame& out) {
     const auto alp = static_cast<uint32_t>(field(pmode, 8, 8));
     const uint32_t bgcolor = static_cast<uint32_t>(g_priv[0xE]) & 0xFFFFFFu;
     const bool blend = en1 && (en2 || slbg);
+    const auto pixel = [&](int x, int line) {
+        const int clock = x0 + x * clocks;
+        uint32_t p1 = 0, p2 = 0, px = 0;
+        const bool has1 = en1 && circuitPixel(c1, clock, line, perField, odd, p1);
+        const bool has2 = en2 && circuitPixel(c2, clock, line, perField, odd, p2);
+        if (!blend) {
+            px = has1 ? p1 : p2;
+        } else {
+            const uint32_t bg = slbg ? bgcolor : (has2 ? p2 : 0);
+            const uint32_t a = !has1 ? 0 : mmod ? alp : std::min<uint32_t>((p1 >> 24) * 2, 255);
+            for (int shift = 0; shift < 24; shift += 8) {
+                const uint32_t s = (p1 >> shift) & 0xFF, d = (bg >> shift) & 0xFF;
+                px |= ((s * a + d * (255 - a)) / 255) << shift;
+            }
+        }
+        return px | 0xFF000000u;
+    };
     out.width = w;
     out.height = h;
     out.pixels.resize(static_cast<size_t>(w) * static_cast<size_t>(h));
-    for (int y = 0; y < h; ++y)
-        for (int x = 0; x < w; ++x) {
-            const int clock = x0 + x * clocks, line = y0 + y;
-            uint32_t p1 = 0, p2 = 0, px = 0;
-            const bool has1 = en1 && circuitPixel(c1, clock, line, perField, odd, p1);
-            const bool has2 = en2 && circuitPixel(c2, clock, line, perField, odd, p2);
-            if (!blend) {
-                px = has1 ? p1 : p2;
-            } else {
-                const uint32_t bg = slbg ? bgcolor : (has2 ? p2 : 0);
-                const uint32_t a = !has1 ? 0 : mmod ? alp : std::min<uint32_t>((p1 >> 24) * 2, 255);
-                for (int shift = 0; shift < 24; shift += 8) {
-                    const uint32_t s = (p1 >> shift) & 0xFF, d = (bg >> shift) & 0xFF;
-                    px |= ((s * a + d * (255 - a)) / 255) << shift;
-                }
-            }
-            out.pixels[static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)] = px | 0xFF000000u;
-        }
+    if (!perField) {
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) out.pixels[static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)] = pixel(x, y0 + y);
+        return true;
+    }
+    // FIELD mode: this field's lines, then the deinterlaced picture.
+    const int lines = (h + 1) / 2;
+    std::vector<uint32_t> cur(static_cast<size_t>(w) * static_cast<size_t>(lines));
+    for (int k = 0; k < lines; ++k) {
+        const int line = y0 + std::min(2 * k + odd, h - 1);
+        for (int x = 0; x < w; ++x) cur[static_cast<size_t>(k) * static_cast<size_t>(w) + static_cast<size_t>(x)] = pixel(x, line);
+    }
+    deinterlaceField(out, std::move(cur), w, h, lines, odd);
     return true;
+}
+
+void setDeinterlace(Deinterlace mode) { g_deinterlace = mode; }
+Deinterlace deinterlace() { return g_deinterlace; }
+
+const char* deinterlaceName(Deinterlace mode) {
+    switch (mode) {
+    case Deinterlace::Adaptive: return "Adaptive";
+    case Deinterlace::Weave: return "Weave";
+    case Deinterlace::Bob: return "Bob";
+    default: return "?";
+    }
 }
 
 } // namespace ps2::gs

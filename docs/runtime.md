@@ -27,12 +27,14 @@ model.
 | `--dump-frames DIR` | Write each displayed frame as `DIR/frame_NNNNNN.ppm`. |
 | `--dump-every N` | With `--dump-frames`, only every Nth frame. |
 | `--no-window` | Do not open a window (builds with SDL2). |
+| `--deinterlace MODE` | How a game that shows interlaced fields becomes whole pictures: `adaptive` (default), `weave` or `bob`. See Video below. |
 | `--fpu-round MODE` | `zero` (default, like the EE) or `nearest`. |
 | `--strict` | Stop at the first unimplemented path, with exit code 4. |
 | `--trace-syscalls` | Log every syscall with its arguments. |
 | `--trace-functions` | Log every function the dispatcher enters (not direct calls between recompiled functions). |
 | `--log-level LEVEL` | `error`, `warn`, `info` (default), `debug`, `trace`. |
 | `--pad-script FILE` | Controller input from a script instead of the keyboard and game controllers. See [Controllers](#controllers). |
+| `--settings FILE` | The settings file with the controller bindings and hotkeys. Default: `ps2n.ini` next to the executable when there is one, else the per-user one. Runs without a window ignore the default file and keep the default bindings. See [input.md](input.md). |
 | `--region REGION` | The console's region as `ROMVER` reports it: `usa` (default), `europe`, `japan`, `asia`, `china`. Libraries such as libgraph pick PAL for `europe`. |
 | `--missing-out FILE` | Where to write the addresses that had to be interpreted (default `ps2n_missing.toml`; an empty string disables it). The game's other executables get their own file next to it, named after the executable (`ps2n_missing.MAIN.ELF.toml`). |
 
@@ -52,10 +54,30 @@ that Sony's libkernel prints through) goes to stdout. The runtime's own
 messages go to stderr as `[level:category] message`.
 
 **Video.** Built with SDL2 (found automatically; `-DPS2N_WITH_SDL2=OFF` to
-disable), the runtime opens a window when the game first displays something.
+disable), the runtime opens a window at start-up. The picture keeps the 4:3
+of the television the game drew for, letterboxed in the window; F11 or
+Alt+Enter switches to fullscreen, and closing the window ends the program.
 Without SDL2, or with `--no-window`, use `--dump-frames`; most image viewers
 open PPM files, and ImageMagick or Pillow convert them. The window runs on the
-main thread and the game on a worker thread, as macOS requires.
+main thread and the game on a worker thread, as macOS requires. Play with the
+real-time clock: `--virtual-clock` runs the game as fast as the host can.
+
+Games that render each field of an interlaced picture (FIELD mode: half the
+lines, redrawn every vsync a line lower on odd fields) are deinterlaced as
+PCSX2 offers it. `adaptive`, the default, takes the lines a field lacks from
+the previous field where the picture stood still since the last field of the
+same parity (a still menu is the whole, steady picture) and interpolates
+them where it moved. `weave` always takes the previous field's lines (steady;
+moving edges comb), `bob` doubles each field's lines as the PS2 sends them
+(still edges shake by a line). F5 (Cycle Deinterlace Mode) switches while
+playing. It needs consecutive fields, so the window has it and frames dumped
+every N vsyncs show each field doubled.
+
+On Windows, SDL2's development package for Visual C++
+(`SDL2-devel-<version>-VC.zip` from SDL's GitHub releases) works as it comes:
+unpack it and pass `-DSDL2_DIR=<unpacked folder>/cmake` when configuring the
+repository or a generated game project. The build copies `SDL2.dll` next to
+every executable that links the runtime.
 
 ## Diagnosing a run
 
@@ -303,12 +325,15 @@ alone. The `mc0:` file device reaches the same directories.
 
 #### Controllers
 
-Port 1 has a DualShock 2. In SDL builds the keyboard drives it: arrows for
-the d-pad, `W`/`D`/`S`/`A` for triangle/circle/cross/square, `Q`/`E` for
-L1/R1, `1`/`3` for L2/R2, Enter for START and Backspace for SELECT. Game
-controllers connected to the host drive ports 1 and 2, in the order they were
-connected, with their sticks and analog triggers. Without SDL, port 1 has a
-controller with nothing pressed.
+Each port has a DualShock 2 (port 2 none, until the settings say so), driven
+by host inputs bound to it the way PCSX2 binds them: the keyboard and SDL
+game controllers, edited in the window's Controller Settings (Escape) and
+kept in a settings file in PCSX2's format. [input.md](input.md) describes
+it all: the defaults, the settings UI, the file and the hotkeys. The Analog
+button switches between digital and analog mode unless the game locked the
+mode, digital sources give full pressure (less with Apply Pressure held),
+and the game's vibration drives the motors bound to the port. Without SDL,
+or without a window, port 1 has a controller with nothing pressed.
 
 `--pad-script FILE` replaces all of that with scripted input for port 1, for
 reproducible runs. Each line gives the vblank from which a state holds, the

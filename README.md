@@ -95,6 +95,12 @@ What works, and is covered by the test suite (`ctest`):
   cards as host directories (MCSERV and XMCSERV), controllers (PADMAN, a
   DualShock 2 driven by the keyboard, game controllers or a script), and
   libsd for sound drivers (silent).
+- **Window and input** (with SDL2): the picture at the television's 4:3,
+  deinterlaced (adaptive, weave or bob), fullscreen, and controller input
+  modelled on PCSX2's: bindings in its INI
+  format, a pause menu with its Controller Settings pages (binding capture,
+  automatic mapping, deadzones, pressure, vibration, hotkeys), drawn with
+  Dear ImGui ([docs/input.md](docs/input.md)).
 - **Games with several executables**: the boot ELF and the executables it
   starts, with `LoadExecPS2` or by loading them itself and jumping in, are
   recompiled into one native program, which recognises each one as it
@@ -126,9 +132,10 @@ What is not there yet, roughly in order of importance for real games:
 
 Requirements: CMake 3.20+, a C++20 compiler, Ninja or Make. Tested with Apple
 clang 21 on arm64, and on Windows x64 with clang-cl 22 and MSVC 19.51 (Visual
-Studio 2026 Build Tools). SDL2 is optional: it adds a window, which so far has
-only been compile-checked against the SDL2 2.30 headers, not run. Without it,
-frames can be dumped to files, which is what the tests check.
+Studio 2026 Build Tools). SDL2 is optional: it adds a window with keyboard and
+game controller input, run so far on Windows with SDL2 2.32 (see
+[docs/runtime.md](docs/runtime.md#running-a-recompiled-game) for its Windows package).
+Without it, frames can be dumped to files, which is what the tests check.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -218,9 +225,10 @@ function, which is the quickest way to check a translation.
 The recompiled executable takes runtime options (`--help` lists them): `--elf`,
 `--host0`, `--cdrom`, `--memcards`, `--interpret`, `--virtual-clock`
 (deterministic time), `--no-throttle`, `--max-vsyncs N`,
-`--dump-frames DIR`, `--no-window`, `--strict`, `--trace-syscalls`,
+`--dump-frames DIR`, `--no-window`, `--deinterlace`, `--strict`, `--trace-syscalls`,
 `--trace-functions`, `--log-level`, `--missing-out`, `--pad-script`,
-`--region`. [docs/runtime.md](docs/runtime.md) describes them.
+`--settings`, `--region`. [docs/runtime.md](docs/runtime.md) describes them,
+and [docs/input.md](docs/input.md) the controller settings.
 
 ## Configuration
 
@@ -294,7 +302,7 @@ takes a different route, these are the reasons:
 | SIMD | SSE intrinsics, sse2neon on ARM | portable lane loops (auto-vectorised) | builds as-is on ARM64 (Apple silicon) and x86-64 |
 | Missed code | a function-not-found error | a built-in interpreter, plus a list of the addresses for the next recompile | a missed entry point costs speed, not a crash |
 | IOP | runs IRX modules on an R3000 interpreter | also runs IRX modules on an R3000 interpreter, but the IOP kernel and Sony's system modules (CD/DVD, memory cards, pads, libsd) are host code speaking their RPC protocols | game-specific modules behave as written, while the system side needs no BIOS image and no SIO2, CDVD or SPU2 register emulation |
-| Dependencies | ELFIO, toml11, fmt, libdwarf, rabbitizer (fetched at configure time) | toml++ (vendored, single header) | offline, reproducible builds |
+| Dependencies | ELFIO, toml11, fmt, libdwarf, rabbitizer (fetched at configure time) | toml++ and Dear ImGui (vendored); SDL2 optional, for the window | offline, reproducible builds |
 | Output size | `ctx->pc = ...` before every instruction | pc stored only at control transfers | smaller, faster code |
 
 Also worth knowing:
@@ -323,12 +331,12 @@ core/         ELF and IRX readers, R5900 decoder / disassembler / assembler (ps2
 recompiler/   analysis, code generation, config, CLI (ps2n_recomp, ps2n)
 runtime/      what recompiled games link against (ps2n_runtime)
   include/ps2/  generated-code API: cpu.h, memory.h, ops_*.h, recomp.h, runtime.h
-  src/          dispatcher, interpreter, VU, kernel/, hw/ (DMAC, GS, VIF, IPU), iop/ (IOP CPU, kernel, services), stubs/, video/
+  src/          dispatcher, interpreter, VU, kernel/, hw/ (DMAC, GS, VIF, IPU), iop/ (IOP CPU, kernel, services), stubs/, video/, input/, ui/
 tools/ghidra/ function-map exporter for Ghidra
 examples/     the end-to-end example
 tests/        unit tests and end-to-end programs (assembled or built with ps2sdk, recompiled, run twice)
-docs/         architecture, config reference, runtime coverage
-third_party/  toml++ (MIT)
+docs/         architecture, config reference, runtime coverage, controller input
+third_party/  toml++ (MIT), Dear ImGui 1.92.9b (MIT)
 ```
 
 ## Testing
@@ -347,7 +355,9 @@ ctest --test-dir build --output-on-failure
   lane layouts, FPU clamping, VU0 flags), guest printf, GS swizzling, the
   SIF RPC protocol end to end (bind, FILEIO open/read of a host file,
   LOADFILE), the disc layer (a directory and the ISO image built from it, the
-  ROMVER file), and `--strict`.
+  ROMVER file), `--strict`, deinterlacing, and controller input (PCSX2-format
+  bindings and settings, what the DualShock 2 reads, hotkey chords, the
+  Analog button and vibration through PADMAN).
 - `program_*` / `example_*`: assembled programs recompiled at build time and
   run in both recompiled and interpreted mode, compared against recorded
   output: control-flow edge cases, a stripped ELF that needs the interpreter
@@ -374,7 +384,10 @@ are linked with ps2sdk (Academic Free License 2.0).
 
 ## Acknowledgements
 
-[toml++](https://github.com/marzer/tomlplusplus) (MIT) parses configs.
+[toml++](https://github.com/marzer/tomlplusplus) (MIT) parses configs, and
+[Dear ImGui](https://github.com/ocornut/imgui) (MIT) draws the settings in
+the window. Controller input follows [PCSX2](https://github.com/PCSX2/pcsx2)'s
+design: its settings format, defaults and settings pages, written anew.
 Instruction encodings were checked against
 [rabbitizer](https://github.com/Decompollaborate/rabbitizer)'s tables, edge-case
 semantics and the GS memory layout against [PCSX2](https://github.com/PCSX2/pcsx2),

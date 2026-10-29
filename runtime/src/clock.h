@@ -23,6 +23,13 @@ int64_t rtcTime();
 void clockAdvance(uint64_t cycles);
 // Idle: wait (or skip, in virtual/no-throttle mode) until `target`.
 void clockWaitUntil(uint64_t target);
+// The guest thread stopped (pause, settings overlay): real time spent paused
+// does not count, so the game carries on where it stopped.
+void clockPause();
+void clockResume();
+// Turbo (fast forward): no-throttle mode, switchable from any thread.
+void clockSetNoThrottle(bool on);
+bool clockNoThrottle();
 
 using EventFn = void (*)(uint64_t param);
 // One-shot event at absolute cycle `when`. Returns an id for cancelEvent.

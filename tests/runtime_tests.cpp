@@ -5,12 +5,15 @@
 #include "hw/gs.h"
 #include "hw/ipu.h"
 #include "hw/mpeg.h"
+#include "input/input.h"
 #include "internal.h"
 #include "iop/disc.h"
 #include "iop/hostfs.h"
 #include "iop/iop.h"
+#include "iop/pad.h"
 #include "log.h"
 #include "ps2/recomp.h"
+#include "settings.h"
 #include "stubs/format.h"
 
 #include "ps2n/elf.h"
@@ -503,6 +506,78 @@ TEST_CASE(gs_display_doubles_fields_and_merges_circuits) {
     gs::privWrite(0x12000000, 0x1 | 0x4 | 1 << 5 | 0x80 << 8);           // ps2sdk's default PMODE
     CHECK(gs::currentFrame(f));
     CHECK_EQ(pixel(f, 2, 0), 0xFFFF0000u);
+}
+
+TEST_CASE(gs_deinterlaces_fields) {
+    // FIELD mode, as Agent Under Fire draws: a 4-line field shown on 8 lines,
+    // redrawn every vsync with the odd field's samples a line lower.
+    gs::init();
+    gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
+    gs::privWrite(0x12000020, 3);                                        // SMODE2: INT, FFMD
+    gs::privWrite(0x12000000, 0x6);                                      // PMODE: circuit 2
+    gs::privWrite(0x12000090, 1 << 9);                                   // DISPFB2: page 0, 64 wide
+    gs::privWrite(0x120000A0, 63ull << 32 | 7ull << 44);                 // DISPLAY2: 64 clocks, 8 lines
+    const uint32_t even[4] = {0x80000010, 0x80000020, 0x80000030, 0x80000040};
+    const uint32_t odd[4] = {0x80001000, 0x80002000, 0x80003000, 0x80004000};
+    auto draw = [](const uint32_t (&rows)[4]) {
+        for (int y = 0; y < 4; ++y) gsRect(0, y, 64, y + 1, rows[y]);
+    };
+    auto field = [&](const uint32_t (&rows)[4]) {   // the next vsync's field, drawn
+        gs::onVblankStart();
+        draw(rows);
+        gs::Frame f;
+        CHECK(gs::currentFrame(f));
+        CHECK_EQ(f.height, 8);
+        std::array<uint32_t, 8> lines{};
+        for (int y = 0; y < 8 && f.height == 8; ++y) lines[size_t(y)] = f.pixels[static_cast<size_t>(y * f.width + 5)] & 0xFFFFFFu;
+        return lines;
+    };
+    auto avg = [](uint32_t a, uint32_t b) {
+        uint32_t px = 0;
+        for (int s = 0; s < 24; s += 8) px |= ((((a >> s) & 0xFF) + ((b >> s) & 0xFF) + 1) / 2) << s;
+        return px;
+    };
+    auto rgb = [](uint32_t c) { return c & 0xFFFFFFu; };
+
+    // The first field (odd) has nothing before it: its lines, doubled.
+    auto l = field(odd);
+    CHECK(l == (std::array<uint32_t, 8>{rgb(odd[0]), rgb(odd[0]), rgb(odd[0]), rgb(odd[1]), rgb(odd[1]), rgb(odd[2]), rgb(odd[2]), rgb(odd[3])}));
+    // The second (even) does not know yet what is still: interpolated.
+    l = field(even);
+    CHECK_EQ(l[0], rgb(even[0]));
+    CHECK_EQ(l[1], avg(even[0], even[1]));
+    CHECK_EQ(l[7], rgb(even[3]));
+    // The third (odd again) matches the first: still, so the two fields
+    // weave into the whole picture, and it stays that way.
+    const std::array<uint32_t, 8> whole = {rgb(even[0]), rgb(odd[0]), rgb(even[1]), rgb(odd[1]),
+                                           rgb(even[2]), rgb(odd[2]), rgb(even[3]), rgb(odd[3])};
+    CHECK(field(odd) == whole);
+    CHECK(field(even) == whole);
+    // Something moves in the odd field's line 1 (display line 3): around it,
+    // interpolated; elsewhere still woven.
+    const uint32_t moved[4] = {odd[0], 0x80FF0000, odd[2], odd[3]};
+    l = field(moved);
+    CHECK_EQ(l[2], avg(odd[0], moved[1]));
+    CHECK_EQ(l[3], rgb(moved[1]));
+    CHECK_EQ(l[4], avg(moved[1], odd[2]));
+    CHECK_EQ(l[6], rgb(even[3]));                                        // still: the even field's line
+    // Weave takes the other field's lines whatever moved; Bob doubles.
+    gs::setDeinterlace(gs::Deinterlace::Weave);
+    l = field(even);
+    CHECK_EQ(l[3], rgb(moved[1]));
+    gs::setDeinterlace(gs::Deinterlace::Bob);
+    l = field(odd);
+    CHECK_EQ(l[2], rgb(odd[0]));
+    gs::setDeinterlace(gs::Deinterlace::Adaptive);
+    // A frame read twice in one field: no field before it to weave with.
+    gs::Frame f;
+    CHECK(gs::currentFrame(f));
+    CHECK_EQ(f.pixels[static_cast<size_t>(2 * f.width + 5)] & 0xFFFFFFu, rgb(odd[0]));
+    // Fields that are not consecutive (frames dumped every few vsyncs) are not woven either.
+    gs::onVblankStart();
+    gs::onVblankStart();
+    l = field(even);
+    CHECK_EQ(l[1], rgb(even[0]));
 }
 
 namespace {
@@ -1192,6 +1267,71 @@ TEST_CASE(iop_power_off_multitap_and_pad_services) {
     write32(send, 0x12);
     call(padSd, padBuf, 1, 128, 128);
     CHECK_EQ(read32(recv + 12), 0x0402u);
+
+    // Port 1 opens with its data area; each vblank writes the newer of the
+    // area's two 128-byte frames (the frame number is word 22).
+    const uint32_t area = 0x00403000;
+    fillBytes(area, 0, 256);
+    auto padCommand = [&](uint32_t cmd, std::initializer_list<uint8_t> args = {}, uint32_t argOffset = 12) {
+        fillBytes(send, 0, 128);
+        write32(send, cmd);
+        uint32_t at = send + argOffset;
+        for (uint8_t b : args) writeBytes(at++, &b, 1);
+        if (cmd == 0x01) write32(send + 16, area);
+        call(padSd, padBuf, 1, 128, 128);
+    };
+    padCommand(0x01);   // open port 0, slot 0
+    CHECK_EQ(read32(recv + 12), 1u);
+    input::PadConfig& cfg = input::pad(0);
+    const input::PadConfig saved = cfg;
+    cfg = input::defaultPad(0);
+    cfg.bindings[size_t(input::Ds2::Analog)] = {*input::parseBinding("Keyboard/F10")};
+    cfg.motors[size_t(input::Motor::Large)] = {*input::parseBinding("SDL-0/LargeMotor")};
+    cfg.motors[size_t(input::Motor::Small)] = {*input::parseBinding("SDL-0/SmallMotor")};
+    auto vblank = [&](std::vector<std::string> keys) {
+        input::HostState host;
+        host.keys = std::move(keys);
+        input::update(host, true, true);
+        iop::pad::onVblank();
+    };
+    auto mode = [&] {
+        const uint32_t newer = read32(area + 88) > read32(area + 128 + 88) ? area : area + 128;
+        uint8_t id = 0;
+        readBytes(newer + 1, &id, 1);
+        return id;
+    };
+    for (int i = 0; i < 3; ++i) vblank({});
+    CHECK_EQ(mode(), 0x41);              // digital, as a DualShock 2 starts
+    vblank({"F10"});
+    CHECK_EQ(mode(), 0x73);              // the Analog button: analog mode
+    vblank({"F10"});
+    CHECK_EQ(mode(), 0x73);              // holding it does not toggle again
+    vblank({});
+    vblank({"F10"});
+    CHECK_EQ(mode(), 0x41);
+    padCommand(0x06, {1, 0, 0, 0, 3});   // the game sets analog mode and locks it
+    for (int i = 0; i < 3; ++i) vblank({});
+    CHECK_EQ(mode(), 0x73);
+    vblank({"F10"});
+    CHECK_EQ(mode(), 0x73);              // locked: the button does nothing
+
+    // Vibration: actuator 0 drives the small motor (on/off), 1 the large one.
+    padCommand(0x08, {0, 1, 0xFF, 0xFF, 0xFF, 0xFF});
+    padCommand(0x07, {1, 200, 0, 0, 0, 0});
+    vblank({});
+    auto rumble = input::rumble();
+    CHECK_EQ(rumble.size(), size_t(1));
+    if (rumble.size() == 1) {
+        CHECK_EQ(rumble[0].device, 0);
+        CHECK(std::fabs(rumble[0].large - 200.0f / 255.0f) < 1e-6f);
+        CHECK_EQ(rumble[0].small, 1.0f);
+    }
+    padCommand(0x0E);                    // the port closes: the motors stop
+    vblank({});
+    rumble = input::rumble();
+    CHECK(rumble.size() == 1 && rumble[0].large == 0.0f && rumble[0].small == 0.0f);
+    cfg = saved;
+    input::update({}, true, true);
     fs::remove_all(dir);
 }
 
@@ -1354,6 +1494,223 @@ TEST_CASE(strict_mode_stops_at_gaps_not_fallbacks) {
     g_opt.strict = false;
     g_exitRequested = false;
     g_exitCode = 0;
+}
+
+TEST_CASE(settings_ini_keeps_repeated_keys_and_order) {
+    settings::Ini ini;
+    ini.parse("; comment\n[Pad1]\nType = DualShock2\nCross = Keyboard/K\n# another\nCross = SDL-0/FaceSouth\n"
+              "AxisScale = 1.5\n[Empty]\n[UI]\nflag = yes\n");
+    CHECK(ini.hasSection("pad1"));   // names ignore case
+    const auto cross = ini.values("Pad1", "cross");
+    CHECK_EQ(cross.size(), size_t(2));
+    CHECK(cross.size() == 2 && cross[0] == "Keyboard/K" && cross[1] == "SDL-0/FaceSouth");
+    CHECK_EQ(ini.getFloat("Pad1", "AxisScale", 0.0f), 1.5f);
+    CHECK_EQ(ini.getFloat("Pad1", "Missing", 2.0f), 2.0f);
+    CHECK(ini.getBool("UI", "flag", false));
+    // Replacing a repeated key keeps its place in the section.
+    ini.setValues("Pad1", "Cross", {"Keyboard/X"});
+    CHECK_EQ(ini.text(), std::string("[Pad1]\nType = DualShock2\nCross = Keyboard/X\nAxisScale = 1.5\n\n[Empty]\n\n[UI]\nflag = yes\n"));
+    ini.setValues("Pad1", "Cross", {});
+    CHECK(ini.values("Pad1", "Cross").empty());
+    CHECK(ini.hasSection("Empty"));   // an emptied section stays (no [Hotkeys] means the defaults)
+}
+
+TEST_CASE(input_bindings_parse_pcsx2_strings) {
+    using input::HostKey;
+    auto round = [](const char* text) {
+        const auto b = input::parseBinding(text);
+        return b ? input::formatBinding(*b) : std::string("(invalid)");
+    };
+    CHECK_EQ(round("Keyboard/K"), std::string("Keyboard/K"));
+    CHECK_EQ(round("SDL-0/FaceSouth"), std::string("SDL-0/FaceSouth"));
+    CHECK_EQ(round("SDL-1/A"), std::string("SDL-1/FaceSouth"));   // PCSX2's SDL 2 era name
+    CHECK_EQ(round("SDL-1/Y"), std::string("SDL-1/FaceNorth"));
+    CHECK_EQ(round("SDL-0/+LeftX"), std::string("SDL-0/+LeftX"));
+    CHECK_EQ(round("SDL-0/-LeftY"), std::string("SDL-0/-LeftY"));
+    CHECK_EQ(round("SDL-0/FullLeftTrigger"), std::string("SDL-0/FullLeftTrigger"));
+    CHECK_EQ(round("SDL-0/+RightTrigger~"), std::string("SDL-0/+RightTrigger~"));
+    CHECK_EQ(round("SDL-2/LargeMotor"), std::string("SDL-2/LargeMotor"));
+    CHECK_EQ(round("Keyboard/Alt & Keyboard/Return"), std::string("Keyboard/Alt & Keyboard/Return"));
+    CHECK_EQ(round("Keyboard/Shift&SDL-0/Start"), std::string("Keyboard/Shift & SDL-0/Start"));
+    // Inputs this runtime does not read are kept as written.
+    CHECK_EQ(round("XInput-0/A"), std::string("XInput-0/A"));
+    CHECK_EQ(round("SDL-0/JoyButton3"), std::string("SDL-0/JoyButton3"));
+    CHECK_EQ(round("Pointer-0/LeftButton"), std::string("Pointer-0/LeftButton"));
+    CHECK_EQ(round("Keyboard"), std::string("(invalid)"));
+    CHECK_EQ(round(""), std::string("(invalid)"));
+    CHECK_EQ(round("Keyboard/A & Keyboard/B & Keyboard/C & Keyboard/D & Keyboard/E"), std::string("(invalid)"));
+    const auto axis = input::parseBinding("SDL-3/-RightY");
+    CHECK(axis && axis->keys.size() == 1 && axis->keys[0].kind == HostKey::Kind::Axis && axis->keys[0].device == 3 &&
+          axis->keys[0].index == int(input::PadAxis::RightY) && axis->keys[0].range == HostKey::Range::Negative);
+    CHECK_EQ(input::displayBinding(*input::parseBinding("Keyboard/Alt & Keyboard/Return")), std::string("Alt + Return"));
+    CHECK_EQ(input::displayBinding(*input::parseBinding("SDL-0/FaceSouth")), std::string("SDL-0 A"));
+}
+
+TEST_CASE(input_ds2_reads_like_pcsx2) {
+    using input::Ds2;
+    auto keys = [](std::vector<std::string> k) {
+        input::HostState s;
+        s.keys = std::move(k);
+        return s;
+    };
+    input::PadConfig cfg = input::defaultPad(0);   // PCSX2's keyboard layout
+    input::PadState st = input::evaluate(cfg, keys({}));
+    CHECK(st.connected);
+    CHECK_EQ(st.buttons, 0);
+    CHECK_EQ(st.lx, 0x80);
+    st = input::evaluate(cfg, keys({"K", "Return", "Up"}));
+    CHECK_EQ(st.buttons, 0x4000 | 0x0008 | 0x0010);   // Cross, Start, Up
+    CHECK_EQ(st.pressure[6], 255);                     // Cross, fully pressed
+    CHECK_EQ(st.pressure[2], 255);                     // Up
+    st = input::evaluate(cfg, keys({"W", "D"}));       // left stick up and right: a key is full tilt
+    CHECK_EQ(st.ly, 0);
+    CHECK_EQ(st.lx, 255);
+    CHECK_EQ(input::evaluate(input::defaultPad(1), keys({"K"})).connected, false);   // port 2: no controller
+
+    // Apply Pressure scales the buttons it holds, but not L2/R2.
+    cfg.bindings[size_t(Ds2::Pressure)] = {*input::parseBinding("Keyboard/Shift")};
+    st = input::evaluate(cfg, keys({"K", "1", "Shift"}));
+    CHECK_EQ(st.pressure[6], 128);    // Cross at 50%
+    CHECK_EQ(st.pressure[10], 255);   // L2 untouched
+    cfg.scale[size_t(Ds2::Cross)] = 0.25f;   // the input's own sensitivity
+    CHECK_EQ(input::evaluate(cfg, keys({"K"})).pressure[6], 64);
+
+    // A controller, mapped automatically: triggers give proportional L2/R2,
+    // sticks scale by 133% and a deadzone centres them.
+    input::PadConfig pad;
+    input::mapController(pad, 0);
+    CHECK(pad.bindings[size_t(Ds2::Pressure)].empty());
+    CHECK_EQ(input::formatBinding(pad.bindings[size_t(Ds2::Cross)][0]), std::string("SDL-0/FaceSouth"));
+    CHECK_EQ(input::formatBinding(pad.motors[size_t(input::Motor::Large)][0]), std::string("SDL-0/LargeMotor"));
+    input::HostState host;
+    host.controllers.push_back({});
+    auto& c = host.controllers[0];
+    c.axes[size_t(input::PadAxis::LeftTrigger)] = 0.5f;
+    c.axes[size_t(input::PadAxis::LeftX)] = 0.5f;
+    c.buttons[size_t(input::PadButton::FaceEast)] = true;
+    st = input::evaluate(pad, host);
+    CHECK_EQ(st.buttons, 0x0100 | 0x2000);   // L2 and Circle
+    CHECK_EQ(st.pressure[10], 128);
+    CHECK_EQ(st.lx, 212);                    // 0.5 * 1.33 of the way right
+    pad.tuning.deadzone = 0.7f;
+    CHECK_EQ(input::evaluate(pad, host).lx, 0x80);   // 0.665 is inside a 0.7 radius
+    pad.tuning.deadzone = 0.0f;
+    pad.tuning.invertL = 1;
+    CHECK_EQ(input::evaluate(pad, host).lx, 43);
+    pad.tuning.invertL = 0;
+    pad.tuning.buttonDeadzone = 0.6f;
+    CHECK_EQ(input::evaluate(pad, host).buttons & 0x0100, 0);   // the trigger at 0.5 no longer presses L2
+    host.controllers[0].device = 1;
+    CHECK_EQ(input::evaluate(pad, host).buttons, 0);           // another controller's input
+}
+
+TEST_CASE(input_settings_carry_pcsx2_sections) {
+    using input::Ds2;
+    settings::Ini ini;
+    ini.parse("[Pad1]\nType = DualShock2\nCross = Keyboard/K\nCross = SDL-0/FaceSouth\nLUp = SDL-0/-LeftY\n"
+              "Deadzone = 0.1\nAxisScale = 1.5\nCrossScale = 0.8\nLargeMotor = SDL-0/LargeMotor\n"
+              "[Pad2]\nType = None\n[Hotkeys]\nToggleFullscreen = Keyboard/Alt & Keyboard/Return\n[UI]\nKeep = 1\n");
+    const input::PadConfig p1 = input::loadPad(ini, 0), p2 = input::loadPad(ini, 1);
+    CHECK(p1.connected);
+    CHECK_EQ(p1.bindings[size_t(Ds2::Cross)].size(), size_t(2));
+    CHECK_EQ(p1.bindings[size_t(Ds2::Start)].size(), size_t(0));   // a section replaces the defaults
+    CHECK_EQ(p1.tuning.deadzone, 0.1f);
+    CHECK_EQ(p1.tuning.axisScale, 1.5f);
+    CHECK_EQ(p1.scale[size_t(Ds2::Cross)], 0.8f);
+    CHECK_EQ(p1.motors[size_t(input::Motor::Large)].size(), size_t(1));
+    CHECK(!p2.connected);
+    const input::HotkeyConfig hk = input::loadHotkeys(ini);
+    CHECK_EQ(hk.bindings[size_t(input::Hotkey::ToggleFullscreen)].size(), size_t(1));
+    CHECK(hk.bindings[size_t(input::Hotkey::OpenPauseMenu)].empty());   // the section says nothing: unbound
+
+    // Written back and read again, nothing changes, and other sections stay.
+    input::savePad(ini, 0, p1);
+    input::savePad(ini, 1, p2);
+    input::saveHotkeys(ini, hk);
+    settings::Ini again;
+    again.parse(ini.text());
+    const input::PadConfig q1 = input::loadPad(again, 0);
+    CHECK(q1.bindings == p1.bindings && q1.motors == p1.motors && q1.scale == p1.scale);
+    CHECK_EQ(q1.tuning.axisScale, 1.5f);
+    CHECK(!input::loadPad(again, 1).connected);
+    CHECK(input::loadHotkeys(again).bindings == hk.bindings);
+    CHECK_EQ(again.getString("UI", "Keep", ""), std::string("1"));
+    CHECK_EQ(again.value("Pad1", "LDownScale").has_value(), false);   // defaults are not written
+
+    // No sections: PCSX2's defaults.
+    const settings::Ini empty;
+    CHECK_EQ(input::formatBinding(input::loadPad(empty, 0).bindings[size_t(Ds2::Triangle)][0]), std::string("Keyboard/I"));
+    CHECK(!input::loadPad(empty, 1).connected);
+    CHECK_EQ(input::formatBinding(input::loadHotkeys(empty).bindings[size_t(input::Hotkey::OpenPauseMenu)][0]),
+             std::string("Keyboard/Escape"));
+}
+
+TEST_CASE(input_hotkey_chords_take_their_keys) {
+    using input::Hotkey;
+    const input::PadConfig savedPad = input::pad(0);
+    const input::HotkeyConfig savedKeys = input::hotkeys();
+    input::pad(0) = input::defaultPad(0);
+    input::hotkeys() = input::defaultHotkeys();
+    auto step = [](std::vector<std::string> keys, bool toGame = true, bool hotkeysOn = true) {
+        input::HostState s;
+        s.keys = std::move(keys);
+        return input::update(s, toGame, hotkeysOn);
+    };
+    auto start = [] { return (input::padState(0).buttons & 0x0008) != 0; };
+    CHECK(step({"Return"}).empty());
+    CHECK(start());
+    auto ev = step({"Return", "Alt"});   // Alt+Return: fullscreen, and Return no longer reaches Start
+    CHECK(ev.size() == 1 && ev[0].hotkey == Hotkey::ToggleFullscreen && ev[0].pressed);
+    CHECK(!start());
+    ev = step({"Alt"});
+    CHECK(ev.size() == 1 && ev[0].hotkey == Hotkey::ToggleFullscreen && !ev[0].pressed);
+    CHECK(step({"Alt", "Return"}).size() == 1);
+    CHECK(step({"Return"}).size() == 1);   // released: Alt let go first, Return is still taken
+    CHECK(!start());
+    CHECK(step({}).empty());
+    step({"Return"});
+    CHECK(start());                        // free again once released
+
+    ev = step({"Escape"});
+    CHECK(ev.size() == 1 && ev[0].hotkey == Hotkey::OpenPauseMenu && ev[0].pressed);
+    CHECK(step({"Escape"}, true, false).empty());   // hotkeys off (binding capture): forgotten silently
+    CHECK(step({}, true, true).empty());
+    step({"K"}, false, true);                        // the overlay has the input: the game sees nothing
+    CHECK_EQ(input::padState(0).buttons, 0);
+    input::HostState held;
+    held.keys = {"K"};
+    input::holdBack(held);                           // K closed the menu: it reaches nothing until released
+    step({"K"});
+    CHECK_EQ(input::padState(0).buttons, 0);
+    step({});
+    step({"K"});
+    CHECK_EQ(input::padState(0).buttons, 0x4000);
+    step({});
+    input::pad(0) = savedPad;
+    input::hotkeys() = savedKeys;
+}
+
+TEST_CASE(input_first_run_adopts_one_controller) {
+    namespace fs = std::filesystem;
+    using input::Ds2;
+    const fs::path dir = fs::temp_directory_path() / "ps2n_input_test";
+    fs::remove_all(dir);
+    input::init(dir / "ps2n.ini");                           // no settings file: a first run
+    CHECK(input::adoptFirstController(1));
+    CHECK(!input::adoptFirstController(2));                  // only the first controller
+    const auto& cross = input::pad(0).bindings[size_t(Ds2::Cross)];
+    CHECK(cross.size() == 2 && input::formatBinding(cross[0]) == "Keyboard/K" &&
+          input::formatBinding(cross[1]) == "SDL-1/FaceSouth");   // beside the keyboard
+    CHECK_EQ(input::formatBinding(input::pad(0).bindings[size_t(Ds2::Analog)][0]), std::string("SDL-1/Guide"));
+    CHECK(fs::exists(dir / "ps2n.ini"));                     // and saved
+    input::init(dir / "ps2n.ini");                           // with the file there: read back, nothing adopted
+    CHECK(!input::adoptFirstController(0));
+    CHECK_EQ(input::pad(0).bindings[size_t(Ds2::Cross)].size(), size_t(2));
+    CHECK(!input::pad(1).connected);
+    fs::remove_all(dir);
+    input::pad(0) = input::defaultPad(0);
+    input::pad(1) = input::defaultPad(1);
+    input::hotkeys() = input::defaultHotkeys();
 }
 
 int main(int argc, char** argv) { return ::testing::runAll(argc, argv); }

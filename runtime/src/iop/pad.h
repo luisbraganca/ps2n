@@ -3,8 +3,9 @@
 // The game's libpad talks to PADMAN over RPC (open a port, switch to analog
 // or pressure mode, set up vibration) and reads the controller state from a
 // double-buffered area in EE memory, which PADMAN refreshes every frame. This
-// does the same from host input: the keyboard or a game controller (SDL
-// builds), or a script (--pad-script) for reproducible runs.
+// does the same from what input/input.h makes of the host's keyboard and game
+// controllers, or from a script (--pad-script) for reproducible runs, and
+// hands the game's vibration requests back to it.
 #pragma once
 
 #include <cstdint>
