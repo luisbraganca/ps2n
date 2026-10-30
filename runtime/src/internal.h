@@ -25,6 +25,7 @@ struct Options {
     bool fpuRoundToZero = true;    // EE FPU / VU round toward zero
     std::filesystem::path dumpFrames;   // write displayed frames here (PPM)
     uint32_t dumpEvery = 1;
+    std::filesystem::path dumpAudio;    // write the SPU2's output here (WAV)
     bool window = true;            // open an SDL window when built with SDL2
     bool strict = false;           // stop at the first unimplemented path (PS2_UNIMPL)
     bool traceSyscalls = false;

@@ -1,16 +1,22 @@
 // Instruction semantics (ops_*.h), guest printf formatting and GS addressing.
 #include "testing.h"
 
+#include "audio/audio.h"
+#include "clock.h"
 #include "hw/dmac.h"
 #include "hw/gs.h"
 #include "hw/ipu.h"
 #include "hw/mpeg.h"
 #include "input/input.h"
 #include "internal.h"
+#include "iop/cpu.h"
 #include "iop/disc.h"
+#include "iop/hle.h"
 #include "iop/hostfs.h"
 #include "iop/iop.h"
+#include "iop/kernel.h"
 #include "iop/pad.h"
+#include "iop/spu2.h"
 #include "log.h"
 #include "ps2/recomp.h"
 #include "settings.h"
@@ -28,6 +34,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <numbers>
 #include <set>
 #include <vector>
@@ -1888,6 +1895,436 @@ TEST_CASE(input_first_run_adopts_one_controller) {
     input::pad(0) = input::defaultPad(0);
     input::pad(1) = input::defaultPad(1);
     input::hotkeys() = input::defaultHotkeys();
+}
+
+// ---- SPU2 and libsd ------------------------------------------------------------------------------
+namespace {
+
+namespace spu2 = iop::spu2;
+
+// Emulated time stands still, so that only runSamples() moves the SPU2 (a
+// register access mixes what is due by now); the real-time clock comes back after.
+struct FrozenClock {
+    FrozenClock() { clockInit(true, false); }
+    ~FrozenClock() {
+        spu2::setSink(nullptr);
+        clockInit(false, false);
+    }
+};
+
+constexpr uint32_t kSpu2 = 0x1F900000u;
+void sw(uint32_t reg, uint16_t v) { spu2::write16(kSpu2 + reg, v); }
+uint16_t sr(uint32_t reg) { return spu2::read16(kSpu2 + reg); }
+int16_t soundWord(uint32_t at) {
+    int16_t v;
+    std::memcpy(&v, spu2::ram() + (at & 0xFFFFF) * 2, 2);
+    return v;
+}
+
+// An ADPCM block at word address `at` whose 28 nibbles are all `nibble`.
+void adpcmBlock(uint32_t at, int shift, int filter, int flags, int nibble) {
+    uint16_t words[8] = {static_cast<uint16_t>(shift | (filter << 4) | (flags << 8))};
+    for (int i = 0; i < 28; ++i) words[1 + i / 4] = static_cast<uint16_t>(words[1 + i / 4] | ((nibble & 0xF) << ((i & 3) * 4)));
+    std::memcpy(spu2::ram() + at * 2, words, sizeof words);
+}
+
+uint32_t voiceParam(int core, int voice) { return static_cast<uint32_t>(core * 0x400 + voice * 16); }
+uint32_t voiceAddr(int core, int voice) { return static_cast<uint32_t>(core * 0x400 + 0x1C0 + voice * 12); }
+void setVoice(int core, int voice, uint32_t start, uint16_t pitch, uint16_t adsr1, uint16_t adsr2) {
+    sw(voiceAddr(core, voice), static_cast<uint16_t>(start >> 16));
+    sw(voiceAddr(core, voice) + 2, static_cast<uint16_t>(start));
+    sw(voiceParam(core, voice) + 4, pitch);
+    sw(voiceParam(core, voice) + 6, adsr1);
+    sw(voiceParam(core, voice) + 8, adsr2);
+}
+void voiceKey(int core, int voice, bool on) {
+    sw(static_cast<uint32_t>(core * 0x400 + (on ? 0x1A0 : 0x1A4) + (voice < 16 ? 0 : 2)), static_cast<uint16_t>(1u << (voice % 16)));
+}
+uint16_t envx(int core, int voice) { return sr(voiceParam(core, voice) + 0xA); }
+uint32_t addrPair(uint32_t reg) { return (static_cast<uint32_t>(sr(reg)) << 16) | sr(reg + 2); }
+uint32_t endx(int core) { return sr(static_cast<uint32_t>(core * 0x400 + 0x340)) | (static_cast<uint32_t>(sr(static_cast<uint32_t>(core * 0x400 + 0x342))) << 16); }
+
+// The fastest linear attack and sustain: full level within six samples, held.
+constexpr uint16_t kHoldAdsr1 = 0x000F, kHoldAdsr2 = 0x0000;
+
+std::vector<int16_t> g_heard;
+void hear(const int16_t* samples, size_t frames) { g_heard.insert(g_heard.end(), samples, samples + frames * 2); }
+
+} // namespace
+
+TEST_CASE(spu2_adpcm_follows_the_shift_and_filter_rules) {
+    auto decode = [](int shift, int filter, std::initializer_list<int> nibbles, int32_t p1, int32_t p2, int16_t* out) {
+        uint16_t block[8] = {static_cast<uint16_t>(shift | (filter << 4))};
+        int i = 0;
+        for (int n : nibbles) {
+            block[1 + i / 4] = static_cast<uint16_t>(block[1 + i / 4] | ((n & 0xF) << ((i & 3) * 4)));
+            ++i;
+        }
+        spu2::decodeAdpcm(block, p1, p2, out);
+        return std::make_pair(p1, p2);
+    };
+    int16_t s[28];
+    decode(0, 0, {1, 7, 8, 15}, 0, 0, s);   // a nibble is the top of a 16-bit sample, shifted right
+    CHECK_EQ(s[0], 4096);
+    CHECK_EQ(s[1], 28672);
+    CHECK_EQ(s[2], -32768);
+    CHECK_EQ(s[3], -4096);
+    CHECK_EQ(s[4], 0);
+    decode(12, 0, {7, 9}, 0, 0, s);
+    CHECK_EQ(s[0], 7);
+    CHECK_EQ(s[1], -7);
+    decode(13, 0, {7}, 0, 0, s);            // shifts 13 to 15 act as 9
+    CHECK_EQ(s[0], 56);
+    decode(15, 0, {7}, 0, 0, s);
+    CHECK_EQ(s[0], 56);
+    const auto carried = decode(12, 1, {}, 1000, 0, s);   // filter 1: 60/64 of the last sample, rounded
+    CHECK_EQ(s[0], 938);
+    CHECK_EQ(s[1], 879);
+    CHECK(carried.first == s[27] && carried.second == s[26]);   // the history carries on
+    decode(12, 2, {}, -1000, 500, s);      // (115 * -1000 - 52 * 500 + 32) >> 6 rounds down
+    CHECK_EQ(s[0], -2203);
+    decode(0, 4, {7}, 30000, 0, s);         // filter 4 overflows: saturated
+    CHECK_EQ(s[0], 32767);
+    decode(12, 5, {}, 1000, 1000, s);       // filters 5 to 7 predict nothing
+    CHECK_EQ(s[0], 0);
+}
+
+TEST_CASE(spu2_interpolation_weighs_the_last_four_samples) {
+    FrozenClock frozen;
+    spu2::init();
+    adpcmBlock(0x3000, 0, 0, 0, 0);   // silence
+    adpcmBlock(0x3008, 0, 0, 7, 4);   // then 16384, looping on itself
+    // Voice 1 plays at the output rate; the core writes its output (after
+    // the envelope) at 0x400 every sample. A step through the four taps at
+    // phase 0 (table entries 0, 0x100, 0x1FF and 0xFF join in turn):
+    setVoice(0, 1, 0x3000, 0x1000, kHoldAdsr1, kHoldAdsr2);
+    voiceKey(0, 1, true);
+    spu2::runSamples(40);
+    const int16_t step[] = {-1, 2433, 13914, 16317};
+    bool found = false;
+    for (uint32_t i = 0; i < 0x200 && !found; ++i) {
+        found = true;
+        for (uint32_t k = 0; k < 4; ++k) found = found && soundWord(0x400 + ((i + k) & 0x1FF)) == step[k];
+    }
+    CHECK(found);
+    // Voice 3 creeps through one interpolation phase per sample over the
+    // held level; at every phase the four taps sum to 255/256 of full scale.
+    setVoice(0, 3, 0x3008, 0x0010, kHoldAdsr1, kHoldAdsr2);
+    voiceKey(0, 3, true);
+    spu2::runSamples(1024 + 512);
+    int lo = 0x7FFF, hi = -0x8000;
+    for (uint32_t i = 0; i < 0x200; ++i) {
+        lo = std::min<int>(lo, soundWord(0x600 + i));
+        hi = std::max<int>(hi, soundWord(0x600 + i));
+    }
+    CHECK(lo >= 16316 && hi <= 16320);
+}
+
+TEST_CASE(spu2_envelopes_and_sweeps_step_at_their_rates) {
+    FrozenClock frozen;
+    spu2::init();
+    adpcmBlock(0x3000, 0, 0, 7, 1);
+    // Attack linear, shift 10 (+14 a sample), sustain level 7; sustain
+    // decreasing at the rate that never steps; release linear, shift 10.
+    setVoice(0, 0, 0x3000, 0x1000, 0x2807, 0x5FCA);
+    voiceKey(0, 0, true);
+    spu2::runSamples(1000);
+    CHECK_EQ(envx(0, 0), 14000);
+    spu2::runSamples(2000);   // full level at 2341, one decay step to 16383 (<= 0x4000), held there
+    CHECK_EQ(envx(0, 0), 16383);
+    voiceKey(0, 0, false);
+    spu2::runSamples(500);
+    CHECK_EQ(envx(0, 0), 16383 - 500 * 16);
+    spu2::runSamples(600);
+    CHECK_EQ(envx(0, 0), 0);
+    // Volumes: bit 15 clear holds half the level; set, it sweeps from where it was.
+    sw(voiceParam(0, 0), 0x3FFF);
+    CHECK_EQ(sr(voiceParam(0, 0) + 0xC), 0x7FFE);   // VOLXL
+    sw(voiceParam(0, 0), 0);
+    sw(voiceParam(0, 0), 0x8028);   // linear increase, shift 10: +14 a sample
+    spu2::runSamples(100);
+    CHECK_EQ(sr(voiceParam(0, 0) + 0xC), 1400);
+}
+
+TEST_CASE(spu2_noise_follows_the_core_clock) {
+    FrozenClock frozen;
+    spu2::init();
+    adpcmBlock(0x3000, 0, 0, 7, 0);
+    setVoice(0, 1, 0x3000, 0x1000, kHoldAdsr1, kHoldAdsr2);
+    sw(0x184, 1u << 1);   // NON: voice 1 plays the core's noise
+    auto distinct = [] {
+        std::set<int16_t> values;
+        bool negative = false, positive = false;
+        for (uint32_t i = 0; i < 0x200; ++i) {
+            values.insert(soundWord(0x400 + i));
+            negative = negative || soundWord(0x400 + i) < 0;
+            positive = positive || soundWord(0x400 + i) > 0;
+        }
+        return std::make_pair(values.size(), negative && positive);
+    };
+    sw(0x19A, 0xBF00);   // ATTR: noise shift 15, step 3, the fastest clock
+    voiceKey(0, 1, true);
+    spu2::runSamples(1024);
+    const auto fast = distinct();
+    CHECK(fast.first > 200 && fast.second);
+    sw(0x19A, 0x8000);   // shift 0, step 0: a step every 32768 samples
+    spu2::runSamples(1024);
+    CHECK(distinct().first <= 2);
+}
+
+TEST_CASE(spu2_loop_flags_set_endx_lsax_and_nax) {
+    FrozenClock frozen;
+    spu2::init();
+    adpcmBlock(0x3000, 0, 0, 0, 1);
+    adpcmBlock(0x3008, 0, 0, 4, 1);   // loop start
+    adpcmBlock(0x3010, 0, 0, 3, 1);   // loop end, repeat
+    setVoice(0, 2, 0x3000, 0x1000, kHoldAdsr1, kHoldAdsr2);
+    voiceKey(0, 2, true);
+    CHECK_EQ(addrPair(voiceAddr(0, 2) + 8), 0x3001u);   // NAX: the first data word
+    spu2::runSamples(28);
+    CHECK_EQ(addrPair(voiceAddr(0, 2) + 4), 0x3008u);   // LSAX from the loop-start block
+    spu2::runSamples(55);
+    CHECK_EQ(addrPair(voiceAddr(0, 2) + 8), 0x3017u);   // in the last block, its last word
+    CHECK_EQ(endx(0) & 4u, 0u);
+    spu2::runSamples(1);
+    CHECK_EQ(endx(0) & 4u, 4u);                           // the end sets ENDX and jumps to LSAX
+    CHECK_EQ(addrPair(voiceAddr(0, 2) + 8), 0x3009u);
+    sw(0x340, 0);                                         // a write clears ENDX
+    CHECK_EQ(endx(0) & 4u, 0u);
+    // LSAX written after key on wins over the loop-start flag.
+    voiceKey(0, 2, true);
+    sw(voiceAddr(0, 2) + 4, 0);
+    sw(voiceAddr(0, 2) + 6, 0x3000);
+    spu2::runSamples(84);
+    CHECK_EQ(addrPair(voiceAddr(0, 2) + 4), 0x3000u);
+    CHECK_EQ(addrPair(voiceAddr(0, 2) + 8), 0x3001u);
+    // An end without the repeat flag silences the voice.
+    adpcmBlock(0x3018, 0, 0, 1, 1);
+    setVoice(0, 20, 0x3018, 0x1000, 0x2C0F, kHoldAdsr2);   // attack +7 a sample: still rising at the end
+    voiceKey(0, 20, true);
+    spu2::runSamples(27);
+    CHECK(envx(0, 20) > 0);
+    spu2::runSamples(1);
+    CHECK_EQ(envx(0, 20), 0);
+    CHECK_EQ(endx(0) & (1u << 20), 1u << 20);
+}
+
+TEST_CASE(spu2_interrupt_address_watches_reads_and_transfers) {
+    FrozenClock frozen;
+    iop::init();   // the IOP kernel takes the SPU2's interrupt, line 9
+    adpcmBlock(0x3000, 0, 0, 4, 1);
+    adpcmBlock(0x3008, 0, 0, 0, 1);
+    adpcmBlock(0x3010, 0, 0, 3, 1);
+    setVoice(0, 0, 0x3000, 0x1000, kHoldAdsr1, kHoldAdsr2);
+    sw(0x19C, 0);
+    sw(0x19E, 0x3010);   // core 0's interrupt address: the third block's header
+    sw(0x19A, 0x8040);   // core 0 on, interrupt enabled
+    voiceKey(0, 0, true);
+    spu2::runSamples(50);
+    CHECK_EQ(sr(0x7C2) & 0xC, 0);
+    spu2::runSamples(10);
+    CHECK_EQ(sr(0x7C2) & 0xC, 4);
+    CHECK((iop::kernel::intcRead(0x1F801070) & (1u << 9)) != 0);
+    sw(0x19A, 0x8000);   // turning it off acknowledges it
+    CHECK_EQ(sr(0x7C2) & 0xC, 0);
+    // Core 1 watches what core 0's voices read too.
+    sw(0x59C, 0);
+    sw(0x59E, 0x3010);
+    sw(0x59A, 0x8040);
+    spu2::runSamples(84);
+    CHECK_EQ(sr(0x7C2) & 0xC, 8);
+    sw(0x59A, 0x8000);
+    // And transfers into sound memory.
+    sw(0x19E, 0x5004);
+    sw(0x19A, 0x8040);
+    const uint8_t data[32] = {};
+    spu2::writeMemory(0xA000, data, sizeof data);   // words 0x5000-0x500F
+    CHECK_EQ(sr(0x7C2) & 0xC, 4);
+    sw(0x19A, 0x8000);
+}
+
+TEST_CASE(spu2_autodma_streams_pcm_through_both_cores) {
+    FrozenClock frozen;
+    spu2::init();
+    // Two 1 KB blocks, as AutoDMA reads them: 256 left samples, then 256 right.
+    std::vector<int16_t> pcm(1024);
+    for (int b = 0; b < 2; ++b)
+        for (int i = 0; i < 256; ++i) {
+            pcm[static_cast<size_t>(b * 512 + i)] = static_cast<int16_t>(1000 * (b + 1));
+            pcm[static_cast<size_t>(b * 512 + 256 + i)] = static_cast<int16_t>(-1000 * (b + 1));
+        }
+    iop::mem::writeBlock(0x1E0000, pcm.data(), 2048);
+    sw(0x76C, 0x7FFF);   // core 0's input volume
+    sw(0x76E, 0x7FFF);
+    sw(0x198, 0x0C0);    // core 0: its input to the dry mix
+    sw(0x760, 0x3FFF);   // core 0's master volume
+    sw(0x762, 0x3FFF);
+    sw(0x790, 0x7FFF);   // core 1 takes core 0's output (external input) dry
+    sw(0x792, 0x7FFF);
+    sw(0x598, 0x00C);
+    sw(0x788, 0x3FFF);
+    sw(0x78A, 0x3FFF);
+    g_heard.clear();
+    spu2::setSink(&hear);
+    spu2::startAutoDma(0, 0x1E0000, 2048);
+    CHECK(spu2::autoDmaActive(0));
+    CHECK_EQ(spu2::autoDmaAddress(0), 0x1E0000u);
+    spu2::runSamples(1);    // the input position enters a half: the other takes the first block
+    CHECK_EQ(spu2::autoDmaAddress(0), 0x1E0400u);
+    spu2::runSamples(1023);
+    CHECK(!spu2::autoDmaActive(0));
+    CHECK_EQ(spu2::autoDmaAddress(0), 0x1E0800u);   // where it ended, as the channel's address shows
+    // Silence until that half plays, then each block in turn, through four
+    // volumes (input, core 0 master, core 1's external input, core 1 master).
+    CHECK_EQ(g_heard.size(), size_t(2048));
+    bool ok = true;
+    for (size_t i = 0; i < 1024 && ok; ++i) {
+        const int16_t l = g_heard[i * 2], r = g_heard[i * 2 + 1];
+        if (i < 256) ok = l == 0 && r == 0;
+        else if (i < 512) ok = l == 996 && r == -1000;
+        else if (i < 768) ok = l == 1996 && r == -2000;
+        else ok = l == 996 && r == -1000;   // the input keeps what it had
+    }
+    CHECK(ok);
+}
+
+TEST_CASE(spu2_reverb_stays_in_its_work_area) {
+    FrozenClock frozen;
+    spu2::init();
+    // libsd's Room preset: dAPF1, dAPF2, eight volumes, twenty offsets (in
+    // 8-byte units), vLIN, vRIN; its work area is 0x26C0 bytes below 2 MB.
+    const uint16_t room[32] = {0x007D, 0x005B, 0x6D80, 0x54B8, 0xBED0, 0x0000, 0x0000, 0xBA80, 0x5800, 0x5300, 0x04D6,
+                               0x0333, 0x03F0, 0x0227, 0x0374, 0x01EF, 0x0336, 0x01B7, 0x0335, 0x01B6, 0x0334, 0x01B5,
+                               0x0334, 0x01B5, 0x0334, 0x01B5, 0x01B4, 0x0136, 0x00B8, 0x005C, 0x8000, 0x8000};
+    auto offset = [&](uint32_t reg, uint16_t v) {
+        sw(reg, static_cast<uint16_t>(v >> 14));
+        sw(reg + 2, static_cast<uint16_t>(v << 2));
+    };
+    offset(0x2E4, room[0]);
+    offset(0x2E8, room[1]);
+    for (uint32_t i = 0; i < 8; ++i) sw(0x774 + i * 2, room[2 + i]);
+    for (uint32_t i = 0; i < 20; ++i) offset(0x2EC + i * 4, room[10 + i]);
+    sw(0x784, room[30]);
+    sw(0x786, room[31]);
+    const uint32_t start = 0x100000 - 0x26C0 / 2;
+    sw(0x2E0, static_cast<uint16_t>(start >> 16));
+    sw(0x2E2, static_cast<uint16_t>(start));
+    sw(0x33C, 0xF);
+    for (uint32_t a = start - 0x100; a < start; ++a) std::memcpy(spu2::ram() + a * 2, "\x34\x12", 2);   // a guard below it
+    // A square wave (1.7 kHz) into core 0's dry and wet mixes; the reverb's output to core 1.
+    const uint16_t square[8] = {0x0700, 0x7777, 0x7777, 0x7777, 0x9977, 0x9999, 0x9999, 0x9999};
+    std::memcpy(spu2::ram() + 0x3000 * 2, square, sizeof square);
+    setVoice(0, 0, 0x3000, 0x1000, kHoldAdsr1, kHoldAdsr2);
+    sw(voiceParam(0, 0), 0x3FFF);
+    sw(voiceParam(0, 0) + 2, 0x3FFF);
+    sw(0x188, 1);   // VMIXL, VMIXEL, VMIXR, VMIXER: voice 0
+    sw(0x18C, 1);
+    sw(0x190, 1);
+    sw(0x194, 1);
+    sw(0x198, 0xF00);
+    sw(0x764, 0x7FFF);   // EVOL
+    sw(0x766, 0x7FFF);
+    sw(0x760, 0x3FFF);
+    sw(0x762, 0x3FFF);
+    sw(0x790, 0x7FFF);
+    sw(0x792, 0x7FFF);
+    sw(0x598, 0x00C);
+    sw(0x788, 0x3FFF);
+    sw(0x78A, 0x3FFF);
+    sw(0x19A, 0x8080);   // effects on
+    voiceKey(0, 0, true);
+    spu2::runSamples(4800);
+    voiceKey(0, 0, false);   // release at the fastest rate: silent within two samples
+    spu2::runSamples(8);
+    g_heard.clear();
+    spu2::setSink(&hear);
+    spu2::runSamples(4800);
+    int tail = 0;
+    for (int16_t v : g_heard) tail = std::max(tail, std::abs(static_cast<int>(v)));
+    CHECK(tail > 100);   // the dry voice has stopped; the reverb goes on
+    bool guard = true, written = false;
+    for (uint32_t a = start - 0x100; a < start; ++a) guard = guard && soundWord(a) == 0x1234;
+    for (uint32_t a = start; a < 0x100000; ++a) written = written || soundWord(a) != 0;
+    CHECK(guard);
+    CHECK(written);
+}
+
+TEST_CASE(libsd_entries_name_the_spu2_registers) {
+    FrozenClock frozen;
+    iop::init();
+    auto sd = [](uint16_t index, uint32_t a0 = 0, uint32_t a1 = 0) {
+        return iop::callGuest(iop::hle::exportAddress("libsd", index), a0, a1);
+    };
+    enum : uint16_t { Init = 4, SetParam, GetParam, SetSwitch, GetSwitch, SetAddr, GetAddr, SetCoreAttr, GetCoreAttr };
+    CHECK_EQ(sd(Init, 0), 0u);
+    CHECK_EQ(sr(0x198), 0xFF0);   // core 0: voices and its input to both mixes
+    CHECK_EQ(sr(0x598), 0xFFC);   // core 1: also core 0's output, dry
+    CHECK_EQ(sr(0x790), 0x7FFF);
+    CHECK_EQ(sd(GetSwitch, 0x1700), 0u);   // ENDX, cleared
+    // Every voice ends up keyed off, looping a silent block at 0x5000.
+    spu2::runSamples(100);
+    CHECK(envx(0, 0) == 0 && envx(1, 23) == 0);
+    CHECK(addrPair(voiceAddr(0, 0) + 8) >= 0x2800u && addrPair(voiceAddr(0, 0) + 8) < 0x2808u);
+    CHECK_EQ(sd(GetSwitch, 0x1700), 0xFFFFFFu);   // and ENDX is set again by every voice's loop
+    // Entries: what in bits 8-15, voice in 1-5, core in 0; bit 7 a core parameter.
+    sd(SetParam, 0x020B, 0x1234);   // voice 5 of core 1, PITCH
+    CHECK_EQ(sr(0x400 + 5 * 16 + 4), 0x1234);
+    CHECK_EQ(sd(GetParam, 0x020B), 0x1234u);
+    sd(SetParam, 0x0981, 0x2222);   // core 1, MVOLL: core parameters are 40 bytes apart
+    CHECK_EQ(sr(0x788), 0x2222);
+    sd(SetAddr, 0x2046, 0x5010);    // voice 3 of core 0, SSA, with Sony's voice-address bit
+    CHECK_EQ(sr(0x1C0 + 3 * 12 + 2), 0x2808);
+    CHECK_EQ(sd(GetAddr, 0x2046), 0x5010u);
+    sd(SetAddr, 0x1D01, 0x1C0000);  // core 1, EEA: only its high part
+    CHECK_EQ(sr(0x73C), 0xE);
+    CHECK_EQ(sd(GetAddr, 0x1D01), 0x1DFFFFu);
+    sd(SetCoreAttr, 0x0005, 1);     // core 1, interrupt enable
+    CHECK((sr(0x59A) & 0x40) != 0);
+    CHECK_EQ(sd(GetCoreAttr, 0x0005), 1u);
+    sd(SetCoreAttr, 0x0009, 0x2A);  // core 1, noise clock
+    CHECK_EQ((sr(0x59A) >> 8) & 0x3F, 0x2A);
+    sd(SetSwitch, 0x1500, 1u << 3); // KON, core 0, voice 3
+    spu2::runSamples(4);
+    CHECK(envx(0, 3) > 0);
+    CHECK_EQ(sd(GetParam, 0x0506), static_cast<uint32_t>(envx(0, 3)));
+}
+
+TEST_CASE(audio_dump_writes_the_output_as_wav) {
+    namespace fs = std::filesystem;
+    FrozenClock frozen;
+    spu2::init();
+    const fs::path file = fs::temp_directory_path() / "ps2n_audio_test.wav";
+    g_opt.dumpAudio = file;
+    audio::init();
+    spu2::runSamples(480);
+    audio::shutdown();
+    g_opt.dumpAudio.clear();
+    std::ifstream in(file, std::ios::binary);
+    const std::vector<char> wav((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+    fs::remove(file);
+    CHECK_EQ(wav.size(), size_t(44 + 480 * 4));
+    if (wav.size() < 44) return;
+    auto u32 = [&](size_t at) {
+        uint32_t v;
+        std::memcpy(&v, wav.data() + at, 4);
+        return v;
+    };
+    auto u16 = [&](size_t at) {
+        uint16_t v;
+        std::memcpy(&v, wav.data() + at, 2);
+        return v;
+    };
+    CHECK(std::string(wav.data(), 4) == "RIFF" && std::string(wav.data() + 8, 8) == "WAVEfmt " &&
+          std::string(wav.data() + 36, 4) == "data");
+    CHECK_EQ(u32(4), 36u + 480 * 4);
+    CHECK_EQ(u16(20), 1);        // PCM
+    CHECK_EQ(u16(22), 2);        // stereo
+    CHECK_EQ(u32(24), 48000u);
+    CHECK_EQ(u32(28), 192000u);
+    CHECK_EQ(u16(32), 4);
+    CHECK_EQ(u16(34), 16);
+    CHECK_EQ(u32(40), 480u * 4);
 }
 
 int main(int argc, char** argv) { return ::testing::runAll(argc, argv); }

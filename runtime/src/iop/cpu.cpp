@@ -4,6 +4,7 @@
 #include "internal.h"
 #include "iop/iop.h"
 #include "iop/kernel.h"
+#include "iop/spu2.h"
 #include "log.h"
 
 #include <array>
@@ -19,7 +20,6 @@ namespace {
 std::array<uint8_t, mem::kRamSize> g_ram;
 std::array<uint8_t, 1024> g_scratchpad;
 std::array<uint8_t, 0x10000> g_ioRegs;     // 0x1F800000-0x1F80FFFF beyond the scratchpad: last written values
-std::array<uint8_t, 0x10000> g_spu2Regs;   // 0x1F900000-0x1F90FFFF
 
 struct Trap {
     HleFn fn;
@@ -73,9 +73,10 @@ uint32_t slowRead(uint32_t addr, int size) {
         reportIo("read", p, v);
         return v;
     }
-    if (p >= 0x1F900000u && p < 0x1F910000u) {
-        const uint32_t v = pick(&g_spu2Regs[p & 0xFFFF]);
-        reportIo("read", p, v);
+    if (p >= 0x1F900000u && p < 0x1F900800u) {   // the SPU2's 16-bit registers
+        uint32_t v = spu2::read16(p & ~1u);
+        if (size == 4) v |= static_cast<uint32_t>(spu2::read16((p & ~1u) + 2)) << 16;
+        else if (size == 1) v = (v >> ((p & 1) * 8)) & 0xFF;
         return v;
     }
     if (p >= kBiosBase && p < kBiosBase + kBiosSize) {
@@ -102,9 +103,10 @@ void slowWrite(uint32_t addr, uint32_t v, int size) {
         put(&g_ioRegs[p & 0xFFFF]);
         return reportIo("write", p, v);
     }
-    if (p >= 0x1F900000u && p < 0x1F910000u) {
-        put(&g_spu2Regs[p & 0xFFFF]);
-        return reportIo("write", p, v);
+    if (p >= 0x1F900000u && p < 0x1F900800u && size != 1) {
+        spu2::write16(p, static_cast<uint16_t>(v));
+        if (size == 4) spu2::write16(p + 2, static_cast<uint16_t>(v >> 16));
+        return;
     }
     reportIo("write", p, v);
 }
@@ -478,7 +480,6 @@ void initCpu() {
     g_ram.fill(0);
     g_scratchpad.fill(0);
     g_ioRegs.fill(0);
-    g_spu2Regs.fill(0);
     g_traps.clear();
     g_traps.push_back({nullptr, "(null trap)"});   // trap 0 is never handed out
     g_returnTrap = addTrap(&nestedReturn, "(return from nested call)");

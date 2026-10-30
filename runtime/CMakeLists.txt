@@ -12,6 +12,7 @@ add_library(ps2n_runtime STATIC
     src/runtime.cpp
     src/settings.cpp
     src/vu.cpp
+    src/audio/audio.cpp
     src/hw/dmac.cpp
     src/hw/gs.cpp
     src/hw/hw.cpp
@@ -34,6 +35,7 @@ add_library(ps2n_runtime STATIC
     src/iop/services.cpp
     src/iop/sif.cpp
     src/iop/sound.cpp
+    src/iop/spu2.cpp
     src/kernel/kernel.cpp
     src/stubs/format.cpp
     src/stubs/stubs.cpp

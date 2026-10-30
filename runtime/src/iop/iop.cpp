@@ -15,6 +15,7 @@
 #include "iop/pad.h"
 #include "iop/sif.h"
 #include "iop/sound.h"
+#include "iop/spu2.h"
 #include "log.h"
 #include "ps2/memory.h"
 
@@ -305,6 +306,7 @@ void registerBuiltinServers() {
 }
 
 void initIopState() {
+    spu2::onIopReboot();   // the SPU2 is not reset: its voices play on, but the IOP's DMA stops
     initCpu();
     hle::initRegistry();
     kernel::init();
@@ -334,6 +336,7 @@ void resetIop() {
 } // namespace
 
 void init() {
+    spu2::init();
     pad::init();
     disc::insert(g_opt.cdrom);
     reboot();
@@ -370,6 +373,10 @@ void sync() {
 }
 
 bool busy() { return kernel::hasReadyThread(); }
+
+void runPending() {
+    if (kernel::hasReadyThread()) kernel::runSlice(20000);
+}
 
 uint64_t runWhileEeIdle() {
     const int64_t used = kernel::runSlice(20000);

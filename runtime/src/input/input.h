@@ -149,11 +149,11 @@ void savePad(settings::Ini& ini, int port, const PadConfig& cfg);
 // lasts while it is held.
 enum class Hotkey : uint8_t {
     OpenPauseMenu, ToggleFullscreen, TogglePause, ToggleFrameLimit, ToggleTurbo, HoldTurbo, CycleInterlaceMode,
-    Screenshot, ShutdownVM, Count
+    Screenshot, ShutdownVM, Mute, IncreaseVolume, DecreaseVolume, Count
 };
 const char* hotkeyKey(Hotkey h);       // "ToggleFullscreen"
 const char* hotkeyLabel(Hotkey h);     // "Toggle Fullscreen"
-const char* hotkeyCategory(Hotkey h);  // "Navigation", "Speed", "System", "Graphics"
+const char* hotkeyCategory(Hotkey h);  // "Navigation", "Speed", "System", "Graphics", "Audio"
 
 struct HotkeyConfig {
     std::array<std::vector<Binding>, size_t(Hotkey::Count)> bindings;

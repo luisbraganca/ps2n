@@ -38,6 +38,10 @@ uint8_t* ramPtr(uint32_t offset);
 // ---- time ------------------------------------------------------------------------------------
 void sync();                 // run the IOP up to the EE's current time
 bool busy();                 // the IOP has work it could do right now
+// Runs what is ready now (an interrupt just raised, threads it wakes)
+// outside the IOP's time budget. The SPU2 calls it when it raises one while
+// catching up, so the driver answers before more is mixed.
+void runPending();
 uint64_t runWhileEeIdle();   // the EE is idle: run ready IOP work; returns EE cycles' worth of it
 void onVblank(bool start);
 std::string describeThreads();   // for deadlock reports

@@ -253,10 +253,11 @@ Behind it, the IOP is split in two:
   `iop/modules.cpp`) are implemented on the host; an import becomes a jump to
   a trap address that runs the host function. Modules that drive hardware the
   runtime does not emulate register by register (controllers, memory cards,
-  the CD/DVD drive, the SPU2) are replaced by services that do their job
-  directly: PADMAN refreshes libpad's data area from host input every frame,
-  MCSERV maps memory cards to directories, CDVDFSV and cdvdman read the disc
-  image, and libsd keeps sound drivers running without producing sound.
+  the CD/DVD drive) are replaced by services that do their job directly:
+  PADMAN refreshes libpad's data area from host input every frame, MCSERV
+  maps memory cards to directories, and CDVDFSV and cdvdman read the disc
+  image. The SPU2 is emulated at its registers (`iop/spu2.cpp`), and libsd
+  is host code that drives them as Sony's library does.
 
 A host function that has to wait (a semaphore, a disc read) blocks the
 calling IOP thread and lets the scheduler run others; one that calls back into
@@ -264,6 +265,19 @@ module code (an interrupt handler, an alarm, a transfer callback) runs it as a
 nested guest call. The IOP is driven from the EE's timeline: it runs when the
 EE syncs with it (SIF transfers, syscalls, idle time), and host events
 (alarms, timers, drive and sound completions) are scheduled in emulated time.
+
+The SPU2 runs on that timeline too: 48,000 samples per emulated second,
+mixed when a driver touches its registers and by an event every 64 samples.
+Its interrupts (a transfer done, an address touched) reach the IOP kernel
+like any other. When it has fallen behind (the EE slept, or a frame took
+long to draw), it catches up one interrupt at a time: it stops after the
+sample that raised one, the IOP runs what that woke, and it mixes on. A
+driver that streams PCM thus refills its buffer in order, as on the console,
+and libsd arms each next half of a looping transfer in its interrupt
+handler, as the real library does: if the IOP answers late, the input plays
+what it had, and the driver never sees two transfers merged into one. In
+real time the samples keep pace with the host's audio device, which a ring
+buffer feeds (`audio/`).
 
 ## The vector units
 

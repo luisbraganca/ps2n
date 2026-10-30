@@ -45,11 +45,13 @@ L_001001a4:
 **Early development: no game is playable yet.** The recompiler, the part that
 translates code, is the furthest along: it covers the whole EE instruction set
 and has recompiled a retail game. Most of the work left is in the runtime,
-which stands in for the rest of the console. There is no sound at all, the
-graphics come from a software renderer that keeps full speed in the first
-game's menus only by drawing on several threads (measured on one 14-core
-desktop CPU; nothing heavier has been tried), the vector units never run
-alongside the EE, and the IOP services cover what the first game needed.
+which stands in for the rest of the console. The graphics come from a
+software renderer that keeps full speed in the first game's menus only by
+drawing on several threads (measured on one 14-core desktop CPU; nothing
+heavier has been tried), the vector units never run alongside the EE, and the
+IOP services cover what the first game needed. The sound comes from an SPU2
+emulated at its registers, but in the first game it drops out every few
+seconds.
 
 ### Games
 
@@ -58,7 +60,7 @@ Playable, Perfect.
 
 | Game | Stage | Notes |
 |---|---|---|
-| 007: Agent Under Fire (Europe, SLES-50539) | Menus | All three executables run recompiled. The language selection, the intro movies (without sound), the title screen and the main menu work, at full speed, and so does the controller. Starting a mission is untested, and the driving missions' executable is not recompiled yet. |
+| 007: Agent Under Fire (Europe, SLES-50539) | Menus | All three executables run recompiled. The language selection, the intro movies, the title screen and the main menu work, at full speed, and so does the controller. They have sound, but it drops out for a second or two every few seconds: the game's sound driver runs out of data to mix. It did so before the SPU2 was emulated, when nothing was heard, and why is not known yet. Starting a mission is untested, and the driving missions' executable is not recompiled yet. |
 
 ### By area
 
@@ -72,7 +74,7 @@ Playable, Perfect.
 | Graphics (GS) | `██████░░░░` 60% | 12 / 20 | filtering, mipmaps, the CLUT buffer, reading back to the EE |
 | Vector units | `███████░░░` 71% | 5 / 7 | running alongside the EE, a VU recompiler |
 | Movies (IPU) | `████████░░` 83% | 5 / 6 | timing |
-| Sound (SPU2) | `░░░░░░░░░░` 0% | 0 / 10 | all of it: nothing is mixed or heard |
+| Sound (SPU2) | `███████░░░` 71% | 10 / 14 | the IOP's DMA channels for drivers without libsd, an audio settings page |
 | IOP library functions | `████████░░` 77% | 428 / 557 | `mcman` (0 / 40), `dmacman`, `intrman`, `sifman` |
 | IOP services | `████████░░` 75% | 9 / 12 | FILEIO for SDK 2.2 and later, used by most later games |
 | Discs and memory cards | `█████░░░░░` 50% | 5 / 10 | dual-layer DVDs, drive timing |
@@ -142,18 +144,21 @@ Playable, Perfect.
 - [x] The IPU interrupt
 - [ ] Timing: a command takes no emulated time
 
-**Sound (SPU2)**: 0 of 10. libsd's calls are answered (they count under IOP
-library functions), so sound drivers run, but none of this exists:
-- [ ] ADPCM voice decoding
-- [ ] Pitch, looping, key on and off
-- [ ] ADSR envelopes
-- [ ] Volumes and volume sweeps
-- [ ] Noise
-- [ ] Reverb
-- [ ] Both cores, mixed
-- [ ] Streamed PCM input
-- [ ] Interrupts at a sound memory address
-- [ ] Audio output, in time with the game
+**Sound (SPU2)**: 10 of 14. libsd's calls count under IOP library functions.
+- [x] ADPCM voice decoding, with the 4-point interpolation
+- [x] Pitch and pitch modulation, looping, key on and off
+- [x] ADSR envelopes
+- [x] Volumes and volume sweeps
+- [x] Noise
+- [x] Reverb, at half rate through its resampling filter
+- [x] Both cores, mixed: dry and reverb mixes, core 0 into core 1
+- [x] Streamed PCM input (AutoDMA)
+- [x] Interrupts at a sound memory address
+- [x] Audio output, in time with the game: SDL, PCSX2's volume settings and hotkeys, a WAV dump
+- [ ] The IOP's DMA channels 4 and 7, for drivers that program the SPU2 without libsd
+- [ ] Reading the output back by DMA
+- [ ] S/PDIF: bypass and compressed output
+- [ ] PCSX2's audio settings page (ps2n.ini holds the settings)
 
 **IOP services**: 9 of 12
 - [x] SIF: transfers, command packets, RPC bind and call, IOP reset
@@ -237,8 +242,9 @@ Roughly in order:
 
 1. **Agent Under Fire in game**: start a mission, recompile the driving
    missions' executable, and fix what the game reaches next.
-2. **Sound**: emulate the SPU2 (ADPCM voices, envelopes, reverb, the two cores
-   and their streamed input) and play the result through SDL.
+2. **Sound**: find why Agent Under Fire's sound driver runs out of data (its
+   drop-outs predate the SPU2), then PCSX2's audio settings page and the
+   IOP's DMA channels 4 and 7, for drivers that program the SPU2 themselves.
 3. **Graphics speed**: the rasterizer now decodes the drawing state once per
    primitive and draws large primitives on several threads, enough for the
    first game's menus. Per pixel it still divides and interpolates in plain
@@ -442,7 +448,7 @@ takes a different route, these are the reasons:
 | Semantics | emitted as code per instruction | shared inline functions | readable output; one place to fix a bug; shared with the interpreter |
 | SIMD | SSE intrinsics, sse2neon on ARM | portable lane loops (auto-vectorised) | builds as-is on ARM64 (Apple silicon) and x86-64 |
 | Missed code | a function-not-found error | a built-in interpreter, plus a list of the addresses for the next recompile | a missed entry point costs speed, not a crash |
-| IOP | runs IRX modules on an R3000 interpreter | also runs IRX modules on an R3000 interpreter, but the IOP kernel and Sony's system modules (CD/DVD, memory cards, pads, libsd) are host code speaking their RPC protocols | game-specific modules behave as written, while the system side needs no BIOS image and no SIO2, CDVD or SPU2 register emulation |
+| IOP | runs IRX modules on an R3000 interpreter | also runs IRX modules on an R3000 interpreter, but the IOP kernel and Sony's system modules (CD/DVD, memory cards, pads, libsd) are host code speaking their RPC protocols; libsd drives an SPU2 emulated at its registers | game-specific modules behave as written, while the system side needs no BIOS image and no SIO2 or CDVD register emulation |
 | Dependencies | ELFIO, toml11, fmt, libdwarf, rabbitizer (fetched at configure time) | toml++ and Dear ImGui (vendored); SDL2 optional, for the window | offline, reproducible builds |
 | Output size | `ctx->pc = ...` before every instruction | pc stored only at control transfers | smaller, faster code |
 
@@ -465,7 +471,7 @@ recompiler/   analysis, code generation, config, CLI (ps2n_recomp, ps2n)
 runtime/      what recompiled games link against (ps2n_runtime)
   include/ps2/  generated-code API: cpu.h, memory.h, ops_*.h, recomp.h, runtime.h
   src/          dispatcher, interpreter, VU, kernel/ (EE syscalls), hw/ (DMAC, GS, VIF, IPU),
-                iop/ (IOP CPU, kernel, services), stubs/, video/, input/, ui/
+                iop/ (IOP CPU, kernel, services, SPU2), stubs/, audio/, video/, input/, ui/
 tools/ghidra/ function-map exporter for Ghidra
 examples/     the end-to-end example
 tests/        unit tests and end-to-end programs
@@ -495,7 +501,7 @@ ctest --test-dir build --output-on-failure
 |---|---|
 | `core` | Every table row decodes to itself, 10,000+ random instructions round-trip through the disassembler and assembler, known encodings, ELF and IRX parsing. |
 | `recompiler` | Config parsing and errors, function map formats, jump tables, stripped-ELF discovery, bindings, patches, code generation. |
-| `runtime` | Instruction semantics against independently computed results (sign extension, R5900 division, unaligned access, MMI lanes, FPU clamping, VU0 flags), guest printf, the GS (swizzling against the manual's block tables, depth, fields, both circuits, deinterlacing, drawing on threads matching one thread byte for byte, triangle coverage), the IPU's commands, FIFOs and DMA (against a reference IDCT), scratchpad DMA, SIF RPC end to end, IOP resets and services, discs, recognising programs in RAM, `--strict`, controller input and settings. |
+| `runtime` | Instruction semantics against independently computed results (sign extension, R5900 division, unaligned access, MMI lanes, FPU clamping, VU0 flags), guest printf, the GS (swizzling against the manual's block tables, depth, fields, both circuits, deinterlacing, drawing on threads matching one thread byte for byte, triangle coverage), the IPU's commands, FIFOs and DMA (against a reference IDCT), scratchpad DMA, SIF RPC end to end, IOP resets and services, discs, recognising programs in RAM, `--strict`, controller input and settings, the SPU2 (ADPCM against psx-spx's rules, the interpolation table's step response and every phase, envelope and sweep rates, noise, loop flags, the interrupt address, AutoDMA through both cores, reverb in its work area), libsd's register entries and the WAV dump. |
 | `program_*` | Assembly programs recompiled at build time and run twice, recompiled and interpreted, against recorded output or a recorded frame: control-flow edge cases, a stripped ELF that needs the interpreter, a polling loop split in two that must still take a vblank interrupt, the kernel scheduler, `printf` over the DECI2 TTY, config bindings, `LoadExecPS2` across three executables, a loader that jumps into the next program. |
 | `sdk_*` | Programs built with ps2sdk, run the same two ways: an IRX with its own RPC server, libsd, libpad and libpadx, VU0 and VU1 micro programs, libcdvd, libmc. The binaries are checked in under `tests/sdk/bin` ([tests/sdk/README.md](tests/sdk/README.md)). |
 

@@ -56,7 +56,9 @@ runtime/src/                     runtime.cpp (options, start-up), dispatch.cpp, 
   hw/                            hw.cpp (EE registers), dmac, gs (rasterizer, draw threads, display), vif, ipu, mpeg
   iop/                           cpu (R3000A), kernel, libs, hle (host libraries), modules (IRX loading),
                                  iop.cpp (SIF, RPC), services (FILEIO, LOADFILE, ...), cdvd, disc,
-                                 memcard, pad, sound (libsd stand-in), hostfs (device paths)
+                                 memcard, pad, spu2 (the SPU2, its registers), sound (libsd on it),
+                                 hostfs (device paths)
+  audio/                         sound output: the SDL device, --dump-audio
   video/ input/ ui/ settings.cpp SDL window, input manager, ImGui overlay, ps2n.ini
 tests/                           core_tests.cpp, recompiler_tests.cpp, runtime_tests.cpp,
                                  programs/ (assembly programs), sdk/ (programs built with ps2sdk)
@@ -107,6 +109,13 @@ assets/                          branding/ (logo and icons; its README says whic
   system modules are host code speaking their RPC protocols. The game's own
   EE libraries run unmodified against them. docs/runtime.md, "Extending the
   runtime", says where a syscall, register, service or library function goes.
+- The SPU2 mixes in emulated time and never runs ahead of an interrupt the
+  IOP has not answered: it stops after the sample that raised one, and its
+  event lets the IOP run (`iop::runPending`) before it mixes on. libsd arms
+  the next half of a looping block transfer in its interrupt handler, as
+  the real library does, so a sound driver sees each half once, in order.
+  Arming it earlier, or calling drivers' handlers from events, merges
+  halves after a stall.
 
 ## Tests
 
@@ -115,7 +124,10 @@ assets/                          branding/ (logo and icons; its README says whic
   (the EE command buffer), and the IPU/DMA tests use 0x01100000-0x016FFFFF.
   Give a new test its own region. The input manager, the GS settings
   (`gs::setDrawThreads`, `gs::setDeinterlace`) and the host rounding mode
-  are process-wide too: restore what you change.
+  are process-wide too: restore what you change. The tests run on the
+  real-time clock, where an SPU2 register access mixes whatever time has
+  passed; the SPU2 tests stop the clock (`FrozenClock`) and mix with
+  `spu2::runSamples`.
 - End-to-end tests run each program twice, recompiled and `--interpret`,
   against `.expected` output, plus a SHA-256 of a dumped frame for drawing
   tests. New assembly programs go in `tests/programs` (`ps2n_program_test`);
@@ -148,6 +160,9 @@ assets/                          branding/ (logo and icons; its README says whic
   `disasm` on the game's own IRX modules are the best protocol reference.
 - `--gs-threads 1` draws on the guest thread alone, which rules the draw
   threads out when a frame looks wrong.
+- `--dump-audio FILE` writes the sound as a WAV file, the same on every
+  `--virtual-clock` run. In streamed sound, a gap of exact zeros is what the
+  driver sent; when the IOP answers late, the last 512 samples repeat instead.
 - A run with a window writes the user's settings
   (`%APPDATA%\PS2Native\ps2n.ini`) when there are none yet and a controller
   is connected. Give test runs `--settings` with a scratch file.

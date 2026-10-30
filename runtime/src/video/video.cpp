@@ -1,5 +1,6 @@
 #include "video/video.h"
 
+#include "audio/audio.h"
 #include "clock.h"
 #include "hw/gs.h"
 #include "hw/hw.h"
@@ -196,6 +197,20 @@ void hotkey(const input::HotkeyEvent& e) {
     }
     case H::Screenshot: screenshot(); break;
     case H::ShutdownVM: g_windowClosed = true; break;
+    case H::Mute:   // PCSX2's messages
+        if (!audio::setMuted(!audio::muted())) ui::osd("Volume: Muted in Settings");
+        else if (audio::muted()) ui::osd("Volume: Muted");
+        else ui::osd(ps2n::strprintf("Volume: Unmuted to %d%%", audio::volume()));
+        break;
+    case H::IncreaseVolume:
+    case H::DecreaseVolume: {
+        const int delta = e.hotkey == H::IncreaseVolume ? 5 : -5;
+        const int v = std::clamp(audio::volume() + delta, 0, 200);
+        if (!audio::setVolume(v)) ui::osd("Volume: Muted in Settings");
+        else if (v > 0 && v < 200) ui::osd(ps2n::strprintf("Volume: %s to %d%%", delta < 0 ? "Decreased" : "Increased", v));
+        else ui::osd(ps2n::strprintf("Volume: %s %d%% Reached", delta < 0 ? "Minimum" : "Maximum", v));
+        break;
+    }
     default: break;
     }
 }
@@ -262,6 +277,7 @@ void hostLoop(const std::atomic<bool>& guestDone) {
 #else
     if (!g_opt.window) return;
     if (!openWindow()) return;
+    audio::openDevice();   // sound plays where the picture shows
     g_windowOpen = true;
     bool menuWasOpen = false;
     while (!guestDone) {
@@ -311,6 +327,7 @@ void hostLoop(const std::atomic<bool>& guestDone) {
 
 void shutdown() {
 #ifdef PS2N_HAVE_SDL2
+    audio::closeDevice();
     ui::shutdown();
     input::sdl::close();
     if (g_texture) SDL_DestroyTexture(g_texture);

@@ -1,7 +1,7 @@
 sdtest: init 0
 sdtest: master volume 3fff
 sdtest: start address 05000
-sdtest: voices ended ffffff, envelope 0000
+sdtest: voices ended 000000, envelope 0000
 sdtest: an octave up: pitch 2000
 sdtest: voice transfer 1024
 sdtest: status 1, interrupts 1

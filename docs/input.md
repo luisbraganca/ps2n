@@ -165,6 +165,9 @@ controller's motors.
 | `ShutdownVM` | System | none: quits the game |
 | `CycleInterlaceMode` | Graphics | `F5`: Adaptive, Weave, Bob deinterlacing (see [runtime.md](runtime.md#running-a-recompiled-game)) |
 | `Screenshot` | Graphics | `F8`: the picture as a BMP in `snaps/` under the working directory |
+| `Mute` | Audio | none: Toggle Mute |
+| `IncreaseVolume` | Audio | none: the volume up 5%, to 200% at most (see [runtime.md](runtime.md#running-a-recompiled-game) for the sound settings) |
+| `DecreaseVolume` | Audio | none: the volume down 5% |
 
 As in PCSX2, a hotkey acts when it is released, except Hold Turbo, which lasts
 while it is held. The frame limiter and turbo both run the game as fast as

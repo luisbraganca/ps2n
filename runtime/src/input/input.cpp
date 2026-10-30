@@ -55,6 +55,9 @@ constexpr HotkeyInfo kHotkeys[] = {
     {"CycleInterlaceMode", "Cycle Deinterlace Mode", "Graphics"},
     {"Screenshot", "Save Screenshot", "Graphics"},
     {"ShutdownVM", "Quit the Game", "System"},
+    {"Mute", "Toggle Mute", "Audio"},
+    {"IncreaseVolume", "Increase Volume", "Audio"},
+    {"DecreaseVolume", "Decrease Volume", "Audio"},
 };
 static_assert(std::size(kHotkeys) == size_t(Hotkey::Count));
 

@@ -61,7 +61,13 @@ void setEventFlag(int id, uint32_t bits);
 void clearEventFlag(int id, uint32_t mask);   // flags &= mask
 
 // ---- hardware glue ----------------------------------------------------------------------------
-void raiseInterrupt(int line);   // INTC line (0-31) or DMA interrupt (32 + channel)
+void raiseInterrupt(int line);   // INTC line (0-31) or DMA interrupt (0x20 + channel; 0x28 for SPU2 core 1)
+// An interrupt handler that host code provides, as a module would with
+// RegisterIntrHandler: `fn` is a trap address (addTrap), called with `arg`
+// in $a0 while interrupts are enabled. False if the line has a handler.
+bool registerInterrupt(int line, uint32_t fn, uint32_t arg);
+void releaseInterrupt(int line);
+void enableInterrupt(int line, bool on);
 void onVblank(bool start);
 uint32_t intcRead(uint32_t phys);
 void intcWrite(uint32_t phys, uint32_t value);

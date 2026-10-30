@@ -558,7 +558,7 @@ void drawPortPage(int port) {
 
 void drawHotkeysPage() {
     ImGui::SeparatorText("Hotkeys");
-    static constexpr const char* kCategories[] = {"Navigation", "Speed", "System", "Graphics"};
+    static constexpr const char* kCategories[] = {"Navigation", "Speed", "System", "Graphics", "Audio"};
     const float w = std::max(ImGui::GetFontSize() * 18.0f, ImGui::GetContentRegionAvail().x * 0.4f);
     for (const char* category : kCategories) {
         ImGui::Spacing();

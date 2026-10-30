@@ -44,9 +44,10 @@ endfunction()
 # waits, and an RPC server called in wait and no-wait mode.
 ps2n_sdk_test(iop_rpc)
 
-# Sound: an IOP module (sdtest.irx) driving libsd, emulated without audio
-# output: registers, voice transfers and their interrupts, a looping block
-# transfer ticking at the playback rate, batches.
+# Sound: an IOP module (sdtest.irx) driving libsd on the SPU2: registers,
+# voice transfers and their interrupts, a looping block transfer streamed
+# through AutoDMA, batches. Its first ENDX read comes right after sceSdInit,
+# before any emulated time has passed, so no voice has looped yet.
 ps2n_sdk_test(iop_sd)
 
 # Controllers through PADMAN: libpad and libpadx against the HLE pad service,

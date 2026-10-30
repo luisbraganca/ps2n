@@ -1,5 +1,6 @@
 // ps2::run(): command line, ELF loading, subsystem start-up and the main
 // dispatch loop.
+#include "audio/audio.h"
 #include "clock.h"
 #include "hw/dmac.h"
 #include "hw/gs.h"
@@ -72,6 +73,7 @@ constexpr const char* kUsage =
     "  --max-vsyncs N        exit after N vertical blanks\n"
     "  --dump-frames DIR     write displayed frames as PPM files\n"
     "  --dump-every N        only dump every Nth frame\n"
+    "  --dump-audio FILE     write the sound as a 48 kHz stereo WAV file\n"
     "  --no-window           do not open a window (SDL builds)\n"
     "  --deinterlace MODE    adaptive (default), weave or bob, for games that\n"
     "                        show interlaced fields\n"
@@ -118,6 +120,7 @@ bool parseOptions(int argc, char** argv) {
         else if (a == "--max-vsyncs") g_opt.maxVsyncs = std::strtoull(value().c_str(), nullptr, 0);
         else if (a == "--dump-frames") g_opt.dumpFrames = value();
         else if (a == "--dump-every") g_opt.dumpEvery = static_cast<uint32_t>(std::strtoul(value().c_str(), nullptr, 0));
+        else if (a == "--dump-audio") g_opt.dumpAudio = value();
         else if (a == "--no-window") g_opt.window = false;
         else if (a == "--gs-threads") gs::setDrawThreads(static_cast<int>(std::strtol(value().c_str(), nullptr, 0)));
         else if (a == "--deinterlace") {
@@ -411,6 +414,7 @@ int run(int argc, char** argv, const GameInfo& game) {
     if (g_opt.window || !g_opt.settingsFile.empty())
         input::init(settings::locate(executableDir(argc > 0 ? argv[0] : ""), g_opt.settingsFile));
     video::init();
+    audio::init();
     initDispatch(game);
     kernel::init(game.entry, bootArgv());
     hw::startVsync();
@@ -421,6 +425,7 @@ int run(int argc, char** argv, const GameInfo& game) {
 
     writeMissingEntries();
     printIssueSummary();
+    audio::shutdown();
     video::shutdown();
     PS2_INFO("runtime", "exit code %d", g_exitCode);
     return g_exitCode;

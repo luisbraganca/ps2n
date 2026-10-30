@@ -1325,6 +1325,24 @@ void raiseInterrupt(int line) {
     if (line >= 0 && line < 64) g_intrPending |= 1ull << line;
 }
 
+bool registerInterrupt(int line, uint32_t fn, uint32_t arg) {
+    if (line <= 0 || line >= 64 || line == 11) return false;
+    IntrHandler& h = g_intr[static_cast<size_t>(line)];
+    if (h.used) return false;
+    h = {true, fn, arg, 0, 0};
+    return true;
+}
+
+void releaseInterrupt(int line) {
+    if (line >= 0 && line < 64) g_intr[static_cast<size_t>(line)] = IntrHandler{};
+}
+
+void enableInterrupt(int line, bool on) {
+    if (line < 0 || line >= 64) return;
+    if (on) g_intrMask |= 1ull << line;
+    else g_intrMask &= ~(1ull << line);
+}
+
 void onVblank(bool start) { raiseInterrupt(start ? 0 : 11); }
 
 uint32_t intcRead(uint32_t phys) {

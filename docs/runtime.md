@@ -26,6 +26,7 @@ model.
 | `--max-vsyncs N` | Exit after N vertical blanks. |
 | `--dump-frames DIR` | Write each displayed frame as `DIR/frame_NNNNNN.ppm`. |
 | `--dump-every N` | With `--dump-frames`, only every Nth frame. |
+| `--dump-audio FILE` | Write the sound to `FILE`, a 16-bit stereo 48 kHz WAV: what the SPU2 puts out, before the host's volume. With `--virtual-clock` it is the same on every run. |
 | `--no-window` | Do not open a window (builds with SDL2). |
 | `--deinterlace MODE` | How a game that shows interlaced fields becomes whole pictures: `adaptive` (default), `weave` or `bob`. See Video below. |
 | `--gs-threads N` | Threads that draw a large primitive together, each taking bands of rows: `0` (default) is half the host's threads, at most 8; `1` draws everything on the game's thread. The picture is the same either way. |
@@ -73,6 +74,29 @@ moving edges comb), `bob` doubles each field's lines as the PS2 sends them
 (still edges shake by a line). F5 (Cycle Deinterlace Mode) switches while
 playing. It needs consecutive fields, so the window has it and frames dumped
 every N vsyncs show each field doubled.
+
+**Sound.** While the window is open, the sound plays through the host's
+default output device (SDL2), not with `--no-window`; `--dump-audio` writes
+it to a file either way. The settings file holds PCSX2's keys for it, in
+`[SPU2/Output]`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `StandardVolume` | 100 | Volume in percent, 0-200. |
+| `FastForwardVolume` | 100 | The volume while turbo or the unlimited frame rate is on. |
+| `OutputMuted` | false | No sound; the volume hotkeys cannot unmute it. |
+| `Backend` | Cubeb | `Null` turns the sound off. Any other value plays through SDL: Cubeb is not built in. |
+| `BufferMS` | 50 | Sound buffered before it plays, again after it ran dry. |
+| `OutputLatencyMS` | 20 | The device's own buffer, rounded up to a power of two of frames. |
+| `OutputLatencyMinimal` | false | The smallest device buffer (256 frames). |
+
+The SPU2 runs in emulated time, which in real time keeps pace with the
+device, so there is nothing to stretch: what fast forward makes too much is
+dropped, and when the game stalls longer than the buffer (a frame slow to
+draw) there is a gap. The Toggle Mute, Increase Volume and Decrease Volume
+hotkeys (5% steps) are unbound by default, as in PCSX2. Not covered: PCSX2's
+audio settings page, surround expansion (`ExpansionMode`) and time
+stretching (`SyncMode`), which are ignored.
 
 On Windows, SDL2's development package for Visual C++
 (`SDL2-devel-<version>-VC.zip` from SDL's GitHub releases) works as it comes:
@@ -237,7 +261,7 @@ enters the code (function pointers, a resumed thread).
 | GS | privileged registers (`PMODE`, `SMODE2`, `DISPFB1/2`, `DISPLAY1/2`, `CSR` with `SIGNAL`/`FINISH`/`LABEL` events, `IMR`); a software rasterizer for points, lines, line strips, triangles, strips, fans and sprites with flat and Gouraud shading, textures in every pixel format including 4/8-bit CLUT and `TEXA`, the four texture functions, `REPEAT`/`CLAMP`/`REGION_CLAMP` wrapping, fog, alpha test with `AFAIL`, depth test (depth interpolated exactly, so layers drawn at one depth do not fight), alpha blending with `PABE` and `FBA`, scissoring, frame-buffer masks; host-to-local and local-to-local transfers; display read-out of both circuits at their `DISPLAY` positions, circuit 1 blended over circuit 2 or `BGCOLOR` (`SLBG`) by its pixels' alpha or `ALP` (`MMOD`), and interlaced FIELD mode (`FFMD`), where each field's lines are deinterlaced (see Video). Large primitives are drawn by several threads (`--gs-threads`), each taking bands of four rows; one that reads memory it draws into (texture or CLUT), or whose frame and depth buffers overlap, is drawn by one thread, so the picture is always the one a single thread draws. The drawing state is decoded once per primitive, and the swizzles are tables |
 | IPU | the MPEG-2 decoder, every command: `BCLR`, `IDEC`, `BDEC`, `VDEC`, `FDEC`, `SETIQ`, `SETVQ`, `CSC`, `PACK`, `SETTH`. Decoding follows ISO/IEC 13818-2: the Annex B code tables, zigzag and alternate scan, inverse quantisation with MPEG-2 mismatch control or MPEG-1 rounding, an inverse DCT within IEEE 1180's error limits, frame and field DCT, `SCD`/`ECD`. CSC is ITU-R BT.601 with the alpha thresholds of `SETTH` and dithered RGB16. Input and output go through the 8-qword FIFOs at `0x10007010`/`0x10007000`, which DMA channels 4 and 3 fill and empty as the IPU uses them; a command that runs out of data waits, and `IPU_BP` (BP, IFC, FP), `IPU_TOP` and the channels' `MADR`/`QWC` show where it stopped. Each finished command raises the IPU interrupt. |
 
-Not covered yet: SPU2 (sound is silent), GS local-to-host transfers,
+Not covered yet: GS local-to-host transfers,
 bilinear texture filtering and mipmaps, dithering and anti-aliasing,
 scratchpad-to-RAM DMA in chain mode, VIF1 GS-to-memory transfers, the IPU's
 speed (a command takes no emulated time), and VU programs running alongside
@@ -285,9 +309,42 @@ modules are host code:
 | CDVDFSV (`0x80000592`, `0x80000593`, `0x80000595`, `0x80000596`, `0x80000597`, `0x8000059A`, `0x8000059C`) and the `cdvdman` library | resident from start-up, like on the console. See [Discs](#discs). |
 | PADMAN (`0x80000100`/`0x80000101`, and the original PADMAN's `0x8000010F`/`0x8000011F`) | a DualShock 2 in port 1: digital, analog and pressure-sensitive modes, actuator set-up, the per-frame data area libpad reads. The version query answers the IRX version of the module the game loaded (3.06 when it is not a file), whose major libpad checks. See [Controllers](#controllers). |
 | XMCSERV / MCSERV (`0x80000400`) | both protocols. See [Memory cards](#memory-cards). |
-| `libsd` (IOP library) | the SPU2 without sound: registers keep what is written, voice transfers move data to and from a 2 MB sound memory and raise their completion interrupt, looping block transfers (streamed PCM) raise one per half buffer at the 48 kHz playback rate, voices report that they have finished. Sound drivers run; nothing is heard. |
+| `libsd` (IOP library) | Sony's library on the SPU2 (see the IOP's SPU2 below): each call reads and writes the registers the library does, after ps2sdk's open libsd. `sceSdInit` leaves every voice keyed off on a silent loop at `0x5000`, as libsd does. Voice transfers move their data at once and finish a little later with the core's DMA interrupt (`0x24`, `0x28`). Block transfers stream PCM through AutoDMA; the interrupt handler arms the next half of a looping buffer, as the library does, and calls the driver's handler. Line 9 means a core's interrupt address was touched: the library turns that core's interrupt off and calls the driver. The reverb presets are libsd's. Not covered: reading the output back (a block transfer from the SPU2 gives silence, reported) and the S/PDIF modes (kept, no effect). |
 | MTAPMAN (`0x80000901`-`905`) | no multitap connected: ports 0-3 open, `GetConnection` reports none, thread priorities in the valid range (9-123) are accepted, and the version query answers the IRX version of the module the game loaded (3.01 when it is not a file), whose major SDK 2.x's libmtap checks |
 | SDRDRV (`0x80000701`) | null service: it binds, answers every call with zeros, and reports it |
+
+#### Sound
+
+The SPU2 is emulated at its registers (`0x1F900000`), which libsd's host
+code and IOP code both reach ([iop/spu2.cpp](../runtime/src/iop/spu2.cpp)).
+Its voices follow the PS1 SPU's, as psx-spx documents them:
+
+- **Voices**: two cores of 24 voices playing ADPCM from 2 MB of sound memory.
+  The loop flags set `ENDX` and `LSAX` (a written `LSAX` stays until key on)
+  and move `NAX`. A voice keeps reading memory after its envelope ends.
+- **Sound shaping**: pitch with pitch modulation, the 4-point interpolation
+  table, ADSR envelopes, volume sweeps and the noise generator.
+- **Mixing**: each core's dry and reverb mixes (`VMIX*`, `MMIX`), its PCM
+  input (`BVOL`) and the reverb (`EVOL`). Core 0's output reaches core 1
+  (`AVOL`), whose output, after the master volumes, is what is heard.
+- **Reverb**: it runs in its work area (`ESA` to `EEA`) at half rate, left and
+  right in turn, through the 39-tap resampling filter.
+- **PCM input**: AutoDMA fills it a 1 KB block at a time as each half of the
+  input area plays out.
+- **Output areas**: voices 1 and 3, the cores' mixes and core 0's output are
+  written at `0x400`-`0x1FFF` every sample, as drivers that read them back
+  expect.
+- **Interrupt address**: each core's (`IRQA`) is watched on voice reads,
+  transfers, the input, those writes and the reverb. Either core's raises IOP
+  interrupt 9 once until it is acknowledged, by turning it off in `ATTR`.
+
+It mixes in emulated time: when a register is touched, and every 64 samples
+(1.3 ms). Having fallen behind, it stops after each sample that raises an
+interrupt, so the IOP answers before it mixes on. Not covered: the IOP's DMA
+channels 4 and 7 themselves (libsd's transfers are host code, so a driver
+that programs them gets nothing), reading the output back by DMA, S/PDIF
+bypass and compressed output, and `ATTR`'s mute bit (14), which libsd sets
+at start-up and the SPU2 here ignores.
 
 #### Discs
 
@@ -375,6 +432,7 @@ generated code does not need to be regenerated.
 | A hardware register | `readEe32()`/`writeEe32()` in [hw/hw.cpp](../runtime/src/hw/hw.cpp), or the DMAC, VIF, GS and IPU files next to it. |
 | An IOP service | Subclass `iop::RpcServer` ([iop/iop.h](../runtime/src/iop/iop.h)): `call(fno, data, size, recvSize, reply)` receives the send buffer and sends the reply bytes through `reply`, now or later. Register it with `registerServer(sid, ...)`: from `enableModuleServices()` in [iop/services.cpp](../runtime/src/iop/services.cpp) so it appears when the game loads the module, or from `registerBuiltinServers()` in [iop/iop.cpp](../runtime/src/iop/iop.cpp) for services resident in the BIOS. |
 | An IOP library function | `defineLibrary(name, version, {{index, "name", fn}, ...})` ([iop/hle.h](../runtime/src/iop/hle.h)): `fn` reads its arguments with `arg(i)` and returns with `ret()`; `kernel::blockCurrent()` and `wakeThread()` let it wait, `kernel::callHandler()` calls back into module code, and `scheduleEvent()` ([clock.h](../runtime/src/clock.h)) runs host code later in emulated time. The kernel libraries are in [iop/kernel.cpp](../runtime/src/iop/kernel.cpp) and [iop/libs.cpp](../runtime/src/iop/libs.cpp). |
+| An SPU2 register | `readCore()`/`writeCore()` in [iop/spu2.cpp](../runtime/src/iop/spu2.cpp). libsd's calls ([iop/sound.cpp](../runtime/src/iop/sound.cpp)) are register reads and writes through `spu2::read16()`/`write16()`. |
 | A stub | A `PS2_STUB(name, summary)` line in [stub_list.inc](../runtime/include/ps2/stub_list.inc) and `void ps2::stub::name_()` in [stubs/stubs.cpp](../runtime/src/stubs/stubs.cpp). The recompiler reads the same list, so configs can bind the new name once it is rebuilt. |
 | An instruction fix | The `ops_*.h` headers in [runtime/include/ps2](../runtime/include/ps2). Recompiled code and the interpreter both pick it up. |
 | Game-specific behaviour | Not in the runtime: use `[functions] override` and `[output] extra_sources` ([config.md](config.md#functions-skip-or-override)). |
