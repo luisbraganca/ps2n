@@ -60,6 +60,7 @@ bool g_rebootPending = false;
 constexpr uint32_t kBiosModuleVersion = 1000;
 std::map<std::string, uint32_t> g_moduleVersions;   // from the replacement image of the last IOP reset
 uint32_t g_eeCmdBuffer = 0;              // EE address of its receive buffer
+bool g_eeArmed = false;                  // the EE's SIF0 channel is set to take the next packet
 uint32_t g_dmaId = 1;
 uint64_t g_iopTime = 0;                  // EE cycles the IOP has caught up to
 
@@ -72,12 +73,16 @@ uint32_t rd32(const uint8_t* p) {
 }
 void wr32(std::vector<uint8_t>& b, size_t off, uint32_t v) { std::memcpy(b.data() + off, &v, 4); }
 
-// Delivers the next queued packet if the EE's receive buffer is free.
+// Delivers the next queued packet once the EE takes it: its SIF0 channel
+// re-armed and the previous packet consumed. The EE's handler clears the size
+// byte before it has copied the packet out and re-arms the channel after, so
+// what the IOP sends in between (it runs at the handler's safepoints) waits.
 void pumpToEe() {
-    if (g_toEe.empty() || !g_eeCmdBuffer) return;
+    if (g_toEe.empty() || !g_eeCmdBuffer || !g_eeArmed) return;
     if (read8(g_eeCmdBuffer) != 0) return;   // psize != 0: the EE has not consumed the previous packet
     const std::vector<uint8_t> pkt = std::move(g_toEe.front());
     g_toEe.pop_front();
+    g_eeArmed = false;
     writeBytes(g_eeCmdBuffer, pkt.data(), static_cast<uint32_t>(pkt.size()));
     hw::dmacRaise(hw::DMA_SIF0);
 }
@@ -256,6 +261,7 @@ void handleCommand(uint32_t pktAddr) {
     switch (cid) {
     case SIF_CMD_CHANGE_SADDR:
         g_eeCmdBuffer = rd32(pkt + 16);
+        g_eeArmed = true;
         PS2_DEBUG("iop", "EE command buffer is now 0x%08x", g_eeCmdBuffer);
         pumpToEe();
         return;
@@ -263,6 +269,7 @@ void handleCommand(uint32_t pktAddr) {
     case SIF_CMD_INIT_CMD:
         if (opt == 0) {
             g_eeCmdBuffer = rd32(pkt + 16);
+            g_eeArmed = true;   // set up with its receive buffer
             PS2_DEBUG("iop", "SIF command init, EE buffer 0x%08x", g_eeCmdBuffer);
         } else {   // RPC init: tell the EE we are ready (sreg SIF_SREG_RPCINIT = 1)
             auto p = makePacket(SIF_CMD_SET_SREG, 24);
@@ -282,6 +289,7 @@ void handleCommand(uint32_t pktAddr) {
             PS2_INFO("iop", "replacement image: FILEIO release %u, LOADFILE release %u", moduleVersion("fileio"), moduleVersion("loadfile"));
         g_toEe.clear();
         g_eeCmdBuffer = 0;
+        g_eeArmed = false;
         g_rebootPending = true;   // completes when the EE next polls SMFLAG
         return;
     }
@@ -354,6 +362,7 @@ void reboot() {
     g_sysregs.clear();
     g_rebootPending = false;
     g_eeCmdBuffer = 0;
+    g_eeArmed = false;
     g_toEe.clear();
     g_dmaId = 1;
     g_iopTime = nowCycles();
@@ -444,7 +453,10 @@ uint32_t sifGetReg(uint32_t reg) {
     }
 }
 
-void sifSetDChain() { pumpToEe(); }
+void sifSetDChain() {
+    g_eeArmed = true;
+    pumpToEe();
+}
 
 uint32_t sbusRead(uint32_t addr) {
     switch (addr) {

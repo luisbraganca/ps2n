@@ -79,21 +79,22 @@ void timerSchedule(int i) {
     t.event = scheduleEvent(nowCycles() + ticks * timerTickCycles(t), timerEvent, static_cast<uint64_t>(i));
 }
 
+// Due when the counter reaches its compare value or wraps. The event runs at
+// the next safepoint, when the counter has usually moved on, so it looks for
+// a crossing since the last rebase, not for equality: an exact match missed
+// most interrupts, and with them the work games run from a timer.
 void timerEvent(uint64_t idx) {
     const int i = static_cast<int>(idx);
     Timer& t = g_timers[i];
     t.event = 0;
-    const uint32_t cur = timerCount(i);
+    const uint64_t reached = t.count + (nowCycles() - t.baseCycle) / timerTickCycles(t);   // not wrapped
+    const uint64_t compAt = t.comp > t.count ? t.comp : t.comp + 0x10000u;
     bool irq = false;
-    if ((t.mode & 0x100) && cur == t.comp) {
-        t.mode |= 0x400;   // EQUF
+    if ((t.mode & 0x100) && reached >= compAt) {
+        t.mode |= 0x400;   // EQUF; with ZRET the counter restarted there, which timerCount models
         irq = true;
-        if (t.mode & 0x40) {   // ZRET: restart from zero
-            t.count = 0;
-            t.baseCycle = nowCycles();
-        }
     }
-    if ((t.mode & 0x200) && cur == 0) {
+    if ((t.mode & 0x200) && !(t.mode & 0x40) && reached >= 0x10000u) {
         t.mode |= 0x800;   // OVFF
         irq = true;
     }

@@ -5,6 +5,7 @@
 #include "clock.h"
 #include "hw/dmac.h"
 #include "hw/gs.h"
+#include "hw/hw.h"
 #include "hw/ipu.h"
 #include "hw/mpeg.h"
 #include "input/input.h"
@@ -1254,6 +1255,47 @@ TEST_CASE(iop_sif_rpc_fileio_and_loadfile) {
     fs::remove_all(dir);
 }
 
+// The EE's SIF0 handler clears a packet's size byte before it has copied the
+// packet out, and re-arms the channel after. The IOP runs at the handler's
+// safepoints; a packet it sends then must wait for the re-arm, or it
+// overwrites the one being read (Agent Under Fire lost a "sound bank upload
+// done" message that way and waited for it forever).
+TEST_CASE(iop_sif_holds_packets_until_the_ee_rearms) {
+    reset();
+    dmac::init();
+    dmac::setMask(5, true);
+    iop::init();
+    EeSif ee;
+    ee.iopCmd = iop::sifGetReg(2);
+    ee.send(0x80000002u, {EeSif::kPktBuf});   // INIT_CMD: our receive buffer
+    constexpr uint32_t kIopPkt = 0x001F0000;
+    auto iopSends = [&](uint32_t tag) {
+        const uint32_t words[5] = {0, 0, 0, tag, tag + 1};
+        iop::mem::writeBlock(kIopPkt, words, sizeof words);
+        iop::sendCommandToEe(1, kIopPkt, 20, 0, 0, 0);
+    };
+
+    iopSends(0xA000);
+    CHECK_EQ(read32(EeSif::kPktBuf) & 0xFF, 20u);
+    CHECK_EQ(read32(EeSif::kPktBuf + 16), 0xA001u);
+    dmac::ack(5);
+    write32(EeSif::kPktBuf, 0);                 // the handler takes the size, then copies
+    iopSends(0xB000);                           // the IOP runs in between
+    CHECK_EQ(read32(EeSif::kPktBuf) & 0xFF, 0u);
+    CHECK_EQ(read32(EeSif::kPktBuf + 12), 0xA000u);
+    CHECK_EQ(read32(EeSif::kPktBuf + 16), 0xA001u);
+    CHECK(!(dmac::pending() & (1u << 5)));
+    iop::sifSetDChain();                        // copied: the channel takes the next packet
+    CHECK(dmac::pending() & (1u << 5));
+    CHECK_EQ(read32(EeSif::kPktBuf + 12), 0xB000u);
+    CHECK_EQ(read32(EeSif::kPktBuf + 16), 0xB001u);
+    ee.receive();
+    CHECK(!(dmac::pending() & (1u << 5)));
+
+    for (uint32_t i = 0; i < 8; ++i) write32(EeSif::kPktBuf + 4 * i, 0);
+    iop::mem::fill(kIopPkt, 0, 20);
+}
+
 TEST_CASE(iop_reset_with_a_replacement_image) {
     reset();
     namespace fs = std::filesystem;
@@ -2325,6 +2367,73 @@ TEST_CASE(audio_dump_writes_the_output_as_wav) {
     CHECK_EQ(u16(32), 4);
     CHECK_EQ(u16(34), 16);
     CHECK_EQ(u32(40), 480u * 4);
+}
+
+// ---- EE timers ----------------------------------------------------------------------------------
+// A timer's event runs at the next safepoint, some ticks after the one it was
+// due on; the interrupt must come all the same. Agent Under Fire runs its
+// sound streaming from a 100 Hz timer and got 15 of its 3,000 ticks when the
+// counter had to equal the compare value as the event ran.
+TEST_CASE(ee_timer_interrupts_come_when_their_event_runs_late) {
+    FrozenClock frozen;
+    const bool wasEnabled = (read32(0x1000F010) >> hw::INTC_TIM1) & 1;
+    hw::setIntcMask(hw::INTC_TIM1, false);   // only I_STAT is looked at: no handler runs
+    constexpr uint32_t kCount = 0x10000800, kMode = 0x10000810, kComp = 0x10000820;
+    constexpr uint64_t kTick = 512;   // BUSCLK/256, in EE cycles
+    auto pass = [](uint64_t ticks) {
+        clockAdvance(ticks * kTick);
+        runDueEvents();
+    };
+    auto raised = [] {
+        const bool r = (read32(0x1000F000) >> hw::INTC_TIM1) & 1;
+        write32(0x1000F000, 1u << hw::INTC_TIM1);
+        return r;
+    };
+    raised();
+
+    write32(kCount, 0);
+    write32(kComp, 100);
+    write32(kMode, 0x182);   // BUSCLK/256, counting, compare interrupt
+    pass(99);
+    CHECK(!raised());
+    pass(4);                 // the counter reached 100 three ticks ago
+    CHECK(raised());
+    CHECK(read32(kMode) & 0x400);   // EQUF
+    CHECK_EQ(read32(kCount), 103u);  // without ZRET it counts on
+
+    // Re-armed as the game's handler does: the counter restarts, the flag is cleared.
+    write32(kCount, 0);
+    write32(kMode, read32(kMode) | 0x400);
+    CHECK(!(read32(kMode) & 0x400));
+    pass(130);
+    CHECK(raised());
+    pass(65536);             // the next match is a whole wrap away
+    CHECK(raised());
+
+    write32(kMode, 0x400);   // stopped, flag cleared
+    write32(kCount, 0xFFF0);
+    write32(kMode, 0x282);   // overflow interrupt only
+    pass(20);
+    CHECK(raised());
+    CHECK(read32(kMode) & 0x800);   // OVFF
+    CHECK_EQ(read32(kCount), 4u);
+
+    write32(kMode, 0xC00);
+    write32(kCount, 0);
+    write32(kComp, 50);
+    write32(kMode, 0x1C2);   // compare interrupt and ZRET: the counter restarts after 50
+    pass(60);
+    CHECK(raised());
+    CHECK_EQ(read32(kCount), 9u);
+    pass(45);
+    CHECK(raised());
+    CHECK_EQ(read32(kCount), 3u);
+
+    write32(kMode, 0xC00);
+    write32(kCount, 0);
+    write32(kComp, 0);
+    raised();
+    hw::setIntcMask(hw::INTC_TIM1, wasEnabled);
 }
 
 int main(int argc, char** argv) { return ::testing::runAll(argc, argv); }

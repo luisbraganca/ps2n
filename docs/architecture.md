@@ -193,6 +193,11 @@ real kernel does. If a handler wakes a higher-priority thread, the switch
 happens right after the handler returns, at the same safepoint; the loop
 header is a resume point, so the preempted thread later continues there.
 
+An event runs at the first safepoint after its time, usually some cycles
+late, so it acts on what happened since it was scheduled rather than on the
+state it finds: a timer's compare interrupt comes because the counter passed
+its compare value, not because the two are equal when the event runs.
+
 Time follows the host clock by default (games run at their real speed);
 `--virtual-clock` advances time by a fixed amount per safepoint and syscall
 instead, making runs reproducible, which is what the tests use.
@@ -265,6 +270,10 @@ module code (an interrupt handler, an alarm, a transfer callback) runs it as a
 nested guest call. The IOP is driven from the EE's timeline: it runs when the
 EE syncs with it (SIF transfers, syscalls, idle time), and host events
 (alarms, timers, drive and sound completions) are scheduled in emulated time.
+That includes the EE's safepoints inside an interrupt handler, so a SIF
+command packet for the EE waits until the EE has re-armed its receive channel
+(`sceSifSetDChain`), as on the console: the EE's handler frees the buffer
+before it has finished copying the packet out.
 
 The SPU2 runs on that timeline too: 48,000 samples per emulated second,
 mixed when a driver touches its registers and by an event every 64 samples.

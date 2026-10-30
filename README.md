@@ -50,8 +50,7 @@ software renderer that keeps full speed in the first game's menus only by
 drawing on several threads (measured on one 14-core desktop CPU; nothing
 heavier has been tried), the vector units never run alongside the EE, and the
 IOP services cover what the first game needed. The sound comes from an SPU2
-emulated at its registers, but in the first game it drops out every few
-seconds.
+emulated at its registers.
 
 ### Games
 
@@ -60,7 +59,7 @@ Playable, Perfect.
 
 | Game | Stage | Notes |
 |---|---|---|
-| 007: Agent Under Fire (Europe, SLES-50539) | Menus | All three executables run recompiled. The language selection, the intro movies, the title screen and the main menu work, at full speed, and so does the controller. They have sound, but it drops out for a second or two every few seconds: the game's sound driver runs out of data to mix. It did so before the SPU2 was emulated, when nothing was heard, and why is not known yet. Starting a mission is untested, and the driving missions' executable is not recompiled yet. |
+| 007: Agent Under Fire (Europe, SLES-50539) | Menus | All three executables run recompiled. The language selection, the intro movies, the title screen and the main menu work, at full speed and with sound, and so does the controller. In real time the game can stay on its copyright screen instead: there it redraws a 3D scene on every vsync, which takes the software GS longer than a frame, so the game's own thread never runs. Whether a run gets past depends on timing; the build from before the sound work does it too. Starting a mission is untested, and the driving missions' executable is not recompiled yet. |
 
 ### By area
 
@@ -242,14 +241,16 @@ Roughly in order:
 
 1. **Agent Under Fire in game**: start a mission, recompile the driving
    missions' executable, and fix what the game reaches next.
-2. **Sound**: find why Agent Under Fire's sound driver runs out of data (its
-   drop-outs predate the SPU2), then PCSX2's audio settings page and the
-   IOP's DMA channels 4 and 7, for drivers that program the SPU2 themselves.
+2. **Sound**: PCSX2's audio settings page, and the IOP's DMA channels 4 and
+   7 for drivers that program the SPU2 themselves.
 3. **Graphics speed**: the rasterizer now decodes the drawing state once per
    primitive and draws large primitives on several threads, enough for the
-   first game's menus. Per pixel it still divides and interpolates in plain
-   scalar code. A faster software renderer next (stepped interpolation, SIMD),
-   then a GPU renderer, which higher resolutions also need.
+   first game's menus. It is not enough for the 3D scene the game redraws
+   behind its copyright screen: about 2,900 VU1 programs and 17 ms of
+   drawing a frame, so real-time runs can stall there. Per pixel it still
+   divides and interpolates in plain scalar code. A faster software renderer
+   next (stepped interpolation, SIMD), then a GPU renderer, which higher
+   resolutions also need.
 4. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
    `ExecPS2`, dual-layer discs, code overlays, and a second game to bring up.
 5. **Vector units**: run micro programs alongside the EE, with their timing,

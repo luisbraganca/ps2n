@@ -84,6 +84,11 @@ assets/                          branding/ (logo and icons; its README says whic
   function is a back-edge too. Entry points found later split loops into
   tail calls, and a loop that polls memory for an interrupt handler's write
   hangs if its back-edge is not a safepoint (`tests/programs/split_loop`).
+- An event runs at the first safepoint after it is due, usually late. It
+  acts on what happened since it was scheduled (a timer counter passing its
+  compare value), never on equality with the state it finds. The IOP runs at
+  safepoints too, also inside an EE interrupt handler, so a SIF packet for
+  the EE waits until the EE re-arms SIF0 (`sceSifSetDChain`).
 - Instruction semantics live only in `ops_*.h`, never in emitted text, so
   recompiled and interpreted code cannot disagree. Keep `-ffp-contract=off`:
   the EE and the VUs round between the multiply and the add.
