@@ -59,7 +59,7 @@ Playable, Perfect.
 
 | Game | Stage | Notes |
 |---|---|---|
-| 007: Agent Under Fire (Europe, SLES-50539) | Menus | All three executables run recompiled. The language selection, the intro movies, the copyright and title screens and the main menu work, at full speed and with sound, and so does the controller. Starting a mission is untested, and the driving missions' executable is not recompiled yet. |
+| 007: Agent Under Fire (Europe, SLES-50539) | Menus | All three executables run recompiled. The language selection, the intro movies, the copyright and title screens and the main menu work, at full speed and with sound, and so does the controller. SELECT MISSION works too, but the game finishes only 37 to 50 pictures a second there, as drawing is too slow. Starting a mission is untested, and the driving missions' executable is not recompiled yet. |
 
 ### By area
 
@@ -255,9 +255,11 @@ Roughly in order:
    drawing state once per primitive. That keeps the first game at full
    speed, with little to spare: the 3D scene behind its copyright screen
    costs about 17 ms of drawing a frame, out of 20, while the EE interprets
-   about 2,900 VU1 programs. Per pixel the rasterizer still divides and
-   interpolates in plain scalar code. A faster software renderer next
-   (stepped interpolation, SIMD), then a GPU renderer, which higher
+   about 2,900 VU1 programs. On SELECT MISSION it is not enough: the game
+   waits for each frame's drawing (10 to 12 ms) and finishes 37 to 50
+   pictures a second, so some show twice. Per pixel the rasterizer still
+   divides and interpolates in plain scalar code. A faster software renderer
+   next (stepped interpolation, SIMD), then a GPU renderer, which higher
    resolutions also need.
 4. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
    `ExecPS2`, dual-layer discs, code overlays, and a second game to bring up.

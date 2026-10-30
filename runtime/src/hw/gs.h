@@ -62,7 +62,8 @@ bool currentFrame(Frame& out);
 
 enum class Deinterlace : uint8_t {
     Adaptive,   // what stayed still since the last field of this parity: the previous field's lines
-                // (the whole picture, steady); what moved: interpolated from this field
+                // (the whole picture, steady); what moved: interpolated from this field. A field
+                // goes on the lines the game drew it for, and a picture shown twice stays as it was.
     Weave,      // the previous field's lines everywhere: steady, but moving edges comb
     Bob,        // this field's lines doubled, as the PS2 sends it: still edges shake by a line
     Count

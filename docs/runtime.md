@@ -69,11 +69,16 @@ lines, redrawn every vsync a line lower on odd fields) are deinterlaced as
 PCSX2 offers it. `adaptive`, the default, takes the lines a field lacks from
 the previous field where the picture stood still since the last field of the
 same parity (a still menu is the whole, steady picture) and interpolates
-them where it moved. `weave` always takes the previous field's lines (steady;
-moving edges comb), `bob` doubles each field's lines as the PS2 sends them
-(still edges shake by a line). F5 (Cycle Deinterlace Mode) switches while
-playing. It needs consecutive fields, so the window has it and frames dumped
-every N vsyncs show each field doubled.
+them where it moved. It also puts each field on the lines the game drew it
+for. Such a game draws the odd field with a half-line Y offset, and when it
+is late with a picture, the picture reaches the screen a vsync after the one
+it was drawn for, where the FIELD bit would put it a line off. A picture
+shown twice stays as it was. A game that draws every field alike gets the
+FIELD bit. `weave` always takes the previous field's lines (steady; moving
+edges comb), `bob` doubles each field's lines as the PS2 sends them (still
+edges shake by a line). Both go by the FIELD bit. F5 (Cycle Deinterlace
+Mode) switches while playing. It needs consecutive fields, so the window has
+it and frames dumped every N vsyncs show each field doubled.
 
 **Sound.** While the window is open, the sound plays through the host's
 default output device (SDL2), not with `--no-window`; `--dump-audio` writes

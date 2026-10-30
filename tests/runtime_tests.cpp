@@ -611,7 +611,7 @@ TEST_CASE(gs_deinterlaces_fields) {
     l = field(odd);
     CHECK_EQ(l[2], rgb(odd[0]));
     gs::setDeinterlace(gs::Deinterlace::Adaptive);
-    // A frame read twice in one field: no field before it to weave with.
+    // A frame read twice in one field: the same picture again.
     gs::Frame f;
     CHECK(gs::currentFrame(f));
     CHECK_EQ(f.pixels[static_cast<size_t>(2 * f.width + 5)] & 0xFFFFFFu, rgb(odd[0]));
@@ -620,6 +620,90 @@ TEST_CASE(gs_deinterlaces_fields) {
     gs::onVblankStart();
     l = field(even);
     CHECK_EQ(l[1], rgb(even[0]));
+}
+
+TEST_CASE(gs_deinterlacing_keeps_late_fields_in_place) {
+    // Agent Under Fire draws each field for the field it is meant for, the
+    // odd one half a line up (OFY + 8), and flips at the vsync. When it is
+    // late, a picture shows twice, or reaches the screen in the field after
+    // the one it was drawn for: by the FIELD bit it would jump a line.
+    auto setUp = [] {   // FIELD mode, as in gs_deinterlaces_fields; the FIELD bit starts even
+        gs::init();
+        gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 63ull << 48}, {0x1A, 1}, {0x47, 0}});
+        gs::privWrite(0x12000020, 3);                                    // SMODE2: INT, FFMD
+        gs::privWrite(0x12000000, 0x6);                                  // PMODE: circuit 2
+        gs::privWrite(0x12000090, 1 << 9);                               // DISPFB2: page 0, 64 wide
+        gs::privWrite(0x120000A0, 63ull << 32 | 7ull << 44);             // DISPLAY2: 64 clocks, 8 lines
+    };
+    const uint32_t even[4] = {0x80000010, 0x80000020, 0x80000030, 0x80000040};
+    const uint32_t odd[4] = {0x80001000, 0x80002000, 0x80003000, 0x80004000};
+    // A field's four lines, drawn for the odd field (half a line up) or the even one.
+    auto draw = [](const uint32_t (&rows)[4], bool forOdd) {
+        const uint64_t half = forOdd ? 8 : 0;
+        gsWrite({{0x18, half << 32}});                                    // XYOFFSET_1
+        for (uint64_t y = 0; y < 4; ++y)
+            gsWrite({{0x00, 6}, {0x01, rows[y]}, {0x05, (y * 16 + half) << 16}, {0x05, 64 * 16 | ((y + 1) * 16 + half) << 16}});
+    };
+    // The next vsync's picture, `rows` drawn for it (or nothing drawn: the
+    // game is late, and the buffer still holds the last picture).
+    auto field = [&](const uint32_t (*rows)[4], bool forOdd) {
+        gs::onVblankStart();
+        if (rows) draw(*rows, forOdd);
+        gs::Frame f;
+        CHECK(gs::currentFrame(f));
+        CHECK_EQ(f.height, 8);
+        std::array<uint32_t, 8> lines{};
+        for (int y = 0; y < 8 && f.height == 8; ++y) lines[size_t(y)] = f.pixels[static_cast<size_t>(y * f.width + 5)] & 0xFFFFFFu;
+        return lines;
+    };
+    auto avg = [](uint32_t a, uint32_t b) {
+        uint32_t px = 0;
+        for (int s = 0; s < 24; s += 8) px |= ((((a >> s) & 0xFF) + ((b >> s) & 0xFF) + 1) / 2) << s;
+        return px;
+    };
+    auto rgb = [](uint32_t c) { return c & 0xFFFFFFu; };
+    const std::array<uint32_t, 8> whole = {rgb(even[0]), rgb(odd[0]), rgb(even[1]), rgb(odd[1]),
+                                           rgb(even[2]), rgb(odd[2]), rgb(even[3]), rgb(odd[3])};
+    const uint32_t moved[4] = {odd[0], 0x80FF0000, odd[2], odd[3]};
+
+    // A game that draws both fields alike: each goes where the FIELD bit puts
+    // it. A picture shown twice stays as it was, where it moved too.
+    setUp();
+    field(&odd, false);
+    field(&even, false);
+    CHECK(field(&odd, false) == whole);
+    const auto before = field(&moved, false);                            // FIELD even
+    CHECK_EQ(before[2], rgb(moved[1]));
+    CHECK(field(nullptr, false) == before);
+
+    // Drawn for each field, on time (the FIELD bit odd, even, odd, even):
+    // woven into the whole picture.
+    setUp();
+    field(&odd, true);
+    field(&even, false);
+    CHECK(field(&odd, true) == whole);
+    CHECK(field(&even, false) == whole);
+    // Late: the odd field shows the even picture again. It stays as it was,
+    // not moved down a line.
+    CHECK(field(nullptr, false) == whole);
+    // The picture drawn for that odd field arrives in the even one, a line of
+    // it changed: on the odd lines all the same, woven where it is still.
+    auto l = field(&moved, true);
+    CHECK(l == (std::array<uint32_t, 8>{rgb(even[0]), rgb(odd[0]), avg(odd[0], moved[1]), rgb(moved[1]), avg(moved[1], odd[2]),
+                                        rgb(odd[2]), rgb(even[3]), rgb(odd[3])}));
+    // The next one is drawn for the odd field too: on the odd lines again,
+    // and where it matches the last field, the last picture's lines stay.
+    const uint32_t moved2[4] = {odd[0], 0x80FF0000, odd[2], 0x8000FF00};
+    l = field(&moved2, true);
+    CHECK(l == (std::array<uint32_t, 8>{rgb(even[0]), rgb(odd[0]), avg(odd[0], moved[1]), rgb(moved[1]), avg(moved[1], odd[2]),
+                                        rgb(odd[2]), avg(odd[2], moved2[3]), rgb(moved2[3])}));
+    // Bob puts each field where the FIELD bit says, as the PS2 sends it: this
+    // even field's picture, drawn for the odd one, on the even lines.
+    gs::setDeinterlace(gs::Deinterlace::Bob);
+    l = field(&moved, true);
+    CHECK_EQ(l[2], rgb(moved[1]));
+    CHECK_EQ(l[3], rgb(moved[1]));
+    gs::setDeinterlace(gs::Deinterlace::Adaptive);
 }
 
 namespace {

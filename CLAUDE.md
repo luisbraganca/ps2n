@@ -110,6 +110,12 @@ assets/                          branding/ (logo and icons; its README says whic
   thread never touches guest state: `FINISH` and `SIGNAL` reach the guest
   through `gs::pollEvents` at a safepoint. `--virtual-clock`, `--strict` and
   `--gs-threads 1` keep the drawing on the guest thread.
+- A vsync's picture is read at the start of the vblank, before the game's
+  vsync handler runs, so a game that flips there (Agent Under Fire does)
+  shows each picture a vsync later than the console. In FIELD mode, adaptive
+  deinterlacing therefore puts a field on the lines the game drew it for (a
+  half-line Y offset: the odd field), not where `CSR.FIELD` says, once the
+  game has drawn for both. Without that, a late picture jumps a line.
 - Generated code embeds no game data; the runtime loads the ELF at start-up.
 - Report every gap. `PS2_UNIMPL(category, key, ...)` is for missing or wrong
   emulation (counted, printed in the exit summary, stops `--strict`), and

@@ -191,20 +191,32 @@ std::atomic<uint64_t> g_siglblid{0};
 bool g_path3Masked = false;
 
 // Deinterlacing (FIELD mode): the mode, the vsyncs so far (which tell
-// consecutive fields apart) and the two fields shown before this one, newest first.
+// consecutive fields apart), the newest field shown on even and on odd lines,
+// and the whole picture the last vsync showed.
 std::atomic<Deinterlace> g_deinterlace{Deinterlace::Adaptive};
 uint64_t g_fieldCount = 0;
 struct ShownField {
     std::vector<uint32_t> pixels;
-    int odd = 0;
-    uint64_t when = 0;
+    uint64_t when = 0;   // the vsync that last showed it
     bool valid = false;
 };
 struct FieldHistory {
     int width = 0, lines = 0;
-    std::array<ShownField, 2> fields;
+    std::array<ShownField, 2> fields;   // even lines, odd lines
+    int newest = 0;
+    std::vector<uint32_t> picture;
 };
 FieldHistory g_history;
+// Which field the game drew each frame buffer for (by its first page): a game
+// that renders every field draws the odd one with a half-line Y offset, its
+// samples a display line lower. -1: not drawn yet. And the vsync (+1) that
+// last showed a field drawn for each.
+std::array<int8_t, 512> g_drawnFor = [] {
+    std::array<int8_t, 512> a;
+    a.fill(-1);
+    return a;
+}();
+std::array<uint64_t, 2> g_drawnShown;
 
 enum Reg : uint32_t {
     PRIM = 0x00, RGBAQ = 0x01, ST = 0x02, UV = 0x03, XYZF2 = 0x04, XYZ2 = 0x05, TEX0_1 = 0x06, TEX0_2 = 0x07,
@@ -920,6 +932,7 @@ void sprite(const Draw& d, const Vertex& a, const Vertex& b) {
 void kick(bool draw) {
     const Draw& d = currentDraw();
     const Env& e = d.e;
+    if (draw) g_drawnFor[(e.fbp >> 5) & 511] = static_cast<int8_t>((e.ofy >> 3) & 1);
     const uint64_t xyz = g_regs[XYZ2];
     Vertex v;
     v.x = static_cast<float>(static_cast<int>(field(xyz, 0, 16)) - e.ofx) / 16.0f;
@@ -1338,6 +1351,8 @@ void init() {
     g_imr = 0x7F00;
     g_events = 0;
     g_history = FieldHistory{};
+    g_drawnFor.fill(-1);
+    g_drawnShown = {};
     g_drawDirty = true;
     g_queueCount = 0;
     resetPaths();
@@ -1526,12 +1541,29 @@ uint32_t average(uint32_t a, uint32_t b) {
 // display lines of parity `odd`, shown at vsync `when`) and the fields before it.
 void deinterlaceField(Frame& out, std::vector<uint32_t>&& cur, int w, int h, int lines, int odd, uint64_t when) {
     FieldHistory& hist = g_history;
-    if (hist.width != w || hist.lines != lines) hist = FieldHistory{w, lines, {}};
-    const ShownField& prev = hist.fields[0];
-    const ShownField& prev2 = hist.fields[1];
-    const bool havePrev = prev.valid && prev.odd != odd && prev.when + 1 == when;
-    const bool havePrev2 = havePrev && prev2.valid && prev2.odd == odd && prev2.when + 2 == when;
+    if (hist.width != w || hist.lines != lines) hist = FieldHistory{w, lines, {}, 0, {}};
     const Deinterlace mode = g_deinterlace;
+    const bool adaptive = mode == Deinterlace::Adaptive;
+    // The field the last vsync showed, again: a game late with its next
+    // picture shows the same one twice. Adaptive shows the same picture, not
+    // that field moved to the other lines.
+    ShownField& last = hist.fields[static_cast<size_t>(hist.newest)];
+    const bool lastShown = last.valid && when <= last.when + 1 && hist.picture.size() == out.pixels.size();
+    if (adaptive && lastShown && last.pixels == cur) {
+        last.when = when;
+        std::copy(hist.picture.begin(), hist.picture.end(), out.pixels.begin());
+        return;
+    }
+    // The newest field on the other lines, if the last vsync showed it, and
+    // the newest on these lines before that one.
+    const ShownField& prev = hist.fields[static_cast<size_t>(odd ^ 1)];
+    const ShownField& prev2 = hist.fields[static_cast<size_t>(odd)];
+    const bool havePrev = prev.valid && prev.when + 1 == when;
+    const bool havePrev2 = havePrev && prev2.valid && prev2.when < prev.when;
+    // A new field on the lines the last vsync showed one on (a late picture,
+    // drawn for the field before): where it matches that field, the last
+    // picture's other lines stay.
+    const bool again = adaptive && !havePrev && lastShown && hist.newest == odd;
     const auto row = [&](const std::vector<uint32_t>& f, int k) {
         return f.data() + static_cast<size_t>(std::clamp(k, 0, lines - 1)) * static_cast<size_t>(w);
     };
@@ -1546,6 +1578,13 @@ void deinterlaceField(Frame& out, std::vector<uint32_t>&& cur, int w, int h, int
         const int below = y + 1 < h ? (y + 1 - odd) / 2 : above;
         const uint32_t* a = row(cur, above);
         const uint32_t* b = row(cur, below);
+        if (again) {
+            const uint32_t* la = row(last.pixels, above);
+            const uint32_t* lb = row(last.pixels, below);
+            const uint32_t* p = hist.picture.data() + static_cast<size_t>(y) * static_cast<size_t>(w);
+            for (int x = 0; x < w; ++x) o[x] = still(a[x], la[x]) && still(b[x], lb[x]) ? p[x] : average(a[x], b[x]);
+            continue;
+        }
         if (mode == Deinterlace::Bob || !havePrev) {
             std::copy_n(a, w, o);
             continue;
@@ -1561,8 +1600,30 @@ void deinterlaceField(Frame& out, std::vector<uint32_t>&& cur, int w, int h, int
         for (int x = 0; x < w; ++x)
             o[x] = pa && still(a[x], pa[x]) && still(b[x], pb[x]) ? p[x] : average(a[x], b[x]);
     }
-    hist.fields[1] = std::move(hist.fields[0]);
-    hist.fields[0] = ShownField{std::move(cur), odd, when, true};
+    hist.fields[static_cast<size_t>(odd)] = ShownField{std::move(cur), when, true};
+    hist.newest = odd;
+    hist.picture = out.pixels;
+}
+
+// The lines a field goes on: the odd ones, a line lower, for the odd field
+// (CSR.FIELD). Adaptive goes by the field the game drew the picture for
+// instead, once it has seen the game draw for both within a second: a game
+// late with a picture shows it a vsync later, in the other field, where by
+// FIELD it would jump a line.
+int fieldLines(const Display& disp, const Circuit* c1, const Circuit* c2) {
+    const int field = static_cast<int>((disp.csr >> 13) & 1);
+    if (g_deinterlace != Deinterlace::Adaptive) return field;
+    int drawn = -1;
+    for (const Circuit* c : {c1, c2}) {
+        if (!c) continue;
+        const int d = g_drawnFor[c->fbp & 511];
+        if (d < 0 || (drawn >= 0 && d != drawn)) return field;
+        drawn = d;
+    }
+    if (drawn < 0) return field;
+    g_drawnShown[static_cast<size_t>(drawn)] = disp.fieldCount + 1;
+    const uint64_t other = g_drawnShown[static_cast<size_t>(drawn ^ 1)];
+    return other != 0 && disp.fieldCount + 1 - other <= 50 ? drawn : field;
 }
 
 bool circuitPixel(const Circuit& c, int clock, int line, bool perField, int odd, uint32_t& px) {
@@ -1580,7 +1641,7 @@ bool buildFrame(const Display& disp, Frame& out) {
     const bool en1 = (pmode & 1) && c1.valid, en2 = (pmode & 2) && c2.valid;
     if (!en1 && !en2) return false;
     const bool perField = (smode2 & 1) && (smode2 & 2);
-    const int odd = perField ? static_cast<int>((disp.csr >> 13) & 1) : 0;
+    const int odd = perField ? fieldLines(disp, en1 ? &c1 : nullptr, en2 ? &c2 : nullptr) : 0;
     // The screen covers both pictures when both circuits show; a pixel is the
     // narrower circuit's.
     int x0 = 1 << 20, y0 = 1 << 20, x1 = 0, y1 = 0, clocks = 16;
