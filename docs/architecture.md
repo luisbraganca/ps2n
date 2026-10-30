@@ -202,6 +202,38 @@ Time follows the host clock by default (games run at their real speed);
 `--virtual-clock` advances time by a fixed amount per safepoint and syscall
 instead, making runs reproducible, which is what the tests use.
 
+### The GS thread
+
+On the console the GS draws while the EE runs on. Drawing inside the DMA
+kick instead made a frame cost the EE's work plus the drawing, and a game
+that redraws a 3D scene on every vsync (Agent Under Fire's copyright screen)
+never got to run its main thread. So in real-time runs the GS has a host
+thread of its own, as PCSX2's MTGS does. DMA, VIF and VU1 hand their GIF data
+to a 32 MB ring, and the GS thread parses and draws it in order, with the
+helper threads for large primitives. The GIF resets (`GIF_CTRL.RST`,
+`CSR.RESET`) go through the ring too, so the GS sees every write in the
+order the guest made it.
+
+The guest thread waits for the GS thread in three places only:
+
+- each vsync queues its picture, which is memory and the display registers
+  as they are at that vsync, and the guest waits while the GS thread is two
+  vsyncs behind;
+- reading GS memory back (`gs::currentFrame`, `gs::readPixel32`) waits until
+  the ring is empty;
+- a full ring waits for room.
+
+The GS thread never touches guest state. `FINISH` and `SIGNAL` set their
+`CSR` bits there, and the guest thread raises the GS interrupt at its next
+safepoint (`gs::pollEvents`, from `hw::intcPending`); a guest waiting idle is
+woken for it (`clockWake`). The guest sees `GIF_STAT` idle as soon as its
+data is queued, where a console would show the GS busy until it is done.
+
+Because the GS thread changes when `FINISH` and `SIGNAL` arrive relative to
+guest code, it is off where runs must repeat (`--virtual-clock`, the tests)
+or stop where a gap is (`--strict`), and with `--gs-threads 1`. Given the
+same GIF data, each vsync's picture is the same either way.
+
 ### The interpreter
 
 `runtime/src/interpreter.cpp` executes guest code directly from memory with

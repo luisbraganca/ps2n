@@ -53,7 +53,7 @@ recompiler/src/                  analysis.cpp (function discovery), codegen.cpp,
 runtime/include/ps2/ops_*.h      instruction semantics, shared by generated code and the interpreter
 runtime/src/                     runtime.cpp (options, start-up), dispatch.cpp, interpreter.cpp, vu.cpp, clock.cpp
   kernel/kernel.cpp              EE syscalls
-  hw/                            hw.cpp (EE registers), dmac, gs (rasterizer, draw threads, display), vif, ipu, mpeg
+  hw/                            hw.cpp (EE registers), dmac, gs (rasterizer, GS thread, draw threads, display), vif, ipu, mpeg
   iop/                           cpu (R3000A), kernel, libs, hle (host libraries), modules (IRX loading),
                                  iop.cpp (SIF, RPC), services (FILEIO, LOADFILE, ...), cdvd, disc,
                                  memcard, pad, spu2 (the SPU2, its registers), sound (libsd on it),
@@ -95,14 +95,21 @@ assets/                          branding/ (logo and icons; its README says whic
 - The guest thread runs with the host FPU rounding toward zero, as the EE
   does (`--fpu-round`), and the GS rasterizer's float math inherits that
   mode. A host thread doing guest-visible float work must take the caller's
-  mode (`fegetround`), as the GS draw threads do; without it, colours come
-  out one step off.
+  mode (`fegetround`), as the GS thread and the draw threads do; without it,
+  colours come out one step off.
 - Drawing on several threads (`--gs-threads`) must give exactly what one
   thread gives, or runs stop being reproducible. Threads share a large
   primitive by bands of rows. A primitive whose memory overlaps (texture or
   CLUT over its frame or depth buffer, frame over depth) is drawn by one
   thread, as is one in a texture format the rasterizer does not support.
   `gs_threads_draw_what_one_thread_draws` checks this.
+- In real-time runs the GS has its own thread, up to two vsyncs behind the
+  guest. Whatever acts on GIF state goes through its ring, in the guest's
+  order; whatever reads GS memory back waits for it (`flush`); a vsync's
+  picture uses the display registers as they were at that vsync. The GS
+  thread never touches guest state: `FINISH` and `SIGNAL` reach the guest
+  through `gs::pollEvents` at a safepoint. `--virtual-clock`, `--strict` and
+  `--gs-threads 1` keep the drawing on the guest thread.
 - Generated code embeds no game data; the runtime loads the ELF at start-up.
 - Report every gap. `PS2_UNIMPL(category, key, ...)` is for missing or wrong
   emulation (counted, printed in the exit summary, stops `--strict`), and
@@ -163,8 +170,8 @@ assets/                          branding/ (logo and icons; its README says whic
   executable). Add them to `[analysis] entries_files` and recompile.
 - `ps2n disasm --cpp NAME` shows one function's translation. `ps2n irx` and
   `disasm` on the game's own IRX modules are the best protocol reference.
-- `--gs-threads 1` draws on the guest thread alone, which rules the draw
-  threads out when a frame looks wrong.
+- `--gs-threads 1` draws on the guest thread alone, which rules the GS
+  thread and the draw threads out when a frame looks wrong.
 - `--dump-audio FILE` writes the sound as a WAV file, the same on every
   `--virtual-clock` run. In streamed sound, a gap of exact zeros is what the
   driver sent; when the IOP answers late, the last 512 samples repeat instead.
@@ -174,8 +181,10 @@ assets/                          branding/ (logo and icons; its README says whic
 - Speed work must not change what a game draws. Run the same scripted
   `--virtual-clock` session with `--dump-frames DIR --dump-every N` before
   and after: the frames must match bit for bit, and the gaps between the
-  files' write times give vblanks per second. In real time, full speed on
-  PAL reads about 49, not 50 (README, Speed).
+  files' write times give vblanks per second. In real time the GS thread
+  writes the dumps, up to two vsyncs late, so measure over long stretches.
+  Full speed on PAL reads 50 only while the guest thread handles each
+  vblank on time: the next one is scheduled from when it was handled.
 - Confirm a cause with a run before stating it.
 
 ## Working rules

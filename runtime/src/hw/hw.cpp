@@ -169,7 +169,7 @@ uint32_t readEe32(uint32_t a) {
     if (a >= 0x10003800u && a < 0x10004000u) return vif::regRead(a);
     if (a >= 0x10008000u && a < 0x1000F000u) return dmac::regRead(a);
     switch (a) {
-    case 0x1000F000u: return g_istat;
+    case 0x1000F000u: gs::pollEvents(); return g_istat;
     case 0x1000F010u: return g_imask;
     case 0x1000F130u: return 0;                  // SIO_ISR: transmitter always ready
     case 0x1000F110u: return 0x00000060u;        // SIO_LSR-ish: TX empty
@@ -247,7 +247,10 @@ void raiseIntc(int cause) {
     g_istat |= 1u << cause;
     if (g_imask & (1u << cause)) kernel::kickInterrupts();
 }
-uint32_t intcPending() { return g_istat & g_imask; }
+uint32_t intcPending() {
+    gs::pollEvents();
+    return g_istat & g_imask;
+}
 void ackIntc(int cause) { g_istat &= ~(1u << cause); }
 void setIntcMask(int cause, bool enabled) {
     if (cause < 0 || cause > 14) return;

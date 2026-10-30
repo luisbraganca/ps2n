@@ -2,7 +2,8 @@
 
 #include <atomic>
 #include <chrono>
-#include <thread>
+#include <condition_variable>
+#include <mutex>
 #include <vector>
 
 namespace ps2 {
@@ -26,6 +27,10 @@ bool g_paused = false;
 std::vector<Event> g_events;   // small; kept sorted by time
 uint64_t g_nextId = 1;
 uint64_t g_nextWhen = UINT64_MAX;
+// A real-time wait, which clockWake() can end early.
+std::mutex g_waitMutex;
+std::condition_variable g_waitEnded;
+bool g_wake = false;
 
 uint64_t realCycles() {
     const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - g_start).count();
@@ -65,8 +70,18 @@ void clockWaitUntil(uint64_t target) {
         g_skipped += target - now;
     } else {
         const auto ns = static_cast<int64_t>(static_cast<double>(target - now) * (1e9 / static_cast<double>(kEeClockHz)));
-        std::this_thread::sleep_for(std::chrono::nanoseconds(ns));
+        std::unique_lock<std::mutex> lock(g_waitMutex);
+        g_waitEnded.wait_for(lock, std::chrono::nanoseconds(ns), [] { return g_wake; });
+        g_wake = false;
     }
+}
+
+void clockWake() {
+    {
+        const std::lock_guard<std::mutex> lock(g_waitMutex);
+        g_wake = true;
+    }
+    g_waitEnded.notify_one();
 }
 
 void clockPause() {

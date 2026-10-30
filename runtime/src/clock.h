@@ -23,6 +23,9 @@ int64_t rtcTime();
 void clockAdvance(uint64_t cycles);
 // Idle: wait (or skip, in virtual/no-throttle mode) until `target`.
 void clockWaitUntil(uint64_t target);
+// Any thread: ends the current or next real-time wait early, for an event
+// from another thread (the GS reaching a FINISH) that the guest must see.
+void clockWake();
 // The guest thread stopped (pause, settings overlay): real time spent paused
 // does not count, so the game carries on where it stopped.
 void clockPause();

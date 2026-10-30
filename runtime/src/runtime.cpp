@@ -77,8 +77,8 @@ constexpr const char* kUsage =
     "  --no-window           do not open a window (SDL builds)\n"
     "  --deinterlace MODE    adaptive (default), weave or bob, for games that\n"
     "                        show interlaced fields\n"
-    "  --gs-threads N        threads that draw a large primitive together\n"
-    "                        (default 0: half the host's, at most 8; 1: one)\n"
+    "  --gs-threads N        threads that draw (default 0: half the host's, at\n"
+    "                        most 8); 1 draws on the guest thread alone\n"
     "  --fpu-round MODE      zero (default, like the EE) or nearest\n"
     "  --strict              stop at the first unimplemented path (exit code 4)\n"
     "  --trace-syscalls      log every syscall\n"
@@ -405,6 +405,9 @@ int run(int argc, char** argv, const GameInfo& game) {
     initCop0();
     hw::init();
     gs::init();
+    // The GS draws on its own thread, except where runs must repeat exactly
+    // or stop where a gap is.
+    gs::setOwnThread(!g_opt.virtualClock && !g_opt.strict);
     dmac::init();
     vif::init();
     ipu::init();
@@ -422,6 +425,7 @@ int run(int argc, char** argv, const GameInfo& game) {
     std::signal(SIGINT, onInterruptSignal);
     runGuestThread(&mainLoop);
     std::signal(SIGINT, SIG_DFL);
+    gs::shutdown();
 
     writeMissingEntries();
     printIssueSummary();

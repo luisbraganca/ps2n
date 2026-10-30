@@ -47,10 +47,10 @@ translates code, is the furthest along: it covers the whole EE instruction set
 and has recompiled a retail game. Most of the work left is in the runtime,
 which stands in for the rest of the console. The graphics come from a
 software renderer that keeps full speed in the first game's menus only by
-drawing on several threads (measured on one 14-core desktop CPU; nothing
-heavier has been tried), the vector units never run alongside the EE, and the
-IOP services cover what the first game needed. The sound comes from an SPU2
-emulated at its registers.
+drawing on threads of its own, alongside the EE (measured on one 14-core
+desktop CPU; nothing heavier has been tried), the vector units never run
+alongside the EE, and the IOP services cover what the first game needed. The
+sound comes from an SPU2 emulated at its registers.
 
 ### Games
 
@@ -59,7 +59,7 @@ Playable, Perfect.
 
 | Game | Stage | Notes |
 |---|---|---|
-| 007: Agent Under Fire (Europe, SLES-50539) | Menus | All three executables run recompiled. The language selection, the intro movies, the title screen and the main menu work, at full speed and with sound, and so does the controller. In real time the game can stay on its copyright screen instead: there it redraws a 3D scene on every vsync, which takes the software GS longer than a frame, so the game's own thread never runs. Whether a run gets past depends on timing; the build from before the sound work does it too. Starting a mission is untested, and the driving missions' executable is not recompiled yet. |
+| 007: Agent Under Fire (Europe, SLES-50539) | Menus | All three executables run recompiled. The language selection, the intro movies, the copyright and title screens and the main menu work, at full speed and with sound, and so does the controller. Starting a mission is untested, and the driving missions' executable is not recompiled yet. |
 
 ### By area
 
@@ -70,7 +70,7 @@ Playable, Perfect.
 | Recompiler | `█████████░` 89% | 8 / 9 | overlays |
 | EE kernel syscalls | `█████████░` 88% | 127 / 145 | event flags, `ExecPS2`, the TLB, CPU timers |
 | DMA, interrupts, timers | `█████░░░░░` 50% | 4 / 8 | MFIFO, stall control, transfer timing |
-| Graphics (GS) | `██████░░░░` 60% | 12 / 20 | filtering, mipmaps, the CLUT buffer, reading back to the EE |
+| Graphics (GS) | `██████░░░░` 62% | 13 / 21 | filtering, mipmaps, the CLUT buffer, reading back to the EE |
 | Vector units | `███████░░░` 71% | 5 / 7 | running alongside the EE, a VU recompiler |
 | Movies (IPU) | `████████░░` 83% | 5 / 6 | timing |
 | Sound (SPU2) | `███████░░░` 71% | 10 / 14 | the IOP's DMA channels for drivers without libsd, an audio settings page |
@@ -104,9 +104,10 @@ Playable, Perfect.
 - [ ] Stall control and interleaved transfers
 - [ ] Transfer timing: a transfer ends the moment it starts
 
-**Graphics (GS)**: 12 of 20
+**Graphics (GS)**: 13 of 21
 - [x] Display: both circuits, their merging, interlaced frames and fields
 - [x] GIF: paths 1-3, PACKED, REGLIST and IMAGE, PATH3 masking
+- [x] Drawing alongside the EE, on the GS's own thread (real-time runs)
 - [x] Points, lines, triangles, strips, fans, sprites
 - [x] Flat and Gouraud shading
 - [x] Every colour texture format, with 4- and 8-bit CLUTs and TEXA
@@ -222,14 +223,20 @@ the runtime accepts with no effect count as implemented.
 **Speed.** Recompiled code is fast: a tight integer loop runs at about 1.8
 billion guest instructions per second on an Apple M3, about 10 times the
 interpreter and well above the EE's 294.9 MHz. Whole games are held back by
-the rest of the emulation. In Agent Under Fire the intro movies, the title
-screen and the main menu now run at 98% of full speed (measured as vblanks per
-second, on an Intel i5-14600KF); the last 2% is the vblank clock, which
-schedules each vblank from when the previous one was handled rather than when
-it was due. Before the GS drew large primitives on 8 threads, the title screen
-dropped to 14.5 vblanks per second; before a polling loop split across two
-functions could take interrupts, it timed out on every frame, and the main menu
-ran at 3 to 5 vblanks per second in a deterministic run.
+the rest of the emulation. In Agent Under Fire the intro movies, the copyright
+and title screens and the main menu run at full speed: 50 vblanks per second
+throughout three headless real-time runs of 150 to 200 s each, on an Intel
+i5-14600KF. That came with the GS's own thread. Before it, the drawing ran
+inside the EE's DMA kicks: the scene the game redraws behind its copyright
+screen on every vsync took longer than a frame, so the game's own thread never
+ran, and real-time runs stayed on that screen at about 46 vblanks per second,
+the sound repeating a 512-sample block 8,516 times in 110 s. The movies went
+from 49 vblanks per second to 50 as well: each vblank is scheduled from when
+the previous one was handled, and the guest thread now handles them on time.
+Before the GS drew large primitives on 8 threads, the title screen dropped to
+14.5 vblanks per second; before a polling loop split across two functions
+could take interrupts, it timed out on every frame, and the main menu ran at 3
+to 5 vblanks per second in a deterministic run.
 
 **Platforms.** Developed and tested on Windows x64, with clang-cl and MSVC.
 The project started on macOS (Apple silicon), which has not been rebuilt
@@ -243,13 +250,14 @@ Roughly in order:
    missions' executable, and fix what the game reaches next.
 2. **Sound**: PCSX2's audio settings page, and the IOP's DMA channels 4 and
    7 for drivers that program the SPU2 themselves.
-3. **Graphics speed**: the rasterizer now decodes the drawing state once per
-   primitive and draws large primitives on several threads, enough for the
-   first game's menus. It is not enough for the 3D scene the game redraws
-   behind its copyright screen: about 2,900 VU1 programs and 17 ms of
-   drawing a frame, so real-time runs can stall there. Per pixel it still
-   divides and interpolates in plain scalar code. A faster software renderer
-   next (stepped interpolation, SIMD), then a GPU renderer, which higher
+3. **Graphics speed**: the GS draws on its own thread, alongside the EE,
+   with helpers sharing large primitives, and the rasterizer decodes the
+   drawing state once per primitive. That keeps the first game at full
+   speed, with little to spare: the 3D scene behind its copyright screen
+   costs about 17 ms of drawing a frame, out of 20, while the EE interprets
+   about 2,900 VU1 programs. Per pixel the rasterizer still divides and
+   interpolates in plain scalar code. A faster software renderer next
+   (stepped interpolation, SIMD), then a GPU renderer, which higher
    resolutions also need.
 4. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
    `ExecPS2`, dual-layer discs, code overlays, and a second game to bring up.

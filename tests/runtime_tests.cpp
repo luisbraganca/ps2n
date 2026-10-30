@@ -31,6 +31,7 @@
 #include <bit>
 #include <cfenv>
 #include <cfloat>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -625,16 +626,27 @@ namespace {
 
 // Host-to-local transfer: w x h pixels to the top left of a buffer at block
 // `dbp`, from words packing them as the format does (one per word for
-// PSMCT32, four per word for PSMT8).
-void gsUpload(uint32_t dbp, uint32_t dbw, uint32_t psm, int w, int h, const std::vector<uint32_t>& words) {
-    gsWrite({{0x50, static_cast<uint64_t>(dbp) << 32 | static_cast<uint64_t>(dbw) << 48 | static_cast<uint64_t>(psm) << 56},
-             {0x51, 0}, {0x52, static_cast<uint64_t>(w) | static_cast<uint64_t>(h) << 32}, {0x53, 0}});
-    std::vector<uint64_t> q = {static_cast<uint64_t>((words.size() + 3) / 4) | 1ull << 15 | 2ull << 58, 0};   // IMAGE
+// PSMCT32, four per word for PSMT8). The GIF packets, then sending them.
+std::vector<uint64_t> uploadPackets(uint32_t dbp, uint32_t dbw, uint32_t psm, int w, int h, const std::vector<uint32_t>& words) {
+    std::vector<uint64_t> q = {4 | 1ull << 15 | 1ull << 60, 0xE,   // A+D: BITBLTBUF TRXPOS TRXREG TRXDIR
+                               static_cast<uint64_t>(dbp) << 32 | static_cast<uint64_t>(dbw) << 48 | static_cast<uint64_t>(psm) << 56, 0x50,
+                               0, 0x51, static_cast<uint64_t>(w) | static_cast<uint64_t>(h) << 32, 0x52, 0, 0x53};
     auto at = [&](size_t i) { return static_cast<uint64_t>(i < words.size() ? words[i] : 0); };
-    for (size_t i = 0; i < words.size(); i += 4) {
-        q.push_back(at(i) | at(i + 1) << 32);
-        q.push_back(at(i + 2) | at(i + 3) << 32);
+    const size_t qwords = (words.size() + 3) / 4;
+    for (size_t done = 0; done < qwords;) {   // IMAGE tags: NLOOP has 15 bits
+        const size_t n = std::min<size_t>(qwords - done, 0x4000);
+        q.push_back(n | (done + n == qwords ? 1ull << 15 : 0) | 2ull << 58);
+        q.push_back(0);
+        for (size_t i = 4 * done; i < 4 * (done + n); i += 4) {
+            q.push_back(at(i) | at(i + 1) << 32);
+            q.push_back(at(i + 2) | at(i + 3) << 32);
+        }
+        done += n;
     }
+    return q;
+}
+void gsUpload(uint32_t dbp, uint32_t dbw, uint32_t psm, int w, int h, const std::vector<uint32_t>& words) {
+    const std::vector<uint64_t> q = uploadPackets(dbp, dbw, psm, w, h, words);
     gs::gifTransfer(q.data(), q.size() / 2, 3);
 }
 
@@ -647,11 +659,12 @@ std::vector<uint32_t> pseudoRandom(size_t n, uint32_t seed) {
 uint64_t bits64(float f) { return std::bit_cast<uint32_t>(f); }
 
 // A scene of large primitives, drawn by `threads` threads under the EE's
-// round-to-zero (the guest thread's, which the drawing inherits). Returns
-// the frame buffer and the depth buffer.
-std::vector<uint32_t> drawScene(int threads) {
+// round-to-zero (the guest thread's, which the drawing inherits), on the GS's
+// own thread if `ownThread`. Returns the frame buffer and the depth buffer.
+std::vector<uint32_t> drawScene(int threads, bool ownThread = false) {
     gs::init();
     gs::setDrawThreads(threads);
+    gs::setOwnThread(ownThread);
     const int mode = std::fegetround();
     std::fesetround(FE_TOWARDZERO);
     // A 64x64 PSMCT32 texture at page 64, a 64x64 PSMT8 one at page 72 and its
@@ -691,6 +704,7 @@ std::vector<uint32_t> drawScene(int threads) {
             out.push_back(gs::readPixel32(32, 4, 0x30, x, y));
         }
     std::fesetround(mode);
+    gs::setOwnThread(false);
     gs::setDrawThreads(0);
     return out;
 }
@@ -706,6 +720,178 @@ TEST_CASE(gs_threads_draw_what_one_thread_draws) {
         for (size_t i = 0; i < one.size(); ++i) differ += one[i] != many[i];
         CHECK_EQ(differ, size_t(0));
     }
+}
+
+TEST_CASE(gs_thread_draws_what_the_guest_thread_draws) {
+    // The GS thread takes the guest's rounding, and reading back waits for it.
+    const std::vector<uint32_t> guest = drawScene(1);
+    for (int threads : {2, 4}) {
+        const std::vector<uint32_t> own = drawScene(threads, true);
+        size_t differ = 0;
+        for (size_t i = 0; i < guest.size(); ++i) differ += guest[i] != own[i];
+        CHECK_EQ(differ, size_t(0));
+    }
+}
+
+namespace {
+
+// Keeps the GS thread busy for a while: large sprites at page 64 and above,
+// away from what the tests show.
+void gsBusyWork() {
+    gsWrite({{0x4C, 64 | 8ull << 16}, {0x40, 511ull << 16 | 255ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
+    for (uint32_t i = 0; i < 16; ++i) gsRect(0, 0, 512, 256, 0x80000000u | i);
+    gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 63ull << 48}});   // back to page 0, 64 wide
+}
+
+} // namespace
+
+TEST_CASE(gs_thread_events_reach_the_guest) {
+    // FINISH and SIGNAL reached on the GS thread: CSR and SIGLBLID show them,
+    // the interrupt comes when the guest thread looks (hw::intcPending at a
+    // safepoint), and a guest waiting idle wakes for them.
+    gs::init();
+    gs::setDrawThreads(2);
+    gs::setOwnThread(true);
+    const uint64_t imr = gs::putImr(0x7F00 & ~(3ull << 8));   // SIGNAL and FINISH get through
+    hw::ackIntc(hw::INTC_GS);
+    hw::setIntcMask(hw::INTC_GS, true);
+    clockWaitUntil(nowCycles() + kEeClockHz / 1000);   // uses up any earlier wake-up
+
+    gsBusyWork();
+    gsWrite({{0x61, 0}});   // FINISH
+    const auto start = std::chrono::steady_clock::now();
+    clockWaitUntil(nowCycles() + 2 * kEeClockHz);
+    CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(1));
+    CHECK(gs::csr() & 2);
+    CHECK(hw::intcPending() & (1u << hw::INTC_GS));
+
+    hw::ackIntc(hw::INTC_GS);
+    gs::privWrite(0x12001000, 0x1F);   // CSR: clear the events
+    gs::privWrite(0x12001080, 0);      // SIGLBLID
+    gsWrite({{0x60, 0x1234 | 0xFFFFFFFFull << 32}, {0x62, 0x5678 | 0xFFFFFFFFull << 32}});   // SIGNAL, LABEL
+    gs::readPixel32(0, 1, 0, 0, 0);    // waits for the GS thread
+    CHECK_EQ(gs::privRead(0x12001080), 0x1234 | 0x5678ull << 32);
+    CHECK_EQ(gs::csr() & 3, uint64_t(1));
+    CHECK(hw::intcPending() & (1u << hw::INTC_GS));
+
+    hw::setIntcMask(hw::INTC_GS, false);
+    hw::ackIntc(hw::INTC_GS);
+    gs::putImr(imr);
+    gs::privWrite(0x12001000, 0x1F);
+    gs::setOwnThread(false);
+    gs::setDrawThreads(0);
+}
+
+TEST_CASE(gs_thread_ring_wraps_round) {
+    // More GIF data than the GS thread's ring holds (32 MB), in 1 MB image
+    // uploads: read back one by one, then queued as fast as they go in.
+    gs::init();
+    gs::setDrawThreads(2);
+    gs::setOwnThread(true);
+    auto pixel = [](size_t i) { return gs::readPixel32(0, 8, 0x00, static_cast<int>(i % 512), static_cast<int>(i / 512)); };
+    size_t differ = 0;
+    for (uint32_t n = 0; n < 36; ++n) {
+        const std::vector<uint32_t> image = pseudoRandom(512 * 512, n + 7);
+        gsUpload(0, 8, 0x00, 512, 512, image);
+        for (size_t i = n % 11; i < image.size(); i += 11) differ += pixel(i) != image[i];
+    }
+    const std::array<std::vector<uint32_t>, 2> images = {pseudoRandom(512 * 512, 50), pseudoRandom(512 * 512, 51)};
+    const std::array<std::vector<uint64_t>, 2> packets = {uploadPackets(0, 8, 0x00, 512, 512, images[0]),
+                                                          uploadPackets(0, 8, 0x00, 512, 512, images[1])};
+    for (int n = 0; n < 37; ++n) gs::gifTransfer(packets[n & 1].data(), packets[n & 1].size() / 2, 3);
+    for (size_t i = 0; i < images[0].size(); i += 7) differ += pixel(i) != images[0][i];
+    CHECK_EQ(differ, size_t(0));
+    gs::setOwnThread(false);
+    gs::setDrawThreads(0);
+}
+
+TEST_CASE(gs_thread_keeps_resets_in_order) {
+    // GIF_CTRL.RST and CSR.RESET drop a half-sent packet when the GS thread
+    // gets to them, not when the guest writes them.
+    gs::init();
+    gs::setDrawThreads(2);
+    gs::setOwnThread(true);
+    const std::array<std::pair<uint32_t, uint64_t>, 2> resets = {{{0x10003000u, 1}, {0x12001000u, 0x200}}};
+    for (const auto& [reg, value] : resets) {
+        gsBusyWork();
+        gsWrite({{0x47, 0}});
+        const uint64_t half[4] = {2 | 1ull << 15 | 1ull << 60, 0xE, 0, 0x47};   // NLOOP 2, one A+D sent
+        gs::gifTransfer(half, 2, 3);
+        if (reg == 0x10003000u) gs::gifRegWrite(reg, static_cast<uint32_t>(value));
+        else gs::privWrite(reg, value);
+        gsRect(0, 0, 8, 8, 0x80123456u);
+        CHECK_EQ(gs::readPixel32(0, 1, 0, 4, 4), 0x80123456u);
+        gsRect(0, 0, 8, 8, 0);
+    }
+    gs::setOwnThread(false);
+    gs::setDrawThreads(0);
+}
+
+namespace {
+
+// The first pixel of a PPM file written by --dump-frames, as 0xBBGGRR.
+uint32_t ppmFirstPixel(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    std::string magic;
+    int w = 0, h = 0, max = 0;
+    in >> magic >> w >> h >> max;
+    in.get();
+    unsigned char rgb[3] = {};
+    in.read(reinterpret_cast<char*>(rgb), 3);
+    return in ? static_cast<uint32_t>(rgb[0] | rgb[1] << 8 | rgb[2] << 16) : 0xFFFFFFFFu;
+}
+
+std::vector<std::filesystem::path> filesIn(const std::filesystem::path& dir) {
+    std::vector<std::filesystem::path> v;
+    for (const auto& e : std::filesystem::directory_iterator(dir)) v.push_back(e.path());
+    std::sort(v.begin(), v.end());
+    return v;
+}
+
+} // namespace
+
+TEST_CASE(gs_thread_shows_each_vsync_as_it_was) {
+    // The GS thread draws behind the guest, but a vsync's picture is memory
+    // and the display registers as they were at that vsync; the guest waits
+    // when the GS thread is two vsyncs behind.
+    const auto dir = std::filesystem::temp_directory_path() / "ps2n_gs_thread_frames";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    g_opt.dumpFrames = dir;
+    g_opt.dumpEvery = 1;
+    gs::init();
+    gs::setDrawThreads(2);
+    gs::setOwnThread(true);
+    gs::privWrite(0x12000000, 0x6);                          // PMODE: circuit 2
+    gs::privWrite(0x12000090, 1 << 9);                       // DISPFB2: page 0, 64 wide
+    gs::privWrite(0x120000A0, 63ull << 32 | 7ull << 44);     // DISPLAY2: 64 clocks, 8 lines
+    gsBusyWork();
+    gsRect(0, 0, 64, 8, 0x800000FF);                         // red on page 0
+    gs::onVblankStart();
+    gsRect(0, 0, 64, 8, 0x8000FF00);                         // green on page 0, then blue on page 2, shown
+    gsWrite({{0x4C, 2 | 1ull << 16}});
+    gsRect(0, 0, 64, 8, 0x80FF0000);
+    gs::privWrite(0x12000090, 2 | 1 << 9);
+    gs::onVblankStart();
+    gs::onVblankStart();
+    CHECK(!filesIn(dir).empty());   // the first vsync was shown before the third was queued
+    gsBusyWork();
+    gsWrite({{0x4C, 2 | 1ull << 16}});
+    gsRect(0, 0, 64, 8, 0x80FFFFFF);                         // white on page 2
+    gs::Frame f;
+    CHECK(gs::currentFrame(f));                              // once the GS thread has drawn it
+    CHECK(!f.pixels.empty() && f.pixels[0] == 0xFFFFFFFFu);
+    const auto files = filesIn(dir);
+    CHECK_EQ(files.size(), size_t(3));
+    if (files.size() == 3) {
+        CHECK_EQ(ppmFirstPixel(files[0]), 0x0000FFu);
+        CHECK_EQ(ppmFirstPixel(files[1]), 0xFF0000u);
+        CHECK_EQ(ppmFirstPixel(files[2]), 0xFF0000u);
+    }
+    gs::setOwnThread(false);
+    gs::setDrawThreads(0);
+    g_opt.dumpFrames.clear();
+    std::filesystem::remove_all(dir);
 }
 
 TEST_CASE(gs_triangles_cover_what_the_float_test_covers) {

@@ -247,21 +247,24 @@ bool windowEnabled() { return g_windowOpen; }
 
 void init() { g_frames = 0; }
 
-void onVsync() {
+Present onVsync() {
     ++g_frames;
     pausePoint();
     if (g_windowClosed.exchange(false)) {
         PS2_INFO("video", "window closed");
         requestExit(0);
-        return;
+        return {};
     }
-    const bool dump = !g_opt.dumpFrames.empty() && g_opt.dumpEvery && (g_frames % g_opt.dumpEvery) == 0;
-    const bool show = windowEnabled();
-    if (!dump && !show) return;
-    gs::Frame f;
-    if (!gs::currentFrame(f)) return;
-    if (dump) dumpPpm(f, g_frames);
-    if (show) {
+    Present p;
+    p.index = g_frames;
+    p.dump = !g_opt.dumpFrames.empty() && g_opt.dumpEvery && (g_frames % g_opt.dumpEvery) == 0;
+    p.show = windowEnabled();
+    return p;
+}
+
+void present(gs::Frame&& f, const Present& how) {
+    if (how.dump) dumpPpm(f, how.index);
+    if (how.show) {
         {
             const std::lock_guard<std::mutex> lock(g_frameMutex);
             g_pending = std::move(f);

@@ -1,5 +1,6 @@
 #include "hw/gs.h"
 
+#include "clock.h"
 #include "hw/hw.h"
 #include "kernel/kernel.h"
 #include "log.h"
@@ -12,6 +13,7 @@
 #include <cfenv>
 #include <cmath>
 #include <cstring>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -167,6 +169,14 @@ uint32_t pack16(uint32_t c) {
     return ((c >> 3) & 0x1F) | (((c >> 11) & 0x1F) << 5) | (((c >> 19) & 0x1F) << 10) | ((c >> 31) << 15);
 }
 
+// A frame buffer pixel as 32-bit RGBA; fbp in pages.
+uint32_t pixel32(uint32_t fbp, uint32_t fbw, uint32_t psm, int x, int y) {
+    const uint32_t raw = readRaw(fbp * 32, fbw, psm, static_cast<uint32_t>(x), static_cast<uint32_t>(y));
+    if (psm == PSMCT16 || psm == PSMCT16S) return expand16(raw);
+    if (psm == PSMCT24) return raw | 0xFF000000u;
+    return raw;
+}
+
 // ===========================================================================
 // Registers and state
 // ===========================================================================
@@ -174,9 +184,10 @@ uint64_t g_regs[0x100];
 uint64_t g_priv[0x10];   // PMODE ... BGCOLOR, indexed by (addr >> 4) & 0xF
 constexpr const char* kPrivName[0x10] = {"PMODE", "SMODE1", "SMODE2", "SRFSH", "SYNCH1", "SYNCH2", "SYNCV", "DISPFB1",
                                          "DISPLAY1", "DISPFB2", "DISPLAY2", "EXTBUF", "EXTDATA", "EXTWRITE", "BGCOLOR", "0xF0"};
-uint64_t g_csr = 0x551B4000ull;   // FIFO empty, REV 0x1B, ID 0x55
+// CSR and SIGLBLID change on the GS thread too (FINISH, SIGNAL, LABEL).
+std::atomic<uint64_t> g_csr{0x551B4000ull};   // FIFO empty, REV 0x1B, ID 0x55
 uint64_t g_imr = 0x7F00;
-uint64_t g_siglblid = 0;
+std::atomic<uint64_t> g_siglblid{0};
 bool g_path3Masked = false;
 
 // Deinterlacing (FIELD mode): the mode, the vsyncs so far (which tell
@@ -210,8 +221,29 @@ constexpr uint64_t field(uint64_t v, int lo, int bits) { return (v >> lo) & ((1u
 
 void updateGsInterrupt() {
     // CSR bits 0-4 (SIGNAL FINISH HSINT VSINT EDWINT) vs IMR bits 8-12.
-    const uint64_t pending = g_csr & 0x1F & ~((g_imr >> 8) & 0x1F);
+    const uint64_t pending = g_csr.load() & 0x1F & ~((g_imr >> 8) & 0x1F);
     if (pending) hw::raiseIntc(hw::INTC_GS);
+}
+
+// The GS draws on its own thread (setOwnThread, unless one thread draws).
+// Only the guest thread changes it, while the GS thread is stopped.
+bool g_async = false;
+// The CSR events the GS thread raised since the guest thread last looked.
+std::atomic<uint64_t> g_events{0};
+
+// SIGNAL and FINISH: their CSR bit, and the interrupt if IMR lets it through.
+// From the GS thread the guest thread raises it at its next safepoint
+// (pollEvents), and wakes for it if it is waiting idle.
+void gsEvent(uint64_t bit) {
+    g_csr.fetch_or(bit);
+    if (!g_async) return updateGsInterrupt();
+    g_events.fetch_or(bit);
+    clockWake();
+}
+
+void setSiglblid(uint64_t mask, uint64_t value) {
+    uint64_t old = g_siglblid.load();
+    while (!g_siglblid.compare_exchange_weak(old, (old & ~mask) | (value & mask))) {}
 }
 
 // ---- vertices -----------------------------------------------------------------
@@ -1009,18 +1041,14 @@ void writeReg(uint32_t reg, uint64_t v) {
     case HWREG: transferData(v); return;
     case SIGNAL: {
         const auto id = static_cast<uint32_t>(v), mask = static_cast<uint32_t>(v >> 32);
-        g_siglblid = (g_siglblid & ~static_cast<uint64_t>(mask)) | (id & mask);
-        g_csr |= 1;
-        updateGsInterrupt();
+        setSiglblid(mask, id);
+        gsEvent(1);
         break;
     }
-    case FINISH:
-        g_csr |= 2;
-        updateGsInterrupt();
-        break;
+    case FINISH: gsEvent(2); break;
     case LABEL: {
         const auto id = static_cast<uint32_t>(v), mask = static_cast<uint32_t>(v >> 32);
-        g_siglblid = (g_siglblid & ~(static_cast<uint64_t>(mask) << 32)) | (static_cast<uint64_t>(id & mask) << 32);
+        setSiglblid(static_cast<uint64_t>(mask) << 32, static_cast<uint64_t>(id) << 32);
         break;
     }
     default: break;
@@ -1115,23 +1143,213 @@ void gifQword(GifPath& p, const uint64_t q[2]) {
     }
 }
 
+void resetPaths() {
+    for (auto& p : g_paths) p = GifPath{};
+}
+
+// What the display circuits show at a vsync: the privileged registers, CSR
+// (its FIELD bit) and the vsync count, which tells consecutive fields apart.
+struct Display {
+    uint64_t priv[0x10];
+    uint64_t csr;
+    uint64_t fieldCount;
+};
+Display displayNow() {
+    Display d{};
+    std::memcpy(d.priv, g_priv, sizeof g_priv);
+    d.csr = g_csr.load();
+    d.fieldCount = g_fieldCount;
+    return d;
+}
+bool buildFrame(const Display& d, Frame& out);
+
+// ---- the GS thread --------------------------------------------------------------------
+// The guest thread queues GIF data, and the commands that act on GIF state,
+// in a ring of 64-bit words; the GS thread runs them in order. An entry is a
+// header (kind, path and payload quadwords; the guest's rounding mode, which
+// the drawing inherits) and its payload. Entries are whole quadwords, so a
+// quadword never wraps round the end of the ring.
+class GsThread {
+public:
+    enum Kind : uint64_t { Gif, ResetPaths, ResetGs, Vsync };
+
+    ~GsThread() { stop(false); }
+
+    void push(Kind kind, int path, const uint64_t* qwords, size_t count) {
+        do {   // a transfer larger than a sixteenth of the ring goes in parts
+            const size_t n = std::min(count, kMaxQwords);
+            put(kind, path, qwords, n);
+            qwords += 2 * n;
+            count -= n;
+        } while (count);
+    }
+
+    // Queues a vsync's picture, once the GS thread has shown the one two
+    // vsyncs before it: it stays at most two vsyncs behind.
+    void vsync(const Display& d, const video::Present& how) {
+        uint64_t& before = vsyncEnd_[vsyncs_++ & 1];
+        waitFor(before);
+        const VsyncEntry v{d, how};
+        uint64_t q[2 * kVsyncQwords] = {};
+        std::memcpy(q, &v, sizeof v);
+        put(Vsync, 0, q, kVsyncQwords);
+        before = head_.load(std::memory_order_relaxed);
+    }
+
+    // Waits until the GS thread has run everything queued.
+    void flush() {
+        if (thread_.joinable()) waitFor(head_.load(std::memory_order_relaxed));
+    }
+
+    // finish: run what is queued first, else drop it.
+    void stop(bool finish) {
+        if (!thread_.joinable()) return;
+        if (finish) flush();
+        stopping_ = true;
+        wake_.fetch_add(1);
+        wake_.notify_one();
+        thread_.join();
+        stopping_ = false;
+        tail_ = head_.load();
+    }
+
+private:
+    static constexpr uint64_t kWords = uint64_t(1) << 22;   // 32 MB
+    static constexpr uint64_t kMask = kWords - 1;
+    static constexpr size_t kMaxQwords = kWords / 32;
+    struct VsyncEntry {
+        Display display;
+        video::Present how;
+    };
+    static constexpr size_t kVsyncQwords = (sizeof(VsyncEntry) + 15) / 16;
+
+    void put(Kind kind, int path, const uint64_t* payload, size_t qwords) {
+        if (!thread_.joinable()) start();
+        const uint64_t at = head_.load(std::memory_order_relaxed), words = 2 + 2 * qwords;
+        if (at + words > kWords) waitFor(at + words - kWords);   // room the GS thread has freed
+        ring_[at & kMask] = kind | static_cast<uint64_t>(path) << 8 | static_cast<uint64_t>(qwords) << 32;
+        ring_[(at + 1) & kMask] = static_cast<uint32_t>(std::fegetround());
+        const uint64_t start = (at + 2) & kMask, first = std::min<uint64_t>(2 * qwords, kWords - start);
+        if (first) std::memcpy(&ring_[start], payload, first * 8);
+        if (2 * qwords > first) std::memcpy(&ring_[0], payload + first, (2 * qwords - first) * 8);
+        head_.store(at + words);
+        if (idle_.load()) {
+            wake_.fetch_add(1);
+            wake_.notify_one();
+        }
+    }
+
+    // Guest thread: until the GS thread has run everything before word `pos`.
+    void waitFor(uint64_t pos) {
+        while (tail_.load() < pos) {
+            waitPos_ = pos;
+            const uint64_t done = tail_.load();
+            if (done < pos) tail_.wait(done);
+            waitPos_ = UINT64_MAX;
+        }
+    }
+
+    void start() {
+        if (!ring_) ring_.reset(new uint64_t[kWords]);
+        thread_ = std::thread([this] { work(); });
+    }
+
+    void work() {
+        int rounding = std::fegetround();
+        for (;;) {
+            const uint32_t seen = wake_.load();
+            if (stopping_) return;
+            uint64_t at = tail_.load(std::memory_order_relaxed);
+            const uint64_t end = head_.load();
+            if (at == end) {
+                idle_ = true;
+                if (head_.load() == at && !stopping_) wake_.wait(seen);
+                idle_ = false;
+                continue;
+            }
+            while (at != end && !stopping_) {
+                const uint64_t h = ring_[at & kMask];
+                const auto mode = static_cast<int>(ring_[(at + 1) & kMask]);
+                if (mode != rounding) std::fesetround(rounding = mode);
+                run(static_cast<Kind>(h & 0xFF), static_cast<int>((h >> 8) & 3), at + 2, h >> 32);
+                at += 2 + 2 * (h >> 32);
+                tail_.store(at);
+                if (at >= waitPos_) tail_.notify_one();
+            }
+        }
+    }
+
+    void run(Kind kind, int path, uint64_t data, uint64_t qwords) {
+        switch (kind) {
+        case Gif:
+            for (uint64_t i = 0; i < qwords; ++i) gifQword(g_paths[path], &ring_[(data + 2 * i) & kMask]);
+            break;
+        case ResetPaths: resetPaths(); break;
+        case ResetGs:
+            g_queueCount = 0;
+            resetPaths();
+            break;
+        case Vsync: {
+            uint64_t q[2 * kVsyncQwords];
+            for (size_t i = 0; i < 2 * kVsyncQwords; ++i) q[i] = ring_[(data + i) & kMask];
+            VsyncEntry v;
+            std::memcpy(&v, q, sizeof v);
+            Frame f;
+            if ((v.how.dump || v.how.show) && buildFrame(v.display, f)) video::present(std::move(f), v.how);
+            break;
+        }
+        }
+    }
+
+    std::unique_ptr<uint64_t[]> ring_;
+    std::thread thread_;
+    std::atomic<uint64_t> head_{0};       // words queued
+    std::atomic<uint64_t> tail_{0};       // words run
+    std::atomic<uint32_t> wake_{0};       // moves to wake the GS thread
+    std::atomic<bool> idle_{false};       // the GS thread waits for work
+    std::atomic<uint64_t> waitPos_{UINT64_MAX};   // the guest thread waits for tail_ to reach it
+    std::atomic<bool> stopping_{false};
+    uint64_t vsyncEnd_[2] = {0, 0};       // where the last two vsyncs' entries end
+    uint64_t vsyncs_ = 0;
+};
+GsThread g_gsThread;   // after g_drawThreads, which it uses: destroyed first
+
+// The GS thread runs when it is wanted and more than one thread draws.
+bool g_wantOwnThread = false;
+void updateMode() {
+    g_gsThread.flush();
+    const bool async = g_wantOwnThread && g_drawThreads.count() > 1;
+    if (async == g_async) return;
+    g_gsThread.stop(true);
+    g_async = async;
+}
+
 } // namespace
 
 // ===========================================================================
 // Public interface
 // ===========================================================================
 void init() {
+    g_gsThread.flush();
     std::memset(g_vram, 0, sizeof g_vram);
     std::memset(g_regs, 0, sizeof g_regs);
     std::memset(g_priv, 0, sizeof g_priv);
     g_csr = 0x551B4000ull;
     g_imr = 0x7F00;
+    g_events = 0;
     g_history = FieldHistory{};
     g_drawDirty = true;
     g_queueCount = 0;
-    for (auto& p : g_paths) p = GifPath{};
+    resetPaths();
     g_regs[PRMODECONT] = 1;
 }
+
+void setOwnThread(bool on) {
+    g_wantOwnThread = on;
+    updateMode();
+}
+
+void shutdown() { g_gsThread.stop(true); }
 
 uint64_t csr() { return g_csr; }
 uint64_t imr() { return g_imr; }
@@ -1140,6 +1358,12 @@ uint64_t putImr(uint64_t v) {
     g_imr = v;
     updateGsInterrupt();
     return old;
+}
+
+void pollEvents() {
+    if (!g_events.load(std::memory_order_relaxed)) return;
+    const uint64_t raised = g_events.exchange(0);
+    if ((raised | g_csr.load()) & 0x1F & ~((g_imr >> 8) & 0x1F)) hw::raiseIntc(hw::INTC_GS);
 }
 
 uint64_t privRead(uint32_t addr) {
@@ -1160,8 +1384,12 @@ void privWrite(uint32_t addr, uint64_t v) {
         case 0x000:   // CSR: event bits are write-1-to-clear; RESET resets the GS
             g_csr &= ~(v & 0x1F);
             if (v & 0x200) {
-                g_queueCount = 0;
-                for (auto& p : g_paths) p = GifPath{};
+                if (g_async) {
+                    g_gsThread.push(GsThread::ResetGs, 0, nullptr, 0);
+                } else {
+                    g_queueCount = 0;
+                    resetPaths();
+                }
             }
             break;
         case 0x010: g_imr = v; updateGsInterrupt(); break;
@@ -1192,7 +1420,10 @@ void onVblankStart() {
     g_csr ^= 1ull << 13;    // FIELD toggles every field
     ++g_fieldCount;
     updateGsInterrupt();
-    video::onVsync();
+    const video::Present how = video::onVsync();
+    if (g_async) return g_gsThread.vsync(displayNow(), how);   // also when nothing shows: it paces the GS thread
+    Frame f;
+    if ((how.dump || how.show) && buildFrame(displayNow(), f)) video::present(std::move(f), how);
 }
 
 void onVblankEnd() {}
@@ -1208,14 +1439,19 @@ uint32_t gifRegRead(uint32_t addr) {
 
 void gifRegWrite(uint32_t addr, uint32_t v) {
     if (addr == 0x10003000u && (v & 1)) {   // GIF_CTRL.RST
-        for (auto& p : g_paths) p = GifPath{};
+        if (g_async) g_gsThread.push(GsThread::ResetPaths, 0, nullptr, 0);
+        else resetPaths();
     }
     if (addr == 0x10003010u) g_path3Masked = v & 1;
 }
 
-void gifFifoWrite(const uint64_t q[2]) { gifQword(g_paths[3], q); }
+void gifFifoWrite(const uint64_t q[2]) {
+    if (g_async) return g_gsThread.push(GsThread::Gif, 3, q, 1);
+    gifQword(g_paths[3], q);
+}
 
 void gifTransfer(const uint64_t* qwords, size_t count, int path) {
+    if (g_async) return g_gsThread.push(GsThread::Gif, path & 3, qwords, count);
     GifPath& p = g_paths[path & 3];
     for (size_t i = 0; i < count; ++i) gifQword(p, qwords + 2 * i);
 }
@@ -1223,10 +1459,8 @@ void gifTransfer(const uint64_t* qwords, size_t count, int path) {
 void setPath3Masked(bool masked) { g_path3Masked = masked; }
 
 uint32_t readPixel32(uint32_t fbp, uint32_t fbw, uint32_t psm, int x, int y) {
-    const uint32_t raw = readRaw(fbp * 32, fbw, psm, static_cast<uint32_t>(x), static_cast<uint32_t>(y));
-    if (psm == PSMCT16 || psm == PSMCT16S) return expand16(raw);
-    if (psm == PSMCT24) return raw | 0xFF000000u;
-    return raw;
+    g_gsThread.flush();
+    return pixel32(fbp, fbw, psm, x, y);
 }
 
 uint32_t debugAddress(uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32_t y) {
@@ -1250,8 +1484,8 @@ struct Circuit {
     bool valid = false;
 };
 
-Circuit readCircuit(int i) {
-    const uint64_t dispfb = g_priv[i == 0 ? 0x7 : 0x9], display = g_priv[i == 0 ? 0x8 : 0xA];
+Circuit readCircuit(const Display& d, int i) {
+    const uint64_t dispfb = d.priv[i == 0 ? 0x7 : 0x9], display = d.priv[i == 0 ? 0x8 : 0xA];
     Circuit c;
     c.fbp = static_cast<uint32_t>(field(dispfb, 0, 9));
     c.fbw = static_cast<uint32_t>(field(dispfb, 9, 6));
@@ -1289,14 +1523,14 @@ uint32_t average(uint32_t a, uint32_t b) {
 }
 
 // Fills `out` (w x h) from the current field `cur` (`lines` lines, on the
-// display lines of parity `odd`) and the fields before it.
-void deinterlaceField(Frame& out, std::vector<uint32_t>&& cur, int w, int h, int lines, int odd) {
+// display lines of parity `odd`, shown at vsync `when`) and the fields before it.
+void deinterlaceField(Frame& out, std::vector<uint32_t>&& cur, int w, int h, int lines, int odd, uint64_t when) {
     FieldHistory& hist = g_history;
     if (hist.width != w || hist.lines != lines) hist = FieldHistory{w, lines, {}};
     const ShownField& prev = hist.fields[0];
     const ShownField& prev2 = hist.fields[1];
-    const bool havePrev = prev.valid && prev.odd != odd && prev.when + 1 == g_fieldCount;
-    const bool havePrev2 = havePrev && prev2.valid && prev2.odd == odd && prev2.when + 2 == g_fieldCount;
+    const bool havePrev = prev.valid && prev.odd != odd && prev.when + 1 == when;
+    const bool havePrev2 = havePrev && prev2.valid && prev2.odd == odd && prev2.when + 2 == when;
     const Deinterlace mode = g_deinterlace;
     const auto row = [&](const std::vector<uint32_t>& f, int k) {
         return f.data() + static_cast<size_t>(std::clamp(k, 0, lines - 1)) * static_cast<size_t>(w);
@@ -1328,7 +1562,7 @@ void deinterlaceField(Frame& out, std::vector<uint32_t>&& cur, int w, int h, int
             o[x] = pa && still(a[x], pa[x]) && still(b[x], pb[x]) ? p[x] : average(a[x], b[x]);
     }
     hist.fields[1] = std::move(hist.fields[0]);
-    hist.fields[0] = ShownField{std::move(cur), odd, g_fieldCount, true};
+    hist.fields[0] = ShownField{std::move(cur), odd, when, true};
 }
 
 bool circuitPixel(const Circuit& c, int clock, int line, bool perField, int odd, uint32_t& px) {
@@ -1336,19 +1570,17 @@ bool circuitPixel(const Circuit& c, int clock, int line, bool perField, int odd,
     const int x = (clock - c.dx) / c.magh;
     int y = (line - c.dy) / c.magv;
     if (perField) y = std::clamp((y - odd) / 2, 0, std::max(c.height / c.magv / 2, 1) - 1);
-    px = readPixel32(c.fbp, c.fbw, c.psm, c.dbx + x, c.dby + y);
+    px = pixel32(c.fbp, c.fbw, c.psm, c.dbx + x, c.dby + y);
     return true;
 }
 
-} // namespace
-
-bool currentFrame(Frame& out) {
-    const uint64_t pmode = g_priv[0x0], smode2 = g_priv[0x2];
-    const Circuit c1 = readCircuit(0), c2 = readCircuit(1);
+bool buildFrame(const Display& disp, Frame& out) {
+    const uint64_t pmode = disp.priv[0x0], smode2 = disp.priv[0x2];
+    const Circuit c1 = readCircuit(disp, 0), c2 = readCircuit(disp, 1);
     const bool en1 = (pmode & 1) && c1.valid, en2 = (pmode & 2) && c2.valid;
     if (!en1 && !en2) return false;
     const bool perField = (smode2 & 1) && (smode2 & 2);
-    const int odd = perField ? static_cast<int>((g_csr >> 13) & 1) : 0;
+    const int odd = perField ? static_cast<int>((disp.csr >> 13) & 1) : 0;
     // The screen covers both pictures when both circuits show; a pixel is the
     // narrower circuit's.
     int x0 = 1 << 20, y0 = 1 << 20, x1 = 0, y1 = 0, clocks = 16;
@@ -1367,7 +1599,7 @@ bool currentFrame(Frame& out) {
     // Circuit 1 alone without SLBG, and circuit 2 alone, show as they are.
     const bool mmod = (pmode >> 5) & 1, slbg = (pmode >> 7) & 1;
     const auto alp = static_cast<uint32_t>(field(pmode, 8, 8));
-    const uint32_t bgcolor = static_cast<uint32_t>(g_priv[0xE]) & 0xFFFFFFu;
+    const uint32_t bgcolor = static_cast<uint32_t>(disp.priv[0xE]) & 0xFFFFFFu;
     const bool blend = en1 && (en2 || slbg);
     const auto pixel = [&](int x, int line) {
         const int clock = x0 + x * clocks;
@@ -1401,8 +1633,15 @@ bool currentFrame(Frame& out) {
         const int line = y0 + std::min(2 * k + odd, h - 1);
         for (int x = 0; x < w; ++x) cur[static_cast<size_t>(k) * static_cast<size_t>(w) + static_cast<size_t>(x)] = pixel(x, line);
     }
-    deinterlaceField(out, std::move(cur), w, h, lines, odd);
+    deinterlaceField(out, std::move(cur), w, h, lines, odd, disp.fieldCount);
     return true;
+}
+
+} // namespace
+
+bool currentFrame(Frame& out) {
+    g_gsThread.flush();
+    return buildFrame(displayNow(), out);
 }
 
 void setDeinterlace(Deinterlace mode) { g_deinterlace = mode; }
@@ -1417,6 +1656,10 @@ const char* deinterlaceName(Deinterlace mode) {
     }
 }
 
-void setDrawThreads(int n) { g_drawThreads.setCount(n); }
+void setDrawThreads(int n) {
+    g_gsThread.flush();
+    g_drawThreads.setCount(n);
+    updateMode();
+}
 
 } // namespace ps2::gs
