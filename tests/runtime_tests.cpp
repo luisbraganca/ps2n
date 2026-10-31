@@ -833,6 +833,14 @@ std::vector<uint32_t> drawScene(int threads, bool ownThread = false) {
              {0x02, bits64(0.0f) | bits64(0.0f) << 32}, {0x01, 0x80FF4020 | bits64(1.0f) << 32}, {0x04, xyz(0, 0, 0x100000) | 0x10ull << 56},
              {0x02, bits64(2.0f) | bits64(0.5f) << 32}, {0x01, 0x6020FF40 | bits64(2.0f) << 32}, {0x04, xyz(256, 8, 0x300000) | 0xF0ull << 56},
              {0x02, bits64(0.25f) | bits64(1.5f) << 32}, {0x01, 0x404080FF | bits64(1.5f) << 32}, {0x04, xyz(16, 128, 0x200000) | 0x80ull << 56}});
+    // A Gouraud triangle with trilinear mipmaps, Q from 1 down to 1/8, depth
+    // ALWAYS: levels 1-3 read the other textures' memory.
+    const uint64_t mips = (72 * 32 | 1ull << 14) | (80 * 32 | 1ull << 14) << 20 | (64 * 32 | 1ull << 14) << 40;
+    gsWrite({{0x34, mips}, {0x14, 0x16C}, {0x47, 1ull << 16 | 1ull << 17}, {0x00, 3 | 1 << 3 | 1 << 4},
+             {0x02, 0}, {0x01, 0x80808080u | bits64(1.0f) << 32}, {0x05, xyz(0, 0, 0x380000)},
+             {0x02, bits64(0.5f)}, {0x01, 0x8040C0FFu | bits64(0.5f) << 32}, {0x05, xyz(256, 32, 0x380000)},
+             {0x02, bits64(0.125f) << 32}, {0x01, 0x80FF8040u | bits64(0.125f) << 32}, {0x05, xyz(128, 128, 0x380000)},
+             {0x14, 0x60}});
     // A sprite from the CLUT texture, by texel coordinates, behind an alpha test.
     const uint64_t tex8 = 2304 | 2ull << 14 | 0x13ull << 20 | 6ull << 26 | 6ull << 30 | 1ull << 34 | 1ull << 35 | 2560ull << 37;
     gsWrite({{0x06, tex8}, {0x08, 0}, {0x47, 1 | 6 << 1 | 0x40 << 4 | 1ull << 16 | 1ull << 17},
@@ -887,9 +895,10 @@ void gsWriteAll(const std::vector<std::pair<uint32_t, uint64_t>>& regs) {
 
 // Many small primitives, drawn by `threads` threads (on the GS's own thread
 // if `ownThread`), with what makes the draw threads wait between them: a
-// texture drawn earlier in the batch, a texture drawn or copied over after
-// primitives that sample it, the same memory drawn under another layout, and
-// an upload over a texture in use. Returns every buffer involved.
+// texture or a mipmap level drawn earlier in the batch, a texture drawn or
+// copied over after primitives that sample it, the same memory drawn under
+// another layout, and an upload over a texture in use. Returns every buffer
+// involved.
 std::vector<uint32_t> drawBatchScene(int threads, bool ownThread = false) {
     gs::init();
     gs::setDrawThreads(threads);
@@ -976,6 +985,17 @@ std::vector<uint32_t> drawBatchScene(int threads, bool ownThread = false) {
     r.push_back({0x40, 255ull << 16 | 127ull << 48});
     triangles(r, 300, texTarget);
     triangles(r, 300, tex32);
+    // Page 104 drawn, then sampled as a texture's second level (K 1,
+    // LINEAR_MIPMAP_NEAREST): the batch must be drawn first.
+    r.push_back({0x4C, 104 | 1ull << 16});
+    r.push_back({0x40, 63ull << 16 | 63ull << 48});
+    sprites(r, 200, 64, 64);
+    r.push_back({0x4C, frame});
+    r.push_back({0x40, 255ull << 16 | 127ull << 48});
+    r.push_back({0x34, 104 * 32 | 1ull << 14});
+    r.push_back({0x14, 1 | 1 << 2 | 4 << 6 | 16ull << 32});
+    triangles(r, 300, tex32);
+    r.push_back({0x14, 0});
     // Page 120 drawn as PSMCT32, then as PSMCT16: other rows own its words.
     r.push_back({0x4C, 120 | 2ull << 16});
     r.push_back({0x40, 127ull << 16 | 63ull << 48});
@@ -1009,7 +1029,7 @@ std::vector<uint32_t> drawBatchScene(int threads, bool ownThread = false) {
             out.push_back(gs::readPixel32(0, 4, 0x00, x, y));
             out.push_back(gs::readPixel32(32, 4, 0x30, x, y));
         }
-    for (const uint32_t page : {64u, 96u})
+    for (const uint32_t page : {64u, 96u, 104u})
         for (int y = 0; y < 64; ++y)
             for (int x = 0; x < 64; ++x) out.push_back(gs::readPixel32(page, 1, 0x00, x, y));
     for (int y = 0; y < 64; ++y)
@@ -1321,7 +1341,8 @@ TEST_CASE(gs_textures_filter_as_tex1_asks) {
     // A 64x64 square shows a 4x4 texture, 16 pixels a texel: pixel x samples
     // u = x / 16. Nearest takes texel x / 16; bilinear weighs the four around
     // u - 1/2, each wrapped on its own. TEX1's level of detail (LOD) is
-    // log2(1 / |Q|) * 2^L + K, or K with LCM: below 0 MMAG filters, from 0 on MMIN.
+    // log2(1 / |Q|) * 2^L + K, or K with LCM or by UV: below 0 MMAG filters,
+    // from 0 on MMIN, but with MXL 0 MMAG alone.
     gs::init();
     gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
     std::vector<uint32_t> texels, indices, clut(256);
@@ -1344,10 +1365,15 @@ TEST_CASE(gs_textures_filter_as_tex1_asks) {
     auto tex1 = [](bool lcm, uint64_t mxl, bool mmag, uint64_t mmin, uint64_t l, int k) {
         return (lcm ? 1ull : 0) | mxl << 2 | (mmag ? 1ull : 0) << 5 | mmin << 6 | l << 19 | (static_cast<uint64_t>(k) & 0xFFF) << 32;
     };
-    // The square by UV, with Q for the level of detail.
+    // The square by UV, with Q; and by ST, where S / Q runs from 0 to 1
+    // (exactly, for a Q that is a power of 2).
     auto square = [&](uint64_t tex0, uint64_t t1, float q, uint64_t clamp) {
         gsWrite({{0x06, tex0}, {0x14, t1}, {0x08, clamp}, {0x00, 6 | 1 << 4 | 1 << 8}, {0x01, 0x80808080u | bits64(q) << 32},
                  {0x03, 0}, {0x05, xyz(0, 0, 0)}, {0x03, 64 | 64ull << 16}, {0x05, xyz(64, 64, 0)}});
+    };
+    auto stSquare = [&](uint64_t tex0, uint64_t t1, float q) {
+        gsWrite({{0x06, tex0}, {0x14, t1}, {0x08, 1 | 1 << 2}, {0x00, 6 | 1 << 4}, {0x01, 0x80808080u | bits64(q) << 32},
+                 {0x02, 0}, {0x05, xyz(0, 0, 0)}, {0x02, bits64(q) | bits64(q) << 32}, {0x05, xyz(64, 64, 0)}});
     };
     auto nearest = [](int x, int y) -> uint64_t { return filterTexel(x >> 4, y >> 4); };
     auto linear = [](int x, int y, int (*wu)(int), int (*wv)(int)) -> uint64_t {
@@ -1368,33 +1394,40 @@ TEST_CASE(gs_textures_filter_as_tex1_asks) {
         return n;
     };
 
-    // Nearest; K alone: below 0 magnified (MMAG bilinear), 0 reduced (MMIN nearest).
+    // Nearest. K alone (LCM), with MXL 1: below 0 magnified (MMAG bilinear),
+    // 0 reduced (MMIN nearest).
     square(tex32, 0, 1.0f, kClamp);
     CHECK_EQ(mismatches(nearest), size_t(0));
-    square(tex32, tex1(true, 0, true, 0, 0, -1), 1.0f, kClamp);
+    square(tex32, tex1(true, 1, true, 0, 0, -1), 1.0f, kClamp);
     CHECK_EQ(mismatches(linearClamped), size_t(0));
-    square(tex32, tex1(true, 0, true, 0, 0, 0), 1.0f, kClamp);
+    square(tex32, tex1(true, 1, true, 0, 0, 0), 1.0f, kClamp);
     CHECK_EQ(mismatches(nearest), size_t(0));
-    // The LOD from Q.
-    square(tex32, tex1(false, 0, true, 0, 0, 0), 2.0f, kClamp);    // -1
-    CHECK_EQ(mismatches(linearClamped), size_t(0));
-    square(tex32, tex1(false, 0, true, 0, 0, 0), -2.0f, kClamp);   // -1: |Q|
-    CHECK_EQ(mismatches(linearClamped), size_t(0));
-    square(tex32, tex1(false, 0, true, 0, 0, 0), 1.0f, kClamp);    // 0
-    CHECK_EQ(mismatches(nearest), size_t(0));
-    square(tex32, tex1(false, 0, true, 0, 1, -16), 0.75f, kClamp);   // 2 * 0.415 - 1
-    CHECK_EQ(mismatches(linearClamped), size_t(0));
-    square(tex32, tex1(false, 0, true, 0, 1, -16), 0.6f, kClamp);    // 2 * 0.737 - 1
-    CHECK_EQ(mismatches(nearest), size_t(0));
-    // The mipmap modes of MMIN filter the first level as they filter each level.
-    for (const uint64_t mmin : {1u, 4u, 5u}) {
-        square(tex32, tex1(true, 0, false, mmin, 0, 0), 1.0f, kClamp);
+    // With MXL 0, MMAG filters whatever the LOD and MMIN is ignored.
+    for (const uint64_t mmin : {0u, 1u, 2u, 3u, 4u, 5u}) {
+        square(tex32, tex1(true, 0, false, mmin, 0, 16), 1.0f, kClamp);
+        CHECK_EQ(mismatches(nearest), size_t(0));
+        square(tex32, tex1(true, 0, true, mmin, 0, 16), 1.0f, kClamp);
         CHECK_EQ(mismatches(linearClamped), size_t(0));
     }
-    for (const uint64_t mmin : {2u, 3u}) {
-        square(tex32, tex1(true, 0, false, mmin, 0, 0), 1.0f, kClamp);
-        CHECK_EQ(mismatches(nearest), size_t(0));
-    }
+    // The LOD from Q, by ST: at Q 2 and -2 it is -1, magnified; at 1 it is 0.
+    // With L 1 and K -1.5, Q 1/2 gives 0.5 (reduced) and Q 1 gives -1.5.
+    const uint64_t byQ = tex1(false, 1, true, 0, 0, 0), byQL = tex1(false, 1, true, 0, 1, -24);
+    stSquare(tex32, byQ, 2.0f);
+    CHECK_EQ(mismatches(linearClamped), size_t(0));
+    stSquare(tex32, byQ, -2.0f);
+    CHECK_EQ(mismatches(linearClamped), size_t(0));
+    stSquare(tex32, byQ, 1.0f);
+    CHECK_EQ(mismatches(nearest), size_t(0));
+    stSquare(tex32, byQL, 0.5f);
+    CHECK_EQ(mismatches(nearest), size_t(0));
+    stSquare(tex32, byQL, 1.0f);
+    CHECK_EQ(mismatches(linearClamped), size_t(0));
+    // By UV, Q is not interpolated: the LOD is K alone, 0 here whatever Q.
+    // So it is with LCM by ST.
+    square(tex32, byQ, 2.0f, kClamp);
+    CHECK_EQ(mismatches(nearest), size_t(0));
+    stSquare(tex32, tex1(true, 1, true, 0, 0, 0), 2.0f);
+    CHECK_EQ(mismatches(nearest), size_t(0));
 
     // Each texel wraps on its own: REPEAT; REGION_CLAMP to u in 1..2 with REGION_REPEAT to v = (v & 1) | 2.
     const uint64_t both = tex1(false, 0, true, 1, 0, 0);
@@ -1410,25 +1443,229 @@ TEST_CASE(gs_textures_filter_as_tex1_asks) {
     square(tex8, both, 1.0f, kClamp);
     CHECK_EQ(mismatches(linearClamped), size_t(0));
 
-    // By ST: S / Q runs from 0 to 1 across the square.
-    const uint64_t magOnly = tex1(false, 0, true, 0, 0, 0);
-    for (const float q : {2.0f, 0.5f}) {
-        gsWrite({{0x06, tex32}, {0x14, magOnly}, {0x08, kClamp}, {0x00, 6 | 1 << 4}, {0x01, 0x80808080u | bits64(q) << 32},
-                 {0x02, 0}, {0x05, xyz(0, 0, 0)}, {0x02, bits64(q) | bits64(q) << 32}, {0x05, xyz(64, 64, 0)}});
-        CHECK_EQ(q > 1 ? mismatches(linearClamped) : mismatches(nearest), size_t(0));
-    }
-    // Triangles over the top left half, by ST with Q 2, and by UV with Q
-    // from 2 down to 0.5 at the bottom left corner: magnified above y = 42.
+    // Triangles over the top left half: by ST with Q 2, magnified; by UV
+    // with Q from 2 down to 0.5 at the bottom left corner, which Q does not
+    // reach: K alone, reduced.
     auto inside = [](int x, int y) { return x + y < 63; };
     square(tex32, 0, 1.0f, kClamp);
-    gsWrite({{0x14, magOnly}, {0x00, 3 | 1 << 4}, {0x01, 0x80808080u | bits64(2.0f) << 32}, {0x02, 0}, {0x05, xyz(0, 0, 0)},
+    gsWrite({{0x14, byQ}, {0x00, 3 | 1 << 4}, {0x01, 0x80808080u | bits64(2.0f) << 32}, {0x02, 0}, {0x05, xyz(0, 0, 0)},
              {0x02, bits64(2.0f)}, {0x05, xyz(64, 0, 0)}, {0x02, bits64(2.0f) << 32}, {0x05, xyz(0, 64, 0)}});
     CHECK_EQ(mismatches([&](int x, int y) { return inside(x, y) ? linearClamped(x, y) : kAnyPixel; }), size_t(0));
     square(tex32, 0, 1.0f, kClamp);
-    gsWrite({{0x14, magOnly}, {0x00, 3 | 1 << 4 | 1 << 8}, {0x01, 0x80808080u | bits64(2.0f) << 32}, {0x03, 0}, {0x05, xyz(0, 0, 0)},
+    gsWrite({{0x14, byQ}, {0x00, 3 | 1 << 4 | 1 << 8}, {0x01, 0x80808080u | bits64(2.0f) << 32}, {0x03, 0}, {0x05, xyz(0, 0, 0)},
              {0x03, 64}, {0x05, xyz(64, 0, 0)}, {0x01, 0x80808080u | bits64(0.5f) << 32}, {0x03, 64ull << 16}, {0x05, xyz(0, 64, 0)}});
-    CHECK_EQ(mismatches([&](int x, int y) {
-                 return !inside(x, y) ? kAnyPixel : y < 40 ? linearClamped(x, y) : y > 45 ? nearest(x, y) : kAnyPixel;
+    CHECK_EQ(mismatches([&](int x, int y) { return inside(x, y) ? nearest(x, y) : kAnyPixel; }), size_t(0));
+}
+
+namespace {
+
+// Texel (x, y) of level n of the textures the mipmap test samples, each its
+// own colour; `seed` tells copies apart.
+uint32_t mipTexel(int n, int x, int y, uint32_t seed) {
+    uint32_t h = (static_cast<uint32_t>(n) << 20 | static_cast<uint32_t>(y) << 10 | static_cast<uint32_t>(x)) * 2654435761u + seed;
+    h ^= h >> 15;
+    h *= 2246822519u;
+    return h ^ (h >> 13);
+}
+
+// Colour a blended with b by f sixteenths of b, each channel rounded down.
+uint32_t blendOf(uint32_t a, uint32_t b, uint32_t f) {
+    uint32_t out = 0;
+    for (int sh = 0; sh < 32; sh += 8) out |= ((((a >> sh) & 0xFF) * (16 - f) + ((b >> sh) & 0xFF) * f) >> 4) << sh;
+    return out;
+}
+
+} // namespace
+
+TEST_CASE(gs_textures_use_mipmaps_as_tex1_asks) {
+    // A 64x64 square shows a 32x32 texture by UV, 2 pixels a texel: pixel x
+    // samples u = x / 2 on the first level, x / 4 on the second... Level n is
+    // 32 >> n texels wide (at least 1), at page 8 + n. The level of detail
+    // (LOD), in sixteenths, picks it: the MIPMAP_NEAREST modes round it to a
+    // level, the MIPMAP_LINEAR ones blend the two around it by its fraction,
+    // rounding down; never past MXL.
+    gs::init();
+    gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
+    auto upload = [](uint32_t block, int n, int size, uint32_t seed) {
+        std::vector<uint32_t> texels;
+        for (int y = 0; y < size; ++y)
+            for (int x = 0; x < size; ++x) texels.push_back(mipTexel(n, x, y, seed));
+        gsUpload(block, 1, 0x00, size, size, texels);
+    };
+    for (int n = 0; n <= 6; ++n) upload(static_cast<uint32_t>(8 + n) * 32, n, std::max(32 >> n, 1), 0);
+    auto at = [](int n) { return static_cast<uint64_t>(8 + n) * 32 | 1ull << 14; };   // TBP, TBW 1
+    const uint64_t mip1 = at(1) | at(2) << 20 | at(3) << 40, mip2 = at(4) | at(5) << 20 | at(6) << 40;
+    gsWrite({{0x34, mip1}, {0x36, mip2}});
+    auto tex0 = [](uint64_t block, uint64_t tw) {   // TBW 1, TCC, decal
+        return block | 1ull << 14 | tw << 26 | tw << 30 | 1ull << 34 | 1ull << 35;
+    };
+    auto tex1 = [](bool lcm, uint64_t mxl, bool mmag, uint64_t mmin, uint64_t l, int k) {
+        return (lcm ? 1ull : 0) | mxl << 2 | (mmag ? 1ull : 0) << 5 | mmin << 6 | l << 19 | (static_cast<uint64_t>(k) & 0xFFF) << 32;
+    };
+    constexpr uint64_t kMtba = 1ull << 9, kClamp = 1 | 1 << 2;
+    int size = 32;       // the first level's width
+    uint32_t seed = 0;   // the copy sampled
+    auto draw = [&](float q) {
+        const uint64_t uv = static_cast<uint64_t>(size) * 16;
+        gsWrite({{0x00, 6 | 1 << 4 | 1 << 8}, {0x01, 0x80808080u | bits64(q) << 32}, {0x03, 0}, {0x05, xyz(0, 0, 0)},
+                 {0x03, uv | uv << 16}, {0x05, xyz(64, 64, 0)}});
+    };
+    auto square = [&](uint64_t t0, uint64_t t1, float q, uint64_t clamp) {
+        gsWrite({{0x06, t0}, {0x14, t1}, {0x08, clamp}});
+        draw(q);
+    };
+    // Level n at pixel (x, y), its coordinates wrapped by wu(c, n) and wv(c, n).
+    auto nearestAt = [&](int n, int x, int y, auto wu, auto wv) {
+        return mipTexel(n, wu((x * size / 64) >> n, n), wv((y * size / 64) >> n, n), seed);
+    };
+    auto linearAt = [&](int n, int x, int y, auto wu, auto wv) {
+        const int su = ((x * size / 4) >> n) - 8, sv = ((y * size / 4) >> n) - 8, x0 = su >> 4, y0 = sv >> 4;
+        auto t = [&](int tx, int ty) { return mipTexel(n, wu(tx, n), wv(ty, n), seed); };
+        return bilinearOf(t(x0, y0), t(x0 + 1, y0), t(x0, y0 + 1), t(x0 + 1, y0 + 1), static_cast<uint32_t>(su & 15),
+                          static_cast<uint32_t>(sv & 15));
+    };
+    auto clamped = [&](int c, int n) { return std::clamp(c, 0, std::max(size >> n, 1) - 1); };
+    auto linear = [&](int n) { return [&, n](int x, int y) -> uint64_t { return linearAt(n, x, y, clamped, clamped); }; };
+    auto nearest = [&](int n) { return [&, n](int x, int y) -> uint64_t { return nearestAt(n, x, y, clamped, clamped); }; };
+    auto blend = [](auto a, auto b, uint32_t f) {
+        return [=](int x, int y) -> uint64_t { return blendOf(static_cast<uint32_t>(a(x, y)), static_cast<uint32_t>(b(x, y)), f); };
+    };
+    auto mismatches = [](auto want) {
+        size_t bad = 0;
+        for (int y = 0; y < 64; ++y)
+            for (int x = 0; x < 64; ++x) {
+                const uint64_t w = want(x, y);
+                bad += w != kAnyPixel && gs::readPixel32(0, 1, 0x00, x, y) != w;
+            }
+        return bad;
+    };
+
+    // K alone (LCM), whatever Q. LINEAR_MIPMAP_NEAREST rounds the LOD: K = 16n
+    // is level n, through MIPTBP2's levels 4-6; 7/16 rounds to level 0 and
+    // 8/16 to level 1.
+    for (int n = 0; n <= 6; ++n) {
+        square(tex0(256, 5), tex1(true, 6, false, 4, 0, 16 * n), 0.5f, kClamp);
+        CHECK_EQ(mismatches(linear(n)), size_t(0));
+    }
+    square(tex0(256, 5), tex1(true, 6, false, 4, 0, 7), 0.5f, kClamp);
+    CHECK_EQ(mismatches(linear(0)), size_t(0));
+    square(tex0(256, 5), tex1(true, 6, false, 4, 0, 8), 0.5f, kClamp);
+    CHECK_EQ(mismatches(linear(1)), size_t(0));
+    // Below 0 the texture is magnified: MMAG filters the first level (nearest here).
+    square(tex0(256, 5), tex1(true, 6, false, 4, 0, -1), 0.5f, kClamp);
+    CHECK_EQ(mismatches(nearest(0)), size_t(0));
+    // NEAREST_MIPMAP_NEAREST: 24/16 rounds to level 2, 23/16 to level 1.
+    square(tex0(256, 5), tex1(true, 6, true, 2, 0, 24), 0.5f, kClamp);
+    CHECK_EQ(mismatches(nearest(2)), size_t(0));
+    square(tex0(256, 5), tex1(true, 6, true, 2, 0, 23), 0.5f, kClamp);
+    CHECK_EQ(mismatches(nearest(1)), size_t(0));
+    // The MIPMAP_LINEAR modes blend the two levels around the LOD: at 1 + 4/16,
+    // at 2, and NEAREST_MIPMAP_LINEAR at 1 + 8/16.
+    square(tex0(256, 5), tex1(true, 6, false, 5, 0, 20), 0.5f, kClamp);
+    CHECK_EQ(mismatches(blend(linear(1), linear(2), 4)), size_t(0));
+    square(tex0(256, 5), tex1(true, 6, false, 5, 0, 32), 0.5f, kClamp);
+    CHECK_EQ(mismatches(linear(2)), size_t(0));
+    square(tex0(256, 5), tex1(true, 6, false, 3, 0, 24), 0.5f, kClamp);
+    CHECK_EQ(mismatches(blend(nearest(1), nearest(2), 8)), size_t(0));
+    // Never past MXL: with MXL 3, 2 + 8/16 blends levels 2 and 3, and from 3
+    // on level 3 is alone.
+    square(tex0(256, 5), tex1(true, 3, false, 5, 0, 40), 0.5f, kClamp);
+    CHECK_EQ(mismatches(blend(linear(2), linear(3), 8)), size_t(0));
+    for (const int k : {56, 2047}) {
+        square(tex0(256, 5), tex1(true, 3, false, 5, 0, k), 0.5f, kClamp);
+        CHECK_EQ(mismatches(linear(3)), size_t(0));
+    }
+    // MMIN without a mipmap mode keeps the first level; with MXL 0, MMAG
+    // filters it whatever the LOD.
+    square(tex0(256, 5), tex1(true, 6, false, 1, 0, 32), 0.5f, kClamp);
+    CHECK_EQ(mismatches(linear(0)), size_t(0));
+    square(tex0(256, 5), tex1(true, 0, false, 5, 0, 32), 0.5f, kClamp);
+    CHECK_EQ(mismatches(nearest(0)), size_t(0));
+
+    // By UV, Q is not interpolated and the LOD is K alone: level 1 here,
+    // though Q is 1/4.
+    square(tex0(256, 5), tex1(false, 6, false, 4, 0, 16), 0.25f, kClamp);
+    CHECK_EQ(mismatches(linear(1)), size_t(0));
+    // By ST the LOD comes from Q: log2(1 / |Q|) * 2^L + K, rounded down to
+    // sixteenths, also where MMAG and MMIN filter alike (as Agent Under Fire
+    // asks); at Q 4 it is -2, magnified, and Q 0 is past every level. With
+    // S = T = 0 every pixel shows texel (0, 0) of its levels.
+    struct ByQ {
+        float q;
+        uint64_t l;
+        int k;
+    };
+    auto byST = [&](uint64_t t1, float q) {
+        gsWrite({{0x06, tex0(256, 5)}, {0x14, t1}, {0x08, kClamp}, {0x00, 6 | 1 << 4}, {0x01, 0x80808080u | bits64(q) << 32},
+                 {0x02, 0}, {0x05, xyz(0, 0, 0)}, {0x05, xyz(64, 64, 0)}});
+    };
+    auto first = [&](int n) { return [&, n](int, int) -> uint64_t { return mipTexel(n, 0, 0, seed); }; };
+    for (const ByQ& c : {ByQ{0.25f, 0, 0}, ByQ{-0.25f, 0, 0}, ByQ{0.3f, 0, 0}, ByQ{0.3f, 1, -32}, ByQ{0.05f, 0, -16}}) {
+        byST(tex1(false, 6, true, 5, c.l, c.k), c.q);
+        const int lod = static_cast<int>(std::floor(16.0 * (1 << c.l) * std::log2(1.0 / std::fabs(c.q)))) + c.k;
+        CHECK_EQ(mismatches(blend(first(lod >> 4), first((lod >> 4) + 1), static_cast<uint32_t>(lod & 15))), size_t(0));
+    }
+    byST(tex1(false, 6, false, 5, 0, 0), 4.0f);
+    CHECK_EQ(mismatches(first(0)), size_t(0));
+    byST(tex1(false, 3, false, 5, 0, 0), 0.0f);
+    CHECK_EQ(mismatches(first(3)), size_t(0));
+    // With LCM the LOD is K by ST too: level 1, though Q is 1/4.
+    byST(tex1(true, 6, false, 4, 0, 16), 0.25f);
+    CHECK_EQ(mismatches(first(1)), size_t(0));
+
+    // CLAMP's region scales with the level: REGION_CLAMP of u to 2..9 and v
+    // to 3..12 is 1..4 and 1..6 on level 1; REGION_REPEAT of u to
+    // (u & 7) | 8 is (u & 1) | 2 on level 2, where REPEAT wraps v at 8 texels.
+    square(tex0(256, 5), tex1(true, 6, false, 4, 0, 16), 0.5f, 2 | 2 << 2 | 2 << 4 | 9 << 14 | 3ull << 24 | 12ull << 34);
+    CHECK_EQ(mismatches([&](int x, int y) -> uint64_t {
+                 return linearAt(1, x, y, [](int c, int n) { return std::clamp(c, 2 >> n, 9 >> n); },
+                                 [](int c, int n) { return std::clamp(c, 3 >> n, 12 >> n); });
+             }),
+             size_t(0));
+    square(tex0(256, 5), tex1(true, 6, false, 4, 0, 32), 0.5f, 3 | 7 << 4 | 8 << 14);
+    CHECK_EQ(mismatches([&](int x, int y) -> uint64_t {
+                 return linearAt(2, x, y, [](int c, int n) { return (c & (7 >> n)) | (8 >> n); }, [](int c, int) { return c & 7; });
+             }),
+             size_t(0));
+
+    // MTBA: writing TEX0 places levels 1-3 behind the first, each a quarter of
+    // the one before. A 32x32 texture at block 512 (16 blocks) has them at
+    // blocks 528, 532 and 533, where copies of the levels in other colours sit.
+    struct Copy {
+        uint32_t block;
+        int n, size;
+    };
+    for (const Copy& c : {Copy{512, 0, 32}, Copy{528, 1, 16}, Copy{532, 2, 8}, Copy{533, 3, 4}}) upload(c.block, c.n, c.size, 99);
+    seed = 99;
+    for (int n = 0; n <= 3; ++n) {
+        gsWrite({{0x14, kMtba}});
+        square(tex0(512, 5), tex1(true, 3, false, 4, 0, 16 * n) | kMtba, 0.5f, kClamp);
+        CHECK_EQ(mismatches(linear(n)), size_t(0));
+    }
+    // Not when TEX2 is written, nor for a texture under 32 texels wide: MIPTBP1 stays.
+    seed = 0;
+    gsWrite({{0x34, mip1}, {0x14, 0}, {0x06, tex0(512, 5)}, {0x14, kMtba}, {0x16, 0},
+             {0x14, tex1(true, 3, false, 4, 0, 16) | kMtba}});
+    draw(0.5f);
+    CHECK_EQ(mismatches(linear(1)), size_t(0));
+    size = 16;
+    gsWrite({{0x14, kMtba}});
+    square(tex0(256, 4), tex1(true, 3, false, 4, 0, 16) | kMtba, 0.5f, kClamp);
+    CHECK_EQ(mismatches(linear(1)), size_t(0));
+
+    // Per pixel: a triangle by ST over the top left half, Q 1 along the top
+    // and 1/16 at the bottom left, S = T = 0, LINEAR_MIPMAP_NEAREST by Q.
+    // Pixels within 1/100 of a sixteenth of where the LOD rounds to the next
+    // level are not checked.
+    size = 32;
+    gsWrite({{0x14, 0}, {0x34, mip1}});
+    square(tex0(256, 5), 0, 1.0f, kClamp);
+    gsWrite({{0x14, tex1(false, 6, false, 4, 0, 0)}, {0x00, 3 | 1 << 4}, {0x02, 0}, {0x01, 0x80808080u | bits64(1.0f) << 32},
+             {0x05, xyz(0, 0, 0)}, {0x05, xyz(64, 0, 0)}, {0x01, 0x80808080u | bits64(0.0625f) << 32}, {0x05, xyz(0, 64, 0)}});
+    CHECK_EQ(mismatches([&](int x, int y) -> uint64_t {
+                 const double lod = 16 * std::log2(1 / (1 - 15.0 / 16 * y / 64)), past = std::fmod(lod + 8, 16);
+                 if (x + y >= 63 || past < 0.01 || past > 15.99) return kAnyPixel;
+                 return mipTexel(std::min((static_cast<int>(lod) + 8) >> 4, 6), 0, 0, seed);
              }),
              size_t(0));
 }

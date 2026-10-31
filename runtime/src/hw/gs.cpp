@@ -226,7 +226,8 @@ enum Reg : uint32_t {
     PRIM = 0x00, RGBAQ = 0x01, ST = 0x02, UV = 0x03, XYZF2 = 0x04, XYZ2 = 0x05, TEX0_1 = 0x06, TEX0_2 = 0x07,
     CLAMP_1 = 0x08, CLAMP_2 = 0x09, FOG = 0x0A, XYZF3 = 0x0C, XYZ3 = 0x0D, TEX1_1 = 0x14, TEX1_2 = 0x15,
     TEX2_1 = 0x16, TEX2_2 = 0x17, XYOFFSET_1 = 0x18, XYOFFSET_2 = 0x19, PRMODECONT = 0x1A, PRMODE = 0x1B,
-    TEXCLUT = 0x1C, SCANMSK = 0x22, TEXA = 0x3B, FOGCOL = 0x3D, TEXFLUSH = 0x3F, SCISSOR_1 = 0x40,
+    TEXCLUT = 0x1C, SCANMSK = 0x22, MIPTBP1_1 = 0x34, MIPTBP1_2 = 0x35, MIPTBP2_1 = 0x36, MIPTBP2_2 = 0x37,
+    TEXA = 0x3B, FOGCOL = 0x3D, TEXFLUSH = 0x3F, SCISSOR_1 = 0x40,
     SCISSOR_2 = 0x41, ALPHA_1 = 0x42, ALPHA_2 = 0x43, DIMX = 0x44, DTHE = 0x45, COLCLAMP = 0x46, TEST_1 = 0x47,
     TEST_2 = 0x48, PABE = 0x49, FBA_1 = 0x4A, FBA_2 = 0x4B, FRAME_1 = 0x4C, FRAME_2 = 0x4D, ZBUF_1 = 0x4E,
     ZBUF_2 = 0x4F, BITBLTBUF = 0x50, TRXPOS = 0x51, TRXREG = 0x52, TRXDIR = 0x53, HWREG = 0x54, SIGNAL = 0x60,
@@ -362,7 +363,7 @@ struct Env {
     uint32_t fbp, fbw, fpsm, fbmsk;
     uint32_t zbp, zpsm;
     bool zmsk;
-    uint64_t test, alpha, tex0, tex1, clamp;
+    uint64_t test, alpha, tex0, tex1, clamp, miptbp1, miptbp2;
     int ofx, ofy;   // 12.4 fixed point
     int scx0, scx1, scy0, scy1;
     bool fba;
@@ -384,6 +385,8 @@ Env currentEnv() {
     e.alpha = g_regs[ALPHA_1 + ctx];
     e.tex0 = g_regs[TEX0_1 + ctx];
     e.tex1 = g_regs[TEX1_1 + ctx];
+    e.miptbp1 = g_regs[MIPTBP1_1 + ctx];
+    e.miptbp2 = g_regs[MIPTBP2_1 + ctx];
     e.clamp = g_regs[CLAMP_1 + ctx];
     const uint64_t off = g_regs[XYOFFSET_1 + ctx];
     e.ofx = static_cast<int>(field(off, 0, 16));
@@ -397,23 +400,35 @@ Env currentEnv() {
     return e;
 }
 
+// One level of a texture: the first is TEX0's, the next six (mipmaps) are
+// MIPTBP1's and MIPTBP2's, each half the size of the one before.
+struct Level {
+    uint32_t tbp, tbw;
+    int tw, th;                          // size, texels
+    int minu, maxu, minv, maxv;          // CLAMP's region, scaled to the level
+};
+
 // What a primitive's pixels need, decoded from the registers when they
 // change rather than for every pixel.
 struct Draw {
     Env e;
     bool tex, fst, gouraud;              // PRIM: TME, FST, IIP
-    uint32_t tbp, tbw, tpsm;             // TEX0
-    int tw, th;                          // texture size, texels
-    float twf, thf;
+    uint32_t tpsm;                       // TEX0
+    float twf, thf;                      // the first level's size, texels
     uint32_t tfx;                        // modulate, decal, highlight, highlight2
     bool tcc;
     uint32_t wms, wmt;                   // CLAMP
-    int minu, maxu, minv, maxv;
-    // TEX1: nearest or bilinear. The level of detail (LOD) picks the filter
-    // for a magnified texture (MMAG) or a reduced one (MMIN). `linear` holds
-    // it unless the LOD depends on the pixel's Q (lodByQ).
+    // TEX1: nearest or bilinear, from one level or blending two. The level
+    // of detail (LOD) picks the filter for a magnified texture (MMAG) or a
+    // reduced one (MMIN), and MMIN's level. `linear` holds the filter unless
+    // the LOD depends on the pixel's Q (lodByQ) or there are mipmaps.
     bool linear, lodByQ, magLinear, minLinear;
-    float lodQ;                          // with lodByQ: |Q| above it is magnified
+    int lodK, lodL;                      // K in sixteenths, L
+    uint32_t magnifiedFrom;              // with lodByQ: the bits of the least |Q| whose LOD is below 0
+    int mipLevels;                       // the levels after the first that MMIN reaches (MXL)
+    int firstLevel, lastLevel;           // the levels sampling can reach: by Q all of them, else those K picks
+    bool mipLinear;                      // MMIN blends the two levels around the LOD
+    Level level[7];
     uint32_t ta0, ta1;                   // TEXA
     bool aem;
     uint32_t cbp, cpsm, csa;             // the CLUT
@@ -463,20 +478,20 @@ uint32_t wrapCoord(int c, int size, uint32_t mode, int minv, int maxv) {
     }
 }
 
-// One texel as RGBA: its coordinates wrapped as CLAMP says, a CLUT format
-// looked up, a 16 or 24-bit one expanded with TEXA.
-uint32_t texel(const Draw& d, int ix, int iy) {
-    const uint32_t x = wrapCoord(ix, d.tw, d.wms, d.minu, d.maxu);
-    const uint32_t y = wrapCoord(iy, d.th, d.wmt, d.minv, d.maxv);
+// One texel of level `l` as RGBA: its coordinates wrapped as CLAMP says, a
+// CLUT format looked up, a 16 or 24-bit one expanded with TEXA.
+uint32_t texel(const Draw& d, const Level& l, int ix, int iy) {
+    const uint32_t x = wrapCoord(ix, l.tw, d.wms, l.minu, l.maxu);
+    const uint32_t y = wrapCoord(iy, l.th, d.wmt, l.minv, l.maxv);
     switch (d.tpsm) {
-    case PSMCT32: return readRaw(d.tbp, d.tbw, d.tpsm, x, y);
+    case PSMCT32: return readRaw(l.tbp, l.tbw, d.tpsm, x, y);
     case PSMCT24: {
-        const uint32_t c = readRaw(d.tbp, d.tbw, d.tpsm, x, y);
+        const uint32_t c = readRaw(l.tbp, l.tbw, d.tpsm, x, y);
         return c | ((d.aem && c == 0) ? 0 : d.ta0 << 24);
     }
-    case PSMCT16: case PSMCT16S: return expand16(readRaw(d.tbp, d.tbw, d.tpsm, x, y), d.ta0, d.ta1, d.aem);
+    case PSMCT16: case PSMCT16S: return expand16(readRaw(l.tbp, l.tbw, d.tpsm, x, y), d.ta0, d.ta1, d.aem);
     case PSMT8: case PSMT4: case PSMT8H: case PSMT4HL: case PSMT4HH:
-        return clutLookup(d, readRaw(d.tbp, d.tbw, d.tpsm, x, y));
+        return clutLookup(d, readRaw(l.tbp, l.tbw, d.tpsm, x, y));
     default:
         PS2_UNIMPL("gs", "texture format", "texture format 0x%x is not supported", d.tpsm);
         return 0xFFFFFFFFu;
@@ -491,27 +506,94 @@ int sixteenths(float c) {
     return f >= -1073741824.0f ? static_cast<int>(f) : -(1 << 30);   // NaN too
 }
 
-// The texture at texel coordinates (u, v); the pixel's Q gives the level of
-// detail. Nearest takes the texel (u, v) falls in. Bilinear blends the four
-// around (u - 1/2, v - 1/2), each wrapped on its own, by where that point
-// lies between them in sixteenths of a texel, and rounds down.
-uint32_t sampleTexture(const Draw& d, float u, float v, float q) {
-    const bool linear = d.lodByQ ? (std::fabs(q) > d.lodQ ? d.magLinear : d.minLinear) : d.linear;
-    if (!linear) return texel(d, static_cast<int>(std::floor(u)), static_cast<int>(std::floor(v)));
-    const int su = sixteenths(u) - 8, sv = sixteenths(v) - 8;
+// Colours are blended two channels at a time, 16 bits each.
+constexpr uint32_t kLanes = 0x00FF00FFu;
+
+// Level `n` of the texture at (u, v), texel coordinates of the first level.
+// Nearest takes the texel the point falls in. Bilinear blends the four
+// around the point half a texel (of the level) up and left, each wrapped on
+// its own, by where that point lies between them in sixteenths of a texel,
+// and rounds down.
+uint32_t sampleLevel(const Draw& d, int n, bool linear, float u, float v) {
+    const Level& l = d.level[n];
+    if (!linear) return texel(d, l, static_cast<int>(std::floor(u)) >> n, static_cast<int>(std::floor(v)) >> n);
+    const int su = (sixteenths(u) >> n) - 8, sv = (sixteenths(v) >> n) - 8;
     const int x = su >> 4, y = sv >> 4;
     const auto fx = static_cast<uint32_t>(su & 15), fy = static_cast<uint32_t>(sv & 15);
-    const uint32_t c00 = texel(d, x, y);
+    const uint32_t c00 = texel(d, l, x, y);
     if ((fx | fy) == 0) return c00;
     // A texel whose weight is 0 is not read.
-    const uint32_t c10 = fx ? texel(d, x + 1, y) : 0, c01 = fy ? texel(d, x, y + 1) : 0;
-    const uint32_t c11 = fx && fy ? texel(d, x + 1, y + 1) : 0;
+    const uint32_t c10 = fx ? texel(d, l, x + 1, y) : 0, c01 = fy ? texel(d, l, x, y + 1) : 0;
+    const uint32_t c11 = fx && fy ? texel(d, l, x + 1, y + 1) : 0;
     const uint32_t w00 = (16 - fx) * (16 - fy), w10 = fx * (16 - fy), w01 = (16 - fx) * fy, w11 = fx * fy;   // sum 256
-    // Two channels at a time, 16 bits each: a weighted sum stays below 2^16.
-    constexpr uint32_t kLanes = 0x00FF00FFu;
+    // A weighted sum stays below 2^16.
     const uint32_t rb = ((c00 & kLanes) * w00 + (c10 & kLanes) * w10 + (c01 & kLanes) * w01 + (c11 & kLanes) * w11) >> 8;
     const uint32_t ga = (((c00 >> 8) & kLanes) * w00 + ((c10 >> 8) & kLanes) * w10 + ((c01 >> 8) & kLanes) * w01 +
                          ((c11 >> 8) & kLanes) * w11) >> 8;
+    return (rb & kLanes) | (ga & kLanes) << 8;
+}
+
+// floor(128 * log2(1 + m / 2^23)) for a float's mantissa m: log2 in steps
+// of 1/128 of an octave. Step i starts at the mantissa
+// ceil(2^23 * (2^(i / 128) - 1)), which doubles get exactly (none is within
+// 10^-5 of a whole number). The steps are wider than 2^15, so each 2^15 of
+// mantissa holds at most one start: the table keeps the steps before each,
+// and where a step starts inside it.
+struct Log2Steps {
+    std::array<uint8_t, 256> before{};
+    std::array<uint32_t, 256> start{};
+    Log2Steps() {
+        auto starts = [](int i) {
+            return i < 128 ? static_cast<uint32_t>(std::ceil(8388608.0 * (std::exp2(i / 128.0) - 1.0))) : 1u << 23;
+        };
+        int i = 1;
+        for (uint32_t b = 0; b < 256; ++b) {
+            while (starts(i) <= b << 15) ++i;
+            before[b] = static_cast<uint8_t>(i - 1);
+            start[b] = starts(i) < (b + 1) << 15 ? starts(i) : ~0u;
+        }
+    }
+    int operator()(uint32_t m) const { return before[m >> 15] + (m >= start[m >> 15] ? 1 : 0); }
+};
+const Log2Steps g_log2Steps;
+
+constexpr int kFarthest = 1 << 20;   // a level of detail past every level
+
+// The level of detail at |Q|, given as its float's bits, in sixteenths (K's
+// precision): log2(1 / |Q|) * 2^L + K, rounded down. That is K less
+// ceil(log2|Q| * 2^(4 + L)): the exponent's octaves and the mantissa's
+// steps, plus one unless the mantissa is 0 (any other has an irrational
+// log2). Q = 0 is the farthest. It falls as |Q| grows.
+int levelOfDetail(const Draw& d, uint32_t bits) {
+    const int e = static_cast<int>(bits >> 23);
+    if (e == 0) return kFarthest;   // 0 (the PS2 has no denormals)
+    const uint32_t m = bits & 0x7FFFFFu;
+    return d.lodK - (e - 127) * (16 << d.lodL) - (m ? (g_log2Steps(m) >> (3 - d.lodL)) + 1 : 0);
+}
+
+// The texture at (u, v), texel coordinates of the first level; the level of
+// detail (LOD) comes from the pixel's Q or from K. Below 0 the texture is
+// magnified and MMAG filters the first level. From 0 on MMIN filters the
+// first level, or with mipmaps the level nearest the LOD, or blends the two
+// around it by the LOD's sixteenths, rounding down; never past level MXL.
+uint32_t sampleTexture(const Draw& d, float u, float v, float q) {
+    if (!d.lodByQ && !d.mipLevels) return sampleLevel(d, 0, d.linear, u, v);
+    int lod = d.lodK;
+    if (d.lodByQ) {   // from magnifiedFrom on, only that it is magnified matters
+        const uint32_t bits = std::bit_cast<uint32_t>(q) & 0x7FFFFFFFu;
+        lod = bits >= d.magnifiedFrom ? -1 : levelOfDetail(d, bits);
+    }
+    if (lod < 0) return sampleLevel(d, 0, d.magLinear, u, v);
+    if (!d.mipLevels) return sampleLevel(d, 0, d.minLinear, u, v);
+    if (!d.mipLinear) return sampleLevel(d, std::min((lod + 8) >> 4, d.mipLevels), d.minLinear, u, v);
+    const int n = lod >> 4;
+    if (n >= d.mipLevels) return sampleLevel(d, d.mipLevels, d.minLinear, u, v);
+    const uint32_t a = sampleLevel(d, n, d.minLinear, u, v);
+    const auto f = static_cast<uint32_t>(lod & 15);
+    if (f == 0) return a;
+    const uint32_t b = sampleLevel(d, n + 1, d.minLinear, u, v);
+    const uint32_t rb = ((a & kLanes) * (16 - f) + (b & kLanes) * f) >> 4;
+    const uint32_t ga = (((a >> 8) & kLanes) * (16 - f) + ((b >> 8) & kLanes) * f) >> 4;
     return (rb & kLanes) | (ga & kLanes) << 8;
 }
 
@@ -547,43 +629,73 @@ const Draw& currentDraw() {
     d.tex = field(e.prim, 4, 1) != 0;
     d.fst = field(e.prim, 8, 1) != 0;
     d.gouraud = field(e.prim, 3, 1) != 0;
-    d.tbp = static_cast<uint32_t>(field(e.tex0, 0, 14));
-    d.tbw = static_cast<uint32_t>(field(e.tex0, 14, 6));
     d.tpsm = static_cast<uint32_t>(field(e.tex0, 20, 6));
-    d.tw = 1 << std::min<int>(10, static_cast<int>(field(e.tex0, 26, 4)));
-    d.th = 1 << std::min<int>(10, static_cast<int>(field(e.tex0, 30, 4)));
-    d.twf = static_cast<float>(d.tw);
-    d.thf = static_cast<float>(d.th);
+    const int tw = 1 << std::min<int>(10, static_cast<int>(field(e.tex0, 26, 4)));
+    const int th = 1 << std::min<int>(10, static_cast<int>(field(e.tex0, 30, 4)));
+    d.twf = static_cast<float>(tw);
+    d.thf = static_cast<float>(th);
     d.tcc = field(e.tex0, 34, 1) != 0;
     d.tfx = static_cast<uint32_t>(field(e.tex0, 35, 2));
     d.wms = static_cast<uint32_t>(field(e.clamp, 0, 2));
     d.wmt = static_cast<uint32_t>(field(e.clamp, 2, 2));
-    d.minu = static_cast<int>(field(e.clamp, 4, 10));
-    d.maxu = static_cast<int>(field(e.clamp, 14, 10));
-    d.minv = static_cast<int>(field(e.clamp, 24, 10));
-    d.maxv = static_cast<int>(field(e.clamp, 34, 10));
-    // TEX1. The LOD is log2(1 / |Q|) * 2^L + K, or K alone with LCM. Below 0
-    // the texture is magnified and MMAG filters it; from 0 on MMIN does.
-    // Mipmaps are not modelled: MMIN's mipmap modes filter the first level as
-    // they would filter each level.
+    // TEX1. The LOD is log2(1 / |Q|) * 2^L + K, or K alone with LCM and for
+    // texture coordinates by UV, where Q is not interpolated. Below 0 the
+    // texture is magnified and MMAG filters it; from 0 on MMIN does, and its
+    // mipmap modes take the levels up to MXL. With MXL 0, MMAG filters
+    // whatever the LOD: PCSX2 found MMIN ignored on a console.
     const auto mmin = static_cast<uint32_t>(field(e.tex1, 6, 3));
+    const auto mxl = static_cast<int>(field(e.tex1, 2, 3));
+    const bool lodFromQ = !field(e.tex1, 0, 1) && !d.fst;
     d.magLinear = field(e.tex1, 5, 1) != 0;
-    d.minLinear = mmin == 1 || mmin == 4 || mmin == 5;   // LINEAR, LINEAR_MIPMAP_NEAREST, LINEAR_MIPMAP_LINEAR
-    const int k = static_cast<int>(field(e.tex1, 32, 12) ^ 0x800) - 0x800;   // sixteenths, signed
-    d.lodByQ = false;
-    d.lodQ = 0;
-    if (d.magLinear == d.minLinear) {
-        d.linear = d.magLinear;
-    } else if (field(e.tex1, 0, 1)) {
-        d.linear = k < 0 ? d.magLinear : d.minLinear;
-    } else {   // the LOD is below 0 where log2(|Q|) > K / 2^L
-        d.lodByQ = true;
-        d.linear = false;
-        d.lodQ = static_cast<float>(std::exp2(k / (16.0 * (1 << field(e.tex1, 19, 2)))));
+    // MMIN LINEAR, LINEAR_MIPMAP_NEAREST or LINEAR_MIPMAP_LINEAR; with MXL 0, as MMAG.
+    d.minLinear = mxl ? mmin == 1 || mmin == 4 || mmin == 5 : d.magLinear;
+    d.mipLinear = mmin == 3 || mmin == 5;   // NEAREST_MIPMAP_LINEAR, LINEAR_MIPMAP_LINEAR
+    d.mipLevels = mmin >= 2 && mmin <= 5 ? std::min(mxl, 6) : 0;
+    d.lodK = static_cast<int>(field(e.tex1, 32, 12) ^ 0x800) - 0x800;   // sixteenths, signed
+    d.lodL = static_cast<int>(field(e.tex1, 19, 2));
+    d.lodByQ = lodFromQ && (d.magLinear != d.minLinear || d.mipLevels > 0);
+    d.linear = !lodFromQ && d.lodK >= 0 ? d.minLinear : d.magLinear;
+    d.firstLevel = 0;
+    d.lastLevel = d.mipLevels;
+    if (!d.lodByQ && d.mipLevels) {   // the LOD is K
+        if (d.lodK < 0) {
+            d.lastLevel = 0;
+        } else if (!d.mipLinear) {
+            d.firstLevel = d.lastLevel = std::min((d.lodK + 8) >> 4, d.mipLevels);
+        } else {
+            d.firstLevel = std::min(d.lodK >> 4, d.mipLevels);
+            d.lastLevel = d.firstLevel < d.mipLevels && (d.lodK & 15) ? d.firstLevel + 1 : d.firstLevel;
+        }
     }
-    if (d.tex && field(e.tex1, 2, 3) != 0 && mmin >= 2)
-        PS2_UNIMPL("gs", "mipmaps", "mipmaps are not implemented: textures are filtered from their first level (TEX1 0x%llx)",
+    // The LOD falls as |Q| grows: find the least |Q| magnified. It is below 0
+    // at the largest float whatever K and L.
+    d.magnifiedFrom = 0x7F800000u;
+    if (d.lodByQ)
+        for (uint32_t lo = 0; d.magnifiedFrom - lo > 1;) {
+            const uint32_t mid = lo + (d.magnifiedFrom - lo) / 2;
+            if (levelOfDetail(d, mid) < 0) d.magnifiedFrom = mid;
+            else lo = mid;
+        }
+    if (d.tex && d.mipLevels && mxl > 6)
+        PS2_UNIMPL("gs", "MXL 7", "TEX1 MXL is 7, past the six levels after the first; drawn as 6 (TEX1 0x%llx)",
                    static_cast<unsigned long long>(e.tex1));
+    // The first level is TEX0's. MIPTBP1 holds levels 1-3 and MIPTBP2 levels
+    // 4-6, each as TBP in 14 bits and TBW in 6. Each level is half the size of
+    // the one before (at least a texel), and so is CLAMP's region.
+    const int minu = static_cast<int>(field(e.clamp, 4, 10)), maxu = static_cast<int>(field(e.clamp, 14, 10));
+    const int minv = static_cast<int>(field(e.clamp, 24, 10)), maxv = static_cast<int>(field(e.clamp, 34, 10));
+    for (int n = 0; n <= d.mipLevels; ++n) {
+        Level& l = d.level[n];
+        const uint64_t at = n ? (n <= 3 ? e.miptbp1 : e.miptbp2) >> (20 * ((n - 1) % 3)) : e.tex0;
+        l.tbp = static_cast<uint32_t>(field(at, 0, 14));
+        l.tbw = static_cast<uint32_t>(field(at, 14, 6));
+        l.tw = std::max(tw >> n, 1);
+        l.th = std::max(th >> n, 1);
+        l.minu = minu >> n;
+        l.maxu = maxu >> n;
+        l.minv = minv >> n;
+        l.maxv = maxv >> n;
+    }
     const uint64_t texa = g_regs[TEXA];
     d.ta0 = static_cast<uint32_t>(field(texa, 0, 8));
     d.ta1 = static_cast<uint32_t>(field(texa, 32, 8));
@@ -840,7 +952,6 @@ void drawTriangle(const Draw& d, const Vertex& v0, const Vertex& v1, const Verte
                 } else {
                     u = lerp(v0.u, v1.u, v2.u);
                     v = lerp(v0.v, v1.v, v2.v);
-                    if (d.lodByQ) q = lerp(v0.q, v1.q, v2.q);   // only the level of detail reads it
                 }
             }
             plot(d, x, y, z, r, g, b, a, u, v, q, d.fge ? lerp(v0.fog, v1.fog, v2.fog) : 0.0f, tex);
@@ -962,11 +1073,16 @@ Access accessOf(const Draw& d) {
         }
         default: a.alone = true; break;   // reported as unsupported, from one thread
         }
-        // Region clamp and repeat can reach past the texture's size, up to 1024.
-        const auto tw = static_cast<uint32_t>(d.wms >= 2 ? 1024 : d.tw), th = static_cast<uint32_t>(d.wmt >= 2 ? 1024 : d.th);
-        const Span texels = footprint(d.tbp, d.tbw, d.tpsm, tw, th);
-        if (meets(texels, frame) || (d.zte && meets(texels, depth))) a.alone = true;
-        a.reads.add(texels);
+        // Every level sampling can read. Region clamp and repeat can reach past
+        // a level's size, up to 1024 texels on the first level, 512 on the next...
+        for (int n = d.firstLevel; n <= d.lastLevel; ++n) {
+            const Level& l = d.level[n];
+            const auto tw = static_cast<uint32_t>(d.wms >= 2 ? 1024 >> n : l.tw);
+            const auto th = static_cast<uint32_t>(d.wmt >= 2 ? 1024 >> n : l.th);
+            const Span texels = footprint(l.tbp, l.tbw, d.tpsm, tw, th);
+            if (meets(texels, frame) || (d.zte && meets(texels, depth))) a.alone = true;
+            a.reads.add(texels);
+        }
     }
     return a;
 }
@@ -1250,6 +1366,29 @@ void kick(bool draw) {
     }
 }
 
+// TEX1's MTBA: writing TEX0 places levels 1-3 (MIPTBP1) one after another
+// behind the first, each a quarter of the one before (at least a block) and
+// half as wide (at least 64 texels). It reckons from the width alone, as if
+// the texture were square, and only for colour formats from 32 texels wide
+// up to 512 (1024 below 32 bits a texel in memory). TEX2 does not do it.
+void placeMipLevels(int ctx, uint64_t tex0) {
+    const auto psm = static_cast<uint32_t>(field(tex0, 20, 6));
+    const auto tw = static_cast<uint32_t>(field(tex0, 26, 4));
+    // Bits a texel takes in memory: 32 for the 24-bit and T8H/T4HL/T4HH layouts too.
+    const uint32_t bits = psm == PSMCT16 || psm == PSMCT16S ? 16 : psm == PSMT8 ? 8 : psm == PSMT4 ? 4 : 32;
+    if (isZ(psm) || tw < 5 || tw > (bits == 32 ? 9u : 10u)) return;
+    auto bp = static_cast<uint32_t>(field(tex0, 0, 14));
+    uint32_t bw = std::max((1u << tw) >> 6, 1u), blocks = ((1u << (2 * tw)) * bits) >> 11;   // 256-byte blocks
+    uint64_t mip = g_regs[MIPTBP1_1 + ctx] & ~((uint64_t(1) << 60) - 1);
+    for (int i = 0; i < 3; ++i) {
+        bp = (bp + blocks) & 0x3FFF;
+        bw = std::max(bw >> 1, 1u);
+        blocks = std::max(blocks >> 2, 1u);
+        mip |= (static_cast<uint64_t>(bp) | static_cast<uint64_t>(bw) << 14) << (20 * i);
+    }
+    g_regs[MIPTBP1_1 + ctx] = mip;
+}
+
 void writeReg(uint32_t reg, uint64_t v) {
     reg &= 0xFF;
     switch (reg) {   // vertex data and image data leave the drawing state (g_draw) alone
@@ -1288,6 +1427,10 @@ void writeReg(uint32_t reg, uint64_t v) {
         kick(reg == XYZ2);
         return;
     case FOG: g_fog = static_cast<uint32_t>(field(v, 56, 8)); break;
+    case TEX0_1:
+    case TEX0_2:
+        if (field(g_regs[TEX1_1 + (reg - TEX0_1)], 9, 1)) placeMipLevels(static_cast<int>(reg - TEX0_1), v);   // MTBA
+        break;
     case TEX2_1:
     case TEX2_2: {   // replaces the CLUT/PSM fields of TEX0
         const uint64_t keep = 0x3FFFFull | (0xFull << 26) | (0xFull << 30) | (0x7ull << 34);   // TBP0 TBW TW TH TCC TFX

@@ -3,10 +3,10 @@
 //
 // Coverage (enough for 2D, debug text and simple 3D sent through GIF/VIF1):
 // points, lines, triangles (flat/Gouraud), sprites; textures in CT32/24/16
-// and T8/T4 with CSM1 CLUTs (nearest or bilinear sampling, as TEX1 asks);
-// TFX modulate/decal/highlight; alpha test, Z test, alpha blending, FBMSK;
-// host->local and local->local image transfers. Not modelled: mipmapping,
-// dithering, destination alpha test, local->host readback.
+// and T8/T4 with CSM1 CLUTs (nearest, bilinear or trilinear sampling and
+// mipmaps, as TEX1 asks); TFX modulate/decal/highlight; alpha test, Z test,
+// alpha blending, FBMSK; host->local and local->local image transfers. Not
+// modelled: dithering, destination alpha test, local->host readback.
 #pragma once
 
 #include <cstddef>

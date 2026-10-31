@@ -59,18 +59,18 @@ Playable, Perfect.
 
 | Game | Stage | Notes |
 |---|---|---|
-| 007: Agent Under Fire (Europe, SLES-50539) | In-game | All three executables run recompiled. The language selection, the intro movies, the copyright and title screens, the menus and the first mission (Trouble in Paradise) run at full speed, and the controller works. In the mission the sound still breaks up, and distant surfaces lack the mipmaps the game asks for (their textures are filtered at full size). The driving missions' executable is not recompiled yet. |
+| 007: Agent Under Fire (Europe, SLES-50539) | In-game | All three executables run recompiled. The language selection, the intro movies, the copyright and title screens, the menus and the first mission (Trouble in Paradise) run at full speed, and the controller works. In the mission the sound still breaks up. The driving missions' executable is not recompiled yet. |
 
 ### By area
 
 | Area | Progress | Count | Biggest gaps |
 |---|---|--:|---|
-| Games playable | `░░░░░░░░░░` 0% | 0 / 1 | Agent Under Fire runs its first mission, with broken-up sound and no mipmaps |
+| Games playable | `░░░░░░░░░░` 0% | 0 / 1 | Agent Under Fire runs its first mission, with broken-up sound |
 | EE instructions | `██████████` 100% | 359 / 359 | |
 | Recompiler | `█████████░` 89% | 8 / 9 | overlays |
 | EE kernel syscalls | `█████████░` 88% | 127 / 145 | event flags, `ExecPS2`, the TLB, CPU timers |
 | DMA, interrupts, timers | `█████░░░░░` 50% | 4 / 8 | MFIFO, stall control, transfer timing |
-| Graphics (GS) | `███████░░░` 67% | 14 / 21 | mipmaps, the CLUT buffer, reading back to the EE |
+| Graphics (GS) | `███████░░░` 71% | 15 / 21 | the CLUT buffer, reading back to the EE |
 | Vector units | `███████░░░` 71% | 5 / 7 | running alongside the EE, a VU recompiler |
 | Movies (IPU) | `████████░░` 83% | 5 / 6 | timing |
 | Sound (SPU2) | `███████░░░` 71% | 10 / 14 | the IOP's DMA channels for drivers without libsd, an audio settings page |
@@ -104,7 +104,7 @@ Playable, Perfect.
 - [ ] Stall control and interleaved transfers
 - [ ] Transfer timing: a transfer ends the moment it starts
 
-**Graphics (GS)**: 14 of 21
+**Graphics (GS)**: 15 of 21
 - [x] Display: both circuits, their merging, interlaced frames and fields
 - [x] GIF: paths 1-3, PACKED, REGLIST and IMAGE, PATH3 masking
 - [x] Drawing alongside the EE, on the GS's own thread (real-time runs)
@@ -121,7 +121,7 @@ Playable, Perfect.
 - [x] Transfers into GS memory and within it
 - [ ] The CLUT buffer: CLD load conditions and the CSM2 layout
 - [x] Bilinear filtering
-- [ ] Mipmaps
+- [x] Mipmaps
 - [ ] Destination alpha test
 - [ ] Dithering
 - [ ] Anti-aliasing
@@ -251,9 +251,8 @@ since the move to Windows. Linux is untested.
 
 Roughly in order:
 
-1. **Agent Under Fire in game**: the first mission's sound, mipmaps for
-   its distant textures, the driving missions' executable, and what the
-   game reaches next.
+1. **Agent Under Fire in game**: the first mission's sound, the driving
+   missions' executable, and what the game reaches next.
 2. **Sound**: PCSX2's audio settings page, and the IOP's DMA channels 4 and
    7 for drivers that program the SPU2 themselves.
 3. **Graphics speed**: the GS has its own thread, alongside the EE, the
