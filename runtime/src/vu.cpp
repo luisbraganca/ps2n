@@ -13,6 +13,9 @@
 //    would on hardware.
 //  * Q (DIV, SQRT, RSQRT) and P (EFU, VU1 only) arrive after the unit's
 //    latency; WAITQ / WAITP and a second operation on a busy unit stall.
+//  * A stall holds the whole pair, whichever half caused it, so both halves
+//    read what is visible once it ends: an operation on Q paired with WAITQ
+//    gets the new Q.
 //  * Branches have one delay slot. A branch that tests a VI register written
 //    by the instruction just before it sees the register's old value.
 //  * The E bit ends the program after one more instruction (its delay slot).
@@ -857,6 +860,35 @@ uint32_t lowerWritesVf(uint32_t c) {
     }
 }
 
+// The stalls a lower operation causes: a source register still being written,
+// WAITQ / WAITP, a busy FDIV or EFU, a branch on an ILW result. A stall holds
+// the whole pair, so they are applied before the upper operation reads
+// anything: an operation on Q paired with WAITQ gets the new Q.
+void lowerHazards(Unit& u, uint32_t c) {
+    const uint32_t op = c >> 25, it = fFt(c), is = fFs(c), dest = fDest(c);
+    switch (op) {
+    case 0x01: stallOn(u, is, dest); return;   // SQ
+    case 0x28: case 0x29: case 0x2C: case 0x2D: case 0x2E: case 0x2F:   // conditional branches
+        if (u.ialu.regs && u.cycle < u.ialu.done && (u.ialu.regs & ((1u << (is & 15)) | (1u << (it & 15))))) advanceTo(u, u.ialu.done);
+        return;
+    case 0x40: break;
+    default: return;
+    }
+    if ((c & 0x3C) != 0x3C) return;
+    switch ((((c >> 6) & 31) << 2) | (c & 3)) {
+    case 0x30: case 0x35: case 0x37: stallOn(u, is, dest); return;   // MOVE SQI SQD
+    case 0x31: stallOn(u, is, 0xF); return;                          // MR32
+    case 0x38: case 0x3A: stallOn(u, is, 8u >> fFsf(c)); stallOn(u, it, 8u >> fFtf(c)); stallFdiv(u); return;   // DIV RSQRT
+    case 0x39: stallOn(u, it, 8u >> fFtf(c)); stallFdiv(u); return;   // SQRT
+    case 0x3B: stallFdiv(u); return;                                  // WAITQ
+    case 0x3C: stallOn(u, is, 8u >> fFsf(c)); return;                 // MTIR
+    case 0x70: case 0x71: case 0x72: case 0x73: case 0x74: case 0x75: case 0x76: stallOn(u, is, 0xF); stallEfu(u); return;
+    case 0x78: case 0x79: case 0x7A: case 0x7C: case 0x7D: case 0x7E: stallOn(u, is, 8u >> fFsf(c)); stallEfu(u); return;
+    case 0x7B: if (u.efu.busy) advanceTo(u, u.efu.done); return;      // WAITP
+    default: return;
+    }
+}
+
 // Executes one instruction pair. Returns false when the program has ended.
 bool step(Unit& u) {
     const uint32_t pc = u.vi[TPC] & u.microMask & ~7u;
@@ -880,6 +912,7 @@ bool step(Unit& u) {
     } else {
         const uint32_t uw = upperWritesVf(upper), lw = lowerWritesVf(lower), lr = lowerReadsVf(lower);
         const bool dropLower = uw && uw == lw;
+        lowerHazards(u, lower);
         VuReg before{};
         const bool isolate = uw && lr == uw;
         if (isolate) before = u.vf[uw];

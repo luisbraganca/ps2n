@@ -357,6 +357,7 @@ interpreter (`runtime/src/vu.cpp`) runs them when they are started (`MSCAL`,
 compared to the EE. It decodes each 64-bit pair (an upper FMAC instruction and
 a lower one) and keeps what micro code can observe of the pipeline: results
 written after both halves read their inputs, MAC/status/clip flags that only
-appear four cycles later, Q and P latencies, stalls on register hazards,
-branch delay slots and the E bit. A VU recompiler on the same model is the
-next step if VU-heavy games turn out to be slow.
+appear four cycles later, Q and P latencies, stalls on register hazards
+(a stall holds the whole pair, so an operation on Q paired with WAITQ reads
+the new Q), branch delay slots and the E bit. A VU recompiler on the same
+model is the next step if VU-heavy games turn out to be slow.

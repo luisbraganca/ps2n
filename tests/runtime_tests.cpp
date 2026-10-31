@@ -381,6 +381,68 @@ TEST_CASE(vu0_clip_and_integer_unit) {
     CHECK_EQ(cpu.vi[VU_R], 0x3F800000u | 0x345678u);
 }
 
+// A VU1 micro program: a stall holds the whole instruction pair, so an
+// operation on Q paired with WAITQ, or with a DIV that waits for a busy FDIV,
+// reads the Q that lands at the end of the stall; one paired with a DIV that
+// starts at once, or issued a cycle after one, reads the Q from before it.
+TEST_CASE(vu_stalls_hold_both_halves_of_a_pair) {
+    vu1Reset();
+    auto fl = [](float v) { return std::bit_cast<uint32_t>(v); };
+    auto setMem = [&](uint32_t qw, float x, float y, float z, float w) {
+        const uint32_t v[4] = {fl(x), fl(y), fl(z), fl(w)};
+        std::memcpy(vu1Mem + qw * 16, v, 16);
+    };
+    setMem(0, 8, 6, 10, 2);        // vf01
+    setMem(1, 2, 3, 4, 1);         // vf02: quotients 4, 2, 2.5, 2
+    setMem(2, 1, 10, 100, 1000);   // vf04
+    const uint32_t upperNop = 0x000002FFu, lowerNop = 0x8000033Cu, ebit = 0x40000000u;
+    auto lq = [](uint32_t ft, uint32_t imm) { return (0xFu << 21) | (ft << 16) | (imm & 0x7FF); };   // lq.xyzw vft, imm(vi00)
+    auto sq = [](uint32_t fs, uint32_t imm) { return 0x02000000u | (0xFu << 21) | (fs << 11) | (imm & 0x7FF); };
+    auto div = [](uint32_t fs, uint32_t fsf, uint32_t ft, uint32_t ftf) {
+        return 0x80000000u | (ftf << 23) | (fsf << 21) | (ft << 16) | (fs << 11) | (0xEu << 6) | 0x3Cu;
+    };
+    const uint32_t waitq = 0x80000000u | (0xEu << 6) | 0x3Fu;
+    auto mulq = [](uint32_t fd, uint32_t fs) { return (0xFu << 21) | (fs << 11) | (fd << 6) | 0x1Cu; };   // mulq.xyzw vfd, vfs, Q
+    const uint32_t program[][2] = {   // lower, upper
+        {lq(1, 0), upperNop},
+        {lq(2, 1), upperNop},
+        {lq(4, 2), upperNop},
+        {div(1, 0, 2, 0), upperNop},    // Q = 4 in 7 cycles
+        {waitq, mulq(3, 4)},            // waits for it: vf03 = 4 * vf04
+        {div(1, 1, 2, 1), mulq(5, 4)},  // starts Q = 2; the pair reads the Q before it: vf05 = 4 * vf04
+        {lowerNop, upperNop},
+        {div(1, 2, 2, 2), mulq(7, 4)},  // the FDIV is busy: waits for Q = 2, then reads it: vf07 = 2 * vf04; starts Q = 2.5
+        {waitq, upperNop},
+        {lowerNop, mulq(8, 4)},         // vf08 = 2.5 * vf04
+        {div(1, 3, 2, 3), upperNop},    // starts Q = 2
+        {lowerNop, mulq(9, 4)},         // a cycle later, without waiting: still the Q before it, vf09 = 2.5 * vf04
+        {sq(3, 4), upperNop},
+        {sq(5, 5), upperNop},
+        {sq(7, 6), upperNop},
+        {sq(8, 7), upperNop},
+        {sq(9, 8), upperNop | ebit},
+        {lowerNop, upperNop},
+    };
+    std::memcpy(vu1Micro, program, sizeof program);
+    vu1Start(0);
+    auto at = [](uint32_t qw, int c) {
+        uint32_t v;
+        std::memcpy(&v, vu1Mem + qw * 16 + 4 * c, 4);
+        return std::bit_cast<float>(v);
+    };
+    CHECK_EQ(at(4, 0), 4.0f);
+    CHECK_EQ(at(4, 3), 4000.0f);
+    CHECK_EQ(at(5, 1), 40.0f);
+    CHECK_EQ(at(6, 0), 2.0f);
+    CHECK_EQ(at(6, 2), 200.0f);
+    CHECK_EQ(at(7, 0), 2.5f);
+    CHECK_EQ(at(7, 3), 2500.0f);
+    CHECK_EQ(at(8, 0), 2.5f);
+    CHECK_EQ(at(8, 1), 25.0f);
+    std::memset(vu1Micro, 0, sizeof program);
+    std::memset(vu1Mem, 0, 9 * 16);
+    vu1Reset();
+}
 TEST_CASE(guest_printf_formatting) {
     reset();
     const uint32_t fmt = 0x00300000, str = 0x00300100;
