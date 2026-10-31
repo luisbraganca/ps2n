@@ -825,9 +825,10 @@ std::vector<uint32_t> drawScene(int threads, bool ownThread = false) {
              {0x42, 0x44},                                           // ALPHA_1: (Cs - Cd) * As + Cd
              {0x47, 1ull << 16 | 1ull << 17},                        // TEST_1: depth ALWAYS
              {0x00, 6}, {0x01, 0x80302010}, {0x05, xyz(0, 0, 0)}, {0x05, xyz(256, 128, 0)}});
-    // A Gouraud triangle, perspective-textured, fogged and blended, depth GEQUAL.
+    // A Gouraud triangle, perspective-textured, fogged and blended, depth
+    // GEQUAL; from here on textures are filtered bilinearly.
     const uint64_t tex32 = 2048 | 1ull << 14 | 6ull << 26 | 6ull << 30 | 1ull << 34;   // TBP0, TBW 1, 64x64, TCC, modulate
-    gsWrite({{0x06, tex32}, {0x08, 0}, {0x47, 1ull << 16 | 2ull << 17},
+    gsWrite({{0x06, tex32}, {0x08, 0}, {0x14, 0x60}, {0x47, 1ull << 16 | 2ull << 17},
              {0x00, 3 | 1 << 3 | 1 << 4 | 1 << 5 | 1 << 6},
              {0x02, bits64(0.0f) | bits64(0.0f) << 32}, {0x01, 0x80FF4020 | bits64(1.0f) << 32}, {0x04, xyz(0, 0, 0x100000) | 0x10ull << 56},
              {0x02, bits64(2.0f) | bits64(0.5f) << 32}, {0x01, 0x6020FF40 | bits64(2.0f) << 32}, {0x04, xyz(256, 8, 0x300000) | 0xF0ull << 56},
@@ -1286,6 +1287,150 @@ TEST_CASE(gs_triangles_cover_what_the_float_test_covers) {
         CHECK_EQ(mismatches, size_t(0));
     }
     CHECK(drawn > 100000);
+}
+
+namespace {
+
+// Texel (x, y) of the 4x4 texture the filtering test samples.
+uint32_t filterTexel(int x, int y) {
+    static constexpr uint32_t kTexels[16] = {0x00000000, 0xFF00FF00, 0x10204080, 0xFFFFFFFF,   //
+                                             0x80FF0000, 0x0000FFFF, 0x7F7F7F7F, 0x01020304,   //
+                                             0xC0C0C0C0, 0x3F003F00, 0x00FF00FF, 0x80808080,   //
+                                             0x12345678, 0xFEDCBA98, 0x55AA55AA, 0x0F0F0F0F};
+    return kTexels[y * 4 + x];
+}
+
+// Bilinear filtering of texel a, b to its right, c below it and d below b,
+// at fractions fx, fy in sixteenths of a texel: each channel weighted, the
+// sum rounded down.
+uint32_t bilinearOf(uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t fx, uint32_t fy) {
+    uint32_t out = 0;
+    for (int sh = 0; sh < 32; sh += 8) {
+        const uint32_t sum = ((a >> sh) & 0xFF) * (16 - fx) * (16 - fy) + ((b >> sh) & 0xFF) * fx * (16 - fy) +
+                             ((c >> sh) & 0xFF) * (16 - fx) * fy + ((d >> sh) & 0xFF) * fx * fy;
+        out |= (sum >> 8) << sh;
+    }
+    return out;
+}
+
+constexpr uint64_t kAnyPixel = ~0ull;   // a pixel the check skips
+
+} // namespace
+
+TEST_CASE(gs_textures_filter_as_tex1_asks) {
+    // A 64x64 square shows a 4x4 texture, 16 pixels a texel: pixel x samples
+    // u = x / 16. Nearest takes texel x / 16; bilinear weighs the four around
+    // u - 1/2, each wrapped on its own. TEX1's level of detail (LOD) is
+    // log2(1 / |Q|) * 2^L + K, or K with LCM: below 0 MMAG filters, from 0 on MMIN.
+    gs::init();
+    gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
+    std::vector<uint32_t> texels, indices, clut(256);
+    for (int y = 0; y < 4; ++y) {
+        uint32_t row = 0;
+        for (int x = 0; x < 4; ++x) {
+            const int i = y * 4 + x;
+            texels.push_back(filterTexel(x, y));
+            row |= static_cast<uint32_t>(i) << (8 * x);
+            clut[static_cast<size_t>((i & 0xE7) | (i & 0x08) << 1 | (i & 0x10) >> 1)] = filterTexel(x, y);   // CSM1 order
+        }
+        indices.push_back(row);
+    }
+    gsUpload(256, 1, 0x00, 4, 4, texels);    // PSMCT32 at page 8
+    gsUpload(512, 2, 0x13, 4, 4, indices);   // PSMT8 at page 16: texel (x, y) is index y * 4 + x
+    gsUpload(768, 1, 0x00, 16, 16, clut);    // its CLUT at page 24, holding the same colours
+    const uint64_t tex32 = 256 | 1ull << 14 | 2ull << 26 | 2ull << 30 | 1ull << 34 | 1ull << 35;   // 4x4, TCC, decal
+    const uint64_t tex8 = 512 | 2ull << 14 | 0x13ull << 20 | 2ull << 26 | 2ull << 30 | 1ull << 34 | 1ull << 35 | 768ull << 37;
+    constexpr uint64_t kClamp = 1 | 1 << 2;   // CLAMP both ways
+    auto tex1 = [](bool lcm, uint64_t mxl, bool mmag, uint64_t mmin, uint64_t l, int k) {
+        return (lcm ? 1ull : 0) | mxl << 2 | (mmag ? 1ull : 0) << 5 | mmin << 6 | l << 19 | (static_cast<uint64_t>(k) & 0xFFF) << 32;
+    };
+    // The square by UV, with Q for the level of detail.
+    auto square = [&](uint64_t tex0, uint64_t t1, float q, uint64_t clamp) {
+        gsWrite({{0x06, tex0}, {0x14, t1}, {0x08, clamp}, {0x00, 6 | 1 << 4 | 1 << 8}, {0x01, 0x80808080u | bits64(q) << 32},
+                 {0x03, 0}, {0x05, xyz(0, 0, 0)}, {0x03, 64 | 64ull << 16}, {0x05, xyz(64, 64, 0)}});
+    };
+    auto nearest = [](int x, int y) -> uint64_t { return filterTexel(x >> 4, y >> 4); };
+    auto linear = [](int x, int y, int (*wu)(int), int (*wv)(int)) -> uint64_t {
+        const int su = x - 8, sv = y - 8, x0 = su >> 4, y0 = sv >> 4;
+        return bilinearOf(filterTexel(wu(x0), wv(y0)), filterTexel(wu(x0 + 1), wv(y0)), filterTexel(wu(x0), wv(y0 + 1)),
+                          filterTexel(wu(x0 + 1), wv(y0 + 1)), static_cast<uint32_t>(su & 15), static_cast<uint32_t>(sv & 15));
+    };
+    auto clamped = [](int c) { return std::clamp(c, 0, 3); };
+    auto linearClamped = [&](int x, int y) { return linear(x, y, clamped, clamped); };
+    // Pixels of the square that differ from want(x, y).
+    auto mismatches = [](auto want) {
+        size_t n = 0;
+        for (int y = 0; y < 64; ++y)
+            for (int x = 0; x < 64; ++x) {
+                const uint64_t w = want(x, y);
+                n += w != kAnyPixel && gs::readPixel32(0, 1, 0x00, x, y) != w;
+            }
+        return n;
+    };
+
+    // Nearest; K alone: below 0 magnified (MMAG bilinear), 0 reduced (MMIN nearest).
+    square(tex32, 0, 1.0f, kClamp);
+    CHECK_EQ(mismatches(nearest), size_t(0));
+    square(tex32, tex1(true, 0, true, 0, 0, -1), 1.0f, kClamp);
+    CHECK_EQ(mismatches(linearClamped), size_t(0));
+    square(tex32, tex1(true, 0, true, 0, 0, 0), 1.0f, kClamp);
+    CHECK_EQ(mismatches(nearest), size_t(0));
+    // The LOD from Q.
+    square(tex32, tex1(false, 0, true, 0, 0, 0), 2.0f, kClamp);    // -1
+    CHECK_EQ(mismatches(linearClamped), size_t(0));
+    square(tex32, tex1(false, 0, true, 0, 0, 0), -2.0f, kClamp);   // -1: |Q|
+    CHECK_EQ(mismatches(linearClamped), size_t(0));
+    square(tex32, tex1(false, 0, true, 0, 0, 0), 1.0f, kClamp);    // 0
+    CHECK_EQ(mismatches(nearest), size_t(0));
+    square(tex32, tex1(false, 0, true, 0, 1, -16), 0.75f, kClamp);   // 2 * 0.415 - 1
+    CHECK_EQ(mismatches(linearClamped), size_t(0));
+    square(tex32, tex1(false, 0, true, 0, 1, -16), 0.6f, kClamp);    // 2 * 0.737 - 1
+    CHECK_EQ(mismatches(nearest), size_t(0));
+    // The mipmap modes of MMIN filter the first level as they filter each level.
+    for (const uint64_t mmin : {1u, 4u, 5u}) {
+        square(tex32, tex1(true, 0, false, mmin, 0, 0), 1.0f, kClamp);
+        CHECK_EQ(mismatches(linearClamped), size_t(0));
+    }
+    for (const uint64_t mmin : {2u, 3u}) {
+        square(tex32, tex1(true, 0, false, mmin, 0, 0), 1.0f, kClamp);
+        CHECK_EQ(mismatches(nearest), size_t(0));
+    }
+
+    // Each texel wraps on its own: REPEAT; REGION_CLAMP to u in 1..2 with REGION_REPEAT to v = (v & 1) | 2.
+    const uint64_t both = tex1(false, 0, true, 1, 0, 0);
+    square(tex32, both, 1.0f, 0);
+    CHECK_EQ(mismatches([&](int x, int y) { return linear(x, y, [](int c) { return c & 3; }, [](int c) { return c & 3; }); }),
+             size_t(0));
+    square(tex32, both, 1.0f, 2 | 3 << 2 | 1 << 4 | 2 << 14 | 1ull << 24 | 2ull << 34);
+    CHECK_EQ(mismatches([&](int x, int y) {
+                 return linear(x, y, [](int c) { return std::clamp(c, 1, 2); }, [](int c) { return (c & 1) | 2; });
+             }),
+             size_t(0));
+    // A CLUT texture is filtered after the lookup: its colours, not its indices.
+    square(tex8, both, 1.0f, kClamp);
+    CHECK_EQ(mismatches(linearClamped), size_t(0));
+
+    // By ST: S / Q runs from 0 to 1 across the square.
+    const uint64_t magOnly = tex1(false, 0, true, 0, 0, 0);
+    for (const float q : {2.0f, 0.5f}) {
+        gsWrite({{0x06, tex32}, {0x14, magOnly}, {0x08, kClamp}, {0x00, 6 | 1 << 4}, {0x01, 0x80808080u | bits64(q) << 32},
+                 {0x02, 0}, {0x05, xyz(0, 0, 0)}, {0x02, bits64(q) | bits64(q) << 32}, {0x05, xyz(64, 64, 0)}});
+        CHECK_EQ(q > 1 ? mismatches(linearClamped) : mismatches(nearest), size_t(0));
+    }
+    // Triangles over the top left half, by ST with Q 2, and by UV with Q
+    // from 2 down to 0.5 at the bottom left corner: magnified above y = 42.
+    auto inside = [](int x, int y) { return x + y < 63; };
+    square(tex32, 0, 1.0f, kClamp);
+    gsWrite({{0x14, magOnly}, {0x00, 3 | 1 << 4}, {0x01, 0x80808080u | bits64(2.0f) << 32}, {0x02, 0}, {0x05, xyz(0, 0, 0)},
+             {0x02, bits64(2.0f)}, {0x05, xyz(64, 0, 0)}, {0x02, bits64(2.0f) << 32}, {0x05, xyz(0, 64, 0)}});
+    CHECK_EQ(mismatches([&](int x, int y) { return inside(x, y) ? linearClamped(x, y) : kAnyPixel; }), size_t(0));
+    square(tex32, 0, 1.0f, kClamp);
+    gsWrite({{0x14, magOnly}, {0x00, 3 | 1 << 4 | 1 << 8}, {0x01, 0x80808080u | bits64(2.0f) << 32}, {0x03, 0}, {0x05, xyz(0, 0, 0)},
+             {0x03, 64}, {0x05, xyz(64, 0, 0)}, {0x01, 0x80808080u | bits64(0.5f) << 32}, {0x03, 64ull << 16}, {0x05, xyz(0, 64, 0)}});
+    CHECK_EQ(mismatches([&](int x, int y) {
+                 return !inside(x, y) ? kAnyPixel : y < 40 ? linearClamped(x, y) : y > 45 ? nearest(x, y) : kAnyPixel;
+             }),
+             size_t(0));
 }
 
 namespace {

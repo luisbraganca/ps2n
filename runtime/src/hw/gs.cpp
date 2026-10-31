@@ -362,7 +362,7 @@ struct Env {
     uint32_t fbp, fbw, fpsm, fbmsk;
     uint32_t zbp, zpsm;
     bool zmsk;
-    uint64_t test, alpha, tex0, clamp;
+    uint64_t test, alpha, tex0, tex1, clamp;
     int ofx, ofy;   // 12.4 fixed point
     int scx0, scx1, scy0, scy1;
     bool fba;
@@ -383,6 +383,7 @@ Env currentEnv() {
     e.test = g_regs[TEST_1 + ctx];
     e.alpha = g_regs[ALPHA_1 + ctx];
     e.tex0 = g_regs[TEX0_1 + ctx];
+    e.tex1 = g_regs[TEX1_1 + ctx];
     e.clamp = g_regs[CLAMP_1 + ctx];
     const uint64_t off = g_regs[XYOFFSET_1 + ctx];
     e.ofx = static_cast<int>(field(off, 0, 16));
@@ -408,6 +409,11 @@ struct Draw {
     bool tcc;
     uint32_t wms, wmt;                   // CLAMP
     int minu, maxu, minv, maxv;
+    // TEX1: nearest or bilinear. The level of detail (LOD) picks the filter
+    // for a magnified texture (MMAG) or a reduced one (MMIN). `linear` holds
+    // it unless the LOD depends on the pixel's Q (lodByQ).
+    bool linear, lodByQ, magLinear, minLinear;
+    float lodQ;                          // with lodByQ: |Q| above it is magnified
     uint32_t ta0, ta1;                   // TEXA
     bool aem;
     uint32_t cbp, cpsm, csa;             // the CLUT
@@ -457,9 +463,11 @@ uint32_t wrapCoord(int c, int size, uint32_t mode, int minv, int maxv) {
     }
 }
 
-uint32_t sampleTexture(const Draw& d, float u, float v) {
-    const uint32_t x = wrapCoord(static_cast<int>(std::floor(u)), d.tw, d.wms, d.minu, d.maxu);
-    const uint32_t y = wrapCoord(static_cast<int>(std::floor(v)), d.th, d.wmt, d.minv, d.maxv);
+// One texel as RGBA: its coordinates wrapped as CLAMP says, a CLUT format
+// looked up, a 16 or 24-bit one expanded with TEXA.
+uint32_t texel(const Draw& d, int ix, int iy) {
+    const uint32_t x = wrapCoord(ix, d.tw, d.wms, d.minu, d.maxu);
+    const uint32_t y = wrapCoord(iy, d.th, d.wmt, d.minv, d.maxv);
     switch (d.tpsm) {
     case PSMCT32: return readRaw(d.tbp, d.tbw, d.tpsm, x, y);
     case PSMCT24: {
@@ -473,6 +481,38 @@ uint32_t sampleTexture(const Draw& d, float u, float v) {
         PS2_UNIMPL("gs", "texture format", "texture format 0x%x is not supported", d.tpsm);
         return 0xFFFFFFFFu;
     }
+}
+
+// A texture coordinate in sixteenths of a texel (the precision of UV),
+// rounded down. Far out of range (Q near 0) it saturates.
+int sixteenths(float c) {
+    const float f = std::floor(c * 16.0f);
+    if (f >= 1073741824.0f) return 1 << 30;
+    return f >= -1073741824.0f ? static_cast<int>(f) : -(1 << 30);   // NaN too
+}
+
+// The texture at texel coordinates (u, v); the pixel's Q gives the level of
+// detail. Nearest takes the texel (u, v) falls in. Bilinear blends the four
+// around (u - 1/2, v - 1/2), each wrapped on its own, by where that point
+// lies between them in sixteenths of a texel, and rounds down.
+uint32_t sampleTexture(const Draw& d, float u, float v, float q) {
+    const bool linear = d.lodByQ ? (std::fabs(q) > d.lodQ ? d.magLinear : d.minLinear) : d.linear;
+    if (!linear) return texel(d, static_cast<int>(std::floor(u)), static_cast<int>(std::floor(v)));
+    const int su = sixteenths(u) - 8, sv = sixteenths(v) - 8;
+    const int x = su >> 4, y = sv >> 4;
+    const auto fx = static_cast<uint32_t>(su & 15), fy = static_cast<uint32_t>(sv & 15);
+    const uint32_t c00 = texel(d, x, y);
+    if ((fx | fy) == 0) return c00;
+    // A texel whose weight is 0 is not read.
+    const uint32_t c10 = fx ? texel(d, x + 1, y) : 0, c01 = fy ? texel(d, x, y + 1) : 0;
+    const uint32_t c11 = fx && fy ? texel(d, x + 1, y + 1) : 0;
+    const uint32_t w00 = (16 - fx) * (16 - fy), w10 = fx * (16 - fy), w01 = (16 - fx) * fy, w11 = fx * fy;   // sum 256
+    // Two channels at a time, 16 bits each: a weighted sum stays below 2^16.
+    constexpr uint32_t kLanes = 0x00FF00FFu;
+    const uint32_t rb = ((c00 & kLanes) * w00 + (c10 & kLanes) * w10 + (c01 & kLanes) * w01 + (c11 & kLanes) * w11) >> 8;
+    const uint32_t ga = (((c00 >> 8) & kLanes) * w00 + ((c10 >> 8) & kLanes) * w10 + ((c01 >> 8) & kLanes) * w01 +
+                         ((c11 >> 8) & kLanes) * w11) >> 8;
+    return (rb & kLanes) | (ga & kLanes) << 8;
 }
 
 bool alphaTestPass(const Draw& d, uint32_t a) {
@@ -522,6 +562,28 @@ const Draw& currentDraw() {
     d.maxu = static_cast<int>(field(e.clamp, 14, 10));
     d.minv = static_cast<int>(field(e.clamp, 24, 10));
     d.maxv = static_cast<int>(field(e.clamp, 34, 10));
+    // TEX1. The LOD is log2(1 / |Q|) * 2^L + K, or K alone with LCM. Below 0
+    // the texture is magnified and MMAG filters it; from 0 on MMIN does.
+    // Mipmaps are not modelled: MMIN's mipmap modes filter the first level as
+    // they would filter each level.
+    const auto mmin = static_cast<uint32_t>(field(e.tex1, 6, 3));
+    d.magLinear = field(e.tex1, 5, 1) != 0;
+    d.minLinear = mmin == 1 || mmin == 4 || mmin == 5;   // LINEAR, LINEAR_MIPMAP_NEAREST, LINEAR_MIPMAP_LINEAR
+    const int k = static_cast<int>(field(e.tex1, 32, 12) ^ 0x800) - 0x800;   // sixteenths, signed
+    d.lodByQ = false;
+    d.lodQ = 0;
+    if (d.magLinear == d.minLinear) {
+        d.linear = d.magLinear;
+    } else if (field(e.tex1, 0, 1)) {
+        d.linear = k < 0 ? d.magLinear : d.minLinear;
+    } else {   // the LOD is below 0 where log2(|Q|) > K / 2^L
+        d.lodByQ = true;
+        d.linear = false;
+        d.lodQ = static_cast<float>(std::exp2(k / (16.0 * (1 << field(e.tex1, 19, 2)))));
+    }
+    if (d.tex && field(e.tex1, 2, 3) != 0 && mmin >= 2)
+        PS2_UNIMPL("gs", "mipmaps", "mipmaps are not implemented: textures are filtered from their first level (TEX1 0x%llx)",
+                   static_cast<unsigned long long>(e.tex1));
     const uint64_t texa = g_regs[TEXA];
     d.ta0 = static_cast<uint32_t>(field(texa, 0, 8));
     d.ta1 = static_cast<uint32_t>(field(texa, 32, 8));
@@ -554,8 +616,10 @@ const Draw& currentDraw() {
     return d;
 }
 
-// Shades and writes one pixel. Colour components are 0..255 floats.
-void plot(const Draw& dr, int x, int y, uint32_t z, float r, float g, float b, float a, float u, float v, float fog, bool textured) {
+// Shades and writes one pixel. Colour components are 0..255 floats; q is the
+// pixel's Q, which gives the texture's level of detail.
+void plot(const Draw& dr, int x, int y, uint32_t z, float r, float g, float b, float a, float u, float v, float q, float fog,
+          bool textured) {
     const Env& e = dr.e;
     if (x < e.scx0 || x > e.scx1 || y < e.scy0 || y > e.scy1) return;
     uint32_t cr = static_cast<uint32_t>(std::clamp(r, 0.f, 255.f));
@@ -564,7 +628,7 @@ void plot(const Draw& dr, int x, int y, uint32_t z, float r, float g, float b, f
     uint32_t ca = static_cast<uint32_t>(std::clamp(a, 0.f, 255.f));
 
     if (textured) {
-        const uint32_t t = sampleTexture(dr, u, v);
+        const uint32_t t = sampleTexture(dr, u, v, q);
         const uint32_t tr = t & 0xFF, tg = (t >> 8) & 0xFF, tb = (t >> 16) & 0xFF, ta = t >> 24;
         const bool tcc = dr.tcc;
         switch (dr.tfx) {
@@ -702,7 +766,7 @@ void drawSprite(const Draw& d, const Vertex& a, const Vertex& b, int part, int p
         const float fy = dy != 0 ? (static_cast<float>(y) - a.y) / dy : 0;
         for (int x = ix0; x <= ix1; ++x) {
             const float fx = dx != 0 ? (static_cast<float>(x) - a.x) / dx : 0;
-            plot(d, x, y, b.z, b.r, b.g, b.b, b.a, ua + (ub - ua) * fx, va + (vb - va) * fy, b.fog, tex);
+            plot(d, x, y, b.z, b.r, b.g, b.b, b.a, ua + (ub - ua) * fx, va + (vb - va) * fy, b.q, b.fog, tex);
         }
     }
 }
@@ -767,17 +831,19 @@ void drawTriangle(const Draw& d, const Vertex& v0, const Vertex& v1, const Verte
                 b = lerp(v0.b, v1.b, v2.b);
                 a = lerp(v0.a, v1.a, v2.a);
             }
-            float u = 0, v = 0;
+            float u = 0, v = 0, q = v2.q;
             if (tex) {
                 if (persp) {
-                    const float s = lerp(v0.s, v1.s, v2.s), t = lerp(v0.t, v1.t, v2.t), q = lerp(v0.q, v1.q, v2.q);
+                    const float s = lerp(v0.s, v1.s, v2.s), t = lerp(v0.t, v1.t, v2.t);
+                    q = lerp(v0.q, v1.q, v2.q);
                     texCoord(d, s, t, q, 0, 0, u, v);
                 } else {
                     u = lerp(v0.u, v1.u, v2.u);
                     v = lerp(v0.v, v1.v, v2.v);
+                    if (d.lodByQ) q = lerp(v0.q, v1.q, v2.q);   // only the level of detail reads it
                 }
             }
-            plot(d, x, y, z, r, g, b, a, u, v, d.fge ? lerp(v0.fog, v1.fog, v2.fog) : 0.0f, tex);
+            plot(d, x, y, z, r, g, b, a, u, v, q, d.fge ? lerp(v0.fog, v1.fog, v2.fog) : 0.0f, tex);
         }
     }
 }
@@ -789,7 +855,7 @@ void drawLine(const Draw& d, const Vertex& a, const Vertex& b, int part, int par
         const int y = static_cast<int>(a.y + (b.y - a.y) * f);
         if (!myRow(y, part, parts)) continue;
         const Vertex& c = d.gouraud ? (f < 0.5f ? a : b) : b;
-        plot(d, static_cast<int>(a.x + (b.x - a.x) * f), y, b.z, c.r, c.g, c.b, c.a, 0, 0, b.fog, false);
+        plot(d, static_cast<int>(a.x + (b.x - a.x) * f), y, b.z, c.r, c.g, c.b, c.a, 0, 0, b.q, b.fog, false);
     }
 }
 
@@ -800,7 +866,8 @@ void drawShape(const Draw& d, Shape shape, const Vertex* v, int part, int parts)
     switch (shape) {
     case Shape::Point: {
         const int y = static_cast<int>(v[0].y);
-        if (myRow(y, part, parts)) plot(d, static_cast<int>(v[0].x), y, v[0].z, v[0].r, v[0].g, v[0].b, v[0].a, 0, 0, v[0].fog, false);
+        if (myRow(y, part, parts))
+            plot(d, static_cast<int>(v[0].x), y, v[0].z, v[0].r, v[0].g, v[0].b, v[0].a, 0, 0, v[0].q, v[0].fog, false);
         break;
     }
     case Shape::Line: drawLine(d, v[0], v[1], part, parts); break;
