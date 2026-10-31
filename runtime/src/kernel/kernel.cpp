@@ -83,6 +83,8 @@ int g_current = -1;
 uint64_t g_readyCounter = 0;
 bool g_needResched = false;
 int g_interruptDepth = 0;
+uint64_t g_interruptCycles = 0;   // time spent in handlers that have returned
+uint64_t g_interruptStart = 0;    // when the running one started
 bool g_dispatchDisabled = false;
 uint32_t g_heapStart = 0, g_heapEnd = 0;
 uint32_t g_vsyncFlagAddr = 0, g_vsyncCsrAddr = 0;
@@ -553,10 +555,9 @@ void alarmFired(uint64_t id) {
         return;
     }
     a.used = false;
-    ++g_interruptDepth;
+    const InterruptScope scope;
     const uint64_t args[3] = {id, a.time, a.arg};
     callGuestOnStack(a.func, args, 3, kInterruptStackTop);
-    --g_interruptDepth;
 }
 
 void sysSetAlarm() {
@@ -1008,6 +1009,13 @@ void onVblankStart() {
 }
 int currentThread() { return g_current; }
 bool inInterrupt() { return g_interruptDepth > 0; }
+uint64_t interruptCycles() { return g_interruptCycles + (g_interruptDepth > 0 ? nowCycles() - g_interruptStart : 0); }
+InterruptScope::InterruptScope() {
+    if (g_interruptDepth++ == 0) g_interruptStart = nowCycles();
+}
+InterruptScope::~InterruptScope() {
+    if (--g_interruptDepth == 0) g_interruptCycles += nowCycles() - g_interruptStart;
+}
 void markRescheduleNeeded() { g_needResched = true; }
 void kickInterrupts() { g_slice = 0; }
 
@@ -1030,17 +1038,19 @@ void serviceInterrupts() {
         if (const uint32_t intc = hw::intcPending()) {
             const int cause = std::countr_zero(intc);
             hw::ackIntc(cause);
-            ++g_interruptDepth;
-            runHandlers(g_intcHandlers[cause], static_cast<uint32_t>(cause));
-            --g_interruptDepth;
+            {
+                const InterruptScope scope;
+                runHandlers(g_intcHandlers[cause], static_cast<uint32_t>(cause));
+            }
             continue;
         }
         if (const uint32_t dmac = hw::dmacPending()) {
             const int ch = std::countr_zero(dmac);
             hw::ackDmac(ch);
-            ++g_interruptDepth;
-            runHandlers(g_dmacHandlers[ch], static_cast<uint32_t>(ch));
-            --g_interruptDepth;
+            {
+                const InterruptScope scope;
+                runHandlers(g_dmacHandlers[ch], static_cast<uint32_t>(ch));
+            }
             continue;
         }
         break;

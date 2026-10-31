@@ -23,6 +23,20 @@ void idle();
 // A thread's entry function returned (its $ra pointed at kTrampThreadExit).
 void onThreadReturned();
 bool inInterrupt();
+// Emulated time spent in interrupt handlers (alarms included) since start-up,
+// the running one included. hw's vblank uses it to keep handlers from
+// starving the threads.
+uint64_t interruptCycles();
+// Interrupt context while it lives: no rescheduling, and its time counted in
+// interruptCycles(). The kernel holds one around every handler it calls.
+class InterruptScope {
+public:
+    InterruptScope();
+    ~InterruptScope();
+    InterruptScope(const InterruptScope&) = delete;
+    InterruptScope& operator=(const InterruptScope&) = delete;
+};
+
 // Delivers pending INTC/DMAC interrupts to registered handlers, then
 // switches threads if one became ready with a higher priority.
 void serviceInterrupts();

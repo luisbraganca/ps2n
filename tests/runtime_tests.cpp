@@ -18,6 +18,7 @@
 #include "iop/kernel.h"
 #include "iop/pad.h"
 #include "iop/spu2.h"
+#include "kernel/kernel.h"
 #include "log.h"
 #include "ps2/recomp.h"
 #include "settings.h"
@@ -3339,6 +3340,79 @@ TEST_CASE(ee_timer_interrupts_come_when_their_event_runs_late) {
     write32(kComp, 0);
     raised();
     hw::setIntcMask(hw::INTC_TIM1, wasEnabled);
+}
+
+// In real time a vblank waits until the threads have had half a frame over the
+// last two frames, so interrupt handlers that keep overrunning frames (Agent
+// Under Fire redraws each field from its vsync handler) cannot starve them,
+// while a handler that overruns every other frame changes nothing. With
+// --virtual-clock vblanks come on time whatever the handlers take.
+TEST_CASE(vblanks_leave_the_threads_half_a_frame_in_two_in_real_time) {
+    const bool wasEnabled = (read32(0x1000F010) >> hw::INTC_VBLANK_START) & 1;
+    const bool wasPal = hw::isPal();
+    hw::setIntcMask(hw::INTC_VBLANK_START, false);   // only I_STAT is looked at: no handler runs
+    auto raised = [] {
+        const bool r = (read32(0x1000F000) >> hw::INTC_VBLANK_START) & 1;
+        write32(0x1000F000, 1u << hw::INTC_VBLANK_START);
+        return r;
+    };
+    auto spin = [](uint64_t cycles) {   // real time passes (sleeping is too coarse on Windows)
+        const uint64_t until = nowCycles() + cycles;
+        while (nowCycles() < until) {
+        }
+    };
+    auto busy = [&](uint64_t cycles) {   // an interrupt handler that takes `cycles`
+        const kernel::InterruptScope handler;
+        spin(cycles);
+    };
+    constexpr uint64_t kFrame = kEeClockHz / 50, kMs = kEeClockHz / 1000;
+
+    clockInit(false, false);            // real time, and no events but the vblanks
+    hw::setVideoMode(true, 3, false);   // PAL
+    raised();
+    hw::startVsync();
+    spin(kFrame + 5 * kMs);
+    runDueEvents();
+    CHECK(raised());                    // the threads had the frame
+    busy(2 * kFrame + 5 * kMs);
+    runDueEvents();
+    CHECK(raised());                    // late, but the threads had the frame before
+    busy(2 * kFrame + 5 * kMs);
+    runDueEvents();
+    CHECK(!raised());                   // the threads have not run for two frames:
+    const uint64_t ahead = nextEventTime() - nowCycles();
+    CHECK(ahead > 3 * kFrame / 8 && ahead <= kFrame / 2);   // it waits for half a frame of them
+    spin(std::min(ahead, kFrame));
+    runDueEvents();
+    CHECK(raised());
+    spin(kFrame + 5 * kMs);
+    runDueEvents();
+    CHECK(raised());                    // a whole frame for the threads
+    busy(2 * kFrame + 5 * kMs);
+    runDueEvents();
+    CHECK(raised());
+    {
+        const kernel::InterruptScope handler;   // the one still running counts too
+        spin(2 * kFrame + 5 * kMs);
+        runDueEvents();
+        CHECK(!raised());
+    }
+    spin(kFrame / 2 + kMs);
+    runDueEvents();
+    CHECK(raised());
+
+    clockInit(true, false);
+    hw::startVsync();
+    for (int i = 0; i < 3; ++i) {
+        const kernel::InterruptScope handler;
+        clockAdvance(kFrame);
+        runDueEvents();
+        CHECK(raised());
+    }
+
+    clockInit(false, false);            // drops the vblank events
+    hw::setVideoMode(true, wasPal ? 3 : 2, false);
+    hw::setIntcMask(hw::INTC_VBLANK_START, wasEnabled);
 }
 
 int main(int argc, char** argv) { return ::testing::runAll(argc, argv); }

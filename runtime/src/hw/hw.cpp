@@ -38,6 +38,8 @@ bool g_pal = false;
 bool g_interlace = true;
 uint64_t g_vsyncs = 0;
 uint64_t g_frameCycles = 0, g_vblankCycles = 0;
+uint64_t g_lastVblank = 0, g_lastVblankHandlers = 0;   // when the last vblank came, and kernel::interruptCycles() then
+uint64_t g_lastThreads = 0;   // the threads' time between the two vblanks before
 
 std::unordered_map<uint32_t, uint32_t> g_misc;   // registers we only store
 std::string g_sioLine;
@@ -136,14 +138,32 @@ void timerWrite(int i, uint32_t reg, uint32_t v) {
 // ---- vsync -----------------------------------------------------------------------
 void vblankEnd(uint64_t);
 
+// In real time interrupt handlers can take longer than a frame: a game that
+// draws from its vsync handler (Agent Under Fire redraws each field) has the
+// VIF and vector units' work done there, which a console does beside the CPU.
+// A vblank then waits until the threads have had half a frame over the last
+// two frames: a game that draws there every other frame keeps its pace, and one
+// that never lets the threads run slows down instead of starving them.
 void vblankStart(uint64_t) {
+    if (!clockVirtual()) {
+        const uint64_t now = nowCycles(), handlers = kernel::interruptCycles() - g_lastVblankHandlers;
+        const uint64_t threads = now - g_lastVblank > handlers ? now - g_lastVblank - handlers : 0;
+        const uint64_t had = g_lastThreads + threads, need = g_frameCycles / 2;
+        if (had < need) {
+            scheduleEvent(now + need - had, vblankStart, 0);
+            return;
+        }
+        g_lastThreads = threads;
+    }
     ++g_vsyncs;
     gs::onVblankStart();
     raiseIntc(INTC_VBLANK_START);
     kernel::onVblankStart();
     iop::onVblank(true);
-    scheduleEvent(nowCycles() + g_vblankCycles, vblankEnd, 0);
-    scheduleEvent(nowCycles() + g_frameCycles, vblankStart, 0);
+    g_lastVblank = nowCycles();
+    g_lastVblankHandlers = kernel::interruptCycles();
+    scheduleEvent(g_lastVblank + g_vblankCycles, vblankEnd, 0);
+    scheduleEvent(g_lastVblank + g_frameCycles, vblankStart, 0);
     if (g_opt.maxVsyncs && g_vsyncs >= g_opt.maxVsyncs) {
         PS2_INFO("hw", "reached --max-vsyncs %llu; exiting", static_cast<unsigned long long>(g_opt.maxVsyncs));
         requestExit(0);
@@ -224,6 +244,7 @@ void init() {
     for (auto& t : g_timers) t = Timer{};
     g_misc.clear();
     g_vsyncs = 0;
+    g_lastVblank = g_lastVblankHandlers = g_lastThreads = 0;
     setVideoMode(true, 2, false);
 }
 
@@ -240,7 +261,12 @@ void setVideoMode(bool interlace, int mode, bool field) {
     gs::setVideoMode(interlace, g_pal);
 }
 
-void startVsync() { scheduleEvent(nowCycles() + g_frameCycles, vblankStart, 0); }
+void startVsync() {
+    g_lastVblank = nowCycles();
+    g_lastVblankHandlers = kernel::interruptCycles();
+    g_lastThreads = g_frameCycles;
+    scheduleEvent(g_lastVblank + g_frameCycles, vblankStart, 0);
+}
 
 // ---- INTC ----------------------------------------------------------------------------
 void raiseIntc(int cause) {

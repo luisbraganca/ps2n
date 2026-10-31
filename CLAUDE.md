@@ -198,7 +198,10 @@ assets/                          branding/ (logo and icons; its README says whic
   files' write times give vblanks per second. In real time the GS thread
   writes the dumps, up to two vsyncs late, so measure over long stretches.
   Full speed on PAL reads 50 only while the guest thread handles each
-  vblank on time: the next one is scheduled from when it was handled.
+  vblank on time: the next one is scheduled from when it was handled. In
+  real time a vblank also waits until the threads have had half a frame
+  over the last two, so handlers that keep overrunning frames slow the game
+  down.
 - Confirm a cause with a run before stating it.
 
 ## Working rules

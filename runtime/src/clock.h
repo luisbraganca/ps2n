@@ -15,6 +15,7 @@ constexpr uint64_t kEeClockHz = 294912000;
 constexpr uint64_t kBusClockHz = kEeClockHz / 2;
 
 void clockInit(bool virtualClock, bool noThrottle);
+bool clockVirtual();   // --virtual-clock
 uint64_t nowCycles();
 // The console's real-time clock, in seconds since the Unix epoch (UTC): the
 // host's time, or with --virtual-clock 2001-07-04 12:00 plus emulated time.

@@ -198,6 +198,18 @@ late, so it acts on what happened since it was scheduled rather than on the
 state it finds: a timer's compare interrupt comes because the counter passed
 its compare value, not because the two are equal when the event runs.
 
+In real time a vblank also waits until the threads have had half a frame
+over the last two frames (`kernel::interruptCycles()` counts the time spent
+in handlers). A handler can take longer than a frame here: a game that draws
+from its vsync handler has the VIF and vector units' work done inside it,
+which a console does beside the CPU. Agent Under Fire redraws each field that
+way inside its first mission's building, and facing the lobby the redraw took
+about 40 ms: each vblank came while the last one's handler was still drawing,
+the threads never ran again, and the picture and the sound froze. The game
+now slows down there instead, while in play outdoors, where it draws in the
+handler every other frame, it keeps its pace. With `--virtual-clock` that work
+costs no emulated time, and vblanks come on time.
+
 Time follows the host clock by default (games run at their real speed);
 `--virtual-clock` advances time by a fixed amount per safepoint and syscall
 instead, making runs reproducible, which is what the tests use.

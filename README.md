@@ -59,7 +59,7 @@ Playable, Perfect.
 
 | Game | Stage | Notes |
 |---|---|---|
-| 007: Agent Under Fire (Europe, SLES-50539) | In-game | All three executables run recompiled. The language selection, the intro movies, the copyright and title screens, the menus and the first mission (Trouble in Paradise) run at full speed, and the controller works. In the mission the sound still breaks up. The driving missions' executable is not recompiled yet. |
+| 007: Agent Under Fire (Europe, SLES-50539) | In-game | All three executables run recompiled. The language selection, the intro movies, the copyright and title screens, the menus and the first mission (Trouble in Paradise) run at full speed, except inside the mission's first building, where the game redraws each field through the vector units and slows to about 23 vblanks per second facing the lobby. The controller works. In the mission the sound still breaks up. The driving missions' executable is not recompiled yet. |
 
 ### By area
 
@@ -238,6 +238,12 @@ ran, and real-time runs stayed on that screen at about 46 vblanks per second,
 the sound repeating a 512-sample block 8,516 times in 110 s. The movies went
 from 49 vblanks per second to 50 as well: each vblank is scheduled from when
 the previous one was handled, and the guest thread now handles them on time.
+Inside the first mission's building the game redraws each field from its vsync
+handler, and facing the lobby the vector units' interpreted work for it took
+about 40 ms a field: the game's threads never ran again, and the picture and
+the sound froze. A vblank now waits until the threads have had half a frame
+over the last two frames, and the game slows to 23 vblanks per second there
+instead.
 Before the GS drew large primitives on 8 threads, the title screen dropped to
 14.5 vblanks per second; before a polling loop split across two functions
 could take interrupts, it timed out on every frame, and the main menu ran at 3
@@ -266,7 +272,8 @@ Roughly in order:
 4. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
    `ExecPS2`, dual-layer discs, code overlays, and a second game to bring up.
 5. **Vector units**: run micro programs alongside the EE, with their timing,
-   and recompile them like EE code.
+   and recompile them like EE code. Agent Under Fire needs it inside its first
+   building, where it redraws each field through them.
 6. **Widescreen and higher resolutions**, the way PCSX2 does them:
    - **16:9.** PS2 games compute their own projection, so there is no general
      switch. PCSX2 applies per-game widescreen patches (`.pnach` files) that

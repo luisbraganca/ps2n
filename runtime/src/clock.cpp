@@ -50,6 +50,8 @@ void clockInit(bool virtualClock, bool noThrottle) {
     g_nextWhen = UINT64_MAX;
 }
 
+bool clockVirtual() { return g_virtual; }
+
 uint64_t nowCycles() { return g_virtual ? g_virtualNow : realCycles() + g_skipped; }
 
 int64_t rtcTime() {
