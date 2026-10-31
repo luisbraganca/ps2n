@@ -806,6 +806,172 @@ TEST_CASE(gs_threads_draw_what_one_thread_draws) {
     }
 }
 
+namespace {
+
+// A+D writes, in packets of up to 32767 registers.
+void gsWriteAll(const std::vector<std::pair<uint32_t, uint64_t>>& regs) {
+    for (size_t at = 0; at < regs.size();) {
+        const size_t n = std::min<size_t>(regs.size() - at, 0x7FFF);
+        std::vector<uint64_t> q = {n | 1ull << 15 | 1ull << 60, 0xE};
+        for (size_t i = at; i < at + n; ++i) {
+            q.push_back(regs[i].second);
+            q.push_back(regs[i].first);
+        }
+        gs::gifTransfer(q.data(), q.size() / 2, 3);
+        at += n;
+    }
+}
+
+// Many small primitives, drawn by `threads` threads (on the GS's own thread
+// if `ownThread`), with what makes the draw threads wait between them: a
+// texture drawn earlier in the batch, a texture drawn or copied over after
+// primitives that sample it, the same memory drawn under another layout, and
+// an upload over a texture in use. Returns every buffer involved.
+std::vector<uint32_t> drawBatchScene(int threads, bool ownThread = false) {
+    gs::init();
+    gs::setDrawThreads(threads);
+    gs::setOwnThread(ownThread);
+    const int mode = std::fegetround();
+    std::fesetround(FE_TOWARDZERO);
+    // Textures as in drawScene: 64x64 PSMCT32 at page 64, PSMT8 at page 72, its CLUT at page 80.
+    gsUpload(64 * 32, 1, 0x00, 64, 64, pseudoRandom(64 * 64, 11));
+    gsUpload(72 * 32, 2, 0x13, 64, 64, pseudoRandom(64 * 64 / 4, 12));
+    gsUpload(80 * 32, 1, 0x00, 16, 16, pseudoRandom(256, 13));
+    gsUpload(100 * 32, 1, 0x00, 32, 32, pseudoRandom(32 * 32, 15));   // copied over page 72 below
+    const uint64_t frame = 4ull << 16;   // FRAME_1: page 0, 256 wide, PSMCT32
+    gsWrite({{0x4C, frame}, {0x4E, 32}, {0x40, 255ull << 16 | 127ull << 48}, {0x18, 0}, {0x1A, 1}, {0x42, 0x44},
+             {0x47, 1ull << 16 | 1ull << 17}, {0x00, 6}, {0x01, 0x80302010}, {0x05, xyz(0, 0, 0)}, {0x05, xyz(256, 128, 0)}});
+    uint32_t seed = 77;
+    auto rnd = [&](uint32_t n) {
+        seed = seed * 1664525u + 1013904223u;
+        return static_cast<int>((seed >> 8) % n);
+    };
+    const uint64_t tex32 = 2048 | 1ull << 14 | 6ull << 26 | 6ull << 30 | 1ull << 34;
+    const uint64_t tex8 = 2304 | 2ull << 14 | 0x13ull << 20 | 6ull << 26 | 6ull << 30 | 1ull << 34 | 2560ull << 37;
+    const uint64_t texTarget = 96 * 32 | 1ull << 14 | 6ull << 26 | 6ull << 30 | 1ull << 34;   // page 96, drawn below
+    // Small Gouraud triangles, textured by ST, blended, under depth GEQUAL.
+    auto triangles = [&](std::vector<std::pair<uint32_t, uint64_t>>& r, int n, uint64_t tex0) {
+        r.push_back({0x06, tex0});
+        r.push_back({0x47, 1ull << 16 | 2ull << 17});
+        r.push_back({0x00, 3 | 1 << 3 | 1 << 4 | 1 << 6});
+        for (int i = 0; i < n; ++i) {
+            const int x = rnd(244), y = rnd(116);
+            for (int k = 0; k < 3; ++k) {
+                r.push_back({0x02, bits64(static_cast<float>(rnd(64)) / 64.0f) | bits64(static_cast<float>(rnd(64)) / 64.0f) << 32});
+                r.push_back({0x01, (0x80000000u | static_cast<uint32_t>(rnd(1 << 24))) | bits64(1.0f) << 32});
+                r.push_back({0x05, xyz(x + rnd(13), y + rnd(13), static_cast<uint32_t>(rnd(1 << 20)))});
+            }
+        }
+    };
+    // Small flat sprites into the current frame.
+    auto sprites = [&](std::vector<std::pair<uint32_t, uint64_t>>& r, int n, int w, int h) {
+        r.push_back({0x47, 0});
+        r.push_back({0x00, 6});
+        for (int i = 0; i < n; ++i) {
+            const int x = rnd(w - 6), y = rnd(h - 6);
+            r.push_back({0x01, 0x80000000u | static_cast<uint32_t>(rnd(1 << 24))});
+            r.push_back({0x05, xyz(x, y, 0)});
+            r.push_back({0x05, xyz(x + 1 + rnd(6), y + 1 + rnd(6), 0)});
+        }
+    };
+    // Blended sprites over rows 0-3 only, textured by UV across the whole
+    // texture: they keep the first draw thread busy while the others go on.
+    auto firstBand = [&](std::vector<std::pair<uint32_t, uint64_t>>& r, int n, uint64_t tex0) {
+        r.push_back({0x06, tex0});
+        r.push_back({0x47, 0});
+        r.push_back({0x00, 6 | 1 << 4 | 1 << 6 | 1 << 8});
+        for (int i = 0; i < n; ++i) {
+            r.push_back({0x01, 0x80000000u | static_cast<uint32_t>(rnd(1 << 24))});
+            r.push_back({0x03, static_cast<uint64_t>(rnd(64 * 16)) | static_cast<uint64_t>(rnd(64 * 16)) << 16});
+            r.push_back({0x05, xyz(0, 0, 0)});
+            r.push_back({0x03, static_cast<uint64_t>(rnd(64 * 16)) | static_cast<uint64_t>(rnd(64 * 16)) << 16});
+            r.push_back({0x05, xyz(256, 4, 0)});
+        }
+    };
+    std::vector<std::pair<uint32_t, uint64_t>> r;
+    triangles(r, 600, tex32);
+    triangles(r, 600, tex8);
+    // Page 64 sampled, then drawn over: drawing it must wait for those.
+    firstBand(r, 1500, tex32);
+    r.push_back({0x4C, 64 | 1ull << 16});
+    r.push_back({0x40, 63ull << 16 | 63ull << 48});
+    sprites(r, 200, 64, 64);
+    r.push_back({0x4C, frame});
+    r.push_back({0x40, 255ull << 16 | 127ull << 48});
+    // Page 72 sampled, then copied over within GS memory: the copy must wait for those.
+    firstBand(r, 1500, tex8);
+    r.push_back({0x50, static_cast<uint64_t>(100 * 32) | 1ull << 16 | static_cast<uint64_t>(72 * 32) << 32 | 1ull << 48});
+    r.push_back({0x51, 0});
+    r.push_back({0x52, 32 | 32ull << 32});
+    r.push_back({0x53, 2});
+    triangles(r, 300, tex8);
+    // Page 96 drawn, then sampled: the batch must be drawn first.
+    r.push_back({0x4C, 96 | 1ull << 16});
+    r.push_back({0x40, 63ull << 16 | 63ull << 48});
+    sprites(r, 200, 64, 64);
+    r.push_back({0x4C, frame});
+    r.push_back({0x40, 255ull << 16 | 127ull << 48});
+    triangles(r, 300, texTarget);
+    triangles(r, 300, tex32);
+    // Page 120 drawn as PSMCT32, then as PSMCT16: other rows own its words.
+    r.push_back({0x4C, 120 | 2ull << 16});
+    r.push_back({0x40, 127ull << 16 | 63ull << 48});
+    sprites(r, 200, 128, 64);
+    r.push_back({0x4C, 120 | 2ull << 16 | 2ull << 24});
+    sprites(r, 200, 128, 64);
+    r.push_back({0x4C, frame});
+    r.push_back({0x40, 255ull << 16 | 127ull << 48});
+    // Points and a line strip.
+    r.push_back({0x47, 0});
+    r.push_back({0x00, 0});
+    for (int i = 0; i < 300; ++i) {
+        r.push_back({0x01, 0x80000000u | static_cast<uint32_t>(rnd(1 << 24))});
+        r.push_back({0x05, xyz(rnd(256), rnd(128), 0)});
+    }
+    r.push_back({0x00, 2});
+    for (int i = 0; i < 300; ++i) {
+        r.push_back({0x01, 0x80000000u | static_cast<uint32_t>(rnd(1 << 24))});
+        r.push_back({0x05, xyz(rnd(256), rnd(128), 0)});
+    }
+    triangles(r, 300, tex8);
+    gsWriteAll(r);
+    // An upload over the PSMT8 texture while primitives sampling it are queued, then more of them.
+    gsUpload(72 * 32, 2, 0x13, 64, 64, pseudoRandom(64 * 64 / 4, 14));
+    r.clear();
+    triangles(r, 300, tex8);
+    gsWriteAll(r);
+    std::vector<uint32_t> out;
+    for (int y = 0; y < 128; ++y)
+        for (int x = 0; x < 256; ++x) {
+            out.push_back(gs::readPixel32(0, 4, 0x00, x, y));
+            out.push_back(gs::readPixel32(32, 4, 0x30, x, y));
+        }
+    for (const uint32_t page : {64u, 96u})
+        for (int y = 0; y < 64; ++y)
+            for (int x = 0; x < 64; ++x) out.push_back(gs::readPixel32(page, 1, 0x00, x, y));
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 128; ++x) out.push_back(gs::readPixel32(120, 2, 0x00, x, y));
+    std::fesetround(mode);
+    gs::setOwnThread(false);
+    gs::setDrawThreads(0);
+    return out;
+}
+
+} // namespace
+
+TEST_CASE(gs_threads_share_small_primitives_in_order) {
+    // Every primitive is shared by rows: the picture is one thread's, also
+    // where a primitive depends on what the batch drew or read before it.
+    const std::vector<uint32_t> one = drawBatchScene(1);
+    CHECK(std::set<uint32_t>(one.begin(), one.end()).size() > 5000);
+    for (const auto& [threads, ownThread] : {std::pair{3, false}, std::pair{4, false}, std::pair{2, true}, std::pair{4, true}}) {
+        const std::vector<uint32_t> many = drawBatchScene(threads, ownThread);
+        size_t differ = 0;
+        for (size_t i = 0; i < one.size(); ++i) differ += one[i] != many[i];
+        CHECK_EQ(differ, size_t(0));
+    }
+}
+
 TEST_CASE(gs_thread_draws_what_the_guest_thread_draws) {
     // The GS thread takes the guest's rounding, and reading back waits for it.
     const std::vector<uint32_t> guest = drawScene(1);
@@ -973,6 +1139,31 @@ TEST_CASE(gs_thread_shows_each_vsync_as_it_was) {
         CHECK_EQ(ppmFirstPixel(files[2]), 0xFF0000u);
     }
     gs::setOwnThread(false);
+    gs::setDrawThreads(0);
+    g_opt.dumpFrames.clear();
+    std::filesystem::remove_all(dir);
+}
+
+TEST_CASE(gs_vsync_shows_what_the_draw_threads_drew) {
+    // On the guest thread too, the draw threads may still be drawing when a
+    // vsync's picture is made: it waits for them.
+    const auto dir = std::filesystem::temp_directory_path() / "ps2n_draw_thread_frames";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    g_opt.dumpFrames = dir;
+    g_opt.dumpEvery = 1;
+    gs::init();
+    gs::setDrawThreads(3);
+    gs::privWrite(0x12000000, 0x6);                          // PMODE: circuit 2
+    gs::privWrite(0x12000090, 1 << 9);                       // DISPFB2: page 0, 64 wide
+    gs::privWrite(0x120000A0, 63ull << 32 | 7ull << 44);     // DISPLAY2: 64 clocks, 8 lines
+    gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
+    for (uint32_t i = 0; i < 64; ++i) gsRect(0, 0, 64, 64, 0x80000000u | i);   // the draw threads stay busy
+    gsRect(0, 0, 64, 8, 0x8000FF00);
+    gs::onVblankStart();
+    const auto files = filesIn(dir);
+    CHECK_EQ(files.size(), size_t(1));
+    if (files.size() == 1) CHECK_EQ(ppmFirstPixel(files[0]), 0x00FF00u);
     gs::setDrawThreads(0);
     g_opt.dumpFrames.clear();
     std::filesystem::remove_all(dir);

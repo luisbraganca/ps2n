@@ -59,13 +59,13 @@ Playable, Perfect.
 
 | Game | Stage | Notes |
 |---|---|---|
-| 007: Agent Under Fire (Europe, SLES-50539) | Menus | All three executables run recompiled. The language selection, the intro movies, the copyright and title screens and the main menu work, at full speed and with sound, and so does the controller. SELECT MISSION works too, but the game finishes only 37 to 50 pictures a second there, as drawing is too slow. Starting a mission is untested, and the driving missions' executable is not recompiled yet. |
+| 007: Agent Under Fire (Europe, SLES-50539) | In-game | All three executables run recompiled. The language selection, the intro movies, the copyright and title screens, the menus and the first mission (Trouble in Paradise) run at full speed, and the controller works. In the mission the sound still breaks up, textures look blocky (the game asks for bilinear filtering, which the rasterizer does not do yet), and some polygons look wrong. The driving missions' executable is not recompiled yet. |
 
 ### By area
 
 | Area | Progress | Count | Biggest gaps |
 |---|---|--:|---|
-| Games playable | `░░░░░░░░░░` 0% | 0 / 1 | Agent Under Fire reaches its menus; a mission is untested |
+| Games playable | `░░░░░░░░░░` 0% | 0 / 1 | Agent Under Fire runs its first mission, with broken-up sound and unfiltered textures |
 | EE instructions | `██████████` 100% | 359 / 359 | |
 | Recompiler | `█████████░` 89% | 8 / 9 | overlays |
 | EE kernel syscalls | `█████████░` 88% | 127 / 145 | event flags, `ExecPS2`, the TLB, CPU timers |
@@ -226,7 +226,12 @@ interpreter and well above the EE's 294.9 MHz. Whole games are held back by
 the rest of the emulation. In Agent Under Fire the intro movies, the copyright
 and title screens and the main menu run at full speed: 50 vblanks per second
 throughout three headless real-time runs of 150 to 200 s each, on an Intel
-i5-14600KF. That came with the GS's own thread. Before it, the drawing ran
+i5-14600KF. So does the first mission, in a headless real-time run, since the
+draw threads share every primitive: when they shared only large ones, its
+thousands of small triangles were drawn on one thread and held it to 28 to 31
+vblanks per second. A deterministic run of the mission went from 14.4 to 41.9
+vblanks per second. Full speed in the menus came with the GS's own thread.
+Before it, the drawing ran
 inside the EE's DMA kicks: the scene the game redraws behind its copyright
 screen on every vsync took longer than a frame, so the game's own thread never
 ran, and real-time runs stayed on that screen at about 46 vblanks per second,
@@ -246,20 +251,18 @@ since the move to Windows. Linux is untested.
 
 Roughly in order:
 
-1. **Agent Under Fire in game**: start a mission, recompile the driving
-   missions' executable, and fix what the game reaches next.
+1. **Agent Under Fire in game**: the first mission's sound, bilinear
+   filtering for its textures, the driving missions' executable, and what
+   the game reaches next.
 2. **Sound**: PCSX2's audio settings page, and the IOP's DMA channels 4 and
    7 for drivers that program the SPU2 themselves.
-3. **Graphics speed**: the GS draws on its own thread, alongside the EE,
-   with helpers sharing large primitives, and the rasterizer decodes the
-   drawing state once per primitive. That keeps the first game at full
-   speed, with little to spare: the 3D scene behind its copyright screen
-   costs about 17 ms of drawing a frame, out of 20, while the EE interprets
-   about 2,900 VU1 programs. On SELECT MISSION it is not enough: the game
-   waits for each frame's drawing (10 to 12 ms) and finishes 37 to 50
-   pictures a second, so some show twice. Per pixel the rasterizer still
-   divides and interpolates in plain scalar code. A faster software renderer
-   next (stepped interpolation, SIMD), then a GPU renderer, which higher
+3. **Graphics speed**: the GS has its own thread, alongside the EE, the
+   draw threads share every primitive in bands of rows, and the rasterizer
+   decodes the drawing state once per primitive. That keeps the first game
+   at full speed, its first mission included, on a 14-core desktop CPU
+   (nothing slower has been tried). Per pixel the rasterizer still divides
+   and interpolates in plain scalar code. A faster software renderer next
+   (stepped interpolation, SIMD), then a GPU renderer, which higher
    resolutions also need.
 4. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
    `ExecPS2`, dual-layer discs, code overlays, and a second game to bring up.

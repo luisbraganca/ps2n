@@ -98,18 +98,26 @@ assets/                          branding/ (logo and icons; its README says whic
   mode (`fegetround`), as the GS thread and the draw threads do; without it,
   colours come out one step off.
 - Drawing on several threads (`--gs-threads`) must give exactly what one
-  thread gives, or runs stop being reproducible. Threads share a large
-  primitive by bands of rows. A primitive whose memory overlaps (texture or
-  CLUT over its frame or depth buffer, frame over depth) is drawn by one
-  thread, as is one in a texture format the rasterizer does not support.
-  `gs_threads_draw_what_one_thread_draws` checks this.
+  thread gives, or runs stop being reproducible. The draw threads work
+  through a batch of queued primitives, each drawing its own bands of four
+  rows of every one, in order. The queuing thread waits for the batch before
+  anything else touches GS memory (an image transfer, the display, a read
+  back), and before a primitive that reads what the batch writes, writes what
+  it reads, or writes the same memory under another layout. A primitive whose
+  memory overlaps itself (texture or CLUT over its frame or depth buffer,
+  frame over depth) is drawn by the queuing thread alone, as is one in a
+  texture format the rasterizer does not support.
+  `gs_threads_draw_what_one_thread_draws` and
+  `gs_threads_share_small_primitives_in_order` check this.
 - In real-time runs the GS has its own thread, up to two vsyncs behind the
-  guest. Whatever acts on GIF state goes through its ring, in the guest's
-  order; whatever reads GS memory back waits for it (`flush`); a vsync's
+  guest, which decodes the GIF data and queues the primitives. Whatever acts
+  on GIF state goes through its ring, in the guest's order; whatever reads GS
+  memory back waits for it and the draw threads (`flush`); a vsync's
   picture uses the display registers as they were at that vsync. The GS
   thread never touches guest state: `FINISH` and `SIGNAL` reach the guest
-  through `gs::pollEvents` at a safepoint. `--virtual-clock`, `--strict` and
-  `--gs-threads 1` keep the drawing on the guest thread.
+  through `gs::pollEvents` at a safepoint. `--virtual-clock` and `--strict`
+  keep the decoding on the guest thread, and `--gs-threads 1` the drawing
+  too.
 - A vsync's picture is read at the start of the vblank, before the game's
   vsync handler runs, so a game that flips there (Agent Under Fire does)
   shows each picture a vsync later than the console. In FIELD mode, adaptive

@@ -17,6 +17,10 @@
 #include <thread>
 #include <vector>
 
+#if defined(_M_X64) || defined(__x86_64__)
+#include <immintrin.h>
+#endif
+
 namespace ps2::gs {
 
 namespace {
@@ -274,6 +278,11 @@ uint32_t g_u = 0, g_v = 0, g_fog = 0;
 Vertex g_queue[3];
 int g_queueCount = 0;
 
+// The queuing thread: whether the draw threads have a batch queued, and waits
+// until it is drawn (see DrawThreads).
+bool drawingQueued();
+void finishDrawing();
+
 // ---- image transfer -------------------------------------------------------------
 struct Transfer {
     bool active = false;
@@ -297,6 +306,7 @@ void writeTransferPixel(uint32_t v) {
 void transferData(uint64_t data) {
     Transfer& t = g_xfer;
     if (!t.active) return;
+    if (drawingQueued()) finishDrawing();   // primitives sent in the middle of the transfer
     const uint32_t bpp = bitsPerPixel(t.dpsm);
     if (bpp == 24) {   // three bytes per pixel, packed across 64-bit words
         for (int i = 0; i < 8; ++i) {
@@ -315,6 +325,7 @@ void transferData(uint64_t data) {
 }
 
 void startTransfer(uint32_t dir) {
+    finishDrawing();   // queued primitives may read what it writes, or write what it reads
     const uint64_t bb = g_regs[BITBLTBUF], pos = g_regs[TRXPOS], reg = g_regs[TRXREG];
     if (dir == 0) {   // host -> local
         g_xfer.active = true;
@@ -414,6 +425,7 @@ struct Draw {
 };
 Draw g_draw;
 bool g_drawDirty = true;   // a drawing register changed since g_draw was decoded
+uint64_t g_drawGen = 0;    // counts the decodings, which tells states apart
 
 uint32_t clutLookup(const Draw& d, uint32_t index) {
     const uint32_t psm = d.tpsm, cbp = d.cbp, cpsm = d.cpsm, csa = d.csa;
@@ -488,6 +500,7 @@ uint32_t zMax(uint32_t zpsm) {
 const Draw& currentDraw() {
     if (!g_drawDirty) return g_draw;
     g_drawDirty = false;
+    ++g_drawGen;
     Draw& d = g_draw;
     d.e = currentEnv();
     const Env& e = d.e;
@@ -646,9 +659,17 @@ void texCoord(const Draw& d, float s, float t, float q, float u, float v, float&
     outV = t * iq * d.thf;
 }
 
-// Several threads can draw one primitive, each taking every parts-th band
-// of four rows (see drawOnThreads).
+// The draw threads share every primitive: row y belongs to thread (y / 4) %
+// parts, in bands of four rows (see DrawThreads). A band never shares a cache
+// line of the frame or depth buffer with another.
 bool myRow(int y, int part, int parts) { return parts == 1 || ((y >> 2) % parts) == part; }
+// The first row from y on that belongs to `part` (y >= 0), and the next one after y.
+int firstRow(int y, int part, int parts) {
+    if (parts == 1) return y;
+    const int band = y >> 2, ahead = (part - band % parts + parts) % parts;
+    return ahead ? (band + ahead) * 4 : y;
+}
+int nextRow(int y, int parts) { return parts == 1 || ((y + 1) & 3) ? y + 1 : y + 1 + 4 * (parts - 1); }
 
 struct Box {
     int x0, x1, y0, y1;   // inclusive, after the scissor
@@ -670,14 +691,14 @@ Box triangleBox(const Draw& d, const Vertex& v0, const Vertex& v1, const Vertex&
 
 void drawSprite(const Draw& d, const Vertex& a, const Vertex& b, int part, int parts) {
     const Box box = spriteBox(d, a, b);
-    const int ix0 = box.x0, ix1 = box.x1, iy0 = box.y0, iy1 = box.y1;
+    const int ix0 = box.x0, ix1 = box.x1, iy0 = firstRow(std::max(box.y0, 0), part, parts), iy1 = box.y1;
+    if (iy0 > iy1) return;
     const bool tex = d.tex;
     float ua, va, ub, vb;
     texCoord(d, a.s, a.t, a.q, a.u, a.v, ua, va);
     texCoord(d, b.s, b.t, b.q, b.u, b.v, ub, vb);
     const float dx = b.x - a.x, dy = b.y - a.y;
-    for (int y = iy0; y <= iy1; ++y) {
-        if (!myRow(y, part, parts)) continue;
+    for (int y = iy0; y <= iy1; y = nextRow(y, parts)) {
         const float fy = dy != 0 ? (static_cast<float>(y) - a.y) / dy : 0;
         for (int x = ix0; x <= ix1; ++x) {
             const float fx = dx != 0 ? (static_cast<float>(x) - a.x) / dx : 0;
@@ -701,7 +722,8 @@ void drawTriangle(const Draw& d, const Vertex& v0, const Vertex& v1, const Verte
     const float area = (v1.x - v0.x) * (v2.y - v0.y) - (v2.x - v0.x) * (v1.y - v0.y);
     if (area == 0) return;
     const Box box = triangleBox(d, v0, v1, v2);
-    const int minX = box.x0, maxX = box.x1, minY = box.y0, maxY = box.y1;
+    const int minX = box.x0, maxX = box.x1, minY = firstRow(std::max(box.y0, 0), part, parts), maxY = box.y1;
+    if (minY > maxY) return;
     const bool gouraud = d.gouraud;
     const bool tex = d.tex;
     const bool persp = tex && !d.fst;
@@ -711,8 +733,7 @@ void drawTriangle(const Draw& d, const Vertex& v0, const Vertex& v1, const Verte
     constexpr double kMargin = 64.0;
     const double sign = area > 0 ? 1.0 : -1.0;
     const Edge edges[3] = {edgeFunction(v1, v2, sign), edgeFunction(v2, v0, sign), edgeFunction(v0, v1, sign)};
-    for (int y = minY; y <= maxY; ++y) {
-        if (!myRow(y, part, parts)) continue;
+    for (int y = minY; y <= maxY; y = nextRow(y, parts)) {
         double lo = minX, hi = maxX;
         bool empty = false;
         for (const Edge& g : edges) {   // inside (or nearly): a * px + k >= 0
@@ -761,92 +782,34 @@ void drawTriangle(const Draw& d, const Vertex& v0, const Vertex& v1, const Verte
     }
 }
 
-void drawLine(const Draw& d, const Vertex& a, const Vertex& b) {
+void drawLine(const Draw& d, const Vertex& a, const Vertex& b, int part, int parts) {
     const int steps = static_cast<int>(std::max(std::fabs(b.x - a.x), std::fabs(b.y - a.y)));
     for (int i = 0; i <= steps; ++i) {
         const float f = steps ? static_cast<float>(i) / static_cast<float>(steps) : 0;
+        const int y = static_cast<int>(a.y + (b.y - a.y) * f);
+        if (!myRow(y, part, parts)) continue;
         const Vertex& c = d.gouraud ? (f < 0.5f ? a : b) : b;
-        plot(d, static_cast<int>(a.x + (b.x - a.x) * f), static_cast<int>(a.y + (b.y - a.y) * f), b.z, c.r, c.g, c.b, c.a, 0, 0, b.fog, false);
+        plot(d, static_cast<int>(a.x + (b.x - a.x) * f), y, b.z, c.r, c.g, c.b, c.a, 0, 0, b.fog, false);
+    }
+}
+
+enum class Shape : uint8_t { Point, Line, Triangle, Sprite };
+
+// Draws the rows of a primitive that belong to `part` of `parts`.
+void drawShape(const Draw& d, Shape shape, const Vertex* v, int part, int parts) {
+    switch (shape) {
+    case Shape::Point: {
+        const int y = static_cast<int>(v[0].y);
+        if (myRow(y, part, parts)) plot(d, static_cast<int>(v[0].x), y, v[0].z, v[0].r, v[0].g, v[0].b, v[0].a, 0, 0, v[0].fog, false);
+        break;
+    }
+    case Shape::Line: drawLine(d, v[0], v[1], part, parts); break;
+    case Shape::Triangle: drawTriangle(d, v[0], v[1], v[2], part, parts); break;
+    case Shape::Sprite: drawSprite(d, v[0], v[1], part, parts); break;
     }
 }
 
 // ---- drawing on several threads ----------------------------------------------------
-// A large primitive is drawn by several threads at once, each taking every
-// Nth band of four rows. Each pixel is still shaded by one thread, and the
-// primitive is finished before the next one starts, so the picture is the
-// one a single thread draws. A primitive whose pixels could see another
-// thread's is drawn by one thread: a texture or CLUT in memory it draws
-// into, or frame and depth buffers that overlap.
-
-using RowJob = void (*)(const void* job, int part, int parts);
-
-class DrawThreads {
-public:
-    ~DrawThreads() { stop(); }
-    void setCount(int n) {
-        stop();
-        want_ = n;
-    }
-    int count() {
-        if (want_ <= 0) want_ = static_cast<int>(std::clamp(std::thread::hardware_concurrency() / 2, 1u, 8u));
-        return want_;
-    }
-    // job(part, count()) for every part: part 0 on this thread, the others on
-    // helpers, which round floats as this thread does (the EE's rounding,
-    // which the guest thread uses and the drawing inherits). Returns when all are done.
-    void run(RowJob job, const void* ctx) {
-        const int parts = count();
-        start(parts - 1);
-        job_ = job;
-        ctx_ = ctx;
-        parts_ = parts;
-        rounding_ = std::fegetround();
-        pending_.store(parts - 1);
-        epoch_.fetch_add(1);
-        epoch_.notify_all();
-        job(ctx, 0, parts);
-        for (int p = pending_.load(); p != 0; p = pending_.load()) pending_.wait(p);
-    }
-
-private:
-    void start(int helpers) {
-        if (static_cast<int>(threads_.size()) == helpers) return;
-        stop();
-        const uint32_t now = epoch_.load();
-        for (int part = 1; part <= helpers; ++part) threads_.emplace_back([this, part, now] { work(part, now); });
-    }
-    void work(int part, uint32_t seen) {
-        for (;;) {
-            epoch_.wait(seen);
-            seen = epoch_.load();
-            if (stopping_) return;
-            if (std::fegetround() != rounding_) std::fesetround(rounding_);
-            job_(ctx_, part, parts_);
-            if (pending_.fetch_sub(1) == 1) pending_.notify_one();
-        }
-    }
-    void stop() {
-        if (threads_.empty()) return;
-        stopping_ = true;
-        epoch_.fetch_add(1);
-        epoch_.notify_all();
-        for (std::thread& t : threads_) t.join();
-        threads_.clear();
-        stopping_ = false;
-    }
-
-    std::vector<std::thread> threads_;
-    std::atomic<uint32_t> epoch_{0};
-    std::atomic<int> pending_{0};
-    std::atomic<bool> stopping_{false};
-    RowJob job_ = nullptr;
-    const void* ctx_ = nullptr;
-    int parts_ = 1;
-    int rounding_ = FE_TONEAREST;
-    int want_ = 0;   // 0: half the host's threads, at most 8
-};
-DrawThreads g_drawThreads;
-
 // The words of local memory that pixels (0..w-1, 0..h-1) of a buffer can
 // address: from its first block to the end of the last page they reach.
 struct Span {
@@ -863,71 +826,289 @@ Span footprint(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t w, uint32_t h) {
     const uint64_t pages = static_cast<uint64_t>((std::max(h, 1u) - 1) / ph) * wide + (std::max(w, 1u) - 1) / pw + 1;
     return {static_cast<uint64_t>(bp) * 64, static_cast<uint64_t>(bp) * 64 + pages * 2048};
 }
+constexpr uint64_t kWords = uint64_t(1) << 20;   // local memory, in words
 bool meets(Span a, Span b) {
-    constexpr uint64_t kWords = uint64_t(1) << 20;
     if (a.hi > kWords || b.hi > kWords) return true;   // wraps round the end of memory: assume the worst
     return a.lo < b.hi && b.lo < a.hi;
 }
 
-// How many threads draw a primitive covering `box`: one, or all of them.
-int drawParts(const Draw& d, const Box& box) {
-    constexpr int64_t kMinPixels = 8192;   // smaller ones cost less than waking the helpers
-    if (box.x1 < box.x0 || box.y1 < box.y0) return 1;
-    if (static_cast<int64_t>(box.x1 - box.x0 + 1) * (box.y1 - box.y0 + 1) < kMinPixels || box.y1 - box.y0 < 16) return 1;
-    const int n = g_drawThreads.count();
-    if (n <= 1) return 1;
+// Local memory's 512 pages of 2048 words, a bit each.
+struct Pages {
+    std::array<uint64_t, 8> bits{};
+    void add(Span s) {
+        if (s.hi > kWords) return bits.fill(~uint64_t(0));   // wraps round: all of it
+        for (uint64_t p = s.lo >> 11; p <= (s.hi - 1) >> 11; ++p) bits[p >> 6] |= uint64_t(1) << (p & 63);
+    }
+    void add(const Pages& o) {
+        for (size_t i = 0; i < bits.size(); ++i) bits[i] |= o.bits[i];
+    }
+    bool meets(const Pages& o) const {
+        for (size_t i = 0; i < bits.size(); ++i)
+            if (bits[i] & o.bits[i]) return true;
+        return false;
+    }
+};
+
+// What primitives drawn with a state touch: the frame and depth buffers they
+// write (with the layout that maps a pixel to its word: other rows own other
+// words under another one), and the texels and CLUT they read.
+struct Access {
+    uint32_t frameLayout = 0, depthLayout = 0;
+    Pages frame, depth, reads;
+    bool depthUsed = false;
+    bool alone = false;   // reads what it writes, or in an unsupported format
+};
+uint32_t layout(uint32_t bp, uint32_t bw, uint32_t psm) {
+    uint32_t family = 0;   // 32 and 24-bit colour
+    switch (psm) {
+    case PSMCT16: family = 1; break;
+    case PSMCT16S: family = 2; break;
+    case PSMZ32: case PSMZ24: family = 3; break;
+    case PSMZ16: family = 4; break;
+    case PSMZ16S: family = 5; break;
+    default: break;
+    }
+    return bp | bw << 14 | family << 20;
+}
+Access accessOf(const Draw& d) {
     const Env& e = d.e;
-    const auto w = static_cast<uint32_t>(box.x1 + 1), h = static_cast<uint32_t>(box.y1 + 1);
-    const Span frame = footprint(e.fbp, e.fbw, e.fpsm, w, h);
-    const Span depth = footprint(e.zbp, e.fbw, e.zpsm, w, h);
-    if (d.zte && meets(frame, depth)) return 1;
+    Access a;
+    // As far as the scissor lets it draw.
+    const auto w = static_cast<uint32_t>(std::max(e.scx1, 0) + 1), h = static_cast<uint32_t>(std::max(e.scy1, 0) + 1);
+    const Span frame = footprint(e.fbp, e.fbw, e.fpsm, w, h), depth = footprint(e.zbp, e.fbw, e.zpsm, w, h);
+    a.frameLayout = layout(e.fbp, e.fbw, e.fpsm);
+    a.frame.add(frame);
+    if (d.zte) {
+        a.depthUsed = true;
+        a.depthLayout = layout(e.zbp, e.fbw, e.zpsm);
+        a.depth.add(depth);
+        if (meets(frame, depth)) a.alone = true;
+    }
     if (d.tex) {
         switch (d.tpsm) {
         case PSMCT32: case PSMCT24: case PSMCT16: case PSMCT16S: break;
         case PSMT8: case PSMT4: case PSMT8H: case PSMT4HL: case PSMT4HH: {
             const Span clut{static_cast<uint64_t>(d.cbp) * 64, static_cast<uint64_t>(d.cbp) * 64 + 2048};
-            if (meets(clut, frame) || (d.zte && meets(clut, depth))) return 1;
+            if (meets(clut, frame) || (d.zte && meets(clut, depth))) a.alone = true;
+            a.reads.add(clut);
             break;
         }
-        default: return 1;   // reported as unsupported, from one thread
+        default: a.alone = true; break;   // reported as unsupported, from one thread
         }
         // Region clamp and repeat can reach past the texture's size, up to 1024.
         const auto tw = static_cast<uint32_t>(d.wms >= 2 ? 1024 : d.tw), th = static_cast<uint32_t>(d.wmt >= 2 ? 1024 : d.th);
         const Span texels = footprint(d.tbp, d.tbw, d.tpsm, tw, th);
-        if (meets(texels, frame) || (d.zte && meets(texels, depth))) return 1;
+        if (meets(texels, frame) || (d.zte && meets(texels, depth))) a.alone = true;
+        a.reads.add(texels);
     }
-    return n;
+    return a;
 }
 
-void triangle(const Draw& d, const Vertex& v0, const Vertex& v1, const Vertex& v2) {
-    if (drawParts(d, triangleBox(d, v0, v1, v2)) == 1) {
-        drawTriangle(d, v0, v1, v2, 0, 1);
-        return;
+// The draw threads work through a batch of primitives together, each drawing
+// its own bands of rows of every primitive, in the order they were queued. A
+// pixel sees the same operations in the same order as with one thread, so the
+// picture is the same. The thread that queues them (the GS thread, or the
+// guest thread) waits for the batch to be drawn before anything else touches
+// local memory (an image transfer, the display, a read-back), and before a
+// primitive that reads what the batch writes, writes what it reads, or writes
+// memory the batch writes under another layout. A primitive that reads what
+// it writes itself is drawn by the queuing thread alone, after the batch.
+class DrawThreads {
+public:
+    ~DrawThreads() { stop(); }
+    int count() {
+        if (want_ <= 0) want_ = static_cast<int>(std::clamp(std::thread::hardware_concurrency() / 2, 1u, 8u));
+        return want_;
     }
-    struct Job {
-        const Draw* d;
-        const Vertex *v0, *v1, *v2;
-    } job{&d, &v0, &v1, &v2};
-    g_drawThreads.run([](const void* p, int part, int parts) {
-        const auto* j = static_cast<const Job*>(p);
-        drawTriangle(*j->d, *j->v0, *j->v1, *j->v2, part, parts);
-    }, &job);
-}
+    // From the guest thread, with nothing queued.
+    void setCount(int n) {
+        stop();
+        want_ = n;
+    }
 
-void sprite(const Draw& d, const Vertex& a, const Vertex& b) {
-    if (drawParts(d, spriteBox(d, a, b)) == 1) {
-        drawSprite(d, a, b, 0, 1);
-        return;
+    // The queuing thread: one primitive with the drawing state `d`, whose
+    // decoding `gen` tells apart. With one thread, drawn here and now.
+    void draw(const Draw& d, uint64_t gen, Shape shape, const Vertex* v) {
+        if (count() <= 1) return drawShape(d, shape, v, 0, 1);
+        start();
+        const int rounding = std::fegetround();   // the guest's, which the drawing inherits
+        if (gen != gen_ || rounding != rounding_) {
+            gen_ = gen;
+            rounding_ = rounding;
+            state_ = -1;
+        }
+        if (queued_ == kMaxPrims) finish();
+        if (state_ == -1) state_ = addState(d);
+        if (state_ == kAlone) {
+            finish();
+            return drawShape(d, shape, v, 0, 1);
+        }
+        Prim& p = prims_[queued_++];
+        p.state = static_cast<uint32_t>(state_);
+        p.shape = shape;
+        std::copy_n(v, shape == Shape::Triangle ? 3 : shape == Shape::Point ? 1 : 2, p.v);
+        if (queued_ - published_ >= kPublishEvery) publish();
     }
-    struct Job {
-        const Draw* d;
-        const Vertex *a, *b;
-    } job{&d, &a, &b};
-    g_drawThreads.run([](const void* p, int part, int parts) {
-        const auto* j = static_cast<const Job*>(p);
-        drawSprite(*j->d, *j->a, *j->b, part, parts);
-    }, &job);
-}
+    // The queuing thread: lets the draw threads see what is queued.
+    void publish() {
+        if (published_ == queued_) return;
+        published_ = queued_;
+        shared_.store(static_cast<uint64_t>(epoch_) << 32 | published_);
+        if (sleepers_.load()) shared_.notify_all();
+    }
+    bool busy() const { return queued_ != 0; }
+    // The queuing thread: waits until the batch is drawn, then empties it.
+    void finish() {
+        if (queued_) {
+            publish();
+            const uint64_t want = static_cast<uint64_t>(epoch_) << 32 | queued_;
+            finishing_.store(true);
+            for (int i = 0; i < threads_; ++i) {
+                std::atomic<uint64_t>& done = workers_[static_cast<size_t>(i)].done;
+                for (uint64_t got = done.load(); got != want; got = done.load())
+                    if (!spinUntil([&] { return done.load() == want; })) done.wait(got);
+            }
+            finishing_.store(false);
+            ++epoch_;
+            queued_ = published_ = 0;
+            shared_.store(static_cast<uint64_t>(epoch_) << 32);
+        }
+        states_ = 0;
+        if (state_ >= 0) state_ = -1;
+        reads_ = Pages{};
+        writes_.clear();
+    }
+
+private:
+    static constexpr int kAlone = -2;
+    static constexpr uint32_t kMaxPrims = 1u << 16, kMaxStates = 1u << 12, kPublishEvery = 16;
+    struct Prim {
+        uint32_t state;
+        Shape shape;
+        Vertex v[3];
+    };
+    struct State {
+        Draw draw;
+        int rounding;
+    };
+    struct alignas(64) Worker {
+        std::atomic<uint64_t> done{0};   // what it has drawn: the batch (epoch) << 32 | primitives
+    };
+
+    // Spins briefly (tens of microseconds) before a thread sleeps: the other side is usually close.
+    template <typename F>
+    static bool spinUntil(F ready) {
+        for (int i = 0; i < 1024; ++i) {
+            if (ready()) return true;
+#if defined(_M_X64) || defined(__x86_64__)
+            _mm_pause();
+#else
+            std::this_thread::yield();
+#endif
+        }
+        return false;
+    }
+
+    // The batch's index for state `d`, after waiting for the batch when `d`
+    // depends on what it does; kAlone if it reads what it writes.
+    int addState(const Draw& d) {
+        const Access a = accessOf(d);
+        if (a.alone) return kAlone;
+        bool wait = states_ == kMaxStates;
+        for (const auto& [lay, pages] : writes_) {
+            if (a.reads.meets(pages)) wait = true;   // reads what the batch writes
+            if (a.frame.meets(pages) && lay != a.frameLayout) wait = true;
+            if (a.depthUsed && a.depth.meets(pages) && lay != a.depthLayout) wait = true;
+        }
+        if (a.frame.meets(reads_) || (a.depthUsed && a.depth.meets(reads_))) wait = true;   // writes what it reads
+        if (wait) finish();
+        record(a.frameLayout, a.frame);
+        if (a.depthUsed) record(a.depthLayout, a.depth);
+        reads_.add(a.reads);
+        stateList_[states_] = State{d, rounding_};
+        return static_cast<int>(states_++);
+    }
+    void record(uint32_t lay, const Pages& pages) {
+        for (auto& [l, p] : writes_)
+            if (l == lay) return p.add(pages);
+        writes_.emplace_back(lay, pages);
+    }
+
+    void start() {
+        if (threads_) return;
+        if (!prims_) {
+            prims_ = std::make_unique<Prim[]>(kMaxPrims);
+            stateList_ = std::make_unique<State[]>(kMaxStates);
+        }
+        threads_ = count();
+        workers_ = std::make_unique<Worker[]>(static_cast<size_t>(threads_));
+        for (int part = 0; part < threads_; ++part) pool_.emplace_back([this, part] { work(part); });
+    }
+    void stop() {
+        if (!threads_) return;
+        finish();
+        stopping_.store(true);
+        shared_.store(shared_.load() ^ (uint64_t(1) << 63));   // a change the sleepers wake for
+        shared_.notify_all();
+        for (std::thread& t : pool_) t.join();
+        pool_.clear();
+        threads_ = 0;
+        stopping_.store(false);
+        ++epoch_;
+        shared_.store(static_cast<uint64_t>(epoch_) << 32);
+    }
+    void work(int part) {
+        Worker& me = workers_[static_cast<size_t>(part)];
+        uint32_t epoch = 0, done = 0;
+        int rounding = std::fegetround();
+        for (;;) {
+            const uint64_t now = shared_.load();
+            if (stopping_.load()) return;
+            const auto batch = static_cast<uint32_t>(now >> 32), queued = static_cast<uint32_t>(now);
+            if (batch != epoch) {
+                epoch = batch;
+                done = 0;
+            }
+            if (done < queued) {
+                for (; done < queued; ++done) {
+                    const Prim& p = prims_[done];
+                    const State& s = stateList_[p.state];
+                    if (s.rounding != rounding) std::fesetround(rounding = s.rounding);
+                    drawShape(s.draw, p.shape, p.v, part, threads_);
+                }
+                me.done.store(now);
+                if (finishing_.load()) me.done.notify_one();
+                continue;
+            }
+            if (spinUntil([&] { return shared_.load() != now || stopping_.load(); })) continue;
+            sleepers_.fetch_add(1);
+            shared_.wait(now);
+            sleepers_.fetch_sub(1);
+        }
+    }
+
+    // The queuing thread's side.
+    std::unique_ptr<Prim[]> prims_;
+    std::unique_ptr<State[]> stateList_;
+    uint32_t queued_ = 0, published_ = 0, states_ = 0, epoch_ = 1;
+    int state_ = -1;          // the current state's index in the batch, -1 if not in it, kAlone
+    uint64_t gen_ = ~uint64_t(0);
+    int rounding_ = FE_TONEAREST;
+    Pages reads_;
+    std::vector<std::pair<uint32_t, Pages>> writes_;   // by layout
+    // Shared with the draw threads.
+    int threads_ = 0;
+    std::vector<std::thread> pool_;
+    std::unique_ptr<Worker[]> workers_;
+    std::atomic<uint64_t> shared_{uint64_t(1) << 32};   // the batch (epoch) << 32 | primitives published
+    std::atomic<int> sleepers_{0};
+    std::atomic<bool> finishing_{false}, stopping_{false};
+    int want_ = 0;   // 0: half the host's threads, at most 8
+};
+DrawThreads g_drawThreads;
+
+bool drawingQueued() { return g_drawThreads.busy(); }
+void finishDrawing() { g_drawThreads.finish(); }
 
 void kick(bool draw) {
     const Draw& d = currentDraw();
@@ -953,31 +1134,31 @@ void kick(bool draw) {
     if (g_queueCount < 3) g_queue[g_queueCount++] = v;
     switch (type) {
     case 0:   // point
-        if (draw) plot(d, static_cast<int>(v.x), static_cast<int>(v.y), v.z, v.r, v.g, v.b, v.a, 0, 0, v.fog, false);
+        if (draw) g_drawThreads.draw(d, g_drawGen, Shape::Point, &v);
         g_queueCount = 0;
         break;
     case 1:   // line
         if (g_queueCount == 2) {
-            if (draw) drawLine(d, g_queue[0], g_queue[1]);
+            if (draw) g_drawThreads.draw(d, g_drawGen, Shape::Line, g_queue);
             g_queueCount = 0;
         }
         break;
     case 2:   // line strip
         if (g_queueCount == 2) {
-            if (draw) drawLine(d, g_queue[0], g_queue[1]);
+            if (draw) g_drawThreads.draw(d, g_drawGen, Shape::Line, g_queue);
             g_queue[0] = g_queue[1];
             g_queueCount = 1;
         }
         break;
     case 3:   // triangle
         if (g_queueCount == 3) {
-            if (draw) triangle(d, g_queue[0], g_queue[1], g_queue[2]);
+            if (draw) g_drawThreads.draw(d, g_drawGen, Shape::Triangle, g_queue);
             g_queueCount = 0;
         }
         break;
     case 4:   // triangle strip
         if (g_queueCount == 3) {
-            if (draw) triangle(d, g_queue[0], g_queue[1], g_queue[2]);
+            if (draw) g_drawThreads.draw(d, g_drawGen, Shape::Triangle, g_queue);
             g_queue[0] = g_queue[1];
             g_queue[1] = g_queue[2];
             g_queueCount = 2;
@@ -985,14 +1166,14 @@ void kick(bool draw) {
         break;
     case 5:   // triangle fan
         if (g_queueCount == 3) {
-            if (draw) triangle(d, g_queue[0], g_queue[1], g_queue[2]);
+            if (draw) g_drawThreads.draw(d, g_drawGen, Shape::Triangle, g_queue);
             g_queue[1] = g_queue[2];
             g_queueCount = 2;
         }
         break;
     case 6:   // sprite
         if (g_queueCount == 2) {
-            if (draw) sprite(d, g_queue[0], g_queue[1]);
+            if (draw) g_drawThreads.draw(d, g_drawGen, Shape::Sprite, g_queue);
             g_queueCount = 0;
         }
         break;
@@ -1184,7 +1365,7 @@ bool buildFrame(const Display& d, Frame& out);
 // quadword never wraps round the end of the ring.
 class GsThread {
 public:
-    enum Kind : uint64_t { Gif, ResetPaths, ResetGs, Vsync };
+    enum Kind : uint64_t { Gif, ResetPaths, ResetGs, Vsync, Finish };
 
     ~GsThread() { stop(false); }
 
@@ -1209,9 +1390,11 @@ public:
         before = head_.load(std::memory_order_relaxed);
     }
 
-    // Waits until the GS thread has run everything queued.
+    // Waits until the GS thread has run everything queued, and the draw threads drawn it.
     void flush() {
-        if (thread_.joinable()) waitFor(head_.load(std::memory_order_relaxed));
+        if (!thread_.joinable()) return;
+        put(Finish, 0, nullptr, 0);
+        waitFor(head_.load(std::memory_order_relaxed));
     }
 
     // finish: run what is queued first, else drop it.
@@ -1296,6 +1479,7 @@ private:
         switch (kind) {
         case Gif:
             for (uint64_t i = 0; i < qwords; ++i) gifQword(g_paths[path], &ring_[(data + 2 * i) & kMask]);
+            g_drawThreads.publish();
             break;
         case ResetPaths: resetPaths(); break;
         case ResetGs:
@@ -1308,9 +1492,13 @@ private:
             VsyncEntry v;
             std::memcpy(&v, q, sizeof v);
             Frame f;
-            if ((v.how.dump || v.how.show) && buildFrame(v.display, f)) video::present(std::move(f), v.how);
+            if (v.how.dump || v.how.show) {
+                g_drawThreads.finish();
+                if (buildFrame(v.display, f)) video::present(std::move(f), v.how);
+            }
             break;
         }
+        case Finish: g_drawThreads.finish(); break;
         }
     }
 
@@ -1329,8 +1517,14 @@ GsThread g_gsThread;   // after g_drawThreads, which it uses: destroyed first
 
 // The GS thread runs when it is wanted and more than one thread draws.
 bool g_wantOwnThread = false;
+
+// Guest thread: waits until everything sent so far is drawn.
+void drawn() {
+    if (g_async) g_gsThread.flush();
+    else g_drawThreads.finish();
+}
 void updateMode() {
-    g_gsThread.flush();
+    drawn();
     const bool async = g_wantOwnThread && g_drawThreads.count() > 1;
     if (async == g_async) return;
     g_gsThread.stop(true);
@@ -1343,7 +1537,7 @@ void updateMode() {
 // Public interface
 // ===========================================================================
 void init() {
-    g_gsThread.flush();
+    drawn();
     std::memset(g_vram, 0, sizeof g_vram);
     std::memset(g_regs, 0, sizeof g_regs);
     std::memset(g_priv, 0, sizeof g_priv);
@@ -1437,8 +1631,10 @@ void onVblankStart() {
     updateGsInterrupt();
     const video::Present how = video::onVsync();
     if (g_async) return g_gsThread.vsync(displayNow(), how);   // also when nothing shows: it paces the GS thread
+    if (!how.dump && !how.show) return;
+    g_drawThreads.finish();
     Frame f;
-    if ((how.dump || how.show) && buildFrame(displayNow(), f)) video::present(std::move(f), how);
+    if (buildFrame(displayNow(), f)) video::present(std::move(f), how);
 }
 
 void onVblankEnd() {}
@@ -1463,18 +1659,20 @@ void gifRegWrite(uint32_t addr, uint32_t v) {
 void gifFifoWrite(const uint64_t q[2]) {
     if (g_async) return g_gsThread.push(GsThread::Gif, 3, q, 1);
     gifQword(g_paths[3], q);
+    g_drawThreads.publish();
 }
 
 void gifTransfer(const uint64_t* qwords, size_t count, int path) {
     if (g_async) return g_gsThread.push(GsThread::Gif, path & 3, qwords, count);
     GifPath& p = g_paths[path & 3];
     for (size_t i = 0; i < count; ++i) gifQword(p, qwords + 2 * i);
+    g_drawThreads.publish();
 }
 
 void setPath3Masked(bool masked) { g_path3Masked = masked; }
 
 uint32_t readPixel32(uint32_t fbp, uint32_t fbw, uint32_t psm, int x, int y) {
-    g_gsThread.flush();
+    drawn();
     return pixel32(fbp, fbw, psm, x, y);
 }
 
@@ -1701,7 +1899,7 @@ bool buildFrame(const Display& disp, Frame& out) {
 } // namespace
 
 bool currentFrame(Frame& out) {
-    g_gsThread.flush();
+    drawn();
     return buildFrame(displayNow(), out);
 }
 
@@ -1718,7 +1916,7 @@ const char* deinterlaceName(Deinterlace mode) {
 }
 
 void setDrawThreads(int n) {
-    g_gsThread.flush();
+    drawn();
     g_drawThreads.setCount(n);
     updateMode();
 }

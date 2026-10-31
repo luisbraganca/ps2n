@@ -29,7 +29,8 @@ uint64_t putImr(uint64_t value);   // returns the previous IMR
 void pollEvents();
 
 // The GS on its own thread, as PCSX2's MTGS runs it: the guest thread queues
-// GIF data and the GS thread draws it, up to two vsyncs behind. A vsync's
+// GIF data and the GS thread decodes it for the draw threads, up to two
+// vsyncs behind. A vsync's
 // picture is still the memory and display registers as they were at that
 // vsync. Off by default; the runtime turns it on for real-time runs, and
 // setDrawThreads(1) keeps everything on the guest thread. Guest thread.
@@ -72,12 +73,14 @@ void setDeinterlace(Deinterlace mode);   // any thread
 Deinterlace deinterlace();
 const char* deinterlaceName(Deinterlace mode);
 
-// Threads that draw a large primitive together (each takes bands of rows;
-// the picture is the same as one thread's): 0 picks half the host's threads,
-// at most 8; 1 draws everything on the guest thread, with no GS thread.
+// Threads that draw: they share every primitive, each drawing its own bands
+// of rows, and the picture is the same as one thread's. 0 picks half the
+// host's threads, at most 8; 1 draws everything on the guest thread, with no
+// GS thread.
 void setDrawThreads(int n);
 
-// Direct access for tests and tools. Both wait for the GS thread.
+// Direct access for tests and tools. readPixel32 waits for the GS thread and
+// the draw threads.
 uint32_t readPixel32(uint32_t fbp, uint32_t fbw, uint32_t psm, int x, int y);
 // Index of the memory unit holding pixel (x, y): a word for 32/24-bit
 // formats, halfword for 16-bit, byte for T8 and nibble for T4.

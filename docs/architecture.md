@@ -209,8 +209,8 @@ kick instead made a frame cost the EE's work plus the drawing, and a game
 that redraws a 3D scene on every vsync (Agent Under Fire's copyright screen)
 never got to run its main thread. So in real-time runs the GS has a host
 thread of its own, as PCSX2's MTGS does. DMA, VIF and VU1 hand their GIF data
-to a 32 MB ring, and the GS thread parses and draws it in order, with the
-helper threads for large primitives. The GIF resets (`GIF_CTRL.RST`,
+to a 32 MB ring, and the GS thread parses it in order and queues the
+primitives for the draw threads. The GIF resets (`GIF_CTRL.RST`,
 `CSR.RESET`) go through the ring too, so the GS sees every write in the
 order the guest made it.
 
@@ -220,8 +220,35 @@ The guest thread waits for the GS thread in three places only:
   as they are at that vsync, and the guest waits while the GS thread is two
   vsyncs behind;
 - reading GS memory back (`gs::currentFrame`, `gs::readPixel32`) waits until
-  the ring is empty;
+  the ring is empty and the draw threads have drawn it;
 - a full ring waits for room.
+
+### The draw threads
+
+A 3D scene is thousands of small triangles. Sharing only large primitives
+between threads left the first mission of Agent Under Fire drawn on one
+thread, at about 60% of full speed. So the draw threads (`--gs-threads`,
+half the host's threads by default, at most 8) share every primitive: the
+thread that decodes the GIF data (the GS thread, or the guest thread where
+runs must repeat) queues each primitive with a copy of its drawing state,
+and each draw thread works through the queue, drawing the rows that belong
+to it, bands of four rows dealt round in turn. A pixel sees the same
+operations in the same order as with one thread, so the picture is the same.
+
+Only the order between rows changes, so the queuing thread waits for the
+queue to be drawn wherever that order could show:
+
+- before anything else touches GS memory: an image transfer, a vsync's
+  picture, a read back;
+- before a primitive that reads what the queue writes (a texture drawn
+  earlier in it), writes what it reads (a texture its primitives still
+  sample), or writes the same memory under another layout, where other
+  threads own its rows. The memory is tracked per 8 KB page, so a false
+  match only costs a wait.
+
+A primitive that reads what it writes itself (a texture or CLUT in its own
+frame or depth buffer, or frame and depth buffers that overlap) is drawn by
+the queuing thread alone, after the queue.
 
 The GS thread never touches guest state. `FINISH` and `SIGNAL` set their
 `CSR` bits there, and the guest thread raises the GS interrupt at its next
