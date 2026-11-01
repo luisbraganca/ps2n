@@ -195,8 +195,8 @@ std::atomic<uint64_t> g_siglblid{0};
 bool g_path3Masked = false;
 
 // Deinterlacing (FIELD mode): the mode, the vsyncs so far (which tell
-// consecutive fields apart), the newest field shown on even and on odd lines,
-// and the whole picture the last vsync showed.
+// consecutive fields apart), the two newest fields shown on even and on odd
+// lines, and the whole picture the last vsync showed.
 std::atomic<Deinterlace> g_deinterlace{Deinterlace::Adaptive};
 uint64_t g_fieldCount = 0;
 struct ShownField {
@@ -206,7 +206,7 @@ struct ShownField {
 };
 struct FieldHistory {
     int width = 0, lines = 0;
-    std::array<ShownField, 2> fields;   // even lines, odd lines
+    std::array<std::array<ShownField, 2>, 2> fields;   // [even lines, odd lines][newest, the one before]
     int newest = 0;
     std::vector<uint32_t> picture;
 };
@@ -1925,18 +1925,41 @@ Circuit readCircuit(const Display& d, int i) {
     return c;
 }
 
-// The circuit's pixel at a screen position, if it covers it. Interlaced FRAME
-// mode (FFMD) shows one field per vblank: half the lines, read one after the
-// other, each covering two display lines, the odd field one line lower.
 // ---- Deinterlacing -----------------------------------------------------------
+//
+// Adaptive deinterlacing, as PCSX2's adaptive mode does it: a line the field
+// lacks comes from the field before (woven) where the picture is still, and
+// halfway between the field's lines above and below (interpolated) where it
+// moves. It moves where a channel changed by more than kMotion: in the lines
+// above or below since the field two back, or in the woven line itself since
+// the field three back. A smaller change keeps the woven line if that line did
+// not change (without the field three back: if the lines around it did not),
+// or if it fits between the lines above and below. A line that stands out
+// from both is the comb of something moving slowly, and is interpolated.
 
-// The same colour, give or take what rounding and dithering change.
-bool still(uint32_t a, uint32_t b) {
+constexpr int kMotion = 16;   // a channel changing by more than this is motion
+constexpr int kOutside = 2;   // how far a woven line may stand out from the lines around it
+
+// The largest change of a colour channel between two pixels.
+int change(uint32_t a, uint32_t b) {
+    int m = 0;
     for (int s = 0; s < 24; s += 8) {
         const int d = static_cast<int>((a >> s) & 0xFF) - static_cast<int>((b >> s) & 0xFF);
-        if (d > 16 || d < -16) return false;
+        m = std::max(m, d < 0 ? -d : d);
     }
-    return true;
+    return m;
+}
+
+// How far a channel of `c` lies outside the range of `a`'s and `b`'s, at
+// most: above kOutside, a line that does not fit between its neighbours.
+int outside(uint32_t a, uint32_t b, uint32_t c) {
+    int m = 0;
+    for (int s = 0; s < 24; s += 8) {
+        const int va = static_cast<int>((a >> s) & 0xFF), vb = static_cast<int>((b >> s) & 0xFF);
+        const int vc = static_cast<int>((c >> s) & 0xFF);
+        m = std::max(m, std::max(vc - std::max(va, vb), std::min(va, vb) - vc));
+    }
+    return m;
 }
 
 uint32_t average(uint32_t a, uint32_t b) {
@@ -1955,22 +1978,25 @@ void deinterlaceField(Frame& out, std::vector<uint32_t>&& cur, int w, int h, int
     // The field the last vsync showed, again: a game late with its next
     // picture shows the same one twice. Adaptive shows the same picture, not
     // that field moved to the other lines.
-    ShownField& last = hist.fields[static_cast<size_t>(hist.newest)];
+    ShownField& last = hist.fields[static_cast<size_t>(hist.newest)][0];
     const bool lastShown = last.valid && when <= last.when + 1 && hist.picture.size() == out.pixels.size();
     if (adaptive && lastShown && last.pixels == cur) {
         last.when = when;
         std::copy(hist.picture.begin(), hist.picture.end(), out.pixels.begin());
         return;
     }
-    // The newest field on the other lines, if the last vsync showed it, and
-    // the newest on these lines before that one.
-    const ShownField& prev = hist.fields[static_cast<size_t>(odd ^ 1)];
-    const ShownField& prev2 = hist.fields[static_cast<size_t>(odd)];
+    // The newest field on the other lines, if the last vsync showed it (the
+    // field one back), the newest on these lines before that one (two back),
+    // and the one before it on the other lines (three back).
+    const ShownField& prev = hist.fields[static_cast<size_t>(odd ^ 1)][0];
+    const ShownField& prev2 = hist.fields[static_cast<size_t>(odd)][0];
+    const ShownField& prev3 = hist.fields[static_cast<size_t>(odd ^ 1)][1];
     const bool havePrev = prev.valid && prev.when + 1 == when;
     const bool havePrev2 = havePrev && prev2.valid && prev2.when < prev.when;
+    const bool havePrev3 = havePrev2 && prev3.valid && prev3.when < prev2.when;
     // A new field on the lines the last vsync showed one on (a late picture,
     // drawn for the field before): where it matches that field, the last
-    // picture's other lines stay.
+    // picture's other lines stay, by the same rules as a woven line.
     const bool again = adaptive && !havePrev && lastShown && hist.newest == odd;
     const auto row = [&](const std::vector<uint32_t>& f, int k) {
         return f.data() + static_cast<size_t>(std::clamp(k, 0, lines - 1)) * static_cast<size_t>(w);
@@ -1990,25 +2016,44 @@ void deinterlaceField(Frame& out, std::vector<uint32_t>&& cur, int w, int h, int
             const uint32_t* la = row(last.pixels, above);
             const uint32_t* lb = row(last.pixels, below);
             const uint32_t* p = hist.picture.data() + static_cast<size_t>(y) * static_cast<size_t>(w);
-            for (int x = 0; x < w; ++x) o[x] = still(a[x], la[x]) && still(b[x], lb[x]) ? p[x] : average(a[x], b[x]);
+            for (int x = 0; x < w; ++x) {
+                const int ma = change(a[x], la[x]), mb = change(b[x], lb[x]);
+                const int moving = std::max(ma, mb) > kMotion;
+                const int changed = (ma | mb) != 0;
+                const int stray = outside(a[x], b[x], p[x]) > kOutside;
+                o[x] = moving | (changed & stray) ? average(a[x], b[x]) : p[x];
+            }
             continue;
         }
         if (mode == Deinterlace::Bob || !havePrev) {
             std::copy_n(a, w, o);
             continue;
         }
-        const uint32_t* p = row(prev.pixels, (y - (1 - odd)) / 2);
+        const int k = (y - (1 - odd)) / 2;
+        const uint32_t* p = row(prev.pixels, k);
         if (mode == Deinterlace::Weave) {
             std::copy_n(p, w, o);
             continue;
         }
-        // Adaptive: still where this field matches the last one of its parity.
-        const uint32_t* pa = havePrev2 ? row(prev2.pixels, above) : nullptr;
-        const uint32_t* pb = havePrev2 ? row(prev2.pixels, below) : nullptr;
-        for (int x = 0; x < w; ++x)
-            o[x] = pa && still(a[x], pa[x]) && still(b[x], pb[x]) ? p[x] : average(a[x], b[x]);
+        // Adaptive: without the field two back, nothing is known to be still.
+        if (!havePrev2) {
+            for (int x = 0; x < w; ++x) o[x] = average(a[x], b[x]);
+            continue;
+        }
+        const uint32_t* pa = row(prev2.pixels, above);
+        const uint32_t* pb = row(prev2.pixels, below);
+        const uint32_t* p3 = havePrev3 ? row(prev3.pixels, k) : p;   // without it, the woven line counts as unchanged
+        for (int x = 0; x < w; ++x) {
+            const int ma = change(a[x], pa[x]), mb = change(b[x], pb[x]), mc = change(p[x], p3[x]);
+            const int moving = std::max(std::max(ma, mb), mc) > kMotion;
+            const int changed = havePrev3 ? mc != 0 : (ma | mb) != 0;
+            const int stray = outside(a[x], b[x], p[x]) > kOutside;
+            o[x] = moving | (changed & stray) ? average(a[x], b[x]) : p[x];
+        }
     }
-    hist.fields[static_cast<size_t>(odd)] = ShownField{std::move(cur), when, true};
+    auto& fields = hist.fields[static_cast<size_t>(odd)];
+    fields[1] = std::move(fields[0]);
+    fields[0] = ShownField{std::move(cur), when, true};
     hist.newest = odd;
     hist.picture = out.pixels;
 }
@@ -2034,6 +2079,9 @@ int fieldLines(const Display& disp, const Circuit* c1, const Circuit* c2) {
     return other != 0 && disp.fieldCount + 1 - other <= 50 ? drawn : field;
 }
 
+// The circuit's pixel at a screen position, if it covers it. Interlaced FRAME
+// mode (FFMD) shows one field per vblank: half the lines, read one after the
+// other, each covering two display lines, the odd field one line lower.
 bool circuitPixel(const Circuit& c, int clock, int line, bool perField, int odd, uint32_t& px) {
     if (clock < c.dx || line < c.dy || clock >= c.dx + c.width || line >= c.dy + c.height) return false;
     const int x = (clock - c.dx) / c.magh;

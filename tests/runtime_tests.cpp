@@ -948,6 +948,16 @@ TEST_CASE(gs_deinterlacing_keeps_late_fields_in_place) {
     l = field(&moved2, true);
     CHECK(l == (std::array<uint32_t, 8>{rgb(even[0]), rgb(odd[0]), avg(odd[0], moved[1]), rgb(moved[1]), avg(moved[1], odd[2]),
                                         rgb(odd[2]), avg(odd[2], moved2[3]), rgb(moved2[3])}));
+    // Small changes around display line 0 leave the last picture's line 0
+    // standing out from the lines around it, the comb of a slow move: it is
+    // interpolated. Display line 2 still fits between its lines, and stays.
+    // Around the odd line 2, which changes by 0x30, the picture moves. Then
+    // the game is late again, which keeps the FIELD bit's turn for Bob.
+    const uint32_t moved3[4] = {0x80001600, 0x80FF0000, 0x80006000, 0x8000FF00};
+    l = field(&moved3, true);
+    CHECK(l == (std::array<uint32_t, 8>{rgb(moved3[0]), rgb(moved3[0]), avg(odd[0], moved[1]), rgb(moved[1]), avg(moved[1], moved3[2]),
+                                        rgb(moved3[2]), avg(moved3[2], moved3[3]), rgb(moved3[3])}));
+    CHECK(field(nullptr, true) == l);
     // Bob puts each field where the FIELD bit says, as the PS2 sends it: this
     // even field's picture, drawn for the odd one, on the even lines.
     gs::setDeinterlace(gs::Deinterlace::Bob);
@@ -955,6 +965,71 @@ TEST_CASE(gs_deinterlacing_keeps_late_fields_in_place) {
     CHECK_EQ(l[2], rgb(moved[1]));
     CHECK_EQ(l[3], rgb(moved[1]));
     gs::setDeinterlace(gs::Deinterlace::Adaptive);
+}
+
+TEST_CASE(gs_deinterlacing_weaves_only_lines_that_fit) {
+    // FIELD mode as in gs_deinterlaces_fields, the first field odd. A line a
+    // field lacks moves where it, or the field's lines around it, changed by
+    // more than 16. Below that it is woven if it did not change itself, or if
+    // it fits between the lines above and below it.
+    auto setUp = [] {
+        gs::init();
+        gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
+        gs::privWrite(0x12000020, 3);                                    // SMODE2: INT, FFMD
+        gs::privWrite(0x12000000, 0x6);                                  // PMODE: circuit 2
+        gs::privWrite(0x12000090, 1 << 9);                               // DISPFB2: page 0, 64 wide
+        gs::privWrite(0x120000A0, 63ull << 32 | 7ull << 44);             // DISPLAY2: 64 clocks, 8 lines
+    };
+    auto field = [](const std::array<uint32_t, 4>& red) {   // the next vsync's field, drawn
+        gs::onVblankStart();
+        for (int y = 0; y < 4; ++y) gsRect(0, y, 64, y + 1, 0x80000000u | red[size_t(y)]);
+        gs::Frame f;
+        CHECK(gs::currentFrame(f));
+        CHECK_EQ(f.height, 8);
+        std::array<uint32_t, 8> lines{};
+        for (int y = 0; y < 8 && f.height == 8; ++y) lines[size_t(y)] = f.pixels[static_cast<size_t>(y * f.width + 5)] & 0xFFFFFFu;
+        return lines;
+    };
+    // Still, the two fields weave into a ramp of red, 0x40 to 0x78.
+    setUp();
+    const std::array<uint32_t, 4> even = {0x40, 0x50, 0x60, 0x70}, odd = {0x48, 0x58, 0x68, 0x78};
+    const std::array<uint32_t, 8> ramp = {0x40, 0x48, 0x50, 0x58, 0x60, 0x68, 0x70, 0x78};
+    field(odd);
+    field(even);
+    CHECK(field(odd) == ramp);
+    CHECK(field(even) == ramp);
+    CHECK(field(odd) == ramp);
+    // The even field's line 1 jumps by 0x40, its line 2 creeps up by 6: around
+    // line 1 the picture moves; the odd line 2, which did not change, is woven.
+    auto l = field({0x40, 0x90, 0x66, 0x70});
+    CHECK(l == (std::array<uint32_t, 8>{0x40, 0x68, 0x90, 0x7B, 0x66, 0x68, 0x70, 0x78}));
+    // The odd field creeps down by 6 (its line 3 by 12). The even line 1 moved
+    // in the last field: interpolated. The even line 2 changed a little and
+    // now stands out from the lines around it: interpolated. The even line 3
+    // stands out too, but did not change: woven.
+    l = field({0x48, 0x52, 0x62, 0x6C});
+    CHECK(l == (std::array<uint32_t, 8>{0x40, 0x48, 0x4D, 0x52, 0x5A, 0x62, 0x70, 0x6C}));
+    // Line 2 creeps back. The odd line 2 changed a little but fits between
+    // its new neighbours: woven. The odd lines 1 and 3 changed a little and
+    // stand out: interpolated.
+    l = field({0x40, 0x90, 0x60, 0x70});
+    CHECK(l == (std::array<uint32_t, 8>{0x40, 0x48, 0x90, 0x78, 0x60, 0x62, 0x70, 0x70}));
+
+    // A woven line that moved by more than 16 is interpolated, even where it
+    // fits between the lines around it: the even line 1 goes from 0x60 to
+    // 0x80, between the odd lines' 0x20 and 0xB0.
+    setUp();
+    const std::array<uint32_t, 4> bars = {0x20, 0xB0, 0x20, 0xB0}, grey = {0x60, 0x60, 0x60, 0x60};
+    const std::array<uint32_t, 8> woven = {0x60, 0x20, 0x60, 0xB0, 0x60, 0x20, 0x60, 0xB0};
+    field(bars);
+    field(grey);
+    CHECK(field(bars) == woven);
+    CHECK(field(grey) == woven);
+    CHECK(field(bars) == woven);
+    l = field({0x60, 0x80, 0x60, 0x60});
+    CHECK(l == (std::array<uint32_t, 8>{0x60, 0x70, 0x80, 0x70, 0x60, 0x20, 0x60, 0xB0}));
+    l = field(bars);
+    CHECK(l == (std::array<uint32_t, 8>{0x60, 0x20, 0x68, 0xB0, 0x60, 0x20, 0x60, 0xB0}));
 }
 
 namespace {

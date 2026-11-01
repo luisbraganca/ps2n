@@ -67,9 +67,15 @@ real-time clock: `--virtual-clock` runs the game as fast as the host can.
 Games that render each field of an interlaced picture (FIELD mode: half the
 lines, redrawn every vsync a line lower on odd fields) are deinterlaced as
 PCSX2 offers it. `adaptive`, the default, takes the lines a field lacks from
-the previous field where the picture stood still since the last field of the
-same parity (a still menu is the whole, steady picture) and interpolates
-them where it moved. It also puts each field on the lines the game drew it
+the previous field where the picture stands still (a still menu is the whole,
+steady picture) and interpolates them where it moves, as PCSX2's adaptive
+mode does. A line moves where a colour channel changed by more than 16: in
+the field's lines above or below it since the last field of the same parity,
+or in the line itself since the field before that. After a smaller change the
+line stays if it did not change itself, or if it fits between the lines
+above and below. One that stands out from both is the comb of something
+moving slowly, and is interpolated; so is a thin, translucent line over a
+moving background. It also puts each field on the lines the game drew it
 for. Such a game draws the odd field with a half-line Y offset, and when it
 is late with a picture, the picture reaches the screen a vsync after the one
 it was drawn for, where the FIELD bit would put it a line off. A picture
