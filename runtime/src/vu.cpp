@@ -22,6 +22,14 @@
 //
 // Programs run to completion when they are started (MSCAL, VCALLMS), as if
 // the VU were infinitely fast compared to the EE.
+//
+// A pair is decoded once: the operations its halves run, the stalls its lower
+// half causes and what it sends down the FMAC pipeline, all of which its words
+// fix. The decoding serves while the words stay the same: micro memory changes
+// between programs (MPG, EE stores), never during one. At most four FMAC
+// results are in flight (one issued a cycle, each landing 4 cycles later), so
+// they wait in a ring, and a table holds the cycle at which each VF
+// component's latest write lands: a stall on a register is a lookup.
 #include "vu.h"
 
 #include "hw/gs.h"
@@ -34,7 +42,7 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
-#include <deque>
+#include <vector>
 
 namespace ps2 {
 
@@ -54,9 +62,39 @@ Vu1Regs g_vu1;
 
 using ops::vu::in;
 
+struct Unit;
+using Op = void (*)(Unit&, uint32_t);   // one half of a pair, given its word
+
+// What a lower operation waits for besides its VF sources.
+enum Wait : uint8_t { WaitNone, WaitFdiv, WaitEfu, WaitP };
+
+// A decoded instruction pair: the operations its halves run (none for a NOP),
+// the stalls its lower half causes, which hold the whole pair (lowerStalls),
+// and what it sends down the FMAC pipeline (issue).
+struct Pair {
+    uint64_t words = 0;      // lower | upper << 32, as decoded
+    Op upper = nullptr;
+    Op lower = nullptr;      // also none with the I bit, or when the upper writes the same VF register
+    bool ibit = false, ebit = false;
+    uint8_t isolate = 0;     // a VF register the upper writes and the lower reads
+    bool stalls = false;     // the lower half can stall:
+    uint8_t stallReg[2] = {0, 0}, stallMask[2] = {0, 0};   // on VF components it reads,
+    Wait wait = WaitNone;    // on the FDIV or the EFU,
+    uint16_t branchRegs = 0; // on an ILW loading a VI register a conditional branch tests
+    bool issues = false;     // the pair sends flags down the FMAC pipeline,
+    bool clip = false, fsset = false;   // including the clip flag / the sticky status bits,
+    uint8_t writeReg[2] = {0, 0}, writeMask[2] = {0, 0};   // and the VF components it writes (upper, lower)
+};
+
+Pair g_code0[4096 / 8], g_code1[16384 / 8];
+
+void decode(Pair& p, uint64_t words);
+
 struct Unit {
-    Unit(int i, VuReg* f, VuReg* a, uint32_t* v, uint8_t* d, uint32_t dm, uint8_t* m, uint32_t mm)
-        : index(i), vf(f), acc(a), vi(v), data(d), dataMask(dm), micro(m), microMask(mm) {}
+    Unit(int i, VuReg* f, VuReg* a, uint32_t* v, uint8_t* d, uint32_t dm, uint8_t* m, uint32_t mm, Pair* c)
+        : index(i), vf(f), acc(a), vi(v), data(d), dataMask(dm), micro(m), microMask(mm), code(c) {
+        for (uint32_t pc = 0; pc < mm; pc += 8) decode(code[pc / 8], 0);   // micro memory starts cleared
+    }
 
     int index;
     VuReg* vf;
@@ -66,17 +104,18 @@ struct Unit {
     uint32_t dataMask;    // byte mask of data memory
     uint8_t* micro;
     uint32_t microMask;
+    Pair* code;           // micro memory decoded, a pair per 8 bytes
 
     // Pipeline state.
     uint64_t cycle = 0;
     struct Fmac {
         uint64_t done;
-        uint8_t reg[2];        // VF registers written (upper, lower)
-        uint8_t mask[2];       // their xyzw masks (bit 3 = x)
         bool clip, fsset;      // the pair wrote the clip flag / set the sticky status bits
         uint32_t mac, status, clipv;
     };
-    std::deque<Fmac> fmac;
+    Fmac fmac[8];              // in flight, oldest first from fmacHead (at most 4)
+    uint32_t fmacHead = 0, fmacCount = 0;
+    uint64_t vfLands[32][4] = {};   // when the latest write to each VF component lands
     struct {
         bool busy = false;
         uint64_t done = 0;
@@ -93,7 +132,6 @@ struct Unit {
     } ialu;
     // Flags as computed by the most recent instructions (not yet visible).
     uint32_t macNext = 0, statusNext = 0, clipNext = 0;
-    uint32_t pNext = 0;
     // Branches.
     int branch = 0;
     uint32_t branchPc = 0, delayPc = 0;
@@ -103,16 +141,12 @@ struct Unit {
     int viBackupCycles = 0;
     uint32_t viBackupReg = 0;
     uint16_t viBackupValue = 0;
-    // Per-pair bookkeeping.
-    bool pairFmac = false;
-    uint8_t pairReg[2] = {0, 0}, pairMask[2] = {0, 0};
-    bool pairClip = false, pairFsset = false;
-    uint32_t insn = 0;   // the operation being executed
+    std::vector<uint64_t> kick;   // the GIF packet of an XGKICK
 };
 
 Unit g_unit[2] = {
-    Unit(0, cpu.vf, &cpu.vacc, cpu.vi, vu0Mem, 0xFFF, vu0Micro, 0xFFF),
-    Unit(1, g_vu1.vf, &g_vu1.acc, g_vu1.vi, vu1Mem, 0x3FFF, vu1Micro, 0x3FFF),
+    Unit(0, cpu.vf, &cpu.vacc, cpu.vi, vu0Mem, 0xFFF, vu0Micro, 0xFFF, g_code0),
+    Unit(1, g_vu1.vf, &g_vu1.acc, g_vu1.vi, vu1Mem, 0x3FFF, vu1Micro, 0x3FFF, g_code1),
 };
 
 // ---- instruction fields ------------------------------------------------------------
@@ -123,6 +157,8 @@ inline uint32_t fFd(uint32_t c) { return (c >> 6) & 31; }
 inline uint32_t fBc(uint32_t c) { return c & 3; }
 inline uint32_t fFsf(uint32_t c) { return (c >> 21) & 3; }
 inline uint32_t fFtf(uint32_t c) { return (c >> 23) & 3; }
+// The extended opcode of the upper and lower OP groups: bits 6-10, then bits 0-1.
+inline uint32_t fExt(uint32_t c) { return (((c >> 6) & 31) << 2) | (c & 3); }
 inline int32_t imm11(uint32_t c) { return (c & 0x400) ? static_cast<int32_t>(c | 0xFFFFF800u) : static_cast<int32_t>(c & 0x3FF); }
 inline int32_t imm5(uint32_t c) {
     const uint32_t v = (c >> 6) & 31;
@@ -133,28 +169,18 @@ inline uint32_t imm12(uint32_t c) { return (((c >> 21) & 1) << 11) | (c & 0x7FF)
 inline bool on(uint32_t dest, int comp) { return (dest & (8u >> comp)) != 0; }
 
 // ---- flags -----------------------------------------------------------------------------
-// MAC flag update for one component (shift 3 = x ... 0 = w); returns the clamped bits.
-uint32_t macUpdate(Unit& u, int shift, float f) {
+// One component's result: its MAC flags (Z, S at bit 4, U at bit 8, O at bit
+// 12) and its clamped bits.
+PS2_ALWAYS_INLINE uint32_t macLane(float f, uint32_t& flags) {
     const uint32_t v = std::bit_cast<uint32_t>(f);
-    const uint32_t s = v & 0x80000000u;
-    uint32_t& m = u.macNext;
-    if (s) m |= 0x0010u << shift;
-    else m &= ~(0x0010u << shift);
-    if (f == 0) {
-        m = (m & ~(0x1100u << shift)) | (0x0001u << shift);
+    const uint32_t s = v & 0x80000000u, e = (v >> 23) & 0xFF;
+    if (e - 1 < 254) [[likely]] {   // normal: only the sign
+        flags = s >> 27;
         return v;
     }
-    switch ((v >> 23) & 0xFF) {
-    case 0:
-        m = (m & ~(0x1000u << shift)) | (0x0101u << shift);
-        return s;
-    case 255:
-        m = (m & ~(0x0101u << shift)) | (0x1000u << shift);
-        return s | 0x7F7FFFFFu;
-    default:
-        m &= ~(0x1101u << shift);
-        return v;
-    }
+    const bool zero = f == 0, under = !zero && e == 0, over = e == 255;
+    flags = (s >> 27) | (zero || under ? 0x0001u : 0) | (under ? 0x0100u : 0) | (over ? 0x1000u : 0);
+    return under ? s : over ? s | 0x7F7FFFFFu : v;
 }
 
 void statusFromMac(Unit& u) {
@@ -167,6 +193,13 @@ void statusFromMac(Unit& u) {
     u.statusNext = (u.statusNext & ~0xFu) | f;
 }
 
+// An FMAC operation's MAC flags replace all 16 (an unwritten component's are
+// cleared) and set the status flags.
+void setMac(Unit& u, uint32_t mac) {
+    u.macNext = (u.macNext & ~0xFFFFu) | mac;
+    statusFromMac(u);
+}
+
 // ---- pipeline ---------------------------------------------------------------------------
 void commit(Unit& u, const Unit::Fmac& e) {
     if (e.clip) u.vi[CLIP] = e.clipv;
@@ -176,10 +209,12 @@ void commit(Unit& u, const Unit::Fmac& e) {
     u.vi[MAC] = e.mac;
 }
 
-void retire(Unit& u) {
-    while (!u.fmac.empty() && u.fmac.front().done <= u.cycle) {
-        commit(u, u.fmac.front());
-        u.fmac.pop_front();
+// Whatever has landed by now becomes visible: flags, Q, P, ILW results.
+PS2_ALWAYS_INLINE void retireDue(Unit& u) {
+    while (u.fmacCount && u.fmac[u.fmacHead].done <= u.cycle) {
+        commit(u, u.fmac[u.fmacHead]);
+        u.fmacHead = (u.fmacHead + 1) & 7;
+        --u.fmacCount;
     }
     if (u.fdiv.busy && u.fdiv.done <= u.cycle) {
         u.fdiv.busy = false;
@@ -192,13 +227,15 @@ void retire(Unit& u) {
     }
     if (u.ialu.regs && u.ialu.done <= u.cycle) u.ialu.regs = 0;
 }
+void retire(Unit& u) { retireDue(u); }   // out of line, after a stall
 
 void flushAll(Unit& u) {
-    for (const auto& e : u.fmac) {
+    for (; u.fmacCount; --u.fmacCount) {
+        const Unit::Fmac& e = u.fmac[u.fmacHead];
         commit(u, e);
         u.cycle = std::max(u.cycle, e.done);
+        u.fmacHead = (u.fmacHead + 1) & 7;
     }
-    u.fmac.clear();
     if (u.fdiv.busy) {
         u.cycle = std::max(u.cycle, u.fdiv.done);
         retire(u);
@@ -218,12 +255,9 @@ void advanceTo(Unit& u, uint64_t c) {
 
 // Stall until VF register `reg` (components `mask`) has no write in flight.
 void stallOn(Unit& u, uint32_t reg, uint32_t mask) {
-    if (!reg || !mask) return;
+    const uint64_t* lands = u.vfLands[reg];
     uint64_t until = 0;
-    for (const auto& e : u.fmac) {
-        if (e.done <= u.cycle) continue;
-        if ((e.reg[0] == reg && (e.mask[0] & mask)) || (e.reg[1] == reg && (e.mask[1] & mask))) until = std::max(until, e.done);
-    }
+    for (int i = 0; i < 4; ++i) until = std::max(until, lands[i] & (0 - static_cast<uint64_t>(on(mask, i))));
     advanceTo(u, until);
 }
 
@@ -234,10 +268,20 @@ void stallEfu(Unit& u) {
     if (u.efu.busy) advanceTo(u, u.efu.done - 1);   // released a cycle before P lands
 }
 
-void fmacWrites(Unit& u, int slot, uint32_t reg, uint32_t mask) {
-    u.pairFmac = true;
-    u.pairReg[slot] = static_cast<uint8_t>(reg);
-    u.pairMask[slot] = static_cast<uint8_t>(mask);
+// The pair's flags enter the FMAC pipeline, landing with its VF results 4 cycles later.
+void issue(Unit& u, const Pair& p) {
+    Unit::Fmac& e = u.fmac[(u.fmacHead + u.fmacCount++) & 7];
+    e.done = u.cycle + 4;
+    e.clip = p.clip;
+    e.fsset = p.fsset;
+    e.mac = u.macNext;
+    e.status = u.statusNext;
+    e.clipv = u.clipNext;
+    for (int slot = 0; slot < 2; ++slot) {
+        if (!p.writeReg[slot]) continue;   // vf0 and ACC hold nothing up
+        uint64_t* lands = u.vfLands[p.writeReg[slot]];
+        for (int i = 0; i < 4; ++i) lands[i] = on(p.writeMask[slot], i) ? e.done : lands[i];
+    }
 }
 
 // ---- VF access ----------------------------------------------------------------------------
@@ -284,17 +328,27 @@ uint8_t* qwPtr(Unit& u, uint32_t qw) {
     return u.data + ((qw * 16) & u.dataMask);
 }
 
+void unknown(Unit& u, const char* which, uint32_t c) {
+    char key[64];
+    std::snprintf(key, sizeof key, "VU%d %s instruction 0x%08x", u.index, which, c);
+    PS2_UNIMPL("vu", key, "unknown VU%d %s instruction 0x%08x at 0x%04x", u.index, which, c, u.vi[TPC] - 8);
+}
+
 // ---- upper (FMAC) operations ----------------------------------------------------------------
+// The components dest names take the clamped results; the MAC flags are those
+// of the results written.
 template <typename F>
-void fmacOp(Unit& u, VuReg* dst, uint32_t dstReg, uint32_t dest, uint32_t fs, const uint32_t (&b)[4], F f) {
-    const VuReg a = u.vf[fs];
-    const VuReg acc = *u.acc;
+PS2_ALWAYS_INLINE void fmacOp(Unit& u, VuReg* dst, uint32_t dest, uint32_t fs, const uint32_t (&b)[4], F f) {
+    const VuReg a = u.vf[fs], acc = *u.acc, old = *dst;
+    uint32_t r[4], flags[4];
     for (int i = 0; i < 4; ++i) {
-        if (on(dest, i)) dst->c[i] = macUpdate(u, 3 - i, f(acc.c[i], a.c[i], b[i]));
-        else u.macNext &= ~(0x1111u << (3 - i));
+        const bool w = on(dest, i);
+        const uint32_t v = macLane(f(acc.c[i], a.c[i], b[i]), flags[i]);
+        r[i] = w ? v : old.c[i];
+        flags[i] = w ? flags[i] : 0;
     }
-    statusFromMac(u);
-    fmacWrites(u, 0, dstReg, dest);
+    std::memcpy(dst->c, r, 16);
+    setMac(u, (flags[0] << 3) | (flags[1] << 2) | (flags[2] << 1) | flags[3]);
 }
 
 struct Add  { float operator()(uint32_t, uint32_t a, uint32_t b) const { return in(a) + in(b); } };
@@ -303,49 +357,61 @@ struct Mul  { float operator()(uint32_t, uint32_t a, uint32_t b) const { return 
 struct MAdd { float operator()(uint32_t c, uint32_t a, uint32_t b) const { const float p = in(a) * in(b); return in(c) + p; } };
 struct MSub { float operator()(uint32_t c, uint32_t a, uint32_t b) const { const float p = in(a) * in(b); return in(c) - p; } };
 
-template <typename F>
-void fmacFamily(Unit& u, uint32_t c, int form, bool toAcc, F f) {
-    // form: 0 vector, 1 broadcast (bc field), 2 Q, 3 I
+// Form: 0 vector, 1 broadcast (bc field), 2 Q, 3 I. Dest: the components
+// written, for the usual xyzw and xyz; 0 takes them from the word.
+template <typename F, int Form, bool ToAcc, uint32_t Dest>
+void fmacFamily(Unit& u, uint32_t c) {
+    const uint32_t dest = Dest ? Dest : fDest(c);
     uint32_t b[4];
     const uint32_t ft = fFt(c);
-    switch (form) {
-    case 0: std::memcpy(b, u.vf[ft].c, 16); break;
-    case 1: b[0] = b[1] = b[2] = b[3] = u.vf[ft].c[fBc(c)]; break;
-    case 2: b[0] = b[1] = b[2] = b[3] = u.vi[Q]; break;
-    default: b[0] = b[1] = b[2] = b[3] = u.vi[I]; break;
-    }
-    if (form == 0) stallOn(u, ft, fDest(c));
-    else if (form == 1) stallOn(u, ft, 8u >> fBc(c));
-    stallOn(u, fFs(c), fDest(c));
-    if (toAcc) fmacOp(u, u.acc, 0, fDest(c), fFs(c), b, f);
-    else fmacOp(u, vfDst(u, fFd(c)), fFd(c), fDest(c), fFs(c), b, f);
+    if constexpr (Form == 0) std::memcpy(b, u.vf[ft].c, 16);
+    else if constexpr (Form == 1) b[0] = b[1] = b[2] = b[3] = u.vf[ft].c[fBc(c)];
+    else if constexpr (Form == 2) b[0] = b[1] = b[2] = b[3] = u.vi[Q];
+    else b[0] = b[1] = b[2] = b[3] = u.vi[I];
+    if constexpr (Form == 0) stallOn(u, ft, dest);
+    else if constexpr (Form == 1) stallOn(u, ft, 8u >> fBc(c));
+    stallOn(u, fFs(c), dest);
+    if constexpr (ToAcc) fmacOp(u, u.acc, dest, fFs(c), b, F{});
+    else fmacOp(u, vfDst(u, fFd(c)), dest, fFs(c), b, F{});
 }
 
-template <typename F>
-void minmaxOp(Unit& u, uint32_t c, int form, F f) {
+template <typename F, int Form, bool ToAcc>
+Op fmac(uint32_t c) {
+    switch (fDest(c)) {
+    case 0xF: return fmacFamily<F, Form, ToAcc, 0xF>;
+    case 0xE: return fmacFamily<F, Form, ToAcc, 0xE>;
+    default: return fmacFamily<F, Form, ToAcc, 0>;
+    }
+}
+
+// Form: 0 vector, 1 broadcast (bc field), 2 I.
+template <uint32_t (*F)(uint32_t, uint32_t), int Form>
+void minmaxOp(Unit& u, uint32_t c) {
     uint32_t b[4];
     const uint32_t ft = fFt(c);
-    if (form == 0) std::memcpy(b, u.vf[ft].c, 16);
-    else if (form == 1) b[0] = b[1] = b[2] = b[3] = u.vf[ft].c[fBc(c)];
+    if constexpr (Form == 0) std::memcpy(b, u.vf[ft].c, 16);
+    else if constexpr (Form == 1) b[0] = b[1] = b[2] = b[3] = u.vf[ft].c[fBc(c)];
     else b[0] = b[1] = b[2] = b[3] = u.vi[I];
     stallOn(u, fFs(c), fDest(c));
-    if (form == 0) stallOn(u, ft, fDest(c));
+    if constexpr (Form == 0) stallOn(u, ft, fDest(c));
     const VuReg a = u.vf[fFs(c)];
     VuReg* d = vfDst(u, fFd(c));
     for (int i = 0; i < 4; ++i)
-        if (on(fDest(c), i)) d->c[i] = f(a.c[i], b[i]);
-    fmacWrites(u, 0, fFd(c), fDest(c));
+        if (on(fDest(c), i)) d->c[i] = F(a.c[i], b[i]);
 }
 
 template <typename F>
-void unaryOp(Unit& u, uint32_t c, F f) {   // ft = f(fs)
+void unaryOp(Unit& u, uint32_t c) {   // ft = f(fs)
     stallOn(u, fFs(c), fDest(c));
     const VuReg a = u.vf[fFs(c)];
     VuReg* d = vfDst(u, fFt(c));
     for (int i = 0; i < 4; ++i)
-        if (on(fDest(c), i)) d->c[i] = f(a.c[i]);
-    fmacWrites(u, 0, fFt(c), fDest(c));
+        if (on(fDest(c), i)) d->c[i] = F{}(a.c[i]);
 }
+
+template <int Frac> struct Itof { uint32_t operator()(uint32_t v) const { return ops::vu::itof(v, Frac); } };
+template <int Frac> struct Ftoi { uint32_t operator()(uint32_t v) const { return ops::vu::ftoi(v, Frac); } };
+struct Abs { uint32_t operator()(uint32_t v) const { return v & 0x7FFFFFFFu; } };
 
 void clipOp(Unit& u, uint32_t c) {
     stallOn(u, fFs(c), 0xE);
@@ -359,20 +425,20 @@ void clipOp(Unit& u, uint32_t c) {
         if (static_cast<int32_t>(a.c[i] ^ 0x80000000u) > w) clip |= 2u << (2 * i);
     }
     u.clipNext = clip & 0xFFFFFF;
-    u.pairClip = true;
-    u.pairFmac = true;
 }
 
 void opmula(Unit& u, uint32_t c) {
     stallOn(u, fFs(c), 0xE);
     stallOn(u, fFt(c), 0xE);
     const VuReg a = u.vf[fFs(c)], b = u.vf[fFt(c)];
-    u.acc->c[0] = macUpdate(u, 3, in(a.c[1]) * in(b.c[2]));
-    u.acc->c[1] = macUpdate(u, 2, in(a.c[2]) * in(b.c[0]));
-    u.acc->c[2] = macUpdate(u, 1, in(a.c[0]) * in(b.c[1]));
-    u.macNext &= ~0x1111u;   // w takes no part
-    statusFromMac(u);
-    fmacWrites(u, 0, 0, 0);
+    uint32_t mac = 0, flags;   // w takes no part
+    u.acc->c[0] = macLane(in(a.c[1]) * in(b.c[2]), flags);
+    mac |= flags << 3;
+    u.acc->c[1] = macLane(in(a.c[2]) * in(b.c[0]), flags);
+    mac |= flags << 2;
+    u.acc->c[2] = macLane(in(a.c[0]) * in(b.c[1]), flags);
+    mac |= flags << 1;
+    setMac(u, mac);
 }
 
 void opmsub(Unit& u, uint32_t c) {
@@ -381,111 +447,109 @@ void opmsub(Unit& u, uint32_t c) {
     const VuReg a = u.vf[fFs(c)], b = u.vf[fFt(c)], acc = *u.acc;
     VuReg* d = vfDst(u, fFd(c));
     auto f = [](uint32_t accv, float x, float y) { const float p = x * y; return in(accv) - p; };
-    d->c[0] = macUpdate(u, 3, f(acc.c[0], in(a.c[1]), in(b.c[2])));
-    d->c[1] = macUpdate(u, 2, f(acc.c[1], in(a.c[2]), in(b.c[0])));
-    d->c[2] = macUpdate(u, 1, f(acc.c[2], in(a.c[0]), in(b.c[1])));
-    u.macNext &= ~0x1111u;
-    statusFromMac(u);
-    fmacWrites(u, 0, fFd(c), 0xE);
+    uint32_t mac = 0, flags;
+    d->c[0] = macLane(f(acc.c[0], in(a.c[1]), in(b.c[2])), flags);
+    mac |= flags << 3;
+    d->c[1] = macLane(f(acc.c[1], in(a.c[2]), in(b.c[0])), flags);
+    mac |= flags << 2;
+    d->c[2] = macLane(f(acc.c[2], in(a.c[0]), in(b.c[1])), flags);
+    mac |= flags << 1;
+    setMac(u, mac);
 }
 
-void unknown(Unit& u, const char* which) {
-    char key[64];
-    std::snprintf(key, sizeof key, "VU%d %s instruction 0x%08x", u.index, which, u.insn);
-    PS2_UNIMPL("vu", key, "unknown VU%d %s instruction 0x%08x at 0x%04x", u.index, which, u.insn, u.vi[TPC] - 8);
-}
+void unknownUpper(Unit& u, uint32_t c) { unknown(u, "upper", c); }
 
-void execUpper(Unit& u, uint32_t c) {
-    u.insn = c;
+Op upperOp(uint32_t c) {
     const uint32_t op = c & 63;
     if (op < 0x3C) {
         const uint32_t bc = op & 3;
         switch (op >> 2) {
-        case 0x0: fmacFamily(u, c, 1, false, Add{}); return;     // ADDbc
-        case 0x1: fmacFamily(u, c, 1, false, Sub{}); return;     // SUBbc
-        case 0x2: fmacFamily(u, c, 1, false, MAdd{}); return;    // MADDbc
-        case 0x3: fmacFamily(u, c, 1, false, MSub{}); return;    // MSUBbc
-        case 0x4: minmaxOp(u, c, 1, ops::vu::maxBits); return;   // MAXbc
-        case 0x5: minmaxOp(u, c, 1, ops::vu::minBits); return;   // MINIbc
-        case 0x6: fmacFamily(u, c, 1, false, Mul{}); return;     // MULbc
+        case 0x0: return fmac<Add, 1, false>(c);         // ADDbc
+        case 0x1: return fmac<Sub, 1, false>(c);         // SUBbc
+        case 0x2: return fmac<MAdd, 1, false>(c);        // MADDbc
+        case 0x3: return fmac<MSub, 1, false>(c);        // MSUBbc
+        case 0x4: return minmaxOp<ops::vu::maxBits, 1>;  // MAXbc
+        case 0x5: return minmaxOp<ops::vu::minBits, 1>;  // MINIbc
+        case 0x6: return fmac<Mul, 1, false>(c);         // MULbc
         case 0x7:
             switch (bc) {
-            case 0: fmacFamily(u, c, 2, false, Mul{}); return;   // MULq
-            case 1: minmaxOp(u, c, 2, ops::vu::maxBits); return; // MAXi
-            case 2: fmacFamily(u, c, 3, false, Mul{}); return;   // MULi
-            default: minmaxOp(u, c, 2, ops::vu::minBits); return; // MINIi
+            case 0: return fmac<Mul, 2, false>(c);          // MULq
+            case 1: return minmaxOp<ops::vu::maxBits, 2>;   // MAXi
+            case 2: return fmac<Mul, 3, false>(c);          // MULi
+            default: return minmaxOp<ops::vu::minBits, 2>;  // MINIi
             }
         case 0x8:
             switch (bc) {
-            case 0: fmacFamily(u, c, 2, false, Add{}); return;   // ADDq
-            case 1: fmacFamily(u, c, 2, false, MAdd{}); return;  // MADDq
-            case 2: fmacFamily(u, c, 3, false, Add{}); return;   // ADDi
-            default: fmacFamily(u, c, 3, false, MAdd{}); return; // MADDi
+            case 0: return fmac<Add, 2, false>(c);    // ADDq
+            case 1: return fmac<MAdd, 2, false>(c);   // MADDq
+            case 2: return fmac<Add, 3, false>(c);    // ADDi
+            default: return fmac<MAdd, 3, false>(c);  // MADDi
             }
         case 0x9:
             switch (bc) {
-            case 0: fmacFamily(u, c, 2, false, Sub{}); return;   // SUBq
-            case 1: fmacFamily(u, c, 2, false, MSub{}); return;  // MSUBq
-            case 2: fmacFamily(u, c, 3, false, Sub{}); return;   // SUBi
-            default: fmacFamily(u, c, 3, false, MSub{}); return; // MSUBi
+            case 0: return fmac<Sub, 2, false>(c);    // SUBq
+            case 1: return fmac<MSub, 2, false>(c);   // MSUBq
+            case 2: return fmac<Sub, 3, false>(c);    // SUBi
+            default: return fmac<MSub, 3, false>(c);  // MSUBi
             }
         case 0xA:
             switch (bc) {
-            case 0: fmacFamily(u, c, 0, false, Add{}); return;   // ADD
-            case 1: fmacFamily(u, c, 0, false, MAdd{}); return;  // MADD
-            case 2: fmacFamily(u, c, 0, false, Mul{}); return;   // MUL
-            default: minmaxOp(u, c, 0, ops::vu::maxBits); return; // MAX
+            case 0: return fmac<Add, 0, false>(c);          // ADD
+            case 1: return fmac<MAdd, 0, false>(c);         // MADD
+            case 2: return fmac<Mul, 0, false>(c);          // MUL
+            default: return minmaxOp<ops::vu::maxBits, 0>;  // MAX
             }
         case 0xB:
             switch (bc) {
-            case 0: fmacFamily(u, c, 0, false, Sub{}); return;   // SUB
-            case 1: fmacFamily(u, c, 0, false, MSub{}); return;  // MSUB
-            case 2: opmsub(u, c); return;                        // OPMSUB
-            default: minmaxOp(u, c, 0, ops::vu::minBits); return; // MINI
+            case 0: return fmac<Sub, 0, false>(c);          // SUB
+            case 1: return fmac<MSub, 0, false>(c);         // MSUB
+            case 2: return opmsub;                          // OPMSUB
+            default: return minmaxOp<ops::vu::minBits, 0>;  // MINI
             }
-        default: return unknown(u, "upper");
+        default: return unknownUpper;
         }
     }
     // Extended table: bits 6-10 select the operation, bits 0-1 the column.
-    const uint32_t ext = (((c >> 6) & 31) << 2) | (c & 3);
-    switch (ext) {
-    case 0x00: case 0x01: case 0x02: case 0x03: fmacFamily(u, c, 1, true, Add{}); return;   // ADDAbc
-    case 0x04: case 0x05: case 0x06: case 0x07: fmacFamily(u, c, 1, true, Sub{}); return;   // SUBAbc
-    case 0x08: case 0x09: case 0x0A: case 0x0B: fmacFamily(u, c, 1, true, MAdd{}); return;  // MADDAbc
-    case 0x0C: case 0x0D: case 0x0E: case 0x0F: fmacFamily(u, c, 1, true, MSub{}); return;  // MSUBAbc
-    case 0x10: unaryOp(u, c, [](uint32_t v) { return ops::vu::itof(v, 0); }); return;
-    case 0x11: unaryOp(u, c, [](uint32_t v) { return ops::vu::itof(v, 4); }); return;
-    case 0x12: unaryOp(u, c, [](uint32_t v) { return ops::vu::itof(v, 12); }); return;
-    case 0x13: unaryOp(u, c, [](uint32_t v) { return ops::vu::itof(v, 15); }); return;
-    case 0x14: unaryOp(u, c, [](uint32_t v) { return ops::vu::ftoi(v, 0); }); return;
-    case 0x15: unaryOp(u, c, [](uint32_t v) { return ops::vu::ftoi(v, 4); }); return;
-    case 0x16: unaryOp(u, c, [](uint32_t v) { return ops::vu::ftoi(v, 12); }); return;
-    case 0x17: unaryOp(u, c, [](uint32_t v) { return ops::vu::ftoi(v, 15); }); return;
-    case 0x18: case 0x19: case 0x1A: case 0x1B: fmacFamily(u, c, 1, true, Mul{}); return;  // MULAbc
-    case 0x1C: fmacFamily(u, c, 2, true, Mul{}); return;    // MULAq
-    case 0x1D: unaryOp(u, c, [](uint32_t v) { return v & 0x7FFFFFFFu; }); return;   // ABS
-    case 0x1E: fmacFamily(u, c, 3, true, Mul{}); return;    // MULAi
-    case 0x1F: clipOp(u, c); return;                        // CLIPw
-    case 0x20: fmacFamily(u, c, 2, true, Add{}); return;    // ADDAq
-    case 0x21: fmacFamily(u, c, 2, true, MAdd{}); return;   // MADDAq
-    case 0x22: fmacFamily(u, c, 3, true, Add{}); return;    // ADDAi
-    case 0x23: fmacFamily(u, c, 3, true, MAdd{}); return;   // MADDAi
-    case 0x24: fmacFamily(u, c, 2, true, Sub{}); return;    // SUBAq
-    case 0x25: fmacFamily(u, c, 2, true, MSub{}); return;   // MSUBAq
-    case 0x26: fmacFamily(u, c, 3, true, Sub{}); return;    // SUBAi
-    case 0x27: fmacFamily(u, c, 3, true, MSub{}); return;   // MSUBAi
-    case 0x28: fmacFamily(u, c, 0, true, Add{}); return;    // ADDA
-    case 0x29: fmacFamily(u, c, 0, true, MAdd{}); return;   // MADDA
-    case 0x2A: fmacFamily(u, c, 0, true, Mul{}); return;    // MULA
-    case 0x2C: fmacFamily(u, c, 0, true, Sub{}); return;    // SUBA
-    case 0x2D: fmacFamily(u, c, 0, true, MSub{}); return;   // MSUBA
-    case 0x2E: opmula(u, c); return;                        // OPMULA
-    case 0x2F: return;                                      // NOP
-    default: return unknown(u, "upper");
+    switch (fExt(c)) {
+    case 0x00: case 0x01: case 0x02: case 0x03: return fmac<Add, 1, true>(c);   // ADDAbc
+    case 0x04: case 0x05: case 0x06: case 0x07: return fmac<Sub, 1, true>(c);   // SUBAbc
+    case 0x08: case 0x09: case 0x0A: case 0x0B: return fmac<MAdd, 1, true>(c);  // MADDAbc
+    case 0x0C: case 0x0D: case 0x0E: case 0x0F: return fmac<MSub, 1, true>(c);  // MSUBAbc
+    case 0x10: return unaryOp<Itof<0>>;
+    case 0x11: return unaryOp<Itof<4>>;
+    case 0x12: return unaryOp<Itof<12>>;
+    case 0x13: return unaryOp<Itof<15>>;
+    case 0x14: return unaryOp<Ftoi<0>>;
+    case 0x15: return unaryOp<Ftoi<4>>;
+    case 0x16: return unaryOp<Ftoi<12>>;
+    case 0x17: return unaryOp<Ftoi<15>>;
+    case 0x18: case 0x19: case 0x1A: case 0x1B: return fmac<Mul, 1, true>(c);  // MULAbc
+    case 0x1C: return fmac<Mul, 2, true>(c);   // MULAq
+    case 0x1D: return unaryOp<Abs>;            // ABS
+    case 0x1E: return fmac<Mul, 3, true>(c);   // MULAi
+    case 0x1F: return clipOp;                  // CLIPw
+    case 0x20: return fmac<Add, 2, true>(c);   // ADDAq
+    case 0x21: return fmac<MAdd, 2, true>(c);  // MADDAq
+    case 0x22: return fmac<Add, 3, true>(c);   // ADDAi
+    case 0x23: return fmac<MAdd, 3, true>(c);  // MADDAi
+    case 0x24: return fmac<Sub, 2, true>(c);   // SUBAq
+    case 0x25: return fmac<MSub, 2, true>(c);  // MSUBAq
+    case 0x26: return fmac<Sub, 3, true>(c);   // SUBAi
+    case 0x27: return fmac<MSub, 3, true>(c);  // MSUBAi
+    case 0x28: return fmac<Add, 0, true>(c);   // ADDA
+    case 0x29: return fmac<MAdd, 0, true>(c);  // MADDA
+    case 0x2A: return fmac<Mul, 0, true>(c);   // MULA
+    case 0x2C: return fmac<Sub, 0, true>(c);   // SUBA
+    case 0x2D: return fmac<MSub, 0, true>(c);  // MSUBA
+    case 0x2E: return opmula;                  // OPMULA
+    case 0x2F: return nullptr;                 // NOP
+    default: return unknownUpper;
     }
 }
 
 // ---- lower operations ------------------------------------------------------------------------
+// Their stalls hold the whole pair, so they are applied before it runs
+// (lowerStalls), not here.
 void setBranch(Unit& u, uint32_t target) {
     target &= u.microMask & ~7u;
     if (u.branch == 1) {   // a branch in a branch delay slot
@@ -511,8 +575,8 @@ void startFdiv(Unit& u, uint32_t q, uint32_t status, int latency) {
     u.fdiv.status = status;
 }
 
-void startEfu(Unit& u, float p, int latency) {
-    if (u.index != 1) return unknown(u, "EFU (VU0 has no EFU)");
+void startEfu(Unit& u, uint32_t c, float p, int latency) {
+    if (u.index != 1) return unknown(u, "EFU (VU0 has no EFU)", c);
     u.efu.busy = true;
     u.efu.done = u.cycle + static_cast<uint64_t>(latency);
     u.efu.p = std::bit_cast<uint32_t>(in(std::bit_cast<uint32_t>(p)));
@@ -520,11 +584,180 @@ void startEfu(Unit& u, float p, int latency) {
 
 float comp(const Unit& u, uint32_t reg, uint32_t which) { return in(u.vf[reg].c[which]); }
 
-void xgkick(Unit& u, uint32_t qwAddr) {
-    if (u.index != 1) return unknown(u, "XGKICK on VU0");
+void loadVf(Unit& u, uint32_t ft, uint32_t dest, const uint8_t* p) {   // LQ, LQI, LQD
+    VuReg* d = vfDst(u, ft);
+    for (int i = 0; i < 4; ++i)
+        if (on(dest, i)) std::memcpy(&d->c[i], p + 4 * i, 4);
+}
+
+void storeVf(Unit& u, uint32_t fs, uint32_t dest, uint8_t* p) {   // SQ, SQI, SQD
+    for (int i = 0; i < 4; ++i)
+        if (on(dest, i)) std::memcpy(p + 4 * i, &u.vf[fs].c[i], 4);
+}
+
+void loadVi(Unit& u, uint32_t it, uint32_t dest, const uint8_t* p) {   // ILW, ILWR: the component chosen by dest
+    for (int i = 0; i < 4; ++i)
+        if (on(dest, i)) {
+            uint16_t v;
+            std::memcpy(&v, p + 4 * i, 2);
+            viWrite(u, it, v);
+            break;
+        }
+    u.ialu.done = u.cycle + 4;
+    u.ialu.regs |= 1u << (it & 15);
+}
+
+void storeVi(uint8_t* p, uint32_t dest, uint32_t v) {   // ISW, ISWR
+    for (int i = 0; i < 4; ++i)
+        if (on(dest, i)) std::memcpy(p + 4 * i, &v, 4);
+}
+
+void fillVf(Unit& u, uint32_t ft, uint32_t dest, uint32_t v) {   // MFIR, RNEXT, RGET, MFP
+    VuReg* d = vfDst(u, ft);
+    for (int i = 0; i < 4; ++i)
+        if (on(dest, i)) d->c[i] = v;
+}
+
+namespace lower {
+
+void lq(Unit& u, uint32_t c) { loadVf(u, fFt(c), fDest(c), qwPtr(u, viRead(u, fFs(c)) + static_cast<uint32_t>(imm11(c)))); }   // LQ ft, imm11(is)
+void sq(Unit& u, uint32_t c) { storeVf(u, fFs(c), fDest(c), qwPtr(u, viRead(u, fFt(c)) + static_cast<uint32_t>(imm11(c)))); }  // SQ fs, imm11(it)
+void ilw(Unit& u, uint32_t c) { loadVi(u, fFt(c), fDest(c), qwPtr(u, viRead(u, fFs(c)) + static_cast<uint32_t>(imm11(c)))); }  // ILW it, imm11(is)
+void isw(Unit& u, uint32_t c) { storeVi(qwPtr(u, viRead(u, fFs(c)) + static_cast<uint32_t>(imm11(c))), fDest(c), viRead(u, fFt(c))); }   // ISW it, imm11(is)
+void iaddiu(Unit& u, uint32_t c) { viWrite(u, fFt(c), viRead(u, fFs(c)) + imm15(c)); }
+void isubiu(Unit& u, uint32_t c) { viWrite(u, fFt(c), viRead(u, fFs(c)) - imm15(c)); }
+void fceq(Unit& u, uint32_t c) { viWrite(u, 1, (u.vi[CLIP] & 0xFFFFFF) == (c & 0xFFFFFF) ? 1 : 0, false); }
+void fcset(Unit& u, uint32_t c) { u.clipNext = c & 0xFFFFFF; }
+void fcand(Unit& u, uint32_t c) { viWrite(u, 1, (u.vi[CLIP] & c & 0xFFFFFF) ? 1 : 0, false); }
+void fcor(Unit& u, uint32_t c) { viWrite(u, 1, ((u.vi[CLIP] | c) & 0xFFFFFF) == 0xFFFFFF ? 1 : 0, false); }
+void fseq(Unit& u, uint32_t c) { viWrite(u, fFt(c), (u.vi[STATUS] & 0xFFF) == imm12(c) ? 1 : 0, false); }
+void fsset(Unit& u, uint32_t c) { u.statusNext = (imm12(c) & 0xFC0) | (u.statusNext & 0x3F); }
+void fsand(Unit& u, uint32_t c) { viWrite(u, fFt(c), u.vi[STATUS] & 0xFFF & imm12(c), false); }
+void fsor(Unit& u, uint32_t c) { viWrite(u, fFt(c), (u.vi[STATUS] & 0xFFF) | imm12(c), false); }
+void fmeq(Unit& u, uint32_t c) { viWrite(u, fFt(c), (u.vi[MAC] & 0xFFFF) == viRead(u, fFs(c)) ? 1 : 0, false); }
+void fmand(Unit& u, uint32_t c) { viWrite(u, fFt(c), u.vi[MAC] & 0xFFFF & viRead(u, fFs(c)), false); }
+void fmor(Unit& u, uint32_t c) { viWrite(u, fFt(c), (u.vi[MAC] & 0xFFFF) | viRead(u, fFs(c)), false); }
+void fcget(Unit& u, uint32_t c) { viWrite(u, fFt(c), u.vi[CLIP] & 0xFFF, false); }
+void b(Unit& u, uint32_t c) { setBranch(u, branchTarget(u, c)); }
+void bal(Unit& u, uint32_t c) {
+    viWrite(u, fFt(c), linkValue(u), false);
+    setBranch(u, branchTarget(u, c));
+}
+void jr(Unit& u, uint32_t c) { setBranch(u, viRead(u, fFs(c)) * 8u); }
+void jalr(Unit& u, uint32_t c) {
+    const uint32_t target = viRead(u, fFs(c)) * 8u;
+    viWrite(u, fFt(c), linkValue(u), false);
+    setBranch(u, target);
+}
+template <uint32_t Op>
+void branchIf(Unit& u, uint32_t c) {   // conditional branches
+    const auto s = static_cast<int16_t>(viBranch(u, fFs(c))), t = static_cast<int16_t>(viBranch(u, fFt(c)));
+    bool taken = false;
+    if constexpr (Op == 0x28) taken = s == t;        // IBEQ
+    else if constexpr (Op == 0x29) taken = s != t;   // IBNE
+    else if constexpr (Op == 0x2C) taken = s < 0;    // IBLTZ
+    else if constexpr (Op == 0x2D) taken = s > 0;    // IBGTZ
+    else if constexpr (Op == 0x2E) taken = s <= 0;   // IBLEZ
+    else taken = s >= 0;                             // IBGEZ
+    if (taken) setBranch(u, branchTarget(u, c));
+}
+void iadd(Unit& u, uint32_t c) { viWrite(u, fFd(c), viRead(u, fFs(c)) + viRead(u, fFt(c))); }
+void isub(Unit& u, uint32_t c) { viWrite(u, fFd(c), viRead(u, fFs(c)) - viRead(u, fFt(c))); }
+void iaddi(Unit& u, uint32_t c) { viWrite(u, fFt(c), viRead(u, fFs(c)) + static_cast<uint32_t>(imm5(c))); }
+void iand(Unit& u, uint32_t c) { viWrite(u, fFd(c), viRead(u, fFs(c)) & viRead(u, fFt(c))); }
+void ior(Unit& u, uint32_t c) { viWrite(u, fFd(c), viRead(u, fFs(c)) | viRead(u, fFt(c))); }
+void move(Unit& u, uint32_t c) {
+    const VuReg a = u.vf[fFs(c)];
+    VuReg* d = vfDst(u, fFt(c));
+    for (int i = 0; i < 4; ++i)
+        if (on(fDest(c), i)) d->c[i] = a.c[i];
+}
+void mr32(Unit& u, uint32_t c) {   // rotate fs by one component (y z w x)
+    const VuReg a = u.vf[fFs(c)];
+    const uint32_t rot[4] = {a.c[1], a.c[2], a.c[3], a.c[0]};
+    VuReg* d = vfDst(u, fFt(c));
+    for (int i = 0; i < 4; ++i)
+        if (on(fDest(c), i)) d->c[i] = rot[i];
+}
+void lqi(Unit& u, uint32_t c) {   // LQI ft, (is++)
+    const uint32_t is = fFs(c);
+    loadVf(u, fFt(c), fDest(c), qwPtr(u, viRead(u, is)));
+    viWrite(u, is, viRead(u, is) + 1);
+}
+void lqd(Unit& u, uint32_t c) {   // LQD ft, (--is)
+    const uint32_t is = fFs(c);
+    viWrite(u, is, viRead(u, is) - 1);
+    loadVf(u, fFt(c), fDest(c), qwPtr(u, viRead(u, is)));
+}
+void sqi(Unit& u, uint32_t c) {   // SQI fs, (it++)
+    const uint32_t it = fFt(c);
+    storeVf(u, fFs(c), fDest(c), qwPtr(u, viRead(u, it)));
+    viWrite(u, it, viRead(u, it) + 1);
+}
+void sqd(Unit& u, uint32_t c) {   // SQD fs, (--it)
+    const uint32_t it = fFt(c);
+    viWrite(u, it, viRead(u, it) - 1);
+    storeVf(u, fFs(c), fDest(c), qwPtr(u, viRead(u, it)));
+}
+void div(Unit& u, uint32_t c) {   // DIV Q, fs.fsf, ft.ftf
+    const uint32_t tb = u.vf[fFt(c)].c[fFtf(c)], sb = u.vf[fFs(c)].c[fFsf(c)];
+    const float t = in(tb), s = in(sb);
+    uint32_t status = 0, q;
+    if (t == 0.0f) {
+        status = s == 0.0f ? 0x10 : 0x20;
+        q = ((tb ^ sb) & 0x80000000u) ? 0xFF7FFFFFu : 0x7F7FFFFFu;
+    } else {
+        q = std::bit_cast<uint32_t>(in(std::bit_cast<uint32_t>(s / t)));
+    }
+    startFdiv(u, q, status, 7);
+}
+void sqrt(Unit& u, uint32_t c) {   // SQRT Q, ft.ftf
+    const float t = in(u.vf[fFt(c)].c[fFtf(c)]);
+    startFdiv(u, std::bit_cast<uint32_t>(in(std::bit_cast<uint32_t>(std::sqrt(std::fabs(t))))), t < 0.0f ? 0x10 : 0, 7);
+}
+void rsqrt(Unit& u, uint32_t c) {   // RSQRT Q, fs.fsf / sqrt(ft.ftf)
+    const uint32_t tb = u.vf[fFt(c)].c[fFtf(c)], sb = u.vf[fFs(c)].c[fFsf(c)];
+    const float t = in(tb), s = in(sb);
+    uint32_t status = 0, q;
+    if (t == 0.0f) {
+        status = 0x20;
+        if (s != 0.0f) {
+            q = ((tb ^ sb) & 0x80000000u) ? 0xFF7FFFFFu : 0x7F7FFFFFu;
+        } else {
+            q = ((tb ^ sb) & 0x80000000u) ? 0x80000000u : 0u;
+            status |= 0x10;
+        }
+    } else {
+        if (t < 0.0f) status = 0x10;
+        q = std::bit_cast<uint32_t>(in(std::bit_cast<uint32_t>(s / std::sqrt(std::fabs(t)))));
+    }
+    startFdiv(u, q, status, 13);
+}
+void mtir(Unit& u, uint32_t c) { viWrite(u, fFt(c), u.vf[fFs(c)].c[fFsf(c)] & 0xFFFF, false); }   // MTIR it, fs.fsf
+void mfir(Unit& u, uint32_t c) {   // MFIR ft, is
+    fillVf(u, fFt(c), fDest(c), static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(viRead(u, fFs(c))))));
+}
+void ilwr(Unit& u, uint32_t c) { loadVi(u, fFt(c), fDest(c), qwPtr(u, viRead(u, fFs(c)))); }   // ILWR it, (is)
+void iswr(Unit& u, uint32_t c) { storeVi(qwPtr(u, viRead(u, fFs(c))), fDest(c), viRead(u, fFt(c))); }   // ISWR it, (is)
+void rnext(Unit& u, uint32_t c) {
+    uint32_t r = u.vi[R];
+    const uint32_t x = (r >> 4) & 1, y = (r >> 22) & 1;
+    r = (r << 1) ^ x ^ y;
+    u.vi[R] = (r & 0x7FFFFF) | 0x3F800000;
+    fillVf(u, fFt(c), fDest(c), u.vi[R]);
+}
+void rget(Unit& u, uint32_t c) { fillVf(u, fFt(c), fDest(c), u.vi[R]); }
+void rinit(Unit& u, uint32_t c) { u.vi[R] = 0x3F800000u | (u.vf[fFs(c)].c[fFsf(c)] & 0x007FFFFFu); }
+void rxor(Unit& u, uint32_t c) { u.vi[R] = 0x3F800000u | ((u.vi[R] ^ u.vf[fFs(c)].c[fFsf(c)]) & 0x007FFFFFu); }
+void mfp(Unit& u, uint32_t c) { fillVf(u, fFt(c), fDest(c), u.vi[P]); }   // MFP ft, P
+void xtop(Unit& u, uint32_t c) { viWrite(u, fFt(c), vif::top(1), false); }
+void xitop(Unit& u, uint32_t c) { viWrite(u, fFt(c), vif::itop(u.index), false); }
+void xgkick(Unit& u, uint32_t c) {
+    if (u.index != 1) return unknown(u, "XGKICK on VU0", c);
     // Collect the GIF packet: tags and data until the tag with EOP.
-    std::vector<uint64_t> q;
-    uint32_t a = qwAddr & 0x3FF;
+    std::vector<uint64_t>& q = u.kick;
+    q.clear();
+    uint32_t a = viRead(u, fFs(c)) & 0x3FF;
     for (int guard = 0; guard < 1024; ++guard) {
         uint64_t tag[2];
         std::memcpy(tag, u.data + a * 16, 16);
@@ -551,278 +784,108 @@ void xgkick(Unit& u, uint32_t qwAddr) {
     }
     gs::gifTransfer(q.data(), q.size() / 2, 1);
 }
+void esum(Unit& u, uint32_t c) {   // ESADD ERSADD ELENG ERLENG ESUM
+    const uint32_t is = fFs(c);
+    const float x = comp(u, is, 0), y = comp(u, is, 1), z = comp(u, is, 2), w = comp(u, is, 3);
+    const float sq = x * x + y * y + z * z;
+    switch (fExt(c)) {
+    case 0x70: return startEfu(u, c, sq, 11);
+    case 0x71: return startEfu(u, c, sq != 0 ? 1.0f / sq : std::bit_cast<float>(0x7F7FFFFFu), 18);
+    case 0x72: return startEfu(u, c, std::sqrt(sq), 18);
+    case 0x73: return startEfu(u, c, sq != 0 ? 1.0f / std::sqrt(sq) : std::bit_cast<float>(0x7F7FFFFFu), 24);
+    default: return startEfu(u, c, x + y + z + w, 12);
+    }
+}
+void eatanxy(Unit& u, uint32_t c) {   // EATANxy, EATANxz: atan(y/x) / atan(z/x)
+    const float x = comp(u, fFs(c), 0), o = comp(u, fFs(c), fExt(c) == 0x74 ? 1 : 2);
+    startEfu(u, c, x != 0 ? std::atan(o / x) : 0.0f, 54);
+}
+void escalar(Unit& u, uint32_t c) {   // ESQRT ERSQRT ERCPR ESIN EATAN EEXP
+    const float s = comp(u, fFs(c), fFsf(c));
+    switch (fExt(c)) {
+    case 0x78: return startEfu(u, c, std::sqrt(std::fabs(s)), 12);
+    case 0x79: return startEfu(u, c, s != 0 ? 1.0f / std::sqrt(std::fabs(s)) : std::bit_cast<float>(0x7F7FFFFFu), 18);
+    case 0x7A: return startEfu(u, c, s != 0 ? 1.0f / s : std::bit_cast<float>(0x7F7FFFFFu), 12);
+    case 0x7C: return startEfu(u, c, std::sin(s), 29);
+    case 0x7D: return startEfu(u, c, std::atan(s), 54);
+    default: return startEfu(u, c, std::exp(-s), 44);
+    }
+}
+void unknownLower(Unit& u, uint32_t c) { unknown(u, "lower", c); }
 
-void execLower(Unit& u, uint32_t c) {
-    u.insn = c;
-    const uint32_t op = c >> 25;
-    const uint32_t it = fFt(c), is = fFs(c), id = fFd(c), dest = fDest(c);
-    switch (op) {
-    case 0x00: {   // LQ ft, imm11(is)
-        VuReg* d = vfDst(u, it);
-        const uint8_t* p = qwPtr(u, viRead(u, is) + static_cast<uint32_t>(imm11(c)));
-        for (int i = 0; i < 4; ++i)
-            if (on(dest, i)) std::memcpy(&d->c[i], p + 4 * i, 4);
-        fmacWrites(u, 1, it, dest);
-        return;
-    }
-    case 0x01: {   // SQ fs, imm11(it)
-        stallOn(u, is, dest);
-        uint8_t* p = qwPtr(u, viRead(u, it) + static_cast<uint32_t>(imm11(c)));
-        for (int i = 0; i < 4; ++i)
-            if (on(dest, i)) std::memcpy(p + 4 * i, &u.vf[is].c[i], 4);
-        u.pairFmac = true;
-        return;
-    }
-    case 0x04: {   // ILW it, imm11(is): the component chosen by dest
-        const uint8_t* p = qwPtr(u, viRead(u, is) + static_cast<uint32_t>(imm11(c)));
-        for (int i = 0; i < 4; ++i)
-            if (on(dest, i)) {
-                uint16_t v;
-                std::memcpy(&v, p + 4 * i, 2);
-                viWrite(u, it, v);
-                break;
-            }
-        u.ialu.done = u.cycle + 4;
-        u.ialu.regs |= 1u << (it & 15);
-        return;
-    }
-    case 0x05: {   // ISW it, imm11(is)
-        uint8_t* p = qwPtr(u, viRead(u, is) + static_cast<uint32_t>(imm11(c)));
-        const uint32_t v = viRead(u, it);
-        for (int i = 0; i < 4; ++i)
-            if (on(dest, i)) std::memcpy(p + 4 * i, &v, 4);
-        return;
-    }
-    case 0x08: viWrite(u, it, viRead(u, is) + imm15(c)); return;   // IADDIU
-    case 0x09: viWrite(u, it, viRead(u, is) - imm15(c)); return;   // ISUBIU
-    case 0x10: viWrite(u, 1, (u.vi[CLIP] & 0xFFFFFF) == (c & 0xFFFFFF) ? 1 : 0, false); return;   // FCEQ
-    case 0x11: u.clipNext = c & 0xFFFFFF; u.pairClip = true; u.pairFmac = true; return;   // FCSET
-    case 0x12: viWrite(u, 1, (u.vi[CLIP] & c & 0xFFFFFF) ? 1 : 0, false); return;               // FCAND
-    case 0x13: viWrite(u, 1, ((u.vi[CLIP] | c) & 0xFFFFFF) == 0xFFFFFF ? 1 : 0, false); return; // FCOR
-    case 0x14: viWrite(u, it, (u.vi[STATUS] & 0xFFF) == imm12(c) ? 1 : 0, false); return;       // FSEQ
-    case 0x15: u.statusNext = (imm12(c) & 0xFC0) | (u.statusNext & 0x3F); u.pairFsset = true; u.pairFmac = true; return;   // FSSET
-    case 0x16: viWrite(u, it, u.vi[STATUS] & 0xFFF & imm12(c), false); return;                  // FSAND
-    case 0x17: viWrite(u, it, (u.vi[STATUS] & 0xFFF) | imm12(c), false); return;                // FSOR
-    case 0x18: viWrite(u, it, (u.vi[MAC] & 0xFFFF) == viRead(u, is) ? 1 : 0, false); return;    // FMEQ
-    case 0x1A: viWrite(u, it, u.vi[MAC] & 0xFFFF & viRead(u, is), false); return;               // FMAND
-    case 0x1B: viWrite(u, it, (u.vi[MAC] & 0xFFFF) | viRead(u, is), false); return;             // FMOR
-    case 0x1C: viWrite(u, it, u.vi[CLIP] & 0xFFF, false); return;                               // FCGET
-    case 0x20: setBranch(u, branchTarget(u, c)); return;                                 // B
-    case 0x21: viWrite(u, it, linkValue(u), false); setBranch(u, branchTarget(u, c)); return;  // BAL
-    case 0x24: setBranch(u, viRead(u, is) * 8u); return;                                 // JR
-    case 0x25: {                                                                         // JALR
-        const uint32_t target = viRead(u, is) * 8u;
-        viWrite(u, it, linkValue(u), false);
-        setBranch(u, target);
-        return;
-    }
-    case 0x28: case 0x29: case 0x2C: case 0x2D: case 0x2E: case 0x2F: {   // conditional branches
-        if (u.ialu.regs && u.cycle < u.ialu.done && (u.ialu.regs & ((1u << (is & 15)) | (1u << (it & 15))))) advanceTo(u, u.ialu.done);
-        const auto s = static_cast<int16_t>(viBranch(u, is)), t = static_cast<int16_t>(viBranch(u, it));
-        bool taken = false;
-        switch (op) {
-        case 0x28: taken = s == t; break;   // IBEQ
-        case 0x29: taken = s != t; break;   // IBNE
-        case 0x2C: taken = s < 0; break;    // IBLTZ
-        case 0x2D: taken = s > 0; break;    // IBGTZ
-        case 0x2E: taken = s <= 0; break;   // IBLEZ
-        default: taken = s >= 0; break;     // IBGEZ
-        }
-        if (taken) setBranch(u, branchTarget(u, c));
-        return;
-    }
+} // namespace lower
+
+Op lowerOp(uint32_t c) {
+    switch (c >> 25) {
+    case 0x00: return lower::lq;
+    case 0x01: return lower::sq;
+    case 0x04: return lower::ilw;
+    case 0x05: return lower::isw;
+    case 0x08: return lower::iaddiu;
+    case 0x09: return lower::isubiu;
+    case 0x10: return lower::fceq;
+    case 0x11: return lower::fcset;
+    case 0x12: return lower::fcand;
+    case 0x13: return lower::fcor;
+    case 0x14: return lower::fseq;
+    case 0x15: return lower::fsset;
+    case 0x16: return lower::fsand;
+    case 0x17: return lower::fsor;
+    case 0x18: return lower::fmeq;
+    case 0x1A: return lower::fmand;
+    case 0x1B: return lower::fmor;
+    case 0x1C: return lower::fcget;
+    case 0x20: return lower::b;
+    case 0x21: return lower::bal;
+    case 0x24: return lower::jr;
+    case 0x25: return lower::jalr;
+    case 0x28: return lower::branchIf<0x28>;
+    case 0x29: return lower::branchIf<0x29>;
+    case 0x2C: return lower::branchIf<0x2C>;
+    case 0x2D: return lower::branchIf<0x2D>;
+    case 0x2E: return lower::branchIf<0x2E>;
+    case 0x2F: return lower::branchIf<0x2F>;
     case 0x40: break;
-    default: return unknown(u, "lower");
+    default: return lower::unknownLower;
     }
-
     // Lower OP group: bits 0-5, with an extended table on 0x3C-0x3F.
     switch (c & 63) {
-    case 0x30: viWrite(u, id, viRead(u, is) + viRead(u, it)); return;                   // IADD
-    case 0x31: viWrite(u, id, viRead(u, is) - viRead(u, it)); return;                   // ISUB
-    case 0x32: viWrite(u, it, viRead(u, is) + static_cast<uint32_t>(imm5(c))); return;  // IADDI
-    case 0x34: viWrite(u, id, viRead(u, is) & viRead(u, it)); return;                   // IAND
-    case 0x35: viWrite(u, id, viRead(u, is) | viRead(u, it)); return;                   // IOR
+    case 0x30: return lower::iadd;
+    case 0x31: return lower::isub;
+    case 0x32: return lower::iaddi;
+    case 0x34: return lower::iand;
+    case 0x35: return lower::ior;
     case 0x3C: case 0x3D: case 0x3E: case 0x3F: break;
-    default: return unknown(u, "lower");
+    default: return lower::unknownLower;
     }
-    const uint32_t ext = (((c >> 6) & 31) << 2) | (c & 3);
-    switch (ext) {
-    case 0x30: {   // MOVE
-        stallOn(u, is, dest);
-        const VuReg a = u.vf[is];
-        VuReg* d = vfDst(u, it);
-        for (int i = 0; i < 4; ++i)
-            if (on(dest, i)) d->c[i] = a.c[i];
-        if (it) fmacWrites(u, 1, it, dest);
-        return;
-    }
-    case 0x31: {   // MR32: rotate fs by one component (y z w x)
-        stallOn(u, is, 0xF);
-        const VuReg a = u.vf[is];
-        const uint32_t rot[4] = {a.c[1], a.c[2], a.c[3], a.c[0]};
-        VuReg* d = vfDst(u, it);
-        for (int i = 0; i < 4; ++i)
-            if (on(dest, i)) d->c[i] = rot[i];
-        fmacWrites(u, 1, it, dest);
-        return;
-    }
-    case 0x34:     // LQI ft, (is++)
-    case 0x36: {   // LQD ft, (--is)
-        if (ext == 0x36) viWrite(u, is, viRead(u, is) - 1);
-        const uint8_t* p = qwPtr(u, viRead(u, is));
-        VuReg* d = vfDst(u, it);
-        for (int i = 0; i < 4; ++i)
-            if (on(dest, i)) std::memcpy(&d->c[i], p + 4 * i, 4);
-        if (ext == 0x34) viWrite(u, is, viRead(u, is) + 1);
-        fmacWrites(u, 1, it, dest);
-        return;
-    }
-    case 0x35:     // SQI fs, (it++)
-    case 0x37: {   // SQD fs, (--it)
-        stallOn(u, is, dest);
-        if (ext == 0x37) viWrite(u, it, viRead(u, it) - 1);
-        uint8_t* p = qwPtr(u, viRead(u, it));
-        for (int i = 0; i < 4; ++i)
-            if (on(dest, i)) std::memcpy(p + 4 * i, &u.vf[is].c[i], 4);
-        if (ext == 0x35) viWrite(u, it, viRead(u, it) + 1);
-        u.pairFmac = true;
-        return;
-    }
-    case 0x38: {   // DIV Q, fs.fsf, ft.ftf
-        stallOn(u, is, 8u >> fFsf(c));
-        stallOn(u, it, 8u >> fFtf(c));
-        stallFdiv(u);
-        const uint32_t tb = u.vf[it].c[fFtf(c)], sb = u.vf[is].c[fFsf(c)];
-        const float t = in(tb), s = in(sb);
-        uint32_t status = 0, q;
-        if (t == 0.0f) {
-            status = s == 0.0f ? 0x10 : 0x20;
-            q = ((tb ^ sb) & 0x80000000u) ? 0xFF7FFFFFu : 0x7F7FFFFFu;
-        } else {
-            q = std::bit_cast<uint32_t>(in(std::bit_cast<uint32_t>(s / t)));
-        }
-        return startFdiv(u, q, status, 7);
-    }
-    case 0x39: {   // SQRT Q, ft.ftf
-        stallOn(u, it, 8u >> fFtf(c));
-        stallFdiv(u);
-        const float t = in(u.vf[it].c[fFtf(c)]);
-        return startFdiv(u, std::bit_cast<uint32_t>(in(std::bit_cast<uint32_t>(std::sqrt(std::fabs(t))))), t < 0.0f ? 0x10 : 0, 7);
-    }
-    case 0x3A: {   // RSQRT Q, fs.fsf / sqrt(ft.ftf)
-        stallOn(u, is, 8u >> fFsf(c));
-        stallOn(u, it, 8u >> fFtf(c));
-        stallFdiv(u);
-        const uint32_t tb = u.vf[it].c[fFtf(c)], sb = u.vf[is].c[fFsf(c)];
-        const float t = in(tb), s = in(sb);
-        uint32_t status = 0, q;
-        if (t == 0.0f) {
-            status = 0x20;
-            if (s != 0.0f) {
-                q = ((tb ^ sb) & 0x80000000u) ? 0xFF7FFFFFu : 0x7F7FFFFFu;
-            } else {
-                q = ((tb ^ sb) & 0x80000000u) ? 0x80000000u : 0u;
-                status |= 0x10;
-            }
-        } else {
-            if (t < 0.0f) status = 0x10;
-            q = std::bit_cast<uint32_t>(in(std::bit_cast<uint32_t>(s / std::sqrt(std::fabs(t)))));
-        }
-        return startFdiv(u, q, status, 13);
-    }
-    case 0x3B: stallFdiv(u); return;   // WAITQ
-    case 0x3C:   // MTIR it, fs.fsf
-        stallOn(u, is, 8u >> fFsf(c));
-        viWrite(u, it, u.vf[is].c[fFsf(c)] & 0xFFFF, false);
-        return;
-    case 0x3D: {   // MFIR ft, is
-        const auto v = static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(viRead(u, is))));
-        VuReg* d = vfDst(u, it);
-        for (int i = 0; i < 4; ++i)
-            if (on(dest, i)) d->c[i] = v;
-        fmacWrites(u, 1, it, dest);
-        return;
-    }
-    case 0x3E: {   // ILWR it, (is): the component chosen by dest
-        const uint8_t* p = qwPtr(u, viRead(u, is));
-        for (int i = 0; i < 4; ++i)
-            if (on(dest, i)) {
-                uint16_t v;
-                std::memcpy(&v, p + 4 * i, 2);
-                viWrite(u, it, v);
-                break;
-            }
-        u.ialu.done = u.cycle + 4;
-        u.ialu.regs |= 1u << (it & 15);
-        return;
-    }
-    case 0x3F: {   // ISWR it, (is)
-        uint8_t* p = qwPtr(u, viRead(u, is));
-        const uint32_t v = viRead(u, it);
-        for (int i = 0; i < 4; ++i)
-            if (on(dest, i)) std::memcpy(p + 4 * i, &v, 4);
-        return;
-    }
-    case 0x40:   // RNEXT
-    case 0x41: { // RGET
-        if (ext == 0x40) {
-            uint32_t r = u.vi[R];
-            const uint32_t x = (r >> 4) & 1, y = (r >> 22) & 1;
-            r = (r << 1) ^ x ^ y;
-            u.vi[R] = (r & 0x7FFFFF) | 0x3F800000;
-        }
-        VuReg* d = vfDst(u, it);
-        for (int i = 0; i < 4; ++i)
-            if (on(dest, i)) d->c[i] = u.vi[R];
-        fmacWrites(u, 1, it, dest);
-        return;
-    }
-    case 0x42: u.vi[R] = 0x3F800000u | (u.vf[is].c[fFsf(c)] & 0x007FFFFFu); return;   // RINIT
-    case 0x43: u.vi[R] = 0x3F800000u | ((u.vi[R] ^ u.vf[is].c[fFsf(c)]) & 0x007FFFFFu); return;   // RXOR
-    case 0x64: {   // MFP ft, P
-        VuReg* d = vfDst(u, it);
-        for (int i = 0; i < 4; ++i)
-            if (on(dest, i)) d->c[i] = u.vi[P];
-        fmacWrites(u, 1, it, dest);
-        return;
-    }
-    case 0x68: viWrite(u, it, vif::top(1), false); return;                // XTOP
-    case 0x69: viWrite(u, it, vif::itop(u.index), false); return;         // XITOP
-    case 0x6C: xgkick(u, viRead(u, is)); return;                   // XGKICK
-    case 0x70: case 0x71: case 0x72: case 0x73: case 0x76: {       // ESADD ERSADD ELENG ERLENG ESUM
-        stallOn(u, is, 0xF);
-        stallEfu(u);
-        const float x = comp(u, is, 0), y = comp(u, is, 1), z = comp(u, is, 2), w = comp(u, is, 3);
-        const float sq = x * x + y * y + z * z;
-        switch (ext) {
-        case 0x70: return startEfu(u, sq, 11);
-        case 0x71: return startEfu(u, sq != 0 ? 1.0f / sq : std::bit_cast<float>(0x7F7FFFFFu), 18);
-        case 0x72: return startEfu(u, std::sqrt(sq), 18);
-        case 0x73: return startEfu(u, sq != 0 ? 1.0f / std::sqrt(sq) : std::bit_cast<float>(0x7F7FFFFFu), 24);
-        default: return startEfu(u, x + y + z + w, 12);
-        }
-    }
-    case 0x74: case 0x75: {   // EATANxy, EATANxz: atan(y/x) / atan(z/x)
-        stallOn(u, is, 0xF);
-        stallEfu(u);
-        const float x = comp(u, is, 0), o = comp(u, is, ext == 0x74 ? 1 : 2);
-        return startEfu(u, x != 0 ? std::atan(o / x) : 0.0f, 54);
-    }
-    case 0x78: case 0x79: case 0x7A: case 0x7C: case 0x7D: case 0x7E: {   // ESQRT ERSQRT ERCPR ESIN EATAN EEXP
-        stallOn(u, is, 8u >> fFsf(c));
-        stallEfu(u);
-        const float s = comp(u, is, fFsf(c));
-        switch (ext) {
-        case 0x78: return startEfu(u, std::sqrt(std::fabs(s)), 12);
-        case 0x79: return startEfu(u, s != 0 ? 1.0f / std::sqrt(std::fabs(s)) : std::bit_cast<float>(0x7F7FFFFFu), 18);
-        case 0x7A: return startEfu(u, s != 0 ? 1.0f / s : std::bit_cast<float>(0x7F7FFFFFu), 12);
-        case 0x7C: return startEfu(u, std::sin(s), 29);
-        case 0x7D: return startEfu(u, std::atan(s), 54);
-        default: return startEfu(u, std::exp(-s), 44);
-        }
-    }
-    case 0x7B: if (u.efu.busy) advanceTo(u, u.efu.done); return;   // WAITP
-    default: return unknown(u, "lower");
+    switch (fExt(c)) {
+    case 0x30: return fFt(c) && fDest(c) ? lower::move : nullptr;   // MOVE (NOP is MOVE vf00, vf00)
+    case 0x31: return lower::mr32;
+    case 0x34: return lower::lqi;
+    case 0x35: return lower::sqi;
+    case 0x36: return lower::lqd;
+    case 0x37: return lower::sqd;
+    case 0x38: return lower::div;
+    case 0x39: return lower::sqrt;
+    case 0x3A: return lower::rsqrt;
+    case 0x3B: return nullptr;   // WAITQ: the pair waited
+    case 0x3C: return lower::mtir;
+    case 0x3D: return lower::mfir;
+    case 0x3E: return lower::ilwr;
+    case 0x3F: return lower::iswr;
+    case 0x40: return lower::rnext;
+    case 0x41: return lower::rget;
+    case 0x42: return lower::rinit;
+    case 0x43: return lower::rxor;
+    case 0x64: return lower::mfp;
+    case 0x68: return lower::xtop;
+    case 0x69: return lower::xitop;
+    case 0x6C: return lower::xgkick;
+    case 0x70: case 0x71: case 0x72: case 0x73: case 0x76: return lower::esum;
+    case 0x74: case 0x75: return lower::eatanxy;
+    case 0x78: case 0x79: case 0x7A: case 0x7C: case 0x7D: case 0x7E: return lower::escalar;
+    case 0x7B: return nullptr;   // WAITP: the pair waited
+    default: return lower::unknownLower;
     }
 }
 
@@ -831,7 +894,7 @@ uint32_t lowerReadsVf(uint32_t c) {
     const uint32_t op = c >> 25;
     if (op == 0x01) return fFs(c);   // SQ
     if (op != 0x40 || (c & 0x3C) != 0x3C) return 0;
-    switch ((((c >> 6) & 31) << 2) | (c & 3)) {
+    switch (fExt(c)) {
     case 0x30: case 0x31: case 0x35: case 0x37: case 0x38: case 0x3A: case 0x3C: case 0x42: case 0x43:
     case 0x70: case 0x71: case 0x72: case 0x73: case 0x74: case 0x75: case 0x76: case 0x78: case 0x79: case 0x7A:
     case 0x7C: case 0x7D: case 0x7E:
@@ -841,20 +904,57 @@ uint32_t lowerReadsVf(uint32_t c) {
     }
 }
 
-// The VF register an upper operation writes (0: none or ACC).
+// What one half of a pair sends down the FMAC pipeline: whether it does, the
+// VF register it writes (0: none, vf0 or ACC) and its components, and whether
+// it sets the clip flag or the sticky status bits.
+struct Writes {
+    bool issues = false, clip = false, fsset = false;
+    uint32_t reg = 0, mask = 0;
+};
+Writes vfWrites(uint32_t reg, uint32_t mask) { return {true, false, false, reg, mask}; }
+
+Writes upperWrites(uint32_t c) {
+    const uint32_t op = c & 63;
+    if (op < 0x3C) {
+        if ((op >> 2) > 0xB) return {};                         // unknown
+        return vfWrites(fFd(c), op == 0x2E ? 0xE : fDest(c));   // OPMSUB writes xyz
+    }
+    const uint32_t ext = fExt(c);
+    if ((ext >= 0x10 && ext <= 0x17) || ext == 0x1D) return vfWrites(fFt(c), fDest(c));   // ITOF / FTOI / ABS
+    if (ext == 0x1F) return {true, true, false, 0, 0};          // CLIPw
+    if (ext <= 0x2E && ext != 0x2B) return vfWrites(0, 0);      // to ACC
+    return {};                                                  // NOP, unknown
+}
+// The VF register an upper operation writes, for the read-before-write rule (0: none or ACC).
 uint32_t upperWritesVf(uint32_t c) {
     const uint32_t op = c & 63;
     if (op < 0x3C) return fFd(c);
-    const uint32_t ext = (((c >> 6) & 31) << 2) | (c & 3);
+    const uint32_t ext = fExt(c);
     if ((ext >= 0x10 && ext <= 0x17) || ext == 0x1D) return fFt(c);   // ITOF / FTOI / ABS
     return 0;
+}
+
+Writes lowerWrites(uint32_t c) {
+    const uint32_t op = c >> 25;
+    if (op == 0x00) return vfWrites(fFt(c), fDest(c));   // LQ
+    if (op == 0x01) return vfWrites(0, 0);               // SQ
+    if (op == 0x11) return {true, true, false, 0, 0};    // FCSET
+    if (op == 0x15) return {true, false, true, 0, 0};    // FSSET
+    if (op != 0x40 || (c & 0x3C) != 0x3C) return {};
+    switch (fExt(c)) {
+    case 0x30: return fFt(c) ? vfWrites(fFt(c), fDest(c)) : Writes{};   // MOVE
+    case 0x31: case 0x34: case 0x36: case 0x3D: case 0x40: case 0x41: case 0x64:   // MR32 LQI LQD MFIR RNEXT RGET MFP
+        return vfWrites(fFt(c), fDest(c));
+    case 0x35: case 0x37: return vfWrites(0, 0);         // SQI SQD
+    default: return {};
+    }
 }
 // The VF register a lower operation writes.
 uint32_t lowerWritesVf(uint32_t c) {
     const uint32_t op = c >> 25;
     if (op == 0x00) return fFt(c);   // LQ
     if (op != 0x40 || (c & 0x3C) != 0x3C) return 0;
-    switch ((((c >> 6) & 31) << 2) | (c & 3)) {
+    switch (fExt(c)) {
     case 0x30: case 0x31: case 0x34: case 0x36: case 0x3D: case 0x40: case 0x41: case 0x64: return fFt(c);
     default: return 0;
     }
@@ -864,87 +964,132 @@ uint32_t lowerWritesVf(uint32_t c) {
 // WAITQ / WAITP, a busy FDIV or EFU, a branch on an ILW result. A stall holds
 // the whole pair, so they are applied before the upper operation reads
 // anything: an operation on Q paired with WAITQ gets the new Q.
-void lowerHazards(Unit& u, uint32_t c) {
+void decodeStalls(Pair& p, uint32_t c) {
     const uint32_t op = c >> 25, it = fFt(c), is = fFs(c), dest = fDest(c);
+    auto vf = [&p](int n, uint32_t reg, uint32_t mask) {
+        p.stallReg[n] = static_cast<uint8_t>(reg);
+        p.stallMask[n] = static_cast<uint8_t>(mask);
+    };
     switch (op) {
-    case 0x01: stallOn(u, is, dest); return;   // SQ
+    case 0x01: return vf(0, is, dest);   // SQ
     case 0x28: case 0x29: case 0x2C: case 0x2D: case 0x2E: case 0x2F:   // conditional branches
-        if (u.ialu.regs && u.cycle < u.ialu.done && (u.ialu.regs & ((1u << (is & 15)) | (1u << (it & 15))))) advanceTo(u, u.ialu.done);
+        p.branchRegs = static_cast<uint16_t>((1u << (is & 15)) | (1u << (it & 15)));
         return;
     case 0x40: break;
     default: return;
     }
     if ((c & 0x3C) != 0x3C) return;
-    switch ((((c >> 6) & 31) << 2) | (c & 3)) {
-    case 0x30: case 0x35: case 0x37: stallOn(u, is, dest); return;   // MOVE SQI SQD
-    case 0x31: stallOn(u, is, 0xF); return;                          // MR32
-    case 0x38: case 0x3A: stallOn(u, is, 8u >> fFsf(c)); stallOn(u, it, 8u >> fFtf(c)); stallFdiv(u); return;   // DIV RSQRT
-    case 0x39: stallOn(u, it, 8u >> fFtf(c)); stallFdiv(u); return;   // SQRT
-    case 0x3B: stallFdiv(u); return;                                  // WAITQ
-    case 0x3C: stallOn(u, is, 8u >> fFsf(c)); return;                 // MTIR
-    case 0x70: case 0x71: case 0x72: case 0x73: case 0x74: case 0x75: case 0x76: stallOn(u, is, 0xF); stallEfu(u); return;
-    case 0x78: case 0x79: case 0x7A: case 0x7C: case 0x7D: case 0x7E: stallOn(u, is, 8u >> fFsf(c)); stallEfu(u); return;
-    case 0x7B: if (u.efu.busy) advanceTo(u, u.efu.done); return;      // WAITP
+    switch (fExt(c)) {
+    case 0x30: case 0x35: case 0x37: return vf(0, is, dest);   // MOVE SQI SQD
+    case 0x31: return vf(0, is, 0xF);                          // MR32
+    case 0x38: case 0x3A:                                      // DIV RSQRT
+        vf(0, is, 8u >> fFsf(c));
+        vf(1, it, 8u >> fFtf(c));
+        p.wait = WaitFdiv;
+        return;
+    case 0x39:                                                 // SQRT
+        vf(0, it, 8u >> fFtf(c));
+        p.wait = WaitFdiv;
+        return;
+    case 0x3B: p.wait = WaitFdiv; return;                      // WAITQ
+    case 0x3C: return vf(0, is, 8u >> fFsf(c));                // MTIR
+    case 0x70: case 0x71: case 0x72: case 0x73: case 0x74: case 0x75: case 0x76:
+        vf(0, is, 0xF);
+        p.wait = WaitEfu;
+        return;
+    case 0x78: case 0x79: case 0x7A: case 0x7C: case 0x7D: case 0x7E:
+        vf(0, is, 8u >> fFsf(c));
+        p.wait = WaitEfu;
+        return;
+    case 0x7B: p.wait = WaitP; return;                         // WAITP
     default: return;
+    }
+}
+
+void decode(Pair& p, uint64_t words) {
+    const auto lower = static_cast<uint32_t>(words), upper = static_cast<uint32_t>(words >> 32);
+    p = {};
+    p.words = words;
+    p.upper = upperOp(upper);
+    p.ebit = (upper & 0x40000000u) != 0;
+    const Writes uw = upperWrites(upper);
+    Writes lw;
+    if (upper & 0x80000000u) {   // I: the lower word is a float for the I register
+        p.ibit = true;
+    } else {
+        const uint32_t ur = upperWritesVf(upper), lr = lowerReadsVf(lower);
+        if (!ur || ur != lowerWritesVf(lower)) {   // else the lower operation is dropped
+            p.lower = lowerOp(lower);
+            lw = lowerWrites(lower);
+        }
+        if (ur && lr == ur) p.isolate = static_cast<uint8_t>(ur);
+        decodeStalls(p, lower);
+        p.stalls = p.stallMask[0] || p.stallMask[1] || p.wait != WaitNone || p.branchRegs;
+    }
+    p.issues = uw.issues || lw.issues;
+    p.clip = uw.clip || lw.clip;
+    p.fsset = lw.fsset;
+    p.writeReg[0] = static_cast<uint8_t>(uw.reg);
+    p.writeMask[0] = static_cast<uint8_t>(uw.mask);
+    p.writeReg[1] = static_cast<uint8_t>(lw.reg);
+    p.writeMask[1] = static_cast<uint8_t>(lw.mask);
+}
+
+void lowerStalls(Unit& u, const Pair& p) {
+    if (p.stallMask[0]) stallOn(u, p.stallReg[0], p.stallMask[0]);
+    if (p.stallMask[1]) stallOn(u, p.stallReg[1], p.stallMask[1]);
+    switch (p.wait) {
+    case WaitFdiv: stallFdiv(u); break;
+    case WaitEfu: stallEfu(u); break;
+    case WaitP:
+        if (u.efu.busy) advanceTo(u, u.efu.done);
+        break;
+    default: break;
+    }
+    if (p.branchRegs && u.ialu.regs && u.cycle < u.ialu.done && (u.ialu.regs & p.branchRegs)) advanceTo(u, u.ialu.done);
+}
+
+// A pair whose lower operation reads a VF register its upper operation
+// writes: the lower operation reads it as it was.
+PS2_NOINLINE void runIsolated(Unit& u, const Pair& p, uint32_t upper, uint32_t lower) {
+    const VuReg before = u.vf[p.isolate];
+    if (p.upper) p.upper(u, upper);
+    if (p.lower) {
+        const VuReg after = u.vf[p.isolate];
+        u.vf[p.isolate] = before;
+        p.lower(u, lower);
+        u.vf[p.isolate] = after;
     }
 }
 
 // Executes one instruction pair. Returns false when the program has ended.
 bool step(Unit& u) {
     const uint32_t pc = u.vi[TPC] & u.microMask & ~7u;
-    uint32_t lower, upper;
-    std::memcpy(&lower, u.micro + pc, 4);
-    std::memcpy(&upper, u.micro + pc + 4, 4);
+    uint64_t words;
+    std::memcpy(&words, u.micro + pc, 8);
+    Pair& p = u.code[pc / 8];
+    if (p.words != words) decode(p, words);
+    const auto lower = static_cast<uint32_t>(words), upper = static_cast<uint32_t>(words >> 32);
     u.vi[TPC] = (pc + 8) & u.microMask;
     ++u.cycle;
-    if (upper & 0x40000000u) u.ebit = 2;          // E: stop after the next instruction
-    u.pairFmac = false;
-    u.pairReg[0] = u.pairReg[1] = 0;
-    u.pairMask[0] = u.pairMask[1] = 0;
-    u.pairClip = u.pairFsset = false;
+    if (p.ebit) u.ebit = 2;          // E: stop after the next instruction
 
-    retire(u);
+    retireDue(u);
     if (u.viBackupCycles > 0) --u.viBackupCycles;
 
-    if (upper & 0x80000000u) {   // I: the lower word is a float for the I register
-        execUpper(u, upper);
+    if (p.ibit) {
+        if (p.upper) p.upper(u, upper);
         u.vi[I] = lower;
     } else {
-        const uint32_t uw = upperWritesVf(upper), lw = lowerWritesVf(lower), lr = lowerReadsVf(lower);
-        const bool dropLower = uw && uw == lw;
-        lowerHazards(u, lower);
-        VuReg before{};
-        const bool isolate = uw && lr == uw;
-        if (isolate) before = u.vf[uw];
-        execUpper(u, upper);
-        if (!dropLower) {
-            if (isolate) {
-                const VuReg after = u.vf[uw];
-                u.vf[uw] = before;
-                execLower(u, lower);
-                u.vf[uw] = after;
-            } else {
-                execLower(u, lower);
-            }
+        if (p.stalls) lowerStalls(u, p);
+        if (p.isolate) {
+            runIsolated(u, p, upper, lower);
+        } else {
+            if (p.upper) p.upper(u, upper);
+            if (p.lower) p.lower(u, lower);
         }
     }
-    if (u.pairFmac) {
-        Unit::Fmac e{};
-        e.done = u.cycle + 4;
-        e.reg[0] = u.pairReg[0];
-        e.reg[1] = u.pairReg[1];
-        e.mask[0] = u.pairMask[0];
-        e.mask[1] = u.pairMask[1];
-        e.clip = u.pairClip;
-        e.fsset = u.pairFsset;
-        e.mac = u.macNext;
-        e.status = u.statusNext;
-        e.clipv = u.clipNext;
-        u.fmac.push_back(e);
-    }
-    u.vf[0].c[0] = u.vf[0].c[1] = u.vf[0].c[2] = 0;
-    u.vf[0].c[3] = 0x3F800000u;
-    u.vi[0] = 0;
+    if (p.issues) issue(u, p);
 
     if (u.branch > 0 && u.branch-- == 1) {
         u.vi[TPC] = u.branchPc;
@@ -967,7 +1112,7 @@ void run(Unit& u, uint32_t startByte) {
     u.macNext = u.vi[MAC];
     u.statusNext = u.vi[STATUS];
     u.clipNext = u.vi[CLIP];
-    u.fmac.clear();
+    u.fmacCount = 0;
     u.fdiv = {};
     u.efu = {};
     u.ialu = {};
@@ -977,13 +1122,21 @@ void run(Unit& u, uint32_t startByte) {
     u.viBackupCycles = 0;
     const uint32_t start = u.vi[TPC];
     uint64_t n = 0;
-    while (step(u)) {
+    bool more = step(u);
+    // vf0 and vi0 are constants. Only writes from outside the program (VU0
+    // stores through its window on VU1's registers) can have changed them,
+    // which the first pair still sees.
+    u.vf[0].c[0] = u.vf[0].c[1] = u.vf[0].c[2] = 0;
+    u.vf[0].c[3] = 0x3F800000u;
+    u.vi[0] = 0;
+    while (more) {
         if (++n == 50000000) {
             PS2_ERROR("vu", "VU%d micro program started at 0x%04x has not ended after 50M instructions (pc 0x%04x); stopping it",
                       u.index, start, u.vi[TPC]);
             flushAll(u);
             break;
         }
+        more = step(u);
     }
     PS2_TRACE("vu", "VU%d program at 0x%04x ran %llu instructions", u.index, start, static_cast<unsigned long long>(n + 1));
 }

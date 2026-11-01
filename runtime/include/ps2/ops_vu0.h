@@ -33,13 +33,9 @@ void vu1Start(uint32_t addr);       // CTC2 to CMSAR1
 namespace ops {
 namespace vu {
 
-inline float in(uint32_t f) {
-    switch (f & 0x7F800000) {
-    case 0: f &= 0x80000000; break;
-    case 0x7F800000: f = (f & 0x80000000) | 0x7F7FFFFF; break;
-    default: break;
-    }
-    return std::bit_cast<float>(f);
+inline float in(uint32_t f) {   // branch-free: lane loops compile to selects
+    const uint32_t e = f & 0x7F800000, s = f & 0x80000000;
+    return std::bit_cast<float>(e == 0 ? s : e == 0x7F800000 ? (s | 0x7F7FFFFF) : f);
 }
 
 // Updates the MAC flags of one component (shift 3 = x ... 0 = w) and returns

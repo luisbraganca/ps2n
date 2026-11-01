@@ -59,7 +59,7 @@ Playable, Perfect.
 
 | Game | Stage | Notes |
 |---|---|---|
-| 007: Agent Under Fire (Europe, SLES-50539) | In-game | All three executables run recompiled. The language selection, the intro movies, the copyright and title screens, the menus and the first mission (Trouble in Paradise) run at full speed, except inside the mission's first building, where the game redraws each field through the vector units and slows to about 23 vblanks per second facing the lobby. The controller works. In the mission the sound still breaks up. The driving missions' executable is not recompiled yet. |
+| 007: Agent Under Fire (Europe, SLES-50539) | In-game | All three executables run recompiled. The language selection, the intro movies, the copyright and title screens, the menus and the first mission (Trouble in Paradise) run at full speed, except inside the mission's first building, where the game redraws each field through the vector units and slows to 45 to 49 vblanks per second facing the lobby. The controller works. In the mission the sound still breaks up. The driving missions' executable is not recompiled yet. |
 
 ### By area
 
@@ -242,8 +242,13 @@ Inside the first mission's building the game redraws each field from its vsync
 handler, and facing the lobby the vector units' interpreted work for it took
 about 40 ms a field: the game's threads never ran again, and the picture and
 the sound froze. A vblank now waits until the threads have had half a frame
-over the last two frames, and the game slows to 23 vblanks per second there
-instead.
+over the last two frames, so the game slows down there instead, and the VU
+interpreter decodes each instruction pair once and looks register hazards up
+in a table instead of searching the results in flight. Facing the lobby the
+game now holds 45 to 49 vblanks per second in real time, against 27 to 32
+with the previous interpreter on the same idle machine. Deterministic runs gain
+less, the guest thread decoding the GS there too: from 22 to 26 vblanks per
+second facing the lobby, from 25 to 27 in the mission's opening.
 Before the GS drew large primitives on 8 threads, the title screen dropped to
 14.5 vblanks per second; before a polling loop split across two functions
 could take interrupts, it timed out on every frame, and the main menu ran at 3
@@ -521,7 +526,7 @@ ctest --test-dir build --output-on-failure
 |---|---|
 | `core` | Every table row decodes to itself, 10,000+ random instructions round-trip through the disassembler and assembler, known encodings, ELF and IRX parsing. |
 | `recompiler` | Config parsing and errors, function map formats, jump tables, stripped-ELF discovery, bindings, patches, code generation. |
-| `runtime` | Instruction semantics against independently computed results (sign extension, R5900 division, unaligned access, MMI lanes, FPU clamping, VU0 flags, a VU1 micro program's stalls), guest printf, the GS (swizzling against the manual's block tables, depth, fields, both circuits, deinterlacing, drawing on threads matching one thread byte for byte, triangle coverage), the IPU's commands, FIFOs and DMA (against a reference IDCT), scratchpad DMA, SIF RPC end to end, IOP resets and services, discs, recognising programs in RAM, `--strict`, controller input and settings, the SPU2 (ADPCM against psx-spx's rules, the interpolation table's step response and every phase, envelope and sweep rates, noise, loop flags, the interrupt address, AutoDMA through both cores, reverb in its work area), libsd's register entries and the WAV dump. |
+| `runtime` | Instruction semantics against independently computed results (sign extension, R5900 division, unaligned access, MMI lanes, FPU clamping, VU0 flags, VU1 micro programs' stalls, flag timing and rewriting), guest printf, the GS (swizzling against the manual's block tables, depth, fields, both circuits, deinterlacing, drawing on threads matching one thread byte for byte, triangle coverage), the IPU's commands, FIFOs and DMA (against a reference IDCT), scratchpad DMA, SIF RPC end to end, IOP resets and services, discs, recognising programs in RAM, `--strict`, controller input and settings, the SPU2 (ADPCM against psx-spx's rules, the interpolation table's step response and every phase, envelope and sweep rates, noise, loop flags, the interrupt address, AutoDMA through both cores, reverb in its work area), libsd's register entries and the WAV dump. |
 | `program_*` | Assembly programs recompiled at build time and run twice, recompiled and interpreted, against recorded output or a recorded frame: control-flow edge cases, a stripped ELF that needs the interpreter, a polling loop split in two that must still take a vblank interrupt, the kernel scheduler, `printf` over the DECI2 TTY, config bindings, `LoadExecPS2` across three executables, a loader that jumps into the next program. |
 | `sdk_*` | Programs built with ps2sdk, run the same two ways: an IRX with its own RPC server, libsd, libpad and libpadx, VU0 and VU1 micro programs, libcdvd, libmc. The binaries are checked in under `tests/sdk/bin` ([tests/sdk/README.md](tests/sdk/README.md)). |
 

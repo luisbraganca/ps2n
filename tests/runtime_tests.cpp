@@ -23,6 +23,7 @@
 #include "ps2/recomp.h"
 #include "settings.h"
 #include "stubs/format.h"
+#include "vu.h"
 
 #include "ps2n/elf.h"
 #include "ps2n/util.h"
@@ -444,6 +445,193 @@ TEST_CASE(vu_stalls_hold_both_halves_of_a_pair) {
     std::memset(vu1Mem, 0, 9 * 16);
     vu1Reset();
 }
+
+// A VU1 micro program: MAC flags reach the register 4 cycles after their pair,
+// sooner only for a pair a stall holds until they land: one reading a VF
+// register still being written, by an upper or a lower operation, in the
+// components it reads; a DIV waiting for its second operand; a branch waiting
+// for the ILW it tests. Four results can be in flight at once; they land in
+// order, and all of them, the clip flag and FSSET's sticky bits too, by the end
+// of the program. A lower operation reads a register its upper half writes as
+// it was, and one writing the same register is dropped. Only the components
+// dest names are written.
+TEST_CASE(vu_flags_land_four_cycles_after_their_pair) {
+    vu1Reset();
+    auto fl = [](float v) { return std::bit_cast<uint32_t>(v); };
+    auto setMem = [&](uint32_t qw, float x, float y, float z, float w) {
+        const uint32_t v[4] = {fl(x), fl(y), fl(z), fl(w)};
+        std::memcpy(vu1Mem + qw * 16, v, 16);
+    };
+    setMem(0, 1, 0, -2, 0);   // vf01
+    setMem(1, 3, 3, 3, 3);    // vf07
+    const uint32_t ilwSource = 0x1234;
+    std::memcpy(vu1Mem + 4 * 16, &ilwSource, 4);
+    setMem(6, 4, 4, 4, 4);    // vf18
+    const uint32_t upperNop = 0x000002FFu, lowerNop = 0x8000033Cu, ebit = 0x40000000u;
+    auto lq = [](uint32_t ft, uint32_t imm) { return (0xFu << 21) | (ft << 16) | (imm & 0x7FF); };   // lq.xyzw vft, imm(vi00)
+    auto sq = [](uint32_t fs, uint32_t imm) { return 0x02000000u | (0xFu << 21) | (fs << 11) | (imm & 0x7FF); };
+    auto fmand = [](uint32_t it) { return (0x1Au << 25) | (it << 16) | (1u << 11); };   // fmand vi_it, vi01
+    auto fmac = [](uint32_t op, uint32_t dest, uint32_t fd, uint32_t fs, uint32_t ft) {
+        return (dest << 21) | (ft << 16) | (fs << 11) | (fd << 6) | op;
+    };
+    const uint32_t ADD = 0x28, SUB = 0x2C, MUL = 0x2A;
+    const uint32_t isubiu = (0x09u << 25) | (1u << 16) | 1u;                                  // isubiu vi01, vi00, 1: 0xFFFF
+    const uint32_t ilw = (0x04u << 25) | (8u << 21) | (12u << 16) | 4u;                       // ilw.x vi12, 4(vi00)
+    const uint32_t ibne = (0x29u << 25) | (12u << 16) | (12u << 11);                          // ibne vi12, vi12: never taken
+    const uint32_t move = 0x80000000u | (0xFu << 21) | (20u << 16) | (1u << 11) | (0xCu << 6) | 0x3Cu;   // move.xyzw vf20, vf01
+    const uint32_t clipw = (0xEu << 21) | (18u << 16) | (1u << 11) | (0x7u << 6) | 0x3Fu;                // clipw.xyz vf01, vf18w
+    const uint32_t fsset = (0x15u << 25) | (1u << 21);                                                // fsset 0x800: the sticky bits
+    const uint32_t div = 0x80000000u | (18u << 16) | (1u << 11) | (0xEu << 6) | 0x3Cu;        // div Q, vf01x, vf18x
+    const uint32_t esadd = 0x80000000u | (1u << 11) | (0x1Cu << 6) | 0x3Cu;                   // esadd P, vf01
+    const uint32_t waitp = 0x80000000u | (0x1Eu << 6) | 0x3Fu;
+    const uint32_t mfp = 0x80000000u | (0xFu << 21) | (16u << 16) | (0x19u << 6) | 0x3Cu;     // mfp.xyzw vf16, P
+    const uint32_t program[][2] = {   // lower, upper
+        {lq(1, 0), upperNop},                    // vf01 = (1, 0, -2, 0)
+        {isubiu, upperNop},
+        {lowerNop, upperNop},
+        {lowerNop, upperNop},
+        {lowerNop, fmac(ADD, 0xF, 2, 1, 0)},     // MAC 0x24: y zero, z negative
+        {lowerNop, upperNop},
+        {lowerNop, upperNop},
+        {fmand(2), upperNop},                    // 3 cycles on: not yet
+        {fmand(3), upperNop},                    // 4 cycles on: 0x24
+        {lowerNop, fmac(ADD, 0xF, 3, 1, 1)},     // MAC 0x25: y and w zero, z negative
+        {fmand(4), fmac(MUL, 0xF, 4, 3, 3)},     // the MUL waits for vf03, so the pair sees 0x25
+        {lowerNop, fmac(SUB, 0x8, 5, 0, 1)},     // vf05.x = -1: MAC 0x80
+        {fmand(5), fmac(ADD, 0x4, 6, 5, 5)},     // reads vf05.y, which nothing is writing: still 0x25
+        {lq(7, 1), fmac(ADD, 0xF, 8, 1, 0)},     // MAC 0x24, with an LQ in flight
+        {fmand(6), fmac(MUL, 0xF, 9, 7, 0)},     // waits for the LQ: everything up to 0x24 has landed
+        {lowerNop, fmac(SUB, 0xF, 10, 0, 1)},    // four results in flight: 0x84,
+        {lowerNop, fmac(ADD, 0xF, 11, 0, 0)},    // 0x0E,
+        {lowerNop, fmac(SUB, 0xF, 12, 1, 0)},    // 0x34
+        {lowerNop, fmac(ADD, 0xF, 13, 1, 1)},    // and 0x25
+        {fmand(7), upperNop},
+        {fmand(8), upperNop},
+        {fmand(9), upperNop},
+        {fmand(10), upperNop},
+        {ilw, fmac(SUB, 0xF, 14, 0, 1)},         // MAC 0x84
+        {ibne, upperNop},                        // waits for the ILW it tests,
+        {fmand(13), upperNop},                   // so its delay slot sees 0x84
+        {lq(18, 6), fmac(ADD, 0xF, 19, 0, 0)},   // MAC 0x0E, with vf18 in flight
+        {div, upperNop},                         // waits for vf18, its second operand,
+        {fmand(14), upperNop},                   // so 0x0E has landed
+        {esadd, upperNop},                       // P = 1 + 0 + 4
+        {waitp, upperNop},
+        {mfp, upperNop},
+        {sq(16, 5), upperNop},
+        {sq(1, 2), fmac(ADD, 0xF, 1, 1, 1)},     // the SQ stores vf01 as it was
+        {lq(1, 0), fmac(ADD, 0xF, 1, 1, 1)},     // the LQ is dropped: vf01 = (4, 0, -8, 0)
+        {sq(1, 3), upperNop},
+        {move, upperNop},
+        {sq(20, 7), upperNop},
+        {lowerNop, fmac(ADD, 0xE, 21, 18, 18)},  // xyz only: vf21 = (8, 8, 8, 0)
+        {sq(21, 8), clipw},                      // -z is outside: CLIP 0x20
+        {fsset, upperNop},
+        {lowerNop, fmac(SUB, 0xF, 15, 0, 0) | ebit},   // MAC 0x0F, landing after the end
+        {lowerNop, upperNop},
+    };
+    std::memcpy(vu1Micro, program, sizeof program);
+    vu1Start(0);
+    CHECK_EQ(ps2::vu::vu1Reg(2), 0u);
+    CHECK_EQ(ps2::vu::vu1Reg(3), 0x24u);
+    CHECK_EQ(ps2::vu::vu1Reg(4), 0x25u);
+    CHECK_EQ(ps2::vu::vu1Reg(5), 0x25u);
+    CHECK_EQ(ps2::vu::vu1Reg(6), 0x24u);
+    CHECK_EQ(ps2::vu::vu1Reg(7), 0x84u);
+    CHECK_EQ(ps2::vu::vu1Reg(8), 0x0Eu);
+    CHECK_EQ(ps2::vu::vu1Reg(9), 0x34u);
+    CHECK_EQ(ps2::vu::vu1Reg(10), 0x25u);
+    CHECK_EQ(ps2::vu::vu1Reg(12), 0x1234u);
+    CHECK_EQ(ps2::vu::vu1Reg(13), 0x84u);
+    CHECK_EQ(ps2::vu::vu1Reg(14), 0x0Eu);
+    CHECK_EQ(ps2::vu::vu1Reg(VU_CLIP), 0x20u);
+    CHECK_EQ(ps2::vu::vu1Reg(VU_MAC), 0x0Fu);
+    CHECK_EQ(ps2::vu::vu1Reg(VU_STATUS), 0x841u);   // Z, and FSSET's sticky bits with Z since
+    CHECK_EQ(std::bit_cast<float>(ps2::vu::vu1Reg(VU_Q)), 0.25f);
+    auto at = [](uint32_t qw, int c) {
+        uint32_t v;
+        std::memcpy(&v, vu1Mem + qw * 16 + 4 * c, 4);
+        return std::bit_cast<float>(v);
+    };
+    CHECK_EQ(at(2, 0), 1.0f);
+    CHECK_EQ(at(2, 2), -2.0f);
+    CHECK_EQ(at(3, 0), 4.0f);
+    CHECK_EQ(at(3, 2), -8.0f);
+    CHECK_EQ(at(5, 0), 5.0f);
+    CHECK_EQ(at(5, 3), 5.0f);
+    CHECK_EQ(at(7, 0), 4.0f);
+    CHECK_EQ(at(7, 2), -8.0f);
+    CHECK_EQ(at(8, 0), 8.0f);
+    CHECK_EQ(at(8, 3), 0.0f);
+    std::memset(vu1Micro, 0, sizeof program);
+    std::memset(vu1Mem, 0, 9 * 16);
+    vu1Reset();
+}
+
+// Micro memory rewritten between programs (by MPG or EE stores) runs as it now
+// reads, whichever half of a pair changed.
+TEST_CASE(vu_programs_run_what_micro_memory_now_holds) {
+    vu1Reset();
+    const uint32_t upperNop = 0x000002FFu, lowerNop = 0x8000033Cu, ebit = 0x40000000u, ibit = 0x80000000u;
+    auto iaddiu = [](uint32_t it, uint32_t imm) { return (0x08u << 25) | (it << 16) | (imm & 0x7FF); };
+    uint32_t program[][2] = {   // lower, upper
+        {iaddiu(1, 5), upperNop},
+        {lowerNop, upperNop | ebit},
+        {lowerNop, upperNop},
+    };
+    auto run = [&] {
+        std::memcpy(vu1Micro, program, sizeof program);
+        vu1Start(0);
+    };
+    run();
+    CHECK_EQ(ps2::vu::vu1Reg(1), 5u);
+    program[0][0] = iaddiu(1, 7);      // a new lower word
+    run();
+    CHECK_EQ(ps2::vu::vu1Reg(1), 7u);
+    vu1Reset();
+    program[0][1] = upperNop | ibit;   // a new upper word: the lower one is now a value for I
+    run();
+    CHECK_EQ(ps2::vu::vu1Reg(1), 0u);
+    CHECK_EQ(ps2::vu::vu1Reg(VU_I), iaddiu(1, 7));
+    std::memset(vu1Micro, 0, sizeof program);
+    vu1Reset();
+}
+
+// VF0 and VI0 are constants. VU0 can store into VU1's VF0 through its window
+// on VU1's registers; VU1's next program sees that in its first pair only.
+TEST_CASE(vu_constants_hold_from_a_programs_second_pair) {
+    reset();
+    vu1Reset();
+    const uint32_t upperNop = 0x000002FFu, lowerNop = 0x8000033Cu, ebit = 0x40000000u;
+    auto sq = [](uint32_t fs, uint32_t it, uint32_t imm) { return 0x02000000u | (0xFu << 21) | (it << 16) | (fs << 11) | (imm & 0x7FF); };
+    const uint32_t iaddiu = (0x08u << 25) | (1u << 16) | 0x400u;   // iaddiu vi01, vi00, 0x400: VU1's vf00
+    setVf(1, 1, 2, 3, 4);
+    const uint32_t vu0Program[][2] = {   // lower, upper
+        {iaddiu, upperNop},
+        {sq(1, 1, 0), upperNop | ebit},
+        {lowerNop, upperNop},
+    };
+    std::memcpy(vu0Micro, vu0Program, sizeof vu0Program);
+    vu0CallMicro(0);
+    const uint32_t vu1Program[][2] = {
+        {sq(0, 0, 10), upperNop},
+        {sq(0, 0, 11), upperNop | ebit},
+        {lowerNop, upperNop},
+    };
+    std::memcpy(vu1Micro, vu1Program, sizeof vu1Program);
+    vu1Start(0);
+    uint32_t v[4];
+    std::memcpy(v, vu1Mem + 11 * 16, 16);
+    CHECK_EQ(v[0], 0u);
+    CHECK_EQ(v[2], 0u);
+    CHECK_EQ(v[3], 0x3F800000u);
+    std::memset(vu0Micro, 0, sizeof vu0Program);
+    std::memset(vu1Micro, 0, sizeof vu1Program);
+    std::memset(vu1Mem + 10 * 16, 0, 2 * 16);
+    vu1Reset();
+    reset();
+}
+
 TEST_CASE(guest_printf_formatting) {
     reset();
     const uint32_t fmt = 0x00300000, str = 0x00300100;

@@ -366,10 +366,19 @@ sections, which the analysis leaves out of the EE code, and games upload them
 at run time through VIF `MPG` commands or direct writes, often from data. An
 interpreter (`runtime/src/vu.cpp`) runs them when they are started (`MSCAL`,
 `VCALLMS`, `CMSAR1`), to completion, as if the VU were infinitely fast
-compared to the EE. It decodes each 64-bit pair (an upper FMAC instruction and
-a lower one) and keeps what micro code can observe of the pipeline: results
-written after both halves read their inputs, MAC/status/clip flags that only
-appear four cycles later, Q and P latencies, stalls on register hazards
-(a stall holds the whole pair, so an operation on Q paired with WAITQ reads
-the new Q), branch delay slots and the E bit. A VU recompiler on the same
-model is the next step if VU-heavy games turn out to be slow.
+compared to the EE. It keeps what micro code can observe of the pipeline:
+results written after both halves of a 64-bit pair (an upper FMAC instruction
+and a lower one) read their inputs, MAC/status/clip flags that only appear
+four cycles later, Q and P latencies, stalls on register hazards (a stall
+holds the whole pair, so an operation on Q paired with WAITQ reads the new
+Q), branch delay slots and the E bit. Each pair is decoded once, into the
+operations its halves run, the stalls its lower half causes and what it sends
+down the pipeline, and the decoding serves for as long as micro memory holds
+the same words: games rewrite it between programs, never during one. At most
+four results are in flight, so they wait in a ring, and a table of the cycle
+at which each VF component's latest write lands makes a stall check a lookup.
+Agent Under Fire shows the limit: inside its first building the game redraws
+each field through VU1 from its vsync handler, and facing the lobby the
+interpreted work holds it at 45 to 49 vblanks per second in real time. A VU
+recompiler on the same model, with the programs running alongside the EE, is
+the next step.
