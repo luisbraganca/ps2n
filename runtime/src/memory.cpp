@@ -6,6 +6,7 @@
 #include "internal.h"
 #include "iop/iop.h"
 #include "log.h"
+#include "vu.h"
 
 #include <cstring>
 
@@ -76,6 +77,13 @@ uint8_t* plainPtr(const Target& t) {
     }
 }
 
+// A store into VU memory: recompiled micro code checks its words again after one into micro memory.
+void noteVuWrite(const Target& t) {
+    if (t.region != Region::VuMem) return;
+    if (t.phys < 0x4000) vu::microChanged(0);
+    else if (t.phys >= 0x8000 && t.phys < 0xC000) vu::microChanged(1);
+}
+
 void badAccess(const char* what, uint32_t addr) {
     PS2_UNIMPL("mem", std::string("unmapped ") + what, "%s at unmapped address 0x%08x (pc 0x%08x)", what, addr, cpu.pc);
 }
@@ -110,6 +118,7 @@ void writeSlow(uint32_t addr, T v) {
     const Target t = classify(addr);
     if (uint8_t* p = plainPtr(t)) {
         std::memcpy(p, &v, sizeof(T));
+        noteVuWrite(t);
         return;
     }
     switch (t.region) {
@@ -153,6 +162,7 @@ void memWrite128Slow(uint32_t addr, const uint64_t v[2]) {
     const Target t = classify(addr);
     if (uint8_t* p = plainPtr(t)) {
         std::memcpy(p, v, 16);
+        noteVuWrite(t);
         return;
     }
     if (t.region == Region::Hw) return hw::write128(t.phys, v);
@@ -203,6 +213,7 @@ void readBytes(uint32_t addr, void* dst, uint32_t size) {
 void writeBytes(uint32_t addr, const void* src, uint32_t size) {
     if (uint8_t* p = hostPtr(addr, size)) {
         std::memcpy(p, src, size);
+        noteVuWrite(classify(addr));
         return;
     }
     const auto* s = static_cast<const uint8_t*>(src);
@@ -212,6 +223,7 @@ void writeBytes(uint32_t addr, const void* src, uint32_t size) {
 void fillBytes(uint32_t addr, uint8_t value, uint32_t size) {
     if (uint8_t* p = hostPtr(addr, size)) {
         std::memset(p, value, size);
+        noteVuWrite(classify(addr));
         return;
     }
     for (uint32_t i = 0; i < size; ++i) write8(addr + i, value);

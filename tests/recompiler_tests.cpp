@@ -11,6 +11,7 @@
 #include "ps2n/util.h"
 
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 
@@ -420,6 +421,57 @@ TEST_CASE(codegen_writes_other_programs) {
     CHECK(readTextFile(cfg.outDir / "MAIN_ELF" / "recomp_table.cpp").find("\"MAIN.ELF\"") != std::string::npos);
     CHECK(readTextFile(cfg.outDir / "recomp_table.cpp").find("&::ps2game_MAIN_ELF::kGameInfo") != std::string::npos);
     CHECK(readTextFile(cfg.outDir / "CMakeLists.txt").find("MAIN_ELF/recomp_table.cpp") != std::string::npos);
+}
+
+TEST_CASE(vu_code_files) {
+    // What the runtime records (ps2n_missing.vu.toml), read back; lines left out are zero.
+    const fs::path code = writeTemp("vu-code.toml",
+                                    "[[image]]\nunit = 1\nentries = [0x0000, 0x0010]\ntargets = [0x0018]\ncode = \"\"\"\n"
+                                    "0000 400002ff8000033c 000002ff8000033c\n"
+                                    "0010 000002ff10010005 400002ff8000033c 000002ff8000033c\n\"\"\"\n"
+                                    "[[image]]\nunit = 0\nentries = [0x0008]\ncode = \"\"\"\n0008 400002ff8000033c 000002ff8000033c\n\"\"\"\n");
+    const std::vector<VuImage> images = loadVuCode(code);
+    CHECK_EQ(images.size(), size_t(2));
+    CHECK_EQ(images[0].unit, 1);
+    CHECK_EQ(images[0].micro.size(), size_t(16384));
+    CHECK_EQ(images[0].entries.size(), size_t(2));
+    CHECK(images[0].targets == std::vector<uint32_t>{0x18});
+    uint64_t w;
+    std::memcpy(&w, images[0].micro.data() + 0x10, 8);
+    CHECK_EQ(w, 0x000002ff10010005ull);
+    std::memcpy(&w, images[0].micro.data() + 0x28, 8);
+    CHECK_EQ(w, 0ull);
+    CHECK_EQ(images[1].micro.size(), size_t(4096));
+    CHECK_THROWS(loadVuCode(writeTemp("vu-unit.toml", "[[image]]\nunit = 2\ncode = \"\"\n")));
+    CHECK_THROWS(loadVuCode(writeTemp("vu-entry.toml", "[[image]]\nunit = 1\nentries = [0x0004]\ncode = \"\"\n")));
+    CHECK_THROWS(loadVuCode(writeTemp("vu-size.toml", "[[image]]\nunit = 0\ncode = \"\"\"\n0ff8 0 0\n\"\"\"\n")));   // past VU0's 4 KB
+    // The same micro memory twice is one function, entered at the entries of both.
+    VuImage again = images[0];
+    again.entries = {0x08};
+    again.targets = {};
+    VuCodegenStats stats;
+    const std::string cpp = generateVuCode({images[0], images[1], again}, "game", &stats);
+    CHECK_EQ(stats.images, size_t(2));
+    CHECK_EQ(stats.entries, size_t(4));
+    CHECK(cpp.find("{1, 0x0008u, &vu1_") != std::string::npos);
+    CHECK(cpp.find("{0, 0x0008u, &vu0_") != std::string::npos);
+    // [vu] code_files, relative to the config.
+    const Config c = Config::load(writeTemp("vu.toml", "[input]\nelf = \"a.elf\"\n[vu]\ncode_files = [\"vu-code.toml\"]\n"));
+    CHECK_EQ(c.vuCodeFiles.size(), size_t(1));
+    CHECK_EQ(c.vuCodeFiles[0], (tempDir() / "vu-code.toml").lexically_normal());
+    // A recompile with them writes recomp_vu.cpp and points the boot program's
+    // table at it; a file that is not there yet is a warning.
+    const ElfFile elf = assemble(kSwitchProgram);
+    Config cfg = configFor(elf);
+    cfg.outDir = tempDir() / "vu";
+    cfg.files = 1;
+    cfg.vuCodeFiles = {code, tempDir() / "not-yet.vu.toml"};
+    const GenerateResult r = generate(analyze(elf, cfg), cfg, {});
+    CHECK_EQ(r.vu.images, size_t(2));
+    CHECK_EQ(r.warnings.size(), size_t(1));
+    CHECK(fs::exists(cfg.outDir / "recomp_vu.cpp"));
+    CHECK(readTextFile(cfg.outDir / "recomp_table.cpp").find("kVuPrograms, kVuProgramCount") != std::string::npos);
+    CHECK(readTextFile(cfg.outDir / "CMakeLists.txt").find("recomp_vu.cpp") != std::string::npos);
 }
 
 int main(int argc, char** argv) {

@@ -49,8 +49,11 @@ Configured trees (Ninja, git-ignored). Reuse them:
 ```
 core/include/ps2n/r5900_ops.inc  the one instruction table: decoder, disassembler, assembler
 core/include/ps2n/r5900_sem.inc  instruction -> runtime op, read by codegen and the interpreter
-recompiler/src/                  analysis.cpp (function discovery), codegen.cpp, config.cpp, main.cpp (CLI)
+core/include/ps2n/vu_micro.h     VU micro pairs: decoding and the pipeline's timing, for vu.cpp and vu_codegen.cpp
+recompiler/src/                  analysis.cpp (function discovery), codegen.cpp, config.cpp, main.cpp (CLI),
+                                 vu_codegen.cpp (recorded VU micro code to C++)
 runtime/include/ps2/ops_*.h      instruction semantics, shared by generated code and the interpreter
+runtime/include/ps2/vu_micro.h   VU micro operations, shared by recompiled micro programs and vu.cpp
 runtime/src/                     runtime.cpp (options, start-up), dispatch.cpp, interpreter.cpp, vu.cpp, clock.cpp
   kernel/kernel.cpp              EE syscalls
   hw/                            hw.cpp (EE registers), dmac, gs (rasterizer, GS thread, draw threads, display), vif, ipu, mpeg
@@ -89,9 +92,11 @@ assets/                          branding/ (logo and icons; its README says whic
   compare value), never on equality with the state it finds. The IOP runs at
   safepoints too, also inside an EE interrupt handler, so a SIF packet for
   the EE waits until the EE re-arms SIF0 (`sceSifSetDChain`).
-- Instruction semantics live only in `ops_*.h`, never in emitted text, so
-  recompiled and interpreted code cannot disagree. Keep `-ffp-contract=off`:
-  the EE and the VUs round between the multiply and the add.
+- Instruction semantics live only in `ops_*.h` (VU micro operations in
+  `ps2/vu_micro.h`, the VU pipeline's timing in `ps2n/vu_micro.h`), never in
+  emitted text, so recompiled and interpreted code cannot disagree. Keep
+  `-ffp-contract=off`: the EE and the VUs round between the multiply and the
+  add.
 - The guest thread runs with the host FPU rounding toward zero, as the EE
   does (`--fpu-round`), and the GS rasterizer's float math inherits that
   mode. A host thread doing guest-visible float work must take the caller's

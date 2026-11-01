@@ -26,15 +26,17 @@ endfunction()
 
 # ps2n_add_recompiled_game(TARGET <name> CONFIG <config.toml> ELF <file.elf>
 #                           [PROGRAMS <file.elf>...] [FILES <n>] [SOURCES <extra .cpp>...]
-#                           [DEPENDS <files>...])
+#                           [DEPENDS <files>...] [VU])
 #
 # Runs `ps2n recompile` at build time and builds the result into an
 # executable linked with the runtime. FILES fixes the number of generated
 # source files so the build graph is known at configure time (default 4).
 # PROGRAMS are the game's other executables, started with LoadExecPS2, which
 # go into the same executable (FILES source files each).
+# VU says the config lists VU micro code ([vu] code_files), which goes to
+# recomp_vu.cpp; DEPENDS names its files.
 function(ps2n_add_recompiled_game)
-    cmake_parse_arguments(G "" "TARGET;CONFIG;ELF;FILES" "PROGRAMS;SOURCES;DEPENDS" ${ARGN})
+    cmake_parse_arguments(G "VU" "TARGET;CONFIG;ELF;FILES" "PROGRAMS;SOURCES;DEPENDS" ${ARGN})
     if(NOT G_FILES)
         set(G_FILES 4)
     endif()
@@ -50,6 +52,9 @@ function(ps2n_add_recompiled_game)
         list(APPEND program_args --program "${p}")
     endforeach()
     set(generated "${out}/recomp_main.cpp")
+    if(G_VU)
+        list(APPEND generated "${out}/recomp_vu.cpp")
+    endif()
     math(EXPR last "${G_FILES} - 1")
     foreach(dir ${dirs})
         list(APPEND generated "${dir}/functions.h" "${dir}/recomp_table.cpp")

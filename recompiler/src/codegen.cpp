@@ -500,7 +500,7 @@ using PutFn = std::function<void(const std::filesystem::path&, const std::string
 // table also lists `others`, the game's other executables. Returns the number
 // of recomp_funcs files.
 int writeProgram(const Program& prog, const Config& cfg, const std::filesystem::path& dir, const std::string& ns,
-                 const std::vector<ExtraProgram>& others, const PutFn& put) {
+                 const std::vector<ExtraProgram>& others, bool vuPrograms, const PutFn& put) {
     namespace fs = std::filesystem;
 
     // functions.h
@@ -534,6 +534,9 @@ int writeProgram(const Program& prog, const Config& cfg, const std::filesystem::
     // recomp_table.cpp
     std::ostringstream t;
     t << kGenNote << "#include \"functions.h\"\n\n";
+    if (vuPrograms)
+        t << "#include \"ps2/vu_recomp.h\"\n\nnamespace " << ns << " {\nextern const ps2::vu::CompiledProgram kVuPrograms[];\n"
+          << "extern const size_t kVuProgramCount;\n}\n\n";
     for (const auto& o : others) t << "namespace ps2game_" << o.id << " { extern const ps2::GameInfo kGameInfo; }\n";
     if (!others.empty()) t << "\n";
     t << "namespace " << ns << " {\n\nnamespace {\n\n";
@@ -571,6 +574,7 @@ int writeProgram(const Program& prog, const Config& cfg, const std::filesystem::
     t << "    " << cstring(PS2N_VERSION_STRING) << ",\n";
     t << "    kPatches, " << (patches.empty() ? "0" : "sizeof(kPatches) / sizeof(kPatches[0])") << ",\n";
     t << "    " << (others.empty() ? "nullptr, 0" : "kPrograms, sizeof(kPrograms) / sizeof(kPrograms[0])") << ",\n";
+    t << "    " << (vuPrograms ? "kVuPrograms, kVuProgramCount" : "nullptr, 0") << ",\n";
     t << "};\n\n} // namespace " << ns << "\n";
     put(dir / "recomp_table.cpp", t.str());
     return files;
@@ -612,10 +616,24 @@ GenerateResult generate(const Program& prog, const Config& cfg, const std::vecto
         if (p.extension() == ".cpp") res.sources.push_back(p);
     };
 
+    // The game's VU micro code ([vu] code_files), for whichever executable uploads it.
+    std::vector<VuImage> vuImages;
+    for (const auto& f : cfg.vuCodeFiles) {
+        std::error_code ec;
+        if (!fs::exists(f, ec)) {   // listed before the run that writes it
+            res.warnings.push_back("VU code file " + f.string() + " does not exist (yet); ignored");
+            continue;
+        }
+        auto images = loadVuCode(f);
+        vuImages.insert(vuImages.end(), std::make_move_iterator(images.begin()), std::make_move_iterator(images.end()));
+    }
+    const bool vu = !vuImages.empty();
+    if (vu) put("recomp_vu.cpp", generateVuCode(vuImages, "ps2game", &res.vu));
+
     // The boot program at the top of the output, each other executable in its own folder.
-    const int files = writeProgram(prog, cfg, {}, "ps2game", extras, put);
+    const int files = writeProgram(prog, cfg, {}, "ps2game", extras, vu, put);
     res.functionFiles = static_cast<size_t>(files);
-    for (const auto& e : extras) writeProgram(*e.prog, *e.cfg, e.id, "ps2game_" + e.id, {}, put);
+    for (const auto& e : extras) writeProgram(*e.prog, *e.cfg, e.id, "ps2game_" + e.id, {}, false, put);
 
     // recomp_main.cpp
     put("recomp_main.cpp", std::string(kGenNote) +
@@ -639,6 +657,7 @@ GenerateResult generate(const Program& prog, const Config& cfg, const std::vecto
           << "add_executable(" << cfg.name << "\n";
         for (int i = 0; i < files; ++i) c << "    recomp_funcs_" << strprintf("%03d", i) << ".cpp\n";
         c << "    recomp_table.cpp\n    recomp_main.cpp\n";
+        if (vu) c << "    recomp_vu.cpp\n";
         std::vector<fs::path> userSources;
         auto addUserSources = [&](const Config& from) {
             for (const auto& e : from.extraSources)

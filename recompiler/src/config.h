@@ -58,6 +58,9 @@ struct Config {
     std::vector<std::filesystem::path> entriesFiles;
     std::vector<ExplicitFunction> functions;
 
+    // [vu]
+    std::vector<std::filesystem::path> vuCodeFiles;   // micro code to recompile (ps2n_missing.vu.toml, as the runtime writes it)
+
     // [stubs]
     bool autoStubs = true;
     std::vector<std::pair<FunctionRef, std::string>> stubBindings;   // target -> handler

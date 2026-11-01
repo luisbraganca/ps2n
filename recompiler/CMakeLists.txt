@@ -7,6 +7,7 @@ add_library(ps2n_recomp STATIC
     src/config.cpp
     src/function_map.cpp
     src/report.cpp
+    src/vu_codegen.cpp
 )
 target_include_directories(ps2n_recomp
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src

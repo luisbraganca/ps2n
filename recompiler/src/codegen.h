@@ -2,6 +2,7 @@
 #pragma once
 
 #include "analysis.h"
+#include "vu_codegen.h"
 
 #include <filesystem>
 #include <string>
@@ -13,6 +14,8 @@ struct GenerateResult {
     std::vector<std::filesystem::path> written;     // files whose content changed
     std::vector<std::filesystem::path> sources;     // every generated .cpp
     size_t functionFiles = 0;
+    VuCodegenStats vu;                              // the micro programs of [vu] code_files
+    std::vector<std::string> warnings;
 };
 
 // Another executable of the same game ([input] programs). Its code goes to the

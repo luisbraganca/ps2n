@@ -134,7 +134,7 @@ Config Config::load(const std::filesystem::path& file) {
     }
     Config c;
     c.configDir = std::filesystem::absolute(file).parent_path();
-    checkKeys(root, {"input", "output", "analysis", "stubs", "functions", "patches"}, "root");
+    checkKeys(root, {"input", "output", "analysis", "vu", "stubs", "functions", "patches"}, "root");
 
     if (const toml::table* in = root["input"].as_table()) {
         checkKeys(*in, {"elf", "ghidra_map", "map_files", "programs"}, "input");
@@ -194,6 +194,11 @@ Config Config::load(const std::filesystem::path& file) {
                 c.functions.push_back(ef);
             }
         }
+    }
+
+    if (const toml::table* vu = root["vu"].as_table()) {
+        checkKeys(*vu, {"code_files"}, "vu");
+        for (const auto& f : stringList(*vu, "code_files")) c.vuCodeFiles.push_back(c.resolve(f));
     }
 
     if (const toml::table* st = root["stubs"].as_table()) {

@@ -46,6 +46,8 @@ constexpr const char* kHelp =
     "  disasm <file.elf> [--function NAME|ADDR] [--range START:END] [--cpp NAME|ADDR]\n"
     "  irx <module.irx>          print the IOP module header, imports and exports\n"
     "  assemble <input.s> -o <output.elf> [--base ADDR] [--strip]\n"
+    "  vu <code.toml>... -o <out.cpp> [--namespace NS]\n"
+    "                            C++ for recorded VU micro code alone, as recompile writes recomp_vu.cpp\n"
     "  stubs                     list the runtime stub handlers\n"
     "  version\n";
 
@@ -156,6 +158,10 @@ int cmdRecompile(int argc, char** argv) {
     if (!quiet) {
         printSummary(cfg, prog);
         for (const auto& e : extras) printSummary(*e.cfg, *e.prog);
+        if (res.vu.images)
+            std::printf("VU micro code: %zu image(s), %zu program entr%s, %zu blocks, %zu pairs, %zu hand-overs to the interpreter\n",
+                        res.vu.images, res.vu.entries, res.vu.entries == 1 ? "y" : "ies", res.vu.blocks, res.vu.pairs, res.vu.handovers);
+        for (const auto& w : res.warnings) std::printf("  warning: %s\n", w.c_str());
         std::printf("wrote %zu file(s) to %s (%zu changed)\n", res.sources.size() + 1 + extras.size() + (cfg.project ? 1 : 0),
                     cfg.outDir.string().c_str(), res.written.size());
         if (cfg.project)
@@ -297,6 +303,21 @@ int cmdAssemble(int argc, char** argv) {
     return 0;
 }
 
+int cmdVu(int argc, char** argv) {
+    const Args a = parseArgs(argc, argv, 2, {"-o", "--namespace"});
+    if (a.positional.empty() || !a.has("-o")) throw Error("usage: vu <code.toml>... -o <out.cpp> [--namespace NS]");
+    std::vector<VuImage> images;
+    for (const auto& f : a.positional) {
+        auto more = loadVuCode(f);
+        images.insert(images.end(), std::make_move_iterator(more.begin()), std::make_move_iterator(more.end()));
+    }
+    VuCodegenStats stats;
+    writeFileIfChanged(a.get("-o"), generateVuCode(images, a.get("--namespace", "ps2game"), &stats));
+    std::printf("%zu image(s), %zu program entr%s, %zu blocks, %zu pairs, %zu hand-overs to the interpreter\n", stats.images, stats.entries,
+                stats.entries == 1 ? "y" : "ies", stats.blocks, stats.pairs, stats.handovers);
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -311,6 +332,7 @@ int main(int argc, char** argv) {
         if (cmd == "disasm") return cmdDisasm(argc, argv);
         if (cmd == "irx") return cmdIrx(argc, argv);
         if (cmd == "assemble") return cmdAssemble(argc, argv);
+        if (cmd == "vu") return cmdVu(argc, argv);
         if (cmd == "stubs") {
             for (const auto& s : runtimeStubNames()) std::printf("%s\n", s.c_str());
             return 0;

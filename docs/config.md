@@ -141,6 +141,36 @@ size extends to that size; weaker starts inside it become entry points into
 it, and a stronger start inside it ends it early. A function without a known
 size runs to the next start.
 
+## `[vu]`: recompile micro code
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `code_files` | array of paths | `[]` | Files of VU micro code, in the format the runtime writes to `ps2n_missing.vu.toml`. `ps2n recompile` turns them into `recomp_vu.cpp`, for every executable of the game (only the boot program's config is read). |
+
+Games upload micro code at run time, so it comes from a run. Every program
+the VU interpreter runs is recorded, and at exit the runtime writes
+`ps2n_missing.vu.toml` next to the `--missing-out` file. Each `[[image]]` in
+it is what a unit's micro memory held when programs started, with `entries`
+(where they started) and `targets` (where recompiled code had to hand a
+program over to the interpreter). Keep a copy of the file, list it here, and
+recompile. After the next run, merge what the new file adds: images with the
+same contents are one image, with all their entries and targets.
+
+A recompiled program runs when micro memory holds the words it was compiled
+from; each block checks its own words once after every change to micro
+memory. It runs to its end, or hands the program over to the interpreter, with
+the pipeline as it stands, in these cases:
+- a branch or E bit in a delay slot;
+- a JR or JALR to an address it was not told about (the image's `targets`);
+- micro memory that no longer holds its code.
+
+`ps2n vu <file>... -o <out.cpp>` writes the C++ alone, to look at.
+
+```toml
+[vu]
+code_files = ["vu-code.toml"]   # a copy of ps2n_missing.vu.toml, merged after later runs
+```
+
 ## `[stubs]`: replace functions with runtime implementations
 
 | Key | Type | Default | Meaning |

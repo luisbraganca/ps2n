@@ -9,6 +9,10 @@
 
 namespace ps2 {
 
+namespace vu {
+struct CompiledProgram;   // ps2/vu_recomp.h
+}
+
 struct FunctionInfo {
     uint32_t start;     // address of the first instruction
     uint32_t end;       // one past the last instruction
@@ -43,6 +47,10 @@ struct GameInfo {
     // LoadExecPS2. Only the boot program's table lists them.
     const GameInfo* const* programs;
     size_t programCount;
+    // Recompiled VU micro programs ([vu] code_files), for every executable.
+    // Only the boot program's table lists them.
+    const vu::CompiledProgram* vuPrograms;
+    size_t vuProgramCount;
 };
 
 // Loads the ELF, sets up the emulated kernel, hardware and IOP, runs the game.

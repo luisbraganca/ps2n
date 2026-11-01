@@ -361,24 +361,58 @@ buffer feeds (`audio/`).
 
 ## The vector units
 
-VU code is not recompiled. dvp-as places micro programs in `.vutext`
-sections, which the analysis leaves out of the EE code, and games upload them
-at run time through VIF `MPG` commands or direct writes, often from data. An
-interpreter (`runtime/src/vu.cpp`) runs them when they are started (`MSCAL`,
-`VCALLMS`, `CMSAR1`), to completion, as if the VU were infinitely fast
-compared to the EE. It keeps what micro code can observe of the pipeline:
+Games upload micro programs at run time, through VIF `MPG` commands or direct
+writes, often from data, and start them with `MSCAL`, `VCALLMS` or `CMSAR1`.
+A program runs to completion when it starts, as if the VU were infinitely
+fast compared to the EE. What micro code can observe of the pipeline is kept:
 results written after both halves of a 64-bit pair (an upper FMAC instruction
 and a lower one) read their inputs, MAC/status/clip flags that only appear
 four cycles later, Q and P latencies, stalls on register hazards (a stall
 holds the whole pair, so an operation on Q paired with WAITQ reads the new
-Q), branch delay slots and the E bit. Each pair is decoded once, into the
-operations its halves run, the stalls its lower half causes and what it sends
-down the pipeline, and the decoding serves for as long as micro memory holds
-the same words: games rewrite it between programs, never during one. At most
-four results are in flight, so they wait in a ring, and a table of the cycle
-at which each VF component's latest write lands makes a stall check a lookup.
-Agent Under Fire shows the limit: inside its first building the game redraws
-each field through VU1 from its vsync handler, and facing the lobby the
-interpreted work holds it at 45 to 49 vblanks per second in real time. A VU
-recompiler on the same model, with the programs running alongside the EE, is
-the next step.
+Q), branch delay slots and the E bit.
+
+That model is written once. `core/include/ps2n/vu_micro.h` says what a
+pair's words make it do to the pipeline (`decodePair`) and keeps the
+pipeline's time (`stepPair`), calling hooks as results land. The interpreter
+(`runtime/src/vu.cpp`) gives it hooks that compute the values, through the
+operations in `runtime/include/ps2/vu_micro.h`. It decodes each pair once and
+keeps the decoding while micro memory holds the same words; at most four
+results are in flight, so they wait in a ring, and a table of the cycle at
+which each VF component's latest write lands makes a stall check a lookup.
+
+Micro programs are recompiled from what the runtime saw: the interpreter
+records each distinct micro memory it ran programs from, with where they
+started, in `ps2n_missing.vu.toml`, and `[vu] code_files` hands that to
+`ps2n recompile` (`recompiler/src/vu_codegen.cpp`). The generator walks each
+program through the same `stepPair`, with hooks that write C++ instead of
+computing: the operations are the interpreter's own, chosen at compile time
+from the instruction words (`upperFn` and `lowerFn` are constexpr), and the
+flags, Q and P land where the walk found them landing. So the generated code
+keeps nothing in flight at run time but the values, and adds each block's
+cycles once. A block is code from one address in one state of the pipeline;
+a loop settles into one or two states. Each block checks, once per change to
+micro memory, that micro memory still holds the words it was compiled from.
+JR goes back to the pairs after the calls whose routine reaches it (and after
+the calls that routine makes, which overwrite its link register), JALR to
+the addresses programs start at, and both also to the `targets` the runtime
+recorded where recompiled code had to hand a program over. Anything else
+hands the program to the interpreter with the pipeline written back as it
+would be: a branch or E bit in a delay slot, too many states at one address,
+a jump to an address nothing recorded, micro memory that changed. Tests run
+random programs both ways and compare every register, data memory and the
+cycle count.
+
+On a VU1 transform loop the recompiled code runs 3.1 times as fast as the
+interpreter. Agent Under Fire uploads its VU1 code once: recorded and
+recompiled (24 entries, 3,371 pairs in 458 blocks), every program of a
+session from the title to the lobby of the first building runs to its end
+recompiled, with the same frames, sound and output as the interpreter. A
+deterministic run inside the building goes from 29.6 to 33.0 vblanks per
+second. In real time drawing is the limit. Facing the lobby the game shows
+41 to 42 pictures a second either way. In the cutscene that opens the
+mission the recompiled programs raise the pictures from 38 to 40 a second,
+and the guest then waits longer for the GS thread, which may only be two
+vsyncs behind: vblanks come at 42 a second instead of 46. The programs still
+run inside the DMA transfer that starts them, on the guest thread; with
+drawing the limit, running VU1 alongside the EE would not make Agent Under
+Fire faster yet.

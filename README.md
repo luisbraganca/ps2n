@@ -59,7 +59,7 @@ Playable, Perfect.
 
 | Game | Stage | Notes |
 |---|---|---|
-| 007: Agent Under Fire (Europe, SLES-50539) | In-game | All three executables run recompiled. The language selection, the intro movies, the copyright and title screens, the menus and the first mission (Trouble in Paradise) run at full speed, except inside the mission's first building, where the game redraws each field through the vector units and slows to 45 to 49 vblanks per second facing the lobby. The controller works. In the mission the sound still breaks up. The driving missions' executable is not recompiled yet. |
+| 007: Agent Under Fire (Europe, SLES-50539) | In-game | All three executables run recompiled, and the VU1 micro code too. The language selection, the intro movies, the copyright and title screens, the menus and the first mission (Trouble in Paradise) run at full speed except where drawing falls behind: in the mission's opening cutscene and facing the lobby of its first building the game shows about 40 pictures a second, 25 in the heaviest views. The controller works. In the mission the sound still breaks up. The driving missions' executable is not recompiled yet. |
 
 ### By area
 
@@ -71,7 +71,7 @@ Playable, Perfect.
 | EE kernel syscalls | `█████████░` 88% | 127 / 145 | event flags, `ExecPS2`, the TLB, CPU timers |
 | DMA, interrupts, timers | `█████░░░░░` 50% | 4 / 8 | MFIFO, stall control, transfer timing |
 | Graphics (GS) | `███████░░░` 71% | 15 / 21 | the CLUT buffer, reading back to the EE |
-| Vector units | `███████░░░` 71% | 5 / 7 | running alongside the EE, a VU recompiler |
+| Vector units | `█████████░` 86% | 6 / 7 | running alongside the EE |
 | Movies (IPU) | `████████░░` 83% | 5 / 6 | timing |
 | Sound (SPU2) | `███████░░░` 71% | 10 / 14 | the IOP's DMA channels for drivers without libsd, an audio settings page |
 | IOP library functions | `████████░░` 77% | 428 / 557 | `mcman` (0 / 40), `dmacman`, `intrman`, `sifman` |
@@ -127,14 +127,14 @@ Playable, Perfect.
 - [ ] Anti-aliasing
 - [ ] Transfers from GS memory back to the EE
 
-**Vector units**: 5 of 7
+**Vector units**: 6 of 7
 - [x] VU0 macro mode
 - [x] Every micro instruction, upper and lower, on VU0 and VU1
 - [x] The pipeline as micro code sees it: flag delays, Q and P latencies, stalls, delay slots, the E bit
 - [x] VIF: every UNPACK format and mode, MPG, MSCAL and the double buffer, DIRECT
 - [x] XGKICK to the GIF
 - [ ] Micro programs running alongside the EE, with their timing
-- [ ] A VU recompiler
+- [x] A VU recompiler: micro code the runtime recorded, recompiled with the pipeline's timing worked out ahead
 
 **Movies (IPU)**: 5 of 6
 - [x] Every command: BCLR, IDEC, BDEC, VDEC, FDEC, SETIQ, SETVQ, CSC, PACK, SETTH
@@ -249,6 +249,17 @@ game now holds 45 to 49 vblanks per second in real time, against 27 to 32
 with the previous interpreter on the same idle machine. Deterministic runs gain
 less, the guest thread decoding the GS there too: from 22 to 26 vblanks per
 second facing the lobby, from 25 to 27 in the mission's opening.
+Micro programs now also run recompiled, from the micro code a run recorded
+(`[vu] code_files`). On a VU1 transform loop the recompiled code is 3.1 times
+as fast as the interpreter; inside the building a deterministic run goes from
+29.6 to 33.0 vblanks per second, with the same frames, sound and output. In
+real time drawing is the limit there. Facing the lobby the game shows 41 to
+42 pictures a second either way, at about 50 vblanks per second; doubling the
+time the drawing takes costs 41% of them, doubling the time the vector units
+take 4%. In the helicopter cutscene that opens the mission, recompiled micro
+code raises the pictures from 38 to 40 a second, and the guest then waits
+for the GS thread, which may only be two vsyncs behind: vblanks come at 42 a
+second instead of 46.
 Before the GS drew large primitives on 8 threads, the title screen dropped to
 14.5 vblanks per second; before a polling loop split across two functions
 could take interrupts, it timed out on every frame, and the main menu ran at 3
@@ -276,9 +287,9 @@ Roughly in order:
    resolutions also need.
 4. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
    `ExecPS2`, dual-layer discs, code overlays, and a second game to bring up.
-5. **Vector units**: run micro programs alongside the EE, with their timing,
-   and recompile them like EE code. Agent Under Fire needs it inside its first
-   building, where it redraws each field through them.
+5. **Vector units**: run micro programs alongside the EE, with their timing
+   (they are recompiled already). Agent Under Fire, which redraws each field
+   through them inside its first building, waits for drawing there first.
 6. **Widescreen and higher resolutions**, the way PCSX2 does them:
    - **16:9.** PS2 games compute their own projection, so there is no general
      switch. PCSX2 applies per-game widescreen patches (`.pnach` files) that
@@ -528,7 +539,8 @@ ctest --test-dir build --output-on-failure
 | `recompiler` | Config parsing and errors, function map formats, jump tables, stripped-ELF discovery, bindings, patches, code generation. |
 | `runtime` | Instruction semantics against independently computed results (sign extension, R5900 division, unaligned access, MMI lanes, FPU clamping, VU0 flags, VU1 micro programs' stalls, flag timing and rewriting), guest printf, the GS (swizzling against the manual's block tables, depth, fields, both circuits, deinterlacing, drawing on threads matching one thread byte for byte, triangle coverage), the IPU's commands, FIFOs and DMA (against a reference IDCT), scratchpad DMA, SIF RPC end to end, IOP resets and services, discs, recognising programs in RAM, `--strict`, controller input and settings, the SPU2 (ADPCM against psx-spx's rules, the interpolation table's step response and every phase, envelope and sweep rates, noise, loop flags, the interrupt address, AutoDMA through both cores, reverb in its work area), libsd's register entries and the WAV dump. |
 | `program_*` | Assembly programs recompiled at build time and run twice, recompiled and interpreted, against recorded output or a recorded frame: control-flow edge cases, a stripped ELF that needs the interpreter, a polling loop split in two that must still take a vblank interrupt, the kernel scheduler, `printf` over the DECI2 TTY, config bindings, `LoadExecPS2` across three executables, a loader that jumps into the next program. |
-| `sdk_*` | Programs built with ps2sdk, run the same two ways: an IRX with its own RPC server, libsd, libpad and libpadx, VU0 and VU1 micro programs, libcdvd, libmc. The binaries are checked in under `tests/sdk/bin` ([tests/sdk/README.md](tests/sdk/README.md)). |
+| `sdk_*` | Programs built with ps2sdk, run the same two ways: an IRX with its own RPC server, libsd, libpad and libpadx, VU0 and VU1 micro programs, libcdvd, libmc. The recompiled run runs the VU programs recompiled too. The binaries are checked in under `tests/sdk/bin` ([tests/sdk/README.md](tests/sdk/README.md)). |
+| `vu_compiled` | Random VU1 micro programs written at build time and recompiled by `ps2n vu`, each run from the same random states on the interpreter and recompiled: every register, data memory and the cycle count must match, and enough runs must end in recompiled code. |
 
 ## Legal
 

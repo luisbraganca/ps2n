@@ -8,6 +8,7 @@
 #include "hw/hw.h"
 #include "hw/ipu.h"
 #include "hw/mpeg.h"
+#include "hw/vif.h"
 #include "input/input.h"
 #include "internal.h"
 #include "iop/cpu.h"
@@ -630,6 +631,85 @@ TEST_CASE(vu_constants_hold_from_a_programs_second_pair) {
     std::memset(vu1Mem + 10 * 16, 0, 2 * 16);
     vu1Reset();
     reset();
+}
+
+// Recompiled micro programs ([vu] code_files). The runtime counts every
+// change to micro memory (recompiled code checks its words again after one),
+// runs a registered program from its entry unless --interpret, and records the
+// micro code the interpreter ran: where programs started, and where
+// recompiled code handed one over.
+namespace {
+int g_compiledRuns = 0;
+uint32_t endsAtOnce(ps2::vu::Unit& u, uint32_t entry) {   // as the two pairs at `entry` leave the unit
+    ++g_compiledRuns;
+    u.vi[ps2::vu::TPC] = entry + 16;
+    return ps2::vu::kEnded;
+}
+uint32_t handsOverAtEntry(ps2::vu::Unit& u, uint32_t entry) {
+    u.vi[ps2::vu::TPC] = entry;
+    return entry;
+}
+} // namespace
+
+TEST_CASE(vu_recompiled_programs_check_micro_memory_and_are_recorded) {
+    vu1Reset();
+    const uint32_t upperNop = 0x000002FFu, lowerNop = 0x8000033Cu, ebit = 0x40000000u;
+    // EE stores and VIF MPG change micro memory; data memory is not micro memory.
+    uint64_t generation = ps2::vu::g_microGeneration[1];
+    write32(0x11008010u, lowerNop);
+    CHECK(ps2::vu::g_microGeneration[1] > generation);
+    generation = ps2::vu::g_microGeneration[1];
+    write32(0x1100C010u, 1u);
+    CHECK_EQ(ps2::vu::g_microGeneration[1], generation);
+    const uint64_t vu0Generation = ps2::vu::g_microGeneration[0];
+    write32(0x11000010u, lowerNop);
+    CHECK(ps2::vu::g_microGeneration[0] > vu0Generation);
+    ps2::vif::init();
+    const uint32_t mpg[4] = {(0x4Au << 24) | (1u << 16) | 2u, lowerNop, upperNop, 0};   // MPG: one pair, to pair 2
+    ps2::vif::transfer(1, reinterpret_cast<const uint64_t*>(mpg), 1);
+    CHECK(ps2::vu::g_microGeneration[1] > generation);
+
+    // A registered program runs from its entry, and not with --interpret.
+    const uint32_t program[][2] = {{lowerNop, upperNop | ebit}, {lowerNop, upperNop}};   // lower, upper
+    std::memcpy(vu1Micro + 0x40, program, sizeof program);
+    const ps2::vu::CompiledProgram ends[] = {{1, 0x40u, &endsAtOnce}};
+    ps2::vu::registerPrograms(ends, 1);
+    g_compiledRuns = 0;
+    vu1Start(0x40);
+    CHECK_EQ(g_compiledRuns, 1);
+    CHECK_EQ(ps2::vu::vu1Reg(VU_TPC), 0x50u);
+    ps2::vu::useCompiledPrograms(false);
+    vu1Reset();
+    vu1Start(0x40);
+    CHECK_EQ(g_compiledRuns, 1);
+    CHECK_EQ(ps2::vu::vu1Reg(VU_TPC), 0x50u);
+    ps2::vu::useCompiledPrograms(true);
+
+    // Recorded: a program the interpreter ran, and one recompiled code handed over.
+    ps2::vu::registerPrograms(nullptr, 0);
+    ps2::vu::recordPrograms(true);
+    vu1Start(0x40);
+    const ps2::vu::CompiledProgram handsOver[] = {{1, 0x40u, &handsOverAtEntry}};
+    ps2::vu::registerPrograms(handsOver, 1);
+    vu1Start(0x40);
+    CHECK_EQ(ps2::vu::vu1Reg(VU_TPC), 0x50u);   // the interpreter went on from there
+    ps2::vu::recordPrograms(false);
+    ps2::vu::registerPrograms(nullptr, 0);
+    const auto file = std::filesystem::temp_directory_path() / "ps2n_vu_recorded.toml";
+    ps2::vu::writeRecordedPrograms(file);
+    std::ifstream in(file);
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    in.close();
+    std::filesystem::remove(file);
+    CHECK(text.find("[[image]]\nunit = 1\nentries = [0x0040]\n") != std::string::npos);
+    CHECK(text.find("targets = [0x0040]\n") != std::string::npos);
+    CHECK(text.find("\n0040 400002ff8000033c 000002ff8000033c ") != std::string::npos);
+    CHECK(text.find("\n0000 0000000000000000 0000000000000000 000002ff8000033c ") != std::string::npos);   // the MPG's pair
+
+    std::memset(vu1Micro, 0, 0x60);
+    std::memset(vu0Micro, 0, 0x20);
+    std::memset(vu1Mem + 0x10, 0, 16);
+    vu1Reset();
 }
 
 TEST_CASE(guest_printf_formatting) {
@@ -2837,10 +2917,10 @@ TEST_CASE(dispatch_checks_programs_against_ram) {
                                         {0x00200008u, 0x00200010u, &noop, "x_b", false, checksumOf(kX + 2, 2)}};
     static const FunctionInfo yFns[] = {{0x00200000u, 0x00200008u, &noop, "y_a", false, checksumOf(kY, 2)},
                                         {0x00200008u, 0x00200010u, &noop, "y_b", false, checksumOf(kY + 2, 2)}};
-    static const GameInfo x = {"x", "X.ELF", 0, 0x00200000u, xFns, 2, nullptr, 0, "test", nullptr, 0, nullptr, 0};
-    static const GameInfo y = {"y", "Y.ELF", 0, 0x00200000u, yFns, 2, nullptr, 0, "test", nullptr, 0, nullptr, 0};
+    static const GameInfo x = {"x", "X.ELF", 0, 0x00200000u, xFns, 2, nullptr, 0, "test", nullptr, 0, nullptr, 0, nullptr, 0};
+    static const GameInfo y = {"y", "Y.ELF", 0, 0x00200000u, yFns, 2, nullptr, 0, "test", nullptr, 0, nullptr, 0, nullptr, 0};
     static const GameInfo* const others[] = {&x, &y};
-    static const GameInfo boot = {"boot", "BOOT.ELF", 0, 0x00100000u, bootFns, 1, nullptr, 0, "test", nullptr, 0, others, 2};
+    static const GameInfo boot = {"boot", "BOOT.ELF", 0, 0x00100000u, bootFns, 1, nullptr, 0, "test", nullptr, 0, others, 2, nullptr, 0};
     initDispatch(boot);
     CHECK(hasCompiledEntry(0x00100000u));                // loaded by the runtime: no check needed
 

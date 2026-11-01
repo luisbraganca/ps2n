@@ -1,9 +1,10 @@
 # Programs built with the ps2dev toolchain and ps2sdk. The binaries in bin/
 # are checked in so the tests run without the toolchain; Makefile rebuilds them.
 # FRAME names a dumped frame whose SHA-256 must match ${name}.frame.sha256.
+# VU: the config lists the program's micro code, ${name}.vu.toml, recompiled.
 # MEMCARDS gives each run an empty memory card directory.
 function(ps2n_sdk_test name)
-    cmake_parse_arguments(T "MEMCARDS" "CONFIG;EXPECTED;FRAME" "RUN_ARGS" ${ARGN})
+    cmake_parse_arguments(T "MEMCARDS;VU" "CONFIG;EXPECTED;FRAME" "RUN_ARGS" ${ARGN})
     if(NOT T_CONFIG)
         set(T_CONFIG ${name}.toml)
     endif()
@@ -11,7 +12,11 @@ function(ps2n_sdk_test name)
         set(T_EXPECTED ${name}.expected)
     endif()
     set(elf "${CMAKE_CURRENT_SOURCE_DIR}/bin/${name}.elf")
-    ps2n_add_recompiled_game(TARGET sdk_${name} CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/${T_CONFIG}" ELF "${elf}" FILES 4)
+    set(vu "")
+    if(T_VU)
+        set(vu VU DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${name}.vu.toml")
+    endif()
+    ps2n_add_recompiled_game(TARGET sdk_${name} CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/${T_CONFIG}" ELF "${elf}" FILES 4 ${vu})
     foreach(mode recompiled interpreted)
         set(args --elf "${elf}" --virtual-clock --no-window --host0 "${CMAKE_CURRENT_SOURCE_DIR}/bin"
                  --missing-out "${CMAKE_CURRENT_BINARY_DIR}/${name}_${mode}_missing.toml" ${T_RUN_ARGS})
@@ -58,8 +63,9 @@ ps2n_sdk_test(padx CONFIG pad.toml EXPECTED pad.expected RUN_ARGS --pad-script "
 
 # Vector units: VU0 micro programs (VCALLMS, VCALLMSR) uploaded through VIF0,
 # a VU1 program on a VIF1 TOP/TOPS double buffer drawing with XGKICK, flags,
-# Q/P timing, branches and the E bit, and VIF1 UNPACK formats and modes.
-ps2n_sdk_test(vu RUN_ARGS --max-vsyncs 2 FRAME frame_000002.ppm)
+# Q/P timing, branches and the E bit, and VIF1 UNPACK formats and modes. The
+# recompiled run runs the micro programs recompiled (vu.vu.toml).
+ps2n_sdk_test(vu VU RUN_ARGS --max-vsyncs 2 FRAME frame_000002.ppm)
 
 # CD/DVD through libcdvd: a disc built from the disc/ directory; file search,
 # reads into aligned and unaligned buffers, streaming, the clock, cdrom0:.

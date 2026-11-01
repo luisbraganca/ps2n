@@ -3,6 +3,7 @@
 #include "internal.h"
 #include "kernel/kernel.h"
 #include "log.h"
+#include "vu.h"
 
 #include "ps2n/util.h"
 
@@ -176,6 +177,11 @@ void initDispatch(const GameInfo& game) {
     g_programs[0].presentEpoch = g_codeEpoch;   // the runtime loaded it
     g_running = &g_programs[0];
     clearCache();
+    // Recompiled micro programs come with the boot program's table; the
+    // interpreter records the micro code it runs, as dispatch records EE code.
+    vu::registerPrograms(game.vuPrograms, game.vuPrograms ? game.vuProgramCount : 0);
+    vu::useCompiledPrograms(!g_opt.interpretOnly);
+    vu::recordPrograms(!g_opt.interpretOnly && !g_opt.missingOut.empty());
 }
 
 void programLoaded(const GameInfo* program, const std::string& name) {
@@ -211,6 +217,11 @@ void recordMissingEntry(uint32_t pc) {
 }
 
 void writeMissingEntries() {
+    // The micro code the VU interpreter ran goes next to the boot program's file (ps2n_missing.vu.toml).
+    if (!g_opt.missingOut.empty()) {
+        const std::filesystem::path& out = g_opt.missingOut;
+        vu::writeRecordedPrograms(out.parent_path() / (out.stem().string() + ".vu" + out.extension().string()));
+    }
     for (const auto& [file, entries] : g_missing) {
         if (entries.empty() || file.empty()) continue;
         std::ofstream out(file);

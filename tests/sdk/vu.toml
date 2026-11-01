@@ -4,3 +4,7 @@ elf = "bin/vu.elf"
 
 [stubs]
 auto = true
+
+# The micro code, recompiled (see vu.vu.toml).
+[vu]
+code_files = ["vu.vu.toml"]

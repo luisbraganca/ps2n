@@ -168,6 +168,7 @@ void finishCommand(int unit, Unit& u) {
         uint8_t* micro = vuMicro(unit);
         for (size_t i = 0; i < bytes; ++i)
             micro[(start + i) % vuMicroSize(unit)] = reinterpret_cast<const uint8_t*>(u.payload.data())[i];
+        vu::microChanged(unit);
         break;
     }
     case 0x50:
