@@ -30,6 +30,17 @@ void vu0Reset();
 void vu1Reset();
 void vu1Start(uint32_t addr);       // CTC2 to CMSAR1
 
+// VU0's window on VU1's registers (vu.cpp), in micro and macro mode alike: a
+// VU0 data address with bit 10 set (byte 0x4000) reaches VU1's VF0-31, then
+// VI0-31, a quadword each, repeating every 64 quadwords. An integer register
+// is the x word, with y, z and w reading as zero. Writes to VF0 and VI0 are
+// lost, as they are constants. The control registers (VI16-31) read and
+// write as they are held, which the console is not known to do: they report
+// a gap.
+void vu0WindowRead(uint32_t qwAddr, uint32_t (&w)[4]);
+void vu0WindowWrite(uint32_t qwAddr, uint32_t dest, const uint32_t (&w)[4]);   // the components dest names
+inline bool inVu0Window(uint32_t qwAddr) { return (qwAddr & 0x400) != 0; }
+
 namespace ops {
 namespace vu {
 
@@ -136,7 +147,19 @@ inline uint32_t itof(uint32_t v, int frac) {
     return std::bit_cast<uint32_t>(f);
 }
 
-inline uint8_t* mem(uint32_t qwAddr) { return vu0Mem + ((qwAddr * 16) & 0xFF0); }
+// A quadword of VU0 data memory, or of VU1's registers through the window.
+inline void readQw(uint32_t qwAddr, uint32_t (&w)[4]) {
+    if (inVu0Window(qwAddr)) [[unlikely]]
+        return vu0WindowRead(qwAddr, w);
+    std::memcpy(w, vu0Mem + ((qwAddr * 16) & 0xFF0), 16);
+}
+inline void writeQw(uint32_t qwAddr, uint32_t dest, const uint32_t (&w)[4]) {
+    if (inVu0Window(qwAddr)) [[unlikely]]
+        return vu0WindowWrite(qwAddr, dest, w);
+    uint8_t* p = vu0Mem + ((qwAddr * 16) & 0xFF0);
+    for (int i = 0; i < 4; ++i)
+        if (on(dest, i)) std::memcpy(p + 4 * i, &w[i], 4);
+}
 inline uint16_t vi(uint32_t r) { return static_cast<uint16_t>(cpu.vi[r]); }
 inline void setVi(uint32_t r, uint32_t v) {
     if (r) cpu.vi[r] = v & 0xFFFF;
@@ -333,49 +356,43 @@ inline void VMFIR(uint32_t dest, uint32_t ft, uint32_t is) {
         if (vu::on(dest, i)) cpu.vf[ft].c[i] = v;
 }
 
-// ---- VU0 data memory -------------------------------------------------------------
+// ---- VU0 data memory (and VU1's registers, through the window) ---------------------
 inline void VLQI(uint32_t dest, uint32_t ft, uint32_t is) {
     if (ft) {
-        const uint8_t* p = vu::mem(vu::vi(is));
+        uint32_t w[4];
+        vu::readQw(vu::vi(is), w);
         for (int i = 0; i < 4; ++i)
-            if (vu::on(dest, i)) std::memcpy(&cpu.vf[ft].c[i], p + 4 * i, 4);
+            if (vu::on(dest, i)) cpu.vf[ft].c[i] = w[i];
     }
     if (is) vu::setVi(is, vu::vi(is) + 1);
 }
 inline void VLQD(uint32_t dest, uint32_t ft, uint32_t is) {
     if (is) vu::setVi(is, vu::vi(is) - 1);
     if (!ft) return;
-    const uint8_t* p = vu::mem(vu::vi(is));
+    uint32_t w[4];
+    vu::readQw(vu::vi(is), w);
     for (int i = 0; i < 4; ++i)
-        if (vu::on(dest, i)) std::memcpy(&cpu.vf[ft].c[i], p + 4 * i, 4);
+        if (vu::on(dest, i)) cpu.vf[ft].c[i] = w[i];
 }
 inline void VSQI(uint32_t dest, uint32_t fs, uint32_t it) {
-    uint8_t* p = vu::mem(vu::vi(it));
-    for (int i = 0; i < 4; ++i)
-        if (vu::on(dest, i)) std::memcpy(p + 4 * i, &cpu.vf[fs].c[i], 4);
+    vu::writeQw(vu::vi(it), dest, cpu.vf[fs].c);
     if (it) vu::setVi(it, vu::vi(it) + 1);
 }
 inline void VSQD(uint32_t dest, uint32_t fs, uint32_t it) {
     if (it) vu::setVi(it, vu::vi(it) - 1);
-    uint8_t* p = vu::mem(vu::vi(it));
-    for (int i = 0; i < 4; ++i)
-        if (vu::on(dest, i)) std::memcpy(p + 4 * i, &cpu.vf[fs].c[i], 4);
+    vu::writeQw(vu::vi(it), dest, cpu.vf[fs].c);
 }
 inline void VILWR(uint32_t dest, uint32_t it, uint32_t is) {
     if (!it) return;
-    const uint8_t* p = vu::mem(vu::vi(is));
+    uint32_t w[4];
+    vu::readQw(vu::vi(is), w);
     for (int i = 0; i < 4; ++i)
-        if (vu::on(dest, i)) {
-            uint16_t v;
-            std::memcpy(&v, p + 4 * i, 2);
-            vu::setVi(it, v);
-        }
+        if (vu::on(dest, i)) vu::setVi(it, w[i] & 0xFFFF);
 }
 inline void VISWR(uint32_t dest, uint32_t it, uint32_t is) {
-    uint8_t* p = vu::mem(vu::vi(is));
     const uint32_t v = vu::vi(it);
-    for (int i = 0; i < 4; ++i)
-        if (vu::on(dest, i)) std::memcpy(p + 4 * i, &v, 4);
+    const uint32_t w[4] = {v, v, v, v};
+    vu::writeQw(vu::vi(is), dest, w);
 }
 
 // ---- random number unit -----------------------------------------------------------

@@ -34,9 +34,9 @@ namespace vu {
 namespace {
 
 struct Vu1Regs {
-    VuReg vf[32];
-    VuReg acc;
-    uint32_t vi[32];
+    VuReg vf[32] = {{{0, 0, 0, 0x3F800000u}}};   // vf0 is the constant (0, 0, 0, 1)
+    VuReg acc{};
+    uint32_t vi[32]{};
 };
 Vu1Regs g_vu1;
 
@@ -237,16 +237,6 @@ void run(Unit& u, uint32_t startByte) {
         PS2_DEBUG("vu", "VU%d program from 0x%04x goes on in the interpreter at 0x%04x", u.index, start, compiled);
     record(u, start, compiled == kNotRun ? ~0u : compiled);
     bool more = true;
-    if (compiled == kNotRun) {
-        more = step(u, code);
-        u.steps = 1;
-        // vf0 and vi0 are constants. Only writes from outside the program (VU0
-        // stores through its window on VU1's registers) can have changed them,
-        // which the first pair still sees.
-        u.vf[0].c[0] = u.vf[0].c[1] = u.vf[0].c[2] = 0;
-        u.vf[0].c[3] = 0x3F800000u;
-        u.vi[0] = 0;
-    }
     while (more) {
         if (u.steps == g_stepLimit) {
             PS2_ERROR("vu", "VU%d micro program started at 0x%04x has not ended after %llu instructions (pc 0x%04x); stopping it",
@@ -335,14 +325,6 @@ void unknown(Unit& u, const char* which, uint32_t c) {
     PS2_UNIMPL("vu", key, "unknown VU%d %s instruction 0x%08x at 0x%04x", u.index, which, c, u.vi[TPC] - 8);
 }
 
-uint8_t* vu0Window(uint32_t qw) {
-    const uint32_t r = qw & 0x7F;
-    if (r < 32) return reinterpret_cast<uint8_t*>(g_vu1.vf[r].c);
-    static uint32_t viWindow[4];
-    viWindow[0] = g_vu1.vi[r & 31];
-    return reinterpret_cast<uint8_t*>(viWindow);
-}
-
 uint32_t vifTop() { return vif::top(1); }
 uint32_t vifItop(int unit) { return vif::itop(unit); }
 
@@ -388,6 +370,41 @@ void runVu1(uint32_t startByte) { run(g_unit[1], startByte); }
 // ---- hooks used by recompiled code and the VIF ---------------------------------------------------
 void vu0CallMicro(uint32_t addr) { vu::run(vu::g_unit[0], addr); }
 
+// VU0's window on VU1's registers: VF0-31, then VI0-31, a quadword each.
+namespace {
+void windowOnControl(uint32_t vi, const char* access) {   // VI16-31: as held, which the console may not show
+    char key[64];
+    std::snprintf(key, sizeof key, "VU0 window %s of VU1 VI%u", access, vi);
+    PS2_UNIMPL("vu", key, "VU0 %s VU1's control register VI%u through its window, as the register is held", access, vi);
+}
+} // namespace
+
+void vu0WindowRead(uint32_t qwAddr, uint32_t (&w)[4]) {
+    const uint32_t r = qwAddr & 0x3F;
+    if (r < 32) {
+        std::memcpy(w, vu::g_vu1.vf[r].c, 16);
+        return;
+    }
+    const uint32_t vi = r - 32;
+    if (vi >= 16) windowOnControl(vi, "reads");
+    w[0] = vu::g_vu1.vi[vi];
+    w[1] = w[2] = w[3] = 0;
+}
+
+void vu0WindowWrite(uint32_t qwAddr, uint32_t dest, const uint32_t (&w)[4]) {
+    const uint32_t r = qwAddr & 0x3F;
+    if (r < 32) {
+        if (r == 0) return;   // VF0 is constant
+        for (int i = 0; i < 4; ++i)
+            if (vu::on(dest, i)) vu::g_vu1.vf[r].c[i] = w[i];
+        return;
+    }
+    const uint32_t vi = r - 32;
+    if (vi >= 16) windowOnControl(vi, "writes");
+    if (vi == 0 || !vu::on(dest, 0)) return;   // VI0 is constant; the register is the x word
+    vu::g_vu1.vi[vi] = vi < 16 ? w[0] & 0xFFFF : w[0];
+}
+
 void vu1Start(uint32_t addr) { vu::run(vu::g_unit[1], addr); }
 
 void vu0Reset() {
@@ -397,9 +414,6 @@ void vu0Reset() {
     cpu.vi[VU_STATUS] = cpu.vi[VU_MAC] = cpu.vi[VU_CLIP] = 0;
 }
 
-void vu1Reset() {
-    vu::g_vu1 = {};
-    vu::g_vu1.vf[0].c[3] = 0x3F800000u;
-}
+void vu1Reset() { vu::g_vu1 = {}; }
 
 } // namespace ps2

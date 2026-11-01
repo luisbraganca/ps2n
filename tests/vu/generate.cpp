@@ -1,7 +1,7 @@
-// Writes the VU1 micro programs the vu_compiled test recompiles: a VU code
+// Writes the VU micro programs the vu_compiled test recompiles: a VU code
 // file for `ps2n vu` (the format the runtime records), and the same images
-// with their entries in binary for check.cpp (per image: the number of
-// entries, the entries, then micro memory).
+// with their entries in binary for check.cpp (per image: the unit, the number
+// of entries, the entries, then micro memory).
 // usage: ps2n_vu_fuzz_generate <code.toml> <images.bin>
 #include "fuzz.h"
 
@@ -10,23 +10,24 @@
 
 namespace {
 
-constexpr uint32_t kSize = 16384;
+constexpr uint32_t kSize = 16384, kVu0Size = 4096;
 
-void write(FILE* toml, FILE* bin, const std::vector<uint8_t>& micro, const std::vector<uint32_t>& entries) {
-    std::fprintf(toml, "[[image]]\nunit = 1\nentries = [");
+void write(FILE* toml, FILE* bin, const std::vector<uint8_t>& micro, const std::vector<uint32_t>& entries, uint32_t unit = 1) {
+    std::fprintf(toml, "[[image]]\nunit = %u\nentries = [", unit);
     for (size_t i = 0; i < entries.size(); ++i) std::fprintf(toml, "%s0x%04x", i ? ", " : "", entries[i]);
     std::fprintf(toml, "]\ncode = \"\"\"\n");
-    for (uint32_t at = 0; at < kSize; at += 32) {
+    for (size_t at = 0; at < micro.size(); at += 32) {
         uint64_t w[4];
         std::memcpy(w, micro.data() + at, 32);
-        std::fprintf(toml, "%04x %016llx %016llx %016llx %016llx\n", at, static_cast<unsigned long long>(w[0]),
+        std::fprintf(toml, "%04zx %016llx %016llx %016llx %016llx\n", at, static_cast<unsigned long long>(w[0]),
                      static_cast<unsigned long long>(w[1]), static_cast<unsigned long long>(w[2]), static_cast<unsigned long long>(w[3]));
     }
     std::fprintf(toml, "\"\"\"\n\n");
     const auto n = static_cast<uint32_t>(entries.size());
+    std::fwrite(&unit, 4, 1, bin);
     std::fwrite(&n, 4, 1, bin);
     std::fwrite(entries.data(), 4, n, bin);
-    std::fwrite(micro.data(), 1, kSize, bin);
+    std::fwrite(micro.data(), 1, micro.size(), bin);
 }
 
 // Programs written out by hand, each ending in recompiled code: a loop, the
@@ -104,6 +105,17 @@ int main(int argc, char** argv) {
         entries.assign(4, 0);
         for (uint32_t& e : entries) e = random.below(kSize / 8) * 8;
         write(toml, bin, micro, entries);
+    }
+    // VU0 images: their loads and stores also reach VU1's registers, through
+    // VU0's window.
+    const Setting vu0Settings[] = {{2, 5}, {3, 10}, {3, 20}, {5, 30}};
+    for (const Setting& s : vu0Settings) {
+        std::vector<uint8_t> micro(kVu0Size);
+        for (uint32_t pc = 0; pc < kVu0Size; pc += 8) random.pair(micro.data(), pc, s.ePercent, s.branchPercent, 0);
+        entries.assign(4, 0);
+        for (uint32_t& e : entries) e = random.below(kVu0Size / 8) * 8;
+        entries[3] = kVu0Size - 8 * (1 + random.below(8));   // runs on past the end of micro memory, to its start
+        write(toml, bin, micro, entries, 0);
     }
     std::fclose(toml);
     std::fclose(bin);

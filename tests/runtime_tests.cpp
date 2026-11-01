@@ -598,37 +598,114 @@ TEST_CASE(vu_programs_run_what_micro_memory_now_holds) {
     vu1Reset();
 }
 
-// VF0 and VI0 are constants. VU0 can store into VU1's VF0 through its window
-// on VU1's registers; VU1's next program sees that in its first pair only.
-TEST_CASE(vu_constants_hold_from_a_programs_second_pair) {
+// VU0 reaches VU1's registers through a window in its data memory: VF0-31,
+// then VI0-31, from quadword 0x400 and repeating every 64, in micro and macro
+// mode. Stores land in VU1's registers, except in the constants VF0 and VI0.
+// An integer register is the x word; the other words read as zero, whatever
+// was stored there. VU1 has no window.
+TEST_CASE(vu0_window_reaches_vu1_registers) {
     reset();
+    vu0Reset();
     vu1Reset();
     const uint32_t upperNop = 0x000002FFu, lowerNop = 0x8000033Cu, ebit = 0x40000000u;
-    auto sq = [](uint32_t fs, uint32_t it, uint32_t imm) { return 0x02000000u | (0xFu << 21) | (it << 16) | (fs << 11) | (imm & 0x7FF); };
-    const uint32_t iaddiu = (0x08u << 25) | (1u << 16) | 0x400u;   // iaddiu vi01, vi00, 0x400: VU1's vf00
-    setVf(1, 1, 2, 3, 4);
+    auto lower = [](uint32_t op, uint32_t dest, uint32_t t, uint32_t s, uint32_t imm) {
+        return (op << 25) | (dest << 21) | (t << 16) | (s << 11) | (imm & 0x7FF);
+    };
+    auto lq = [&](uint32_t dest, uint32_t ft, uint32_t is, uint32_t imm) { return lower(0x00, dest, ft, is, imm); };
+    auto sq = [&](uint32_t dest, uint32_t fs, uint32_t it, uint32_t imm) { return lower(0x01, dest, it, fs, imm); };
+    auto ilw = [&](uint32_t dest, uint32_t it, uint32_t is, uint32_t imm) { return lower(0x04, dest, it, is, imm); };
+    auto isw = [&](uint32_t dest, uint32_t it, uint32_t is, uint32_t imm) { return lower(0x05, dest, it, is, imm); };
+    auto words = [](const VuReg& r, uint32_t x, uint32_t y, uint32_t z, uint32_t w) {
+        return r.c[0] == x && r.c[1] == y && r.c[2] == z && r.c[3] == w;
+    };
+    ps2::vu::Unit& vu1 = ps2::vu::unit(1);
+    vu1.vi[VU_STATUS] = 0x0C2;
+    cpu.vf[1] = VuReg{{0xABCD0011u, 0x22u, 0x33u, 0x44u}};
+    cpu.vi[1] = 0x405;   // VU1's VF5
+    cpu.vi[2] = 0x423;   // VU1's VI3
+    cpu.vi[3] = 0x400;   // VU1's VF0
+    cpu.vi[4] = 0x420;   // VU1's VI0
+    cpu.vi[5] = 0x1234;
+    cpu.vi[6] = 0xC45;   // VU1's VF5 again
+    cpu.vi[7] = 0x805;   // VU0's own quadword 5
+    cpu.vi[8] = 0x430;   // VU1's status flag (VI16)
     const uint32_t vu0Program[][2] = {   // lower, upper
-        {iaddiu, upperNop},
-        {sq(1, 1, 0), upperNop | ebit},
+        {sq(0xF, 1, 1, 0), upperNop},     // VU1's VF5 = vf01
+        {isw(0x8, 5, 2, 0), upperNop},    // VU1's VI3 = vi05
+        {sq(0xF, 1, 3, 0), upperNop},     // lost
+        {isw(0x8, 5, 4, 0), upperNop},    // lost
+        {lq(0xF, 2, 6, 0), upperNop},     // vf02 = VU1's VF5
+        {sq(0xF, 1, 2, 1), upperNop},     // VU1's VI4 = vf01.x, 16 bits of it
+        {lq(0xF, 3, 2, 1), upperNop},     // vf03 = VU1's VI4: (0x11, 0, 0, 0)
+        {ilw(0x4, 9, 2, 1), upperNop},    // vi09 = its y word
+        {ilw(0x8, 10, 2, 0), upperNop},   // vi10 = VU1's VI3
+        {isw(0x4, 5, 2, 3), upperNop},    // VU1's VI6: the y word is not the register
+        {sq(0x6, 1, 1, 2), upperNop},     // VU1's VF7.yz
+        {sq(0xF, 1, 7, 0), upperNop},
+        {ilw(0x8, 11, 8, 0), upperNop},   // vi11 = VU1's status flag, as held (a gap)
+        {lowerNop, upperNop | ebit},
         {lowerNop, upperNop},
     };
     std::memcpy(vu0Micro, vu0Program, sizeof vu0Program);
     vu0CallMicro(0);
+    CHECK(words(vu1.vf[5], 0xABCD0011u, 0x22, 0x33, 0x44));
+    CHECK_EQ(ps2::vu::vu1Reg(3), 0x1234u);
+    CHECK(words(vu1.vf[0], 0, 0, 0, 0x3F800000u));
+    CHECK_EQ(ps2::vu::vu1Reg(0), 0u);
+    CHECK(words(cpu.vf[2], 0xABCD0011u, 0x22, 0x33, 0x44));
+    CHECK_EQ(ps2::vu::vu1Reg(4), 0x11u);
+    CHECK(words(cpu.vf[3], 0x11, 0, 0, 0));
+    CHECK_EQ(cpu.vi[9], 0u);
+    CHECK_EQ(cpu.vi[10], 0x1234u);
+    CHECK_EQ(ps2::vu::vu1Reg(6), 0u);
+    CHECK(words(vu1.vf[7], 0, 0x22, 0x33, 0));
+    uint32_t q[4];
+    std::memcpy(q, vu0Mem + 5 * 16, 16);
+    CHECK(q[0] == 0xABCD0011u && q[1] == 0x22 && q[2] == 0x33 && q[3] == 0x44);
+    CHECK_EQ(cpu.vi[11], 0x0C2u);
+    CHECK_EQ(noteIssue("VU0 window reads of VU1 VI16", false), 2u);
+
+    // VU1's next program sees VF0 as the constant from its first pair, and
+    // its quadword 0x405 is its own memory.
+    const uint32_t iaddiu = (0x08u << 25) | (1u << 16) | 0x405u;   // iaddiu vi01, vi00, 0x405
     const uint32_t vu1Program[][2] = {
-        {sq(0, 0, 10), upperNop},
-        {sq(0, 0, 11), upperNop | ebit},
+        {sq(0xF, 0, 0, 10), upperNop},
+        {iaddiu, upperNop},
+        {sq(0xF, 0, 1, 0), upperNop | ebit},
         {lowerNop, upperNop},
     };
     std::memcpy(vu1Micro, vu1Program, sizeof vu1Program);
     vu1Start(0);
-    uint32_t v[4];
-    std::memcpy(v, vu1Mem + 11 * 16, 16);
-    CHECK_EQ(v[0], 0u);
-    CHECK_EQ(v[2], 0u);
-    CHECK_EQ(v[3], 0x3F800000u);
+    std::memcpy(q, vu1Mem + 10 * 16, 16);
+    CHECK(q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 0x3F800000u);
+    std::memcpy(q, vu1Mem + 5 * 16, 16);
+    CHECK(q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 0x3F800000u);
+    CHECK(words(vu1.vf[5], 0xABCD0011u, 0x22, 0x33, 0x44));
+
+    // Macro mode goes through the same window.
+    cpu.vi[12] = 0x406;
+    VSQI(0xF, 1, 12);   // VU1's VF6 = vf01
+    CHECK(words(vu1.vf[6], 0xABCD0011u, 0x22, 0x33, 0x44));
+    VLQD(0xF, 4, 12);
+    CHECK(words(cpu.vf[4], 0xABCD0011u, 0x22, 0x33, 0x44));
+    cpu.vi[13] = 0x425;
+    VISWR(0x8, 5, 13);   // VU1's VI5 = vi05
+    CHECK_EQ(ps2::vu::vu1Reg(5), 0x1234u);
+    VILWR(0x4, 14, 13);
+    CHECK_EQ(cpu.vi[14], 0u);
+    VILWR(0x8, 14, 13);
+    CHECK_EQ(cpu.vi[14], 0x1234u);
+    cpu.vi[15] = 0x431;
+    VISWR(0x8, 5, 15);   // VU1's MAC flag (VI17), as held (a gap)
+    CHECK_EQ(ps2::vu::vu1Reg(17), 0x1234u);
+    CHECK_EQ(noteIssue("VU0 window writes of VU1 VI17", false), 2u);
+
     std::memset(vu0Micro, 0, sizeof vu0Program);
     std::memset(vu1Micro, 0, sizeof vu1Program);
-    std::memset(vu1Mem + 10 * 16, 0, 2 * 16);
+    std::memset(vu0Mem + 5 * 16, 0, 16);
+    std::memset(vu1Mem + 5 * 16, 0, 16);
+    std::memset(vu1Mem + 10 * 16, 0, 16);
+    vu0Reset();
     vu1Reset();
     reset();
 }

@@ -480,14 +480,8 @@ private:
         std::array<std::string, 8> slotVar;
         const std::vector<std::string> entryNames = canonicalNames(s0.count);
         for (uint32_t i = 0; i < s0.count; ++i) slotVar[i] = entryNames[i];
-        bool constants = s0.start;   // vf0 and vi0 are set after the program's first pair
         std::string code, exit;
         uint32_t pc = start, pairs = 0;
-        auto first = [&] {
-            if (!constants) return;
-            code += "    u.vf[0].c[0] = u.vf[0].c[1] = u.vf[0].c[2] = 0;\n    u.vf[0].c[3] = 0x3F800000u;\n    u.vi[0] = 0;\n";
-            constants = false;
-        };
         auto handOverHere = [&](uint32_t at) {
             if (s0.start && pairs == 0) return std::string("    return ps2::vu::kNotRun;\n");
             return handover(t, currentNames(t, slotVar), hex(at, 4) + "u", t.cycle - kBase, "a branch or E bit in a delay slot");
@@ -503,7 +497,6 @@ private:
                     break;
                 }
                 pair(code, t, slotVar, pc);
-                first();
                 pair(code, t, slotVar, slot);
                 pairs += 2;
                 if (p.ebit) {
@@ -562,7 +555,6 @@ private:
                     break;
                 }
                 pair(code, t, slotVar, pc);
-                first();
                 pair(code, t, slotVar, slot);
                 pairs += 2;
                 Emitter e{code, t, slotVar, fresh_, img_.unit};
@@ -572,7 +564,6 @@ private:
                 break;
             }
             pair(code, t, slotVar, pc);
-            first();
             ++pairs;
             pc = img_.next(pc);
             if (flow_.starts.count(pc) || pairs >= kMaxBlockPairs) {

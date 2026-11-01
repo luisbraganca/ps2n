@@ -168,11 +168,19 @@ inline uint16_t viBranch(const Unit& u, uint32_t r) {
 }
 
 // ---- data memory ---------------------------------------------------------------------------
-// VU0 sees VU1's registers at qword 0x400 onwards (VF0-31, then VI0-15).
-uint8_t* vu0Window(uint32_t qw);   // vu.cpp
-inline uint8_t* qwPtr(Unit& u, uint32_t qw) {
-    if (u.index == 0 && (qw & 0x7FF) >= 0x400) return vu0Window(qw);
-    return u.data + ((qw * 16) & u.dataMask);
+// A quadword of the unit's data memory. VU0 reaches VU1's registers through
+// its window (ops_vu0.h).
+PS2_ALWAYS_INLINE void readQw(const Unit& u, uint32_t qw, uint32_t (&w)[4]) {
+    if (u.index == 0 && inVu0Window(qw)) [[unlikely]]
+        return vu0WindowRead(qw, w);
+    std::memcpy(w, u.data + ((qw * 16) & u.dataMask), 16);
+}
+PS2_ALWAYS_INLINE void writeQw(Unit& u, uint32_t qw, uint32_t dest, const uint32_t (&w)[4]) {   // the components dest names
+    if (u.index == 0 && inVu0Window(qw)) [[unlikely]]
+        return vu0WindowWrite(qw, dest, w);
+    uint8_t* p = u.data + ((qw * 16) & u.dataMask);
+    for (int i = 0; i < 4; ++i)
+        if (on(dest, i)) std::memcpy(p + 4 * i, &w[i], 4);
 }
 
 using Op = void (*)(Unit&, uint32_t);   // one half of a pair, given its word
@@ -352,27 +360,26 @@ constexpr Op upperFn(uint32_t c) {
 // Their stalls and the units they start are the timing's business.
 inline float comp(const Unit& u, uint32_t reg, uint32_t which) { return in(u.vf[reg].c[which]); }
 
-inline void loadVf(Unit& u, uint32_t ft, uint32_t dest, const uint8_t* p) {   // LQ, LQI, LQD
+inline void loadVf(Unit& u, uint32_t ft, uint32_t dest, uint32_t qw) {   // LQ, LQI, LQD
+    uint32_t w[4];
+    readQw(u, qw, w);
     VuReg* d = vfDst(u, ft);
     for (int i = 0; i < 4; ++i)
-        if (on(dest, i)) std::memcpy(&d->c[i], p + 4 * i, 4);
+        if (on(dest, i)) d->c[i] = w[i];
 }
-inline void storeVf(Unit& u, uint32_t fs, uint32_t dest, uint8_t* p) {   // SQ, SQI, SQD
-    for (int i = 0; i < 4; ++i)
-        if (on(dest, i)) std::memcpy(p + 4 * i, &u.vf[fs].c[i], 4);
-}
-inline void loadVi(Unit& u, uint32_t it, uint32_t dest, const uint8_t* p) {   // ILW, ILWR: the component chosen by dest
+inline void storeVf(Unit& u, uint32_t fs, uint32_t dest, uint32_t qw) { writeQw(u, qw, dest, u.vf[fs].c); }   // SQ, SQI, SQD
+inline void loadVi(Unit& u, uint32_t it, uint32_t dest, uint32_t qw) {   // ILW, ILWR: the component chosen by dest
+    uint32_t w[4];
+    readQw(u, qw, w);
     for (int i = 0; i < 4; ++i)
         if (on(dest, i)) {
-            uint16_t v;
-            std::memcpy(&v, p + 4 * i, 2);
-            viWrite(u, it, v);
+            viWrite(u, it, w[i] & 0xFFFF);
             break;
         }
 }
-inline void storeVi(uint8_t* p, uint32_t dest, uint32_t v) {   // ISW, ISWR
-    for (int i = 0; i < 4; ++i)
-        if (on(dest, i)) std::memcpy(p + 4 * i, &v, 4);
+inline void storeVi(Unit& u, uint32_t qw, uint32_t dest, uint32_t v) {   // ISW, ISWR
+    const uint32_t w[4] = {v, v, v, v};
+    writeQw(u, qw, dest, w);
 }
 inline void fillVf(Unit& u, uint32_t ft, uint32_t dest, uint32_t v) {   // MFIR, RNEXT, RGET, MFP
     VuReg* d = vfDst(u, ft);
@@ -421,10 +428,10 @@ inline bool branchTaken(const Unit& u, uint32_t op, uint32_t c) {
 
 namespace lower {
 
-inline void lq(Unit& u, uint32_t c) { loadVf(u, fFt(c), fDest(c), qwPtr(u, viRead(u, fFs(c)) + static_cast<uint32_t>(imm11(c)))); }   // LQ ft, imm11(is)
-inline void sq(Unit& u, uint32_t c) { storeVf(u, fFs(c), fDest(c), qwPtr(u, viRead(u, fFt(c)) + static_cast<uint32_t>(imm11(c)))); }  // SQ fs, imm11(it)
-inline void ilw(Unit& u, uint32_t c) { loadVi(u, fFt(c), fDest(c), qwPtr(u, viRead(u, fFs(c)) + static_cast<uint32_t>(imm11(c)))); }  // ILW it, imm11(is)
-inline void isw(Unit& u, uint32_t c) { storeVi(qwPtr(u, viRead(u, fFs(c)) + static_cast<uint32_t>(imm11(c))), fDest(c), viRead(u, fFt(c))); }   // ISW it, imm11(is)
+inline void lq(Unit& u, uint32_t c) { loadVf(u, fFt(c), fDest(c), viRead(u, fFs(c)) + static_cast<uint32_t>(imm11(c))); }   // LQ ft, imm11(is)
+inline void sq(Unit& u, uint32_t c) { storeVf(u, fFs(c), fDest(c), viRead(u, fFt(c)) + static_cast<uint32_t>(imm11(c))); }  // SQ fs, imm11(it)
+inline void ilw(Unit& u, uint32_t c) { loadVi(u, fFt(c), fDest(c), viRead(u, fFs(c)) + static_cast<uint32_t>(imm11(c))); }  // ILW it, imm11(is)
+inline void isw(Unit& u, uint32_t c) { storeVi(u, viRead(u, fFs(c)) + static_cast<uint32_t>(imm11(c)), fDest(c), viRead(u, fFt(c))); }   // ISW it, imm11(is)
 inline void iaddiu(Unit& u, uint32_t c) { viWrite(u, fFt(c), viRead(u, fFs(c)) + imm15(c)); }
 inline void isubiu(Unit& u, uint32_t c) { viWrite(u, fFt(c), viRead(u, fFs(c)) - imm15(c)); }
 inline void fceq(Unit& u, uint32_t c) { viWrite(u, 1, (u.vi[CLIP] & 0xFFFFFF) == (c & 0xFFFFFF) ? 1 : 0, false); }
@@ -474,23 +481,23 @@ inline void mr32(Unit& u, uint32_t c) {   // rotate fs by one component (y z w x
 }
 inline void lqi(Unit& u, uint32_t c) {   // LQI ft, (is++)
     const uint32_t is = fFs(c);
-    loadVf(u, fFt(c), fDest(c), qwPtr(u, viRead(u, is)));
+    loadVf(u, fFt(c), fDest(c), viRead(u, is));
     viWrite(u, is, viRead(u, is) + 1);
 }
 inline void lqd(Unit& u, uint32_t c) {   // LQD ft, (--is)
     const uint32_t is = fFs(c);
     viWrite(u, is, viRead(u, is) - 1);
-    loadVf(u, fFt(c), fDest(c), qwPtr(u, viRead(u, is)));
+    loadVf(u, fFt(c), fDest(c), viRead(u, is));
 }
 inline void sqi(Unit& u, uint32_t c) {   // SQI fs, (it++)
     const uint32_t it = fFt(c);
-    storeVf(u, fFs(c), fDest(c), qwPtr(u, viRead(u, it)));
+    storeVf(u, fFs(c), fDest(c), viRead(u, it));
     viWrite(u, it, viRead(u, it) + 1);
 }
 inline void sqd(Unit& u, uint32_t c) {   // SQD fs, (--it)
     const uint32_t it = fFt(c);
     viWrite(u, it, viRead(u, it) - 1);
-    storeVf(u, fFs(c), fDest(c), qwPtr(u, viRead(u, it)));
+    storeVf(u, fFs(c), fDest(c), viRead(u, it));
 }
 inline void div(Unit& u, uint32_t c) {   // DIV Q, fs.fsf, ft.ftf
     const uint32_t tb = u.vf[fFt(c)].c[fFtf(c)], sb = u.vf[fFs(c)].c[fFsf(c)];
@@ -530,8 +537,8 @@ inline void mtir(Unit& u, uint32_t c) { viWrite(u, fFt(c), u.vf[fFs(c)].c[fFsf(c
 inline void mfir(Unit& u, uint32_t c) {   // MFIR ft, is
     fillVf(u, fFt(c), fDest(c), static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(viRead(u, fFs(c))))));
 }
-inline void ilwr(Unit& u, uint32_t c) { loadVi(u, fFt(c), fDest(c), qwPtr(u, viRead(u, fFs(c)))); }   // ILWR it, (is)
-inline void iswr(Unit& u, uint32_t c) { storeVi(qwPtr(u, viRead(u, fFs(c))), fDest(c), viRead(u, fFt(c))); }   // ISWR it, (is)
+inline void ilwr(Unit& u, uint32_t c) { loadVi(u, fFt(c), fDest(c), viRead(u, fFs(c))); }   // ILWR it, (is)
+inline void iswr(Unit& u, uint32_t c) { storeVi(u, viRead(u, fFs(c)), fDest(c), viRead(u, fFt(c))); }   // ISWR it, (is)
 inline void rnext(Unit& u, uint32_t c) {
     uint32_t r = u.vi[R];
     const uint32_t x = (r >> 4) & 1, y = (r >> 22) & 1;

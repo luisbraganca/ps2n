@@ -1,7 +1,8 @@
-// Random VU1 micro programs and states for the vu_compiled test: the same
+// Random VU micro programs and states for the vu_compiled test: the same
 // generator writes the programs (generate.cpp) and the states they run from
 // (check.cpp). Operations that would leave the unit are left out: XGKICK
-// (the GS would draw the garbage) and unknown words (they report themselves).
+// (the GS would draw the garbage), unknown words and, on VU0, the EFU's
+// operations (they report themselves).
 #pragma once
 
 #include "ps2n/vu_micro.h"
@@ -48,16 +49,19 @@ public:
     // A pair, with the E bit `ePercent` of the time; branches are kept
     // `branchPercent` of the time (else drawn again), so programs run longer
     // straight stretches and loops.
-    void pair(uint8_t* micro, uint32_t pc, uint32_t ePercent, uint32_t branchPercent) {
+    void pair(uint8_t* micro, uint32_t pc, uint32_t ePercent, uint32_t branchPercent, int unit = 1) {
         uint32_t upper = 0, lower = 0;
         for (;;) {
             upper = upperWord();
             const bool ibit = chance(8);
             lower = ibit ? floatBits() : lowerWord();
             if (ibit) upper |= 0x80000000u;
-            const ps2n::vu::Pair p = ps2n::vu::decodePair(lower, upper, 1);
+            const ps2n::vu::Pair p = ps2n::vu::decodePair(lower, upper, unit);
             if (p.upper.op == ps2n::vu::UpperOp::Unknown) continue;
             if (!ibit && (p.lower.op == ps2n::vu::LowerOp::Unknown || p.lower.op == ps2n::vu::LowerOp::Xgkick)) continue;
+            using ps2n::vu::LowerOp;
+            if (!ibit && unit == 0 && (p.lower.op == LowerOp::Esum || p.lower.op == LowerOp::Eatan2 || p.lower.op == LowerOp::Escalar))
+                continue;   // VU0 has no EFU
             if (!ibit && p.lower.branch && !chance(branchPercent)) continue;
             break;
         }
