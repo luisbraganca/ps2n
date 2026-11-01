@@ -59,7 +59,7 @@ Playable, Perfect.
 
 | Game | Stage | Notes |
 |---|---|---|
-| 007: Agent Under Fire (Europe, SLES-50539) | In-game | All three executables run recompiled, and the VU1 micro code too. The language selection, the intro movies, the copyright and title screens, the menus and the first mission (Trouble in Paradise) run at full speed except where drawing falls behind: in the mission's opening cutscene and facing the lobby of its first building the game shows about 40 pictures a second, 25 in the heaviest views. The controller works. In the mission the sound still breaks up. The driving missions' executable is not recompiled yet. |
+| 007: Agent Under Fire (Europe, SLES-50539) | In-game | All three executables run recompiled, and the VU1 micro code too. The language selection, the intro movies, the copyright and title screens, the menus and the first mission (Trouble in Paradise) run at full speed except where drawing falls behind: in the heaviest view measured, facing the lobby of the mission's first building, the game shows 46 pictures a second (25 before the rasterizer's per-pixel work), and in the mission's opening cutscene 48 (38 before). The controller works. In the mission the sound still breaks up. The driving missions' executable is not recompiled yet. |
 
 ### By area
 
@@ -259,7 +259,24 @@ time the drawing takes costs 41% of them, doubling the time the vector units
 take 4%. In the helicopter cutscene that opens the mission, recompiled micro
 code raises the pictures from 38 to 40 a second, and the guest then waits
 for the GS thread, which may only be two vsyncs behind: vblanks come at 42 a
-second instead of 46.
+second instead of 46. Those lobby runs turned the camera in real time, a step
+a picture, so builds that drew at different rates ended up facing different
+ways. The rasterizer has since become faster per pixel without changing a
+pixel: each texture format samples through its own code, with each level's
+addressing and the CLUT's layout worked out with the drawing state, as are
+the frame and depth buffers' addressing; the depth test comes before
+texturing; and triangles work out eight pixels' weights at a time. With every
+primitive drawn on one thread, the deterministic run into the first building
+takes 357 s instead of 577, with the same frames and sound; with the draw
+threads, 131 s instead of 165 (vblanks 7,000 to 9,000 at 38.5 a second
+instead of 30). In real time, with the camera turned on the virtual clock
+first so that every build faces the same way, the game shows 46 pictures a
+second instead of 25 in the heaviest view facing the lobby, at 46 vblanks a
+second (the interpreted micro code holds the guest back there), and 49
+instead of 39 in a lighter one; in the helicopter cutscene 48 instead of 38,
+with vblanks back at 50. With the micro code recompiled too, vblanks stay at
+50 in the heaviest view and drawing allows 39 pictures a second; the lighter
+view shows 50.
 Before the GS drew large primitives on 8 threads, the title screen dropped to
 14.5 vblanks per second; before a polling loop split across two functions
 could take interrupts, it timed out on every frame, and the main menu ran at 3
@@ -281,15 +298,19 @@ Roughly in order:
    draw threads share every primitive in bands of rows, and the rasterizer
    decodes the drawing state once per primitive. That keeps the first game
    at full speed, its first mission included, on a 14-core desktop CPU
-   (nothing slower has been tried). Per pixel the rasterizer still divides
-   and interpolates in plain scalar code. A faster software renderer next
-   (stepped interpolation, SIMD), then a GPU renderer, which higher
+   (nothing slower has been tried). Per pixel the rasterizer samples each
+   texture format through its own code and works out eight pixels' weights
+   at a time, with the same arithmetic per pixel as before; the heaviest
+   view of the first mission's lobby still shows fewer than 50 pictures a
+   second. Stepped interpolation would be faster still but rounds
+   differently, so pictures would change; then a GPU renderer, which higher
    resolutions also need.
 4. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
    `ExecPS2`, dual-layer discs, code overlays, and a second game to bring up.
 5. **Vector units**: run micro programs alongside the EE, with their timing
    (they are recompiled already). Agent Under Fire, which redraws each field
-   through them inside its first building, waits for drawing there first.
+   through them inside its first building, keeps 50 vblanks a second there
+   with its micro code recompiled; drawing is what limits it.
 6. **Widescreen and higher resolutions**, the way PCSX2 does them:
    - **16:9.** PS2 games compute their own projection, so there is no general
      switch. PCSX2 applies per-game widescreen patches (`.pnach` files) that
@@ -537,7 +558,7 @@ ctest --test-dir build --output-on-failure
 |---|---|
 | `core` | Every table row decodes to itself, 10,000+ random instructions round-trip through the disassembler and assembler, known encodings, ELF and IRX parsing. |
 | `recompiler` | Config parsing and errors, function map formats, jump tables, stripped-ELF discovery, bindings, patches, code generation. |
-| `runtime` | Instruction semantics against independently computed results (sign extension, R5900 division, unaligned access, MMI lanes, FPU clamping, VU0 flags, VU1 micro programs' stalls, flag timing and rewriting, VU0's window on VU1's registers), guest printf, the GS (swizzling against the manual's block tables, depth, fields, both circuits, deinterlacing, drawing on threads matching one thread byte for byte, triangle coverage), the IPU's commands, FIFOs and DMA (against a reference IDCT), scratchpad DMA, SIF RPC end to end, IOP resets and services, discs, recognising programs in RAM, `--strict`, controller input and settings, the SPU2 (ADPCM against psx-spx's rules, the interpolation table's step response and every phase, envelope and sweep rates, noise, loop flags, the interrupt address, AutoDMA through both cores, reverb in its work area), libsd's register entries and the WAV dump. |
+| `runtime` | Instruction semantics against independently computed results (sign extension, R5900 division, unaligned access, MMI lanes, FPU clamping, VU0 flags, VU1 micro programs' stalls, flag timing and rewriting, VU0's window on VU1's registers), guest printf, the GS (swizzling against the manual's block tables, depth, fields, both circuits, deinterlacing, drawing on threads matching one thread byte for byte, triangle coverage, every texture format and CLUT layout, blending's choices, the alpha test's fail modes and the masks), the IPU's commands, FIFOs and DMA (against a reference IDCT), scratchpad DMA, SIF RPC end to end, IOP resets and services, discs, recognising programs in RAM, `--strict`, controller input and settings, the SPU2 (ADPCM against psx-spx's rules, the interpolation table's step response and every phase, envelope and sweep rates, noise, loop flags, the interrupt address, AutoDMA through both cores, reverb in its work area), libsd's register entries and the WAV dump. |
 | `program_*` | Assembly programs recompiled at build time and run twice, recompiled and interpreted, against recorded output or a recorded frame: control-flow edge cases, a stripped ELF that needs the interpreter, a polling loop split in two that must still take a vblank interrupt, the kernel scheduler, `printf` over the DECI2 TTY, config bindings, `LoadExecPS2` across three executables, a loader that jumps into the next program. |
 | `sdk_*` | Programs built with ps2sdk, run the same two ways: an IRX with its own RPC server, libsd, libpad and libpadx, VU0 and VU1 micro programs, libcdvd, libmc. The recompiled run runs the VU programs recompiled too. The binaries are checked in under `tests/sdk/bin` ([tests/sdk/README.md](tests/sdk/README.md)). |
 | `vu_compiled` | Random VU1 and VU0 micro programs written at build time and recompiled by `ps2n vu`, each run from the same random states on the interpreter and recompiled: every register, data memory, VU1's registers (VU0 reaches them through its window) and the cycle count must match, and enough of each unit's runs must end in recompiled code. |

@@ -262,6 +262,23 @@ A primitive that reads what it writes itself (a texture or CLUT in its own
 frame or depth buffer, or frame and depth buffers that overlap) is drawn by
 the queuing thread alone, after the queue.
 
+### Pixels
+
+Faster pixels must not change a picture: every pixel goes through the same
+float operations in the same order as before. So the rasterizer works out
+ahead what does not change within a primitive. With the drawing state it
+picks the sampler for the texture's format (a template per format, with no
+switch per texel), each level's first memory unit and its row of pages,
+where each CLUT entry sits, from tables built at start-up, and the frame and
+depth buffers' addressing; a texel still reads local memory as it is when
+the pixel is drawn. The depth test comes before texturing, since a pixel
+that fails it writes nothing whatever the alpha test says, and the frame's
+pixel is read only when blending, `FBMSK` or a kept alpha needs it.
+Triangles work out the weights of eight pixels of a row at a time, and
+sprites their texture's u, in plain loops over eight lanes that the
+compilers vectorise: each lane does one pixel's operations. Interpolating
+the colours and texture coordinates in lanes as well gained nothing.
+
 The GS thread never touches guest state. `FINISH` and `SIGNAL` set their
 `CSR` bits there, and the guest thread raises the GS interrupt at its next
 safepoint (`gs::pollEvents`, from `hw::intcPending`); a guest waiting idle is

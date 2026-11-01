@@ -11,6 +11,7 @@
 #include <atomic>
 #include <bit>
 #include <cfenv>
+#include <climits>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -81,6 +82,33 @@ struct Swizzle {
 };
 const Swizzle g_swizzle;
 
+// Where each CLUT entry sits in the CLUT's first page, in the CLUT format's
+// units: [0] 32-bit (words), [1] CT16, [2] CT16S (halfwords). An 8-bit
+// texel's entry comes from its index in CSM1 order; a 4-bit texel's from its
+// index plus CSA's offset, the first 16 entries in two rows of 8 and the
+// rest in CSM1 order.
+struct ClutOffsets {
+    uint16_t t8[3][256];
+    uint16_t t4[3][512];
+    static uint32_t csm1(uint32_t i) { return (i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1); }
+    static uint16_t at(int kind, uint32_t x, uint32_t y) {
+        return kind ? g_swizzle.c16[kind - 1][y][x] : g_swizzle.c32[0][y][x];
+    }
+    ClutOffsets() {
+        for (int kind = 0; kind < 3; ++kind) {
+            for (uint32_t index = 0; index < 256; ++index) {
+                const uint32_t i = csm1(index);
+                t8[kind][index] = at(kind, i & 15, i >> 4);
+            }
+            for (uint32_t i = 0; i < 512; ++i) {
+                const uint32_t j = csm1(i);
+                t4[kind][i] = i < 16 ? at(kind, i & 7, (i >> 3) & 1) : at(kind, j & 15, j >> 4);
+            }
+        }
+    }
+};
+const ClutOffsets g_clutOffsets;
+
 // Word index of a 32-bit pixel (CT32/CT24/Z32/Z24 and the T8H/T4HL/T4HH host words).
 uint32_t addr32(uint32_t bp, uint32_t bw, uint32_t x, uint32_t y, bool z) {
     const uint32_t page = (y >> 5) * std::max(bw, 1u) + (x >> 6);
@@ -102,53 +130,95 @@ uint32_t addr4(uint32_t bp, uint32_t bw, uint32_t x, uint32_t y) {
 
 uint8_t* vramBytes() { return reinterpret_cast<uint8_t*>(g_vram); }
 
-// Raw read: the format's own bits (32/24/16-bit colour, Z, or a CLUT index).
-uint32_t readRaw(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y) {
+// The memory unit holding pixel (x, y) in format psm: a word, halfword, byte
+// or nibble, as the format addresses memory.
+uint32_t pixelUnit(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y) {
     switch (psm) {
-    case PSMCT32: case PSMZ32: return g_vram[addr32(bp, bw, x, y, isZ(psm))];
-    case PSMCT24: case PSMZ24: return g_vram[addr32(bp, bw, x, y, isZ(psm))] & 0xFFFFFF;
-    case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S: {
-        uint16_t h;
-        std::memcpy(&h, vramBytes() + 2 * addr16(bp, bw, x, y, (psm & 0x08) != 0, isZ(psm)), 2);
-        return h;
-    }
-    case PSMT8: return vramBytes()[addr8(bp, bw, x, y)];
-    case PSMT4: {
-        const uint32_t n = addr4(bp, bw, x, y);
-        return (vramBytes()[n >> 1] >> ((n & 1) * 4)) & 0xF;
-    }
-    case PSMT8H: return g_vram[addr32(bp, bw, x, y, false)] >> 24;
-    case PSMT4HL: return (g_vram[addr32(bp, bw, x, y, false)] >> 24) & 0xF;
-    case PSMT4HH: return g_vram[addr32(bp, bw, x, y, false)] >> 28;
+    case PSMCT32: case PSMZ32: case PSMCT24: case PSMZ24: return addr32(bp, bw, x, y, isZ(psm));
+    case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S: return addr16(bp, bw, x, y, (psm & 0x08) != 0, isZ(psm));
+    case PSMT8: return addr8(bp, bw, x, y);
+    case PSMT4: return addr4(bp, bw, x, y);
+    case PSMT8H: case PSMT4HL: case PSMT4HH: return addr32(bp, bw, x, y, false);
     default: return 0;
     }
 }
 
-void writeRaw(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t v) {
+// A frame or depth buffer's addressing, worked out with the drawing state:
+// the unit pixelUnit() gives, the 32 and 16-bit layouts' sums inline.
+struct Buffer {
+    uint32_t bp, bw, psm;
+    int layout;                  // 32 or 16 bits; 0: through pixelUnit
+    uint32_t base, rowOfPages;   // in words or halfwords
+    int table;                   // the swizzle: Z for 32 bits, S | Z << 1 for 16
+};
+Buffer bufferOf(uint32_t bp, uint32_t bw, uint32_t psm) {
+    Buffer b{bp, bw, psm, 0, 0, 0, 0};
     switch (psm) {
-    case PSMCT32: case PSMZ32: g_vram[addr32(bp, bw, x, y, isZ(psm))] = v; return;
-    case PSMCT24: case PSMZ24: {
-        uint32_t& w = g_vram[addr32(bp, bw, x, y, isZ(psm))];
-        w = (w & 0xFF000000u) | (v & 0xFFFFFF);
-        return;
+    case PSMCT32: case PSMZ32: case PSMCT24: case PSMZ24: case PSMT8H: case PSMT4HL: case PSMT4HH:
+        b.layout = 32;
+        b.base = bp * 64;
+        b.rowOfPages = std::max(bw, 1u) * 2048;
+        b.table = isZ(psm) ? 1 : 0;
+        break;
+    case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S:
+        b.layout = 16;
+        b.base = bp * 128;
+        b.rowOfPages = std::max(bw, 1u) * 4096;
+        b.table = ((psm & 0x08) ? 1 : 0) | (isZ(psm) ? 2 : 0);
+        break;
+    default: break;
     }
+    return b;
+}
+PS2_ALWAYS_INLINE uint32_t unitOf(const Buffer& b, uint32_t x, uint32_t y) {
+    if (b.layout == 32) return (b.base + (y >> 5) * b.rowOfPages + (x >> 6) * 2048 + g_swizzle.c32[b.table][y & 31][x & 63]) & 0xFFFFF;
+    if (b.layout == 16) return (b.base + (y >> 6) * b.rowOfPages + (x >> 6) * 4096 + g_swizzle.c16[b.table][y & 63][x & 63]) & 0x1FFFFF;
+    return pixelUnit(b.bp, b.bw, b.psm, x, y);
+}
+
+// Raw read: the format's own bits (32/24/16-bit colour, Z, or a CLUT index).
+PS2_ALWAYS_INLINE uint32_t readUnit(uint32_t psm, uint32_t n) {
+    switch (psm) {
+    case PSMCT32: case PSMZ32: return g_vram[n];
+    case PSMCT24: case PSMZ24: return g_vram[n] & 0xFFFFFF;
+    case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S: {
+        uint16_t h;
+        std::memcpy(&h, vramBytes() + 2 * n, 2);
+        return h;
+    }
+    case PSMT8: return vramBytes()[n];
+    case PSMT4: return (vramBytes()[n >> 1] >> ((n & 1) * 4)) & 0xF;
+    case PSMT8H: return g_vram[n] >> 24;
+    case PSMT4HL: return (g_vram[n] >> 24) & 0xF;
+    case PSMT4HH: return g_vram[n] >> 28;
+    default: return 0;
+    }
+}
+uint32_t readRaw(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y) { return readUnit(psm, pixelUnit(bp, bw, psm, x, y)); }
+
+PS2_ALWAYS_INLINE void writeUnit(uint32_t psm, uint32_t n, uint32_t v) {
+    switch (psm) {
+    case PSMCT32: case PSMZ32: g_vram[n] = v; return;
+    case PSMCT24: case PSMZ24: g_vram[n] = (g_vram[n] & 0xFF000000u) | (v & 0xFFFFFF); return;
     case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S: {
         const auto h = static_cast<uint16_t>(v);
-        std::memcpy(vramBytes() + 2 * addr16(bp, bw, x, y, (psm & 0x08) != 0, isZ(psm)), &h, 2);
+        std::memcpy(vramBytes() + 2 * n, &h, 2);
         return;
     }
-    case PSMT8: vramBytes()[addr8(bp, bw, x, y)] = static_cast<uint8_t>(v); return;
+    case PSMT8: vramBytes()[n] = static_cast<uint8_t>(v); return;
     case PSMT4: {
-        const uint32_t n = addr4(bp, bw, x, y);
         uint8_t& b = vramBytes()[n >> 1];
         b = (n & 1) ? static_cast<uint8_t>((b & 0x0F) | ((v & 0xF) << 4)) : static_cast<uint8_t>((b & 0xF0) | (v & 0xF));
         return;
     }
-    case PSMT8H: { uint32_t& w = g_vram[addr32(bp, bw, x, y, false)]; w = (w & 0x00FFFFFFu) | (v << 24); return; }
-    case PSMT4HL: { uint32_t& w = g_vram[addr32(bp, bw, x, y, false)]; w = (w & 0xF0FFFFFFu) | ((v & 0xF) << 24); return; }
-    case PSMT4HH: { uint32_t& w = g_vram[addr32(bp, bw, x, y, false)]; w = (w & 0x0FFFFFFFu) | ((v & 0xF) << 28); return; }
+    case PSMT8H: g_vram[n] = (g_vram[n] & 0x00FFFFFFu) | (v << 24); return;
+    case PSMT4HL: g_vram[n] = (g_vram[n] & 0xF0FFFFFFu) | ((v & 0xF) << 24); return;
+    case PSMT4HH: g_vram[n] = (g_vram[n] & 0x0FFFFFFFu) | ((v & 0xF) << 28); return;
     default: return;
     }
+}
+void writeRaw(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t v) {
+    writeUnit(psm, pixelUnit(bp, bw, psm, x, y), v);
 }
 
 uint32_t bitsPerPixel(uint32_t psm) {
@@ -406,7 +476,11 @@ struct Level {
     uint32_t tbp, tbw;
     int tw, th;                          // size, texels
     int minu, maxu, minv, maxv;          // CLAMP's region, scaled to the level
+    uint32_t base, rowOfPages;           // its first unit and a row of pages, in the format's units
 };
+
+struct Draw;
+using SampleFn = uint32_t (*)(const Draw& d, float u, float v, float q);
 
 // What a primitive's pixels need, decoded from the registers when they
 // change rather than for every pixel.
@@ -429,9 +503,13 @@ struct Draw {
     int firstLevel, lastLevel;           // the levels sampling can reach: by Q all of them, else those K picks
     bool mipLinear;                      // MMIN blends the two levels around the LOD
     Level level[7];
+    SampleFn sample;                     // sampleTexture for the texture's format
     uint32_t ta0, ta1;                   // TEXA
     bool aem;
     uint32_t cbp, cpsm, csa;             // the CLUT
+    bool clutWide;                       // 32-bit entries, else 16-bit
+    uint32_t clutBase;                   // CBP in the entries' units
+    const uint16_t* clutOffsets;         // by a texel's index (ClutOffsets)
     bool ate;                            // alpha test
     uint32_t atst, aref, afail;
     bool zte;                            // depth test
@@ -440,33 +518,24 @@ struct Draw {
     uint32_t fogr, fogg, fogb;
     bool abe, pabe, colclamp;            // blending
     uint64_t ba, bb, bc, bd;
+    uint32_t blendA[2], blendB[2], blendD[2];   // A, B and D as masks on Cs and Cd: one, or neither for 0
     uint32_t fix;
     bool fb16;                           // a 16-bit frame buffer, and its mask
     uint32_t fbmsk16;
+    Buffer frame, depth;                 // their addressing
 };
 Draw g_draw;
 bool g_drawDirty = true;   // a drawing register changed since g_draw was decoded
 uint64_t g_drawGen = 0;    // counts the decodings, which tells states apart
 
-uint32_t clutLookup(const Draw& d, uint32_t index) {
-    const uint32_t psm = d.tpsm, cbp = d.cbp, cpsm = d.cpsm, csa = d.csa;
-    uint32_t x, y;
-    if (psm == PSMT8 || psm == PSMT8H) {
-        const uint32_t i = (index & 0xE7) | ((index & 0x08) << 1) | ((index & 0x10) >> 1);   // CSM1 order
-        x = i & 15;
-        y = i >> 4;
-    } else {
-        const uint32_t i = (index & 15) + (cpsm == PSMCT32 ? (csa & 15) * 16 : csa * 16);
-        x = i & 7;
-        y = (i >> 3) & 1;
-        if (i >= 16) {
-            const uint32_t j = (i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1);
-            x = j & 15;
-            y = j >> 4;
-        }
-    }
-    if (cpsm == PSMCT32 || cpsm == PSMCT24) return readRaw(cbp, 1, PSMCT32, x, y);
-    return expand16(readRaw(cbp, 1, cpsm == PSMCT16S ? PSMCT16S : PSMCT16, x, y));
+// A CLUT entry as RGBA, read from local memory as it is now. A 16-bit entry
+// takes alpha 0 or 0x80 (TEXA is not applied).
+PS2_ALWAYS_INLINE uint32_t clutColour(const Draw& d, uint32_t index) {
+    const uint32_t at = d.clutBase + d.clutOffsets[index];
+    if (d.clutWide) return g_vram[at & 0xFFFFF];
+    uint16_t h;
+    std::memcpy(&h, vramBytes() + 2 * (at & 0x1FFFFF), 2);
+    return expand16(h);
 }
 
 uint32_t wrapCoord(int c, int size, uint32_t mode, int minv, int maxv) {
@@ -478,32 +547,65 @@ uint32_t wrapCoord(int c, int size, uint32_t mode, int minv, int maxv) {
     }
 }
 
-// One texel of level `l` as RGBA: its coordinates wrapped as CLAMP says, a
-// CLUT format looked up, a 16 or 24-bit one expanded with TEXA.
-uint32_t texel(const Draw& d, const Level& l, int ix, int iy) {
-    const uint32_t x = wrapCoord(ix, l.tw, d.wms, l.minu, l.maxu);
-    const uint32_t y = wrapCoord(iy, l.th, d.wmt, l.minv, l.maxv);
-    switch (d.tpsm) {
-    case PSMCT32: return readRaw(l.tbp, l.tbw, d.tpsm, x, y);
-    case PSMCT24: {
-        const uint32_t c = readRaw(l.tbp, l.tbw, d.tpsm, x, y);
-        return c | ((d.aem && c == 0) ? 0 : d.ta0 << 24);
+// The bits of the texel at (x, y) of level l, wrapped already: its colour,
+// or its index in the CLUT. Psm is the texture's format; each level's
+// addressing was worked out with the drawing state.
+template <uint32_t Psm>
+PS2_ALWAYS_INLINE uint32_t rawTexel(const Level& l, uint32_t x, uint32_t y) {
+    if constexpr (Psm == PSMCT16 || Psm == PSMCT16S) {
+        const uint32_t at = l.base + (y >> 6) * l.rowOfPages + (x >> 6) * 4096 + g_swizzle.c16[Psm == PSMCT16S ? 1 : 0][y & 63][x & 63];
+        uint16_t h;
+        std::memcpy(&h, vramBytes() + 2 * (at & 0x1FFFFF), 2);
+        return h;
+    } else if constexpr (Psm == PSMT8) {
+        return vramBytes()[(l.base + (y >> 6) * l.rowOfPages + (x >> 7) * 8192 + g_swizzle.c8[y & 63][x & 127]) & 0x3FFFFF];
+    } else if constexpr (Psm == PSMT4) {
+        const uint32_t n = (l.base + (y >> 7) * l.rowOfPages + (x >> 7) * 16384 + g_swizzle.c4[y & 127][x & 127]) & 0x7FFFFF;
+        return (vramBytes()[n >> 1] >> ((n & 1) * 4)) & 0xF;
+    } else {   // the 32-bit layout: CT32, CT24, T8H, T4HL, T4HH
+        const uint32_t w = g_vram[(l.base + (y >> 5) * l.rowOfPages + (x >> 6) * 2048 + g_swizzle.c32[0][y & 31][x & 63]) & 0xFFFFF];
+        if constexpr (Psm == PSMCT24) return w & 0xFFFFFF;
+        else if constexpr (Psm == PSMT8H) return w >> 24;
+        else if constexpr (Psm == PSMT4HL) return (w >> 24) & 0xF;
+        else if constexpr (Psm == PSMT4HH) return w >> 28;
+        else return w;
     }
-    case PSMCT16: case PSMCT16S: return expand16(readRaw(l.tbp, l.tbw, d.tpsm, x, y), d.ta0, d.ta1, d.aem);
-    case PSMT8: case PSMT4: case PSMT8H: case PSMT4HL: case PSMT4HH:
-        return clutLookup(d, readRaw(l.tbp, l.tbw, d.tpsm, x, y));
-    default:
+}
+
+constexpr uint32_t kAnyFormat = 0x100;   // a texture format the rasterizer does not support
+
+// The texel at (x, y) of level l, wrapped already, as RGBA: a CLUT format
+// looked up, a 16 or 24-bit one expanded with TEXA.
+template <uint32_t Psm>
+PS2_ALWAYS_INLINE uint32_t texel(const Draw& d, const Level& l, uint32_t x, uint32_t y) {
+    if constexpr (Psm == kAnyFormat) {
+        (void)l, (void)x, (void)y;
         PS2_UNIMPL("gs", "texture format", "texture format 0x%x is not supported", d.tpsm);
         return 0xFFFFFFFFu;
+    } else {
+        const uint32_t c = rawTexel<Psm>(l, x, y);
+        if constexpr (Psm == PSMCT32) return c;
+        else if constexpr (Psm == PSMCT24) return c | ((d.aem && c == 0) ? 0 : d.ta0 << 24);
+        else if constexpr (Psm == PSMCT16 || Psm == PSMCT16S) return expand16(c, d.ta0, d.ta1, d.aem);
+        else return clutColour(d, c);
     }
 }
 
 // A texture coordinate in sixteenths of a texel (the precision of UV),
 // rounded down. Far out of range (Q near 0) it saturates.
 int sixteenths(float c) {
-    const float f = std::floor(c * 16.0f);
+    const float f = c * 16.0f;
     if (f >= 1073741824.0f) return 1 << 30;
-    return f >= -1073741824.0f ? static_cast<int>(f) : -(1 << 30);   // NaN too
+    if (!(f >= -1073741824.0f)) return -(1 << 30);   // NaN too
+    const int i = static_cast<int>(f);   // toward zero: one more than the floor below a negative fraction
+    return static_cast<float>(i) > f ? i - 1 : i;
+}
+
+// static_cast<int>(std::floor(c)) without the library call (SSE2 has no
+// rounding instruction), INT_MIN past the range as there.
+int floorInt(float c) {
+    const int i = static_cast<int>(c);
+    return static_cast<float>(i) > c && i != INT_MIN ? i - 1 : i;
 }
 
 // Colours are blended two channels at a time, 16 bits each.
@@ -514,17 +616,23 @@ constexpr uint32_t kLanes = 0x00FF00FFu;
 // around the point half a texel (of the level) up and left, each wrapped on
 // its own, by where that point lies between them in sixteenths of a texel,
 // and rounds down.
+template <uint32_t Psm>
 uint32_t sampleLevel(const Draw& d, int n, bool linear, float u, float v) {
     const Level& l = d.level[n];
-    if (!linear) return texel(d, l, static_cast<int>(std::floor(u)) >> n, static_cast<int>(std::floor(v)) >> n);
+    // Coordinates wrapped as CLAMP says.
+    const auto wrapU = [&](int c) { return wrapCoord(c, l.tw, d.wms, l.minu, l.maxu); };
+    const auto wrapV = [&](int c) { return wrapCoord(c, l.th, d.wmt, l.minv, l.maxv); };
+    if (!linear) return texel<Psm>(d, l, wrapU(floorInt(u) >> n), wrapV(floorInt(v) >> n));
     const int su = (sixteenths(u) >> n) - 8, sv = (sixteenths(v) >> n) - 8;
     const int x = su >> 4, y = sv >> 4;
     const auto fx = static_cast<uint32_t>(su & 15), fy = static_cast<uint32_t>(sv & 15);
-    const uint32_t c00 = texel(d, l, x, y);
+    const uint32_t x0 = wrapU(x), y0 = wrapV(y);
+    const uint32_t c00 = texel<Psm>(d, l, x0, y0);
     if ((fx | fy) == 0) return c00;
     // A texel whose weight is 0 is not read.
-    const uint32_t c10 = fx ? texel(d, l, x + 1, y) : 0, c01 = fy ? texel(d, l, x, y + 1) : 0;
-    const uint32_t c11 = fx && fy ? texel(d, l, x + 1, y + 1) : 0;
+    const uint32_t x1 = fx ? wrapU(x + 1) : 0, y1 = fy ? wrapV(y + 1) : 0;
+    const uint32_t c10 = fx ? texel<Psm>(d, l, x1, y0) : 0, c01 = fy ? texel<Psm>(d, l, x0, y1) : 0;
+    const uint32_t c11 = fx && fy ? texel<Psm>(d, l, x1, y1) : 0;
     const uint32_t w00 = (16 - fx) * (16 - fy), w10 = fx * (16 - fy), w01 = (16 - fx) * fy, w11 = fx * fy;   // sum 256
     // A weighted sum stays below 2^16.
     const uint32_t rb = ((c00 & kLanes) * w00 + (c10 & kLanes) * w10 + (c01 & kLanes) * w01 + (c11 & kLanes) * w11) >> 8;
@@ -576,25 +684,52 @@ int levelOfDetail(const Draw& d, uint32_t bits) {
 // magnified and MMAG filters the first level. From 0 on MMIN filters the
 // first level, or with mipmaps the level nearest the LOD, or blends the two
 // around it by the LOD's sixteenths, rounding down; never past level MXL.
+template <uint32_t Psm>
 uint32_t sampleTexture(const Draw& d, float u, float v, float q) {
-    if (!d.lodByQ && !d.mipLevels) return sampleLevel(d, 0, d.linear, u, v);
+    if (!d.lodByQ && !d.mipLevels) return sampleLevel<Psm>(d, 0, d.linear, u, v);
     int lod = d.lodK;
     if (d.lodByQ) {   // from magnifiedFrom on, only that it is magnified matters
         const uint32_t bits = std::bit_cast<uint32_t>(q) & 0x7FFFFFFFu;
         lod = bits >= d.magnifiedFrom ? -1 : levelOfDetail(d, bits);
     }
-    if (lod < 0) return sampleLevel(d, 0, d.magLinear, u, v);
-    if (!d.mipLevels) return sampleLevel(d, 0, d.minLinear, u, v);
-    if (!d.mipLinear) return sampleLevel(d, std::min((lod + 8) >> 4, d.mipLevels), d.minLinear, u, v);
+    if (lod < 0) return sampleLevel<Psm>(d, 0, d.magLinear, u, v);
+    if (!d.mipLevels) return sampleLevel<Psm>(d, 0, d.minLinear, u, v);
+    if (!d.mipLinear) return sampleLevel<Psm>(d, std::min((lod + 8) >> 4, d.mipLevels), d.minLinear, u, v);
     const int n = lod >> 4;
-    if (n >= d.mipLevels) return sampleLevel(d, d.mipLevels, d.minLinear, u, v);
-    const uint32_t a = sampleLevel(d, n, d.minLinear, u, v);
+    if (n >= d.mipLevels) return sampleLevel<Psm>(d, d.mipLevels, d.minLinear, u, v);
+    const uint32_t a = sampleLevel<Psm>(d, n, d.minLinear, u, v);
     const auto f = static_cast<uint32_t>(lod & 15);
     if (f == 0) return a;
-    const uint32_t b = sampleLevel(d, n + 1, d.minLinear, u, v);
+    const uint32_t b = sampleLevel<Psm>(d, n + 1, d.minLinear, u, v);
     const uint32_t rb = ((a & kLanes) * (16 - f) + (b & kLanes) * f) >> 4;
     const uint32_t ga = (((a >> 8) & kLanes) * (16 - f) + ((b >> 8) & kLanes) * f) >> 4;
     return (rb & kLanes) | (ga & kLanes) << 8;
+}
+
+SampleFn samplerFor(uint32_t tpsm) {
+    switch (tpsm) {
+    case PSMCT32: return sampleTexture<PSMCT32>;
+    case PSMCT24: return sampleTexture<PSMCT24>;
+    case PSMCT16: return sampleTexture<PSMCT16>;
+    case PSMCT16S: return sampleTexture<PSMCT16S>;
+    case PSMT8: return sampleTexture<PSMT8>;
+    case PSMT4: return sampleTexture<PSMT4>;
+    case PSMT8H: return sampleTexture<PSMT8H>;
+    case PSMT4HL: return sampleTexture<PSMT4HL>;
+    case PSMT4HH: return sampleTexture<PSMT4HH>;
+    default: return sampleTexture<kAnyFormat>;
+    }
+}
+
+// Each level's addressing, in the units of the texture's format: its first
+// unit, and the units in a row of pages (addr32, addr16, addr8 and addr4).
+void address(Level& l, uint32_t psm) {
+    switch (psm) {
+    case PSMCT16: case PSMCT16S: l.base = l.tbp * 128; l.rowOfPages = std::max(l.tbw, 1u) * 4096; break;
+    case PSMT8: l.base = l.tbp * 256; l.rowOfPages = std::max(l.tbw >> 1, 1u) * 8192; break;
+    case PSMT4: l.base = l.tbp * 512; l.rowOfPages = std::max(l.tbw >> 1, 1u) * 16384; break;
+    default: l.base = l.tbp * 64; l.rowOfPages = std::max(l.tbw, 1u) * 2048; break;   // CT32, CT24, T8H, T4HL, T4HH
+    }
 }
 
 bool alphaTestPass(const Draw& d, uint32_t a) {
@@ -695,6 +830,7 @@ const Draw& currentDraw() {
         l.maxu = maxu >> n;
         l.minv = minv >> n;
         l.maxv = maxv >> n;
+        address(l, d.tpsm);
     }
     const uint64_t texa = g_regs[TEXA];
     d.ta0 = static_cast<uint32_t>(field(texa, 0, 8));
@@ -703,6 +839,15 @@ const Draw& currentDraw() {
     d.cbp = static_cast<uint32_t>(field(e.tex0, 37, 14));
     d.cpsm = static_cast<uint32_t>(field(e.tex0, 51, 4));
     d.csa = static_cast<uint32_t>(field(e.tex0, 56, 5));
+    d.sample = samplerFor(d.tpsm);
+    // CPSM 32 and 24-bit read 32-bit entries, every other value 16-bit ones.
+    // A 4-bit texel's entries start CSA's 16 entries in, only CSA's low 4
+    // bits with CPSM 32.
+    const int clutKind = d.cpsm == PSMCT32 || d.cpsm == PSMCT24 ? 0 : d.cpsm == PSMCT16S ? 2 : 1;
+    d.clutWide = clutKind == 0;
+    d.clutBase = d.cbp * (d.clutWide ? 64 : 128);
+    d.clutOffsets = d.tpsm == PSMT8 || d.tpsm == PSMT8H ? g_clutOffsets.t8[clutKind]
+                                                         : g_clutOffsets.t4[clutKind] + (d.cpsm == PSMCT32 ? (d.csa & 15) * 16 : d.csa * 16);
     d.ate = field(e.test, 0, 1) != 0;
     d.atst = static_cast<uint32_t>(field(e.test, 1, 3));
     d.aref = static_cast<uint32_t>(field(e.test, 4, 8));
@@ -722,25 +867,44 @@ const Draw& currentDraw() {
     d.bb = field(e.alpha, 2, 2);
     d.bc = field(e.alpha, 4, 2);
     d.bd = field(e.alpha, 6, 2);
+    for (int i = 0; i < 2; ++i) {   // 0 picks Cs, 1 Cd, 2 and 3 nothing
+        d.blendA[i] = d.ba == static_cast<uint64_t>(i) ? ~0u : 0;
+        d.blendB[i] = d.bb == static_cast<uint64_t>(i) ? ~0u : 0;
+        d.blendD[i] = d.bd == static_cast<uint64_t>(i) ? ~0u : 0;
+    }
     d.fix = static_cast<uint32_t>(field(e.alpha, 32, 8));
     d.fb16 = e.fpsm == PSMCT16 || e.fpsm == PSMCT16S;
     d.fbmsk16 = pack16(e.fbmsk);
+    d.frame = bufferOf(e.fbp, e.fbw, e.fpsm);
+    d.depth = bufferOf(e.zbp, e.fbw, e.zpsm);   // the frame's width
     return d;
 }
 
 // Shades and writes one pixel. Colour components are 0..255 floats; q is the
-// pixel's Q, which gives the texture's level of detail.
-void plot(const Draw& dr, int x, int y, uint32_t z, float r, float g, float b, float a, float u, float v, float q, float fog,
+// pixel's Q, which gives the texture's level of detail. The depth test comes
+// first: a pixel that fails it writes nothing, whatever the alpha test says.
+PS2_ALWAYS_INLINE void plot(const Draw& dr, int x, int y, uint32_t z, float r, float g, float b, float a, float u, float v, float q, float fog,
           bool textured) {
     const Env& e = dr.e;
     if (x < e.scx0 || x > e.scx1 || y < e.scy0 || y > e.scy1) return;
+    const auto ux = static_cast<uint32_t>(x), uy = static_cast<uint32_t>(y);
+    uint32_t zc = 0, zUnit = 0;
+    if (dr.zte) {
+        if (dr.ztst == 0) return;   // NEVER
+        zc = std::min(z, dr.zmax);
+        zUnit = unitOf(dr.depth, ux, uy);
+        if (dr.ztst >= 2) {   // GEQUAL, GREATER
+            const uint32_t zd = readUnit(e.zpsm, zUnit);
+            if (dr.ztst == 2 ? zc < zd : zc <= zd) return;
+        }
+    }
     uint32_t cr = static_cast<uint32_t>(std::clamp(r, 0.f, 255.f));
     uint32_t cg = static_cast<uint32_t>(std::clamp(g, 0.f, 255.f));
     uint32_t cb = static_cast<uint32_t>(std::clamp(b, 0.f, 255.f));
     uint32_t ca = static_cast<uint32_t>(std::clamp(a, 0.f, 255.f));
 
     if (textured) {
-        const uint32_t t = sampleTexture(dr, u, v, q);
+        const uint32_t t = dr.sample(dr, u, v, q);
         const uint32_t tr = t & 0xFF, tg = (t >> 8) & 0xFF, tb = (t >> 16) & 0xFF, ta = t >> 24;
         const bool tcc = dr.tcc;
         switch (dr.tfx) {
@@ -786,27 +950,24 @@ void plot(const Draw& dr, int x, int y, uint32_t z, float r, float g, float b, f
         default: writeZ = false; writeA = false; break;
         }
     }
-    if (dr.zte) {
-        const uint32_t zc = std::min(z, dr.zmax);
-        const uint32_t zd = readRaw(e.zbp, e.fbw, e.zpsm, static_cast<uint32_t>(x), static_cast<uint32_t>(y));
-        switch (dr.ztst) {
-        case 0: return;
-        case 1: break;
-        case 2: if (zc < zd) return; break;
-        default: if (zc <= zd) return; break;
-        }
-        if (writeZ) writeRaw(e.zbp, e.fbw, e.zpsm, static_cast<uint32_t>(x), static_cast<uint32_t>(y), zc);
-    }
+    if (dr.zte && writeZ) writeUnit(e.zpsm, zUnit, zc);
     if (!writeFb) return;
 
-    const uint32_t dst = readRaw(e.fbp, e.fbw, e.fpsm, static_cast<uint32_t>(x), static_cast<uint32_t>(y));
-    const uint32_t d = dr.fb16 ? expand16(dst) : dst;
-    if (dr.abe && !(dr.pabe && !(ca & 0x80))) {   // alpha blending
+    // The frame buffer's pixel, if blending, the mask or keeping its alpha needs it.
+    const uint32_t fbUnit = unitOf(dr.frame, ux, uy);
+    const bool blending = dr.abe && !(dr.pabe && !(ca & 0x80));
+    const uint32_t mask = dr.fb16 ? dr.fbmsk16 : e.fbmsk;
+    uint32_t dst = 0, d = 0;
+    if (blending || !writeA || mask) {
+        dst = readUnit(e.fpsm, fbUnit);
+        d = dr.fb16 ? expand16(dst) : dst;
+    }
+    if (blending) {
         const uint32_t dR = d & 0xFF, dG = (d >> 8) & 0xFF, dB = (d >> 16) & 0xFF, da = d >> 24;
-        auto pick = [&](uint64_t sel, uint32_t s, uint32_t dd) -> int { return sel == 0 ? int(s) : sel == 1 ? int(dd) : 0; };
         const int c = dr.bc == 0 ? int(ca) : dr.bc == 1 ? int(da) : int(dr.fix);
         auto blend = [&](uint32_t s, uint32_t dd) {
-            int v = ((pick(dr.ba, s, dd) - pick(dr.bb, s, dd)) * c >> 7) + pick(dr.bd, s, dd);
+            const auto pick = [&](const uint32_t (&m)[2]) { return static_cast<int>((s & m[0]) | (dd & m[1])); };
+            int v = ((pick(dr.blendA) - pick(dr.blendB)) * c >> 7) + pick(dr.blendD);
             return dr.colclamp ? static_cast<uint32_t>(std::clamp(v, 0, 255)) : static_cast<uint32_t>(v & 0xFF);
         };
         cr = blend(cr, dR);
@@ -816,12 +977,7 @@ void plot(const Draw& dr, int x, int y, uint32_t z, float r, float g, float b, f
     if (e.fba) ca |= 0x80;
     uint32_t out = cr | (cg << 8) | (cb << 16) | (ca << 24);
     if (!writeA) out = (out & 0x00FFFFFF) | (d & 0xFF000000);
-    if (dr.fb16) {
-        const uint32_t m = dr.fbmsk16;
-        writeRaw(e.fbp, e.fbw, e.fpsm, static_cast<uint32_t>(x), static_cast<uint32_t>(y), (pack16(out) & ~m) | (dst & m));
-    } else {
-        writeRaw(e.fbp, e.fbw, e.fpsm, static_cast<uint32_t>(x), static_cast<uint32_t>(y), (out & ~e.fbmsk) | (dst & e.fbmsk));
-    }
+    writeUnit(e.fpsm, fbUnit, ((dr.fb16 ? pack16(out) : out) & ~mask) | (dst & mask));
 }
 
 void texCoord(const Draw& d, float s, float t, float q, float u, float v, float& outU, float& outV) {
@@ -876,9 +1032,17 @@ void drawSprite(const Draw& d, const Vertex& a, const Vertex& b, int part, int p
     const float dx = b.x - a.x, dy = b.y - a.y;
     for (int y = iy0; y <= iy1; y = nextRow(y, parts)) {
         const float fy = dy != 0 ? (static_cast<float>(y) - a.y) / dy : 0;
+        const float v = va + (vb - va) * fy;
+        float us[8] = {};   // u of eight pixels at a time, as lanes the compiler can vectorise
         for (int x = ix0; x <= ix1; ++x) {
-            const float fx = dx != 0 ? (static_cast<float>(x) - a.x) / dx : 0;
-            plot(d, x, y, b.z, b.r, b.g, b.b, b.a, ua + (ub - ua) * fx, va + (vb - va) * fy, b.q, b.fog, tex);
+            const int lane = (x - ix0) & 7;
+            if (lane == 0) {
+                if (dx != 0)
+                    for (int i = 0; i < 8; ++i) us[i] = ua + (ub - ua) * ((static_cast<float>(x + i) - a.x) / dx);
+                else
+                    for (int i = 0; i < 8; ++i) us[i] = ua + (ub - ua) * 0.0f;
+            }
+            plot(d, x, y, b.z, b.r, b.g, b.b, b.a, us[lane], v, b.q, b.fog, tex);
         }
     }
 }
@@ -919,10 +1083,21 @@ void drawTriangle(const Draw& d, const Vertex& v0, const Vertex& v1, const Verte
             else if (k < 0) empty = true;
         }
         if (empty || lo > hi) continue;
-        for (int x = static_cast<int>(lo); x <= static_cast<int>(hi); ++x) {
-            const float px = static_cast<float>(x), py = static_cast<float>(y);
-            const float w0 = ((v1.x - px) * (v2.y - py) - (v2.x - px) * (v1.y - py)) / area;
-            const float w1 = ((v2.x - px) * (v0.y - py) - (v0.x - px) * (v2.y - py)) / area;
+        const float py = static_cast<float>(y);
+        const float dy0 = v0.y - py, dy1 = v1.y - py, dy2 = v2.y - py;
+        const int xFirst = static_cast<int>(lo), xLast = static_cast<int>(hi);
+        // The weights of eight pixels at a time, as lanes the compiler can vectorise.
+        float w0s[8] = {}, w1s[8] = {};
+        for (int x = xFirst; x <= xLast; ++x) {
+            const int lane = (x - xFirst) & 7;
+            if (lane == 0)
+                for (int i = 0; i < 8; ++i) {
+                    const float lx = static_cast<float>(x + i);
+                    w0s[i] = ((v1.x - lx) * dy2 - (v2.x - lx) * dy1) / area;
+                    w1s[i] = ((v2.x - lx) * dy0 - (v0.x - lx) * dy2) / area;
+                }
+            const float px = static_cast<float>(x);
+            const float w0 = w0s[lane], w1 = w1s[lane];
             const float w2 = 1.0f - w0 - w1;
             if (w0 < 0 || w1 < 0 || w2 < 0) continue;
             // Exclude the bottom/right edges so shared edges are drawn once.

@@ -1863,6 +1863,21 @@ TEST_CASE(gs_textures_filter_as_tex1_asks) {
     // A CLUT texture is filtered after the lookup: its colours, not its indices.
     square(tex8, both, 1.0f, kClamp);
     CHECK_EQ(mismatches(linearClamped), size_t(0));
+    // Below 0 a coordinate rounds down, also in sixteenths: by ST from
+    // S = T = -1/2 to 0, pixel x samples u = x / 32 - 2, which REPEAT wraps.
+    auto belowZero = [&](uint64_t t1) {
+        gsWrite({{0x06, tex32}, {0x14, t1}, {0x08, 0}, {0x00, 6 | 1 << 4}, {0x01, 0x80808080u | bits64(1.0f) << 32},
+                 {0x02, bits64(-0.5f) | bits64(-0.5f) << 32}, {0x05, xyz(0, 0, 0)}, {0x02, 0}, {0x05, xyz(64, 64, 0)}});
+    };
+    belowZero(0);
+    CHECK_EQ(mismatches([](int x, int y) -> uint64_t { return filterTexel(((x >> 5) - 2) & 3, ((y >> 5) - 2) & 3); }), size_t(0));
+    belowZero(both);
+    CHECK_EQ(mismatches([](int x, int y) -> uint64_t {
+                 const int su = (x >> 1) - 40, sv = (y >> 1) - 40, x0 = su >> 4, y0 = sv >> 4;
+                 return bilinearOf(filterTexel(x0 & 3, y0 & 3), filterTexel((x0 + 1) & 3, y0 & 3), filterTexel(x0 & 3, (y0 + 1) & 3),
+                                   filterTexel((x0 + 1) & 3, (y0 + 1) & 3), static_cast<uint32_t>(su & 15), static_cast<uint32_t>(sv & 15));
+             }),
+             size_t(0));
 
     // Triangles over the top left half: by ST with Q 2, magnified; by UV
     // with Q from 2 down to 0.5 at the bottom left corner, which Q does not
@@ -2089,6 +2104,171 @@ TEST_CASE(gs_textures_use_mipmaps_as_tex1_asks) {
                  return mipTexel(std::min((static_cast<int>(lod) + 8) >> 4, 6), 0, 0, seed);
              }),
              size_t(0));
+}
+
+TEST_CASE(gs_textures_read_every_format) {
+    // A 256x256 texture, two pages or more each way in every format, drawn
+    // 1:1 by a sprite (by UV, nearest, decal, TCC): each pixel shows its
+    // texel as uploaded. A 24 or 16-bit texel takes its alpha from TEXA (AEM:
+    // 0 for black); a CLUT index takes its entry from a 32-bit, CT16 or CT16S
+    // CLUT, which sits in CSM1 order (entries 8-15 of each 32 after 16-23), a
+    // 4-bit one 16 entries a step of CSA in (only CSA's low 4 bits with a
+    // 32-bit CLUT). A 16-bit entry takes alpha 0 or 0x80, without TEXA.
+    gs::init();
+    constexpr int kW = 256, kH = 256;
+    constexpr uint64_t kTexa = 0x40 | 1ull << 15 | 0xC0ull << 32;   // TA0 0x40, AEM, TA1 0xC0
+    gsWrite({{0x4C, 4ull << 16}, {0x40, 255ull << 16 | 255ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}, {0x14, 0}, {0x08, 0},
+             {0x3B, kTexa}});
+    // The bits of uploaded texel k, `bits` a texel (24: three bytes).
+    auto texelBits = [](const std::vector<uint32_t>& words, size_t k, int bits) -> uint32_t {
+        if (bits == 24) {
+            uint32_t v = 0;
+            for (size_t b = 0; b < 3; ++b) v |= ((words[(3 * k + b) / 4] >> (8 * ((3 * k + b) % 4))) & 0xFF) << (8 * b);
+            return v;
+        }
+        const size_t bit = k * static_cast<size_t>(bits);
+        return static_cast<uint32_t>((words[bit / 32] >> (bit % 32)) & ((uint64_t(1) << bits) - 1));
+    };
+    auto expand16 = [](uint32_t c, uint32_t ta0, uint32_t ta1, bool aem) {
+        uint32_t a = (c & 0x8000) ? ta1 : ta0;
+        if (aem && (c & 0x7FFF) == 0) a = 0;
+        return (c & 0x1F) << 3 | ((c >> 5) & 0x1F) << 11 | ((c >> 10) & 0x1F) << 19 | a << 24;
+    };
+    // The CLUT: 16x16 at page 128, random, as 32-bit or 16-bit entries.
+    const std::vector<uint32_t> clut = pseudoRandom(256, 31);
+    auto entry = [&](uint32_t cpsm, uint32_t i) -> uint32_t {
+        const uint32_t x = (i & 7) | (i & 0x10) >> 1, y = (i >> 3 & 1) | (i >> 4 & 0xE);   // CSM1, i < 256
+        return cpsm == 0x00 ? clut[y * 16 + x] : expand16(texelBits(clut, y * 16 + x, 16), 0, 0x80, false);
+    };
+    int draws = 0;
+    // Uploads texels in `psm` (`bits` a texel) to page 32, draws them, and
+    // counts the pixels that differ from colour(texel bits).
+    auto check = [&](uint32_t psm, int bits, uint64_t clutFields, auto colour) {
+        std::vector<uint32_t> words = pseudoRandom(static_cast<size_t>(kW * kH * bits / 32), 40 + static_cast<uint32_t>(draws));
+        words[0] = words[1] = 0;   // the first texels black
+        gsUpload(32 * 32, 4, psm, kW, kH, words);
+        const uint64_t tex0 = 32 * 32 | 4ull << 14 | static_cast<uint64_t>(psm) << 20 | 8ull << 26 | 8ull << 30 | 1ull << 34 | 1ull << 35 |
+                              128ull * 32 << 37 | clutFields;
+        gsWrite({{0x06, tex0}, {0x00, 6 | 1 << 4 | 1 << 8}, {0x01, 0x80808080u}, {0x03, 0}, {0x05, xyz(0, 0, 0)},
+                 {0x03, kW * 16 | static_cast<uint64_t>(kH) * 16 << 16}, {0x05, xyz(kW, kH, 0)}});
+        ++draws;
+        size_t differ = 0;
+        for (int y = 0; y < kH; ++y)
+            for (int x = 0; x < kW; ++x)
+                differ += gs::readPixel32(0, 4, 0x00, x, y) != colour(texelBits(words, static_cast<size_t>(y * kW + x), bits));
+        return differ;
+    };
+    auto same = [](uint32_t c) { return c; };
+    CHECK_EQ(check(0x00, 32, 0, same), size_t(0));                                                            // PSMCT32
+    CHECK_EQ(check(0x01, 24, 0, [](uint32_t c) { return c | (c ? 0x40u << 24 : 0); }), size_t(0));            // PSMCT24
+    for (const uint32_t psm : {0x02u, 0x0Au})                                                                   // PSMCT16, PSMCT16S
+        CHECK_EQ(check(psm, 16, 0, [&](uint32_t c) { return expand16(c, 0x40, 0xC0, true); }), size_t(0));
+    for (const uint32_t cpsm : {0x00u, 0x02u, 0x0Au}) {
+        gsUpload(128 * 32, 1, cpsm, 16, 16, clut);
+        const uint64_t fields = static_cast<uint64_t>(cpsm) << 51;
+        CHECK_EQ(check(0x13, 8, fields, [&](uint32_t i) { return entry(cpsm, i); }), size_t(0));               // PSMT8
+        CHECK_EQ(check(0x1B, 8, fields, [&](uint32_t i) { return entry(cpsm, i); }), size_t(0));               // PSMT8H
+        for (const uint32_t csa : {0u, cpsm == 0x00 ? 21u : 5u}) {
+            const uint32_t first = cpsm == 0x00 ? (csa & 15) * 16 : csa * 16;
+            for (const uint32_t psm : {0x14u, 0x24u, 0x2Cu})                                                    // PSMT4, T4HL, T4HH
+                CHECK_EQ(check(psm, 4, fields | static_cast<uint64_t>(csa) << 56, [&](uint32_t i) { return entry(cpsm, first + i); }),
+                         size_t(0));
+        }
+    }
+    // CSA 21 with a 16-bit CLUT reads entries 336-351, where 80-95 sit (CSM1 has 256 places).
+    gsUpload(128 * 32, 1, 0x02, 16, 16, clut);
+    CHECK_EQ(check(0x14, 4, 0x02ull << 51 | 21ull << 56, [&](uint32_t i) { return entry(0x02, 80 + i); }), size_t(0));
+}
+
+TEST_CASE(gs_pixels_write_what_the_tests_and_masks_allow) {
+    // A sprite over a frame and a depth buffer filled beforehand. FBMSK keeps
+    // the frame's bits it sets, in the frame's format. A failed alpha test
+    // keeps both buffers (AFAIL KEEP), writes the frame only (FB_ONLY), the
+    // depth only (ZB_ONLY), or the frame's colour but not its alpha
+    // (RGB_ONLY). A failed depth test keeps both, whatever the alpha test.
+    gs::init();
+    gsWrite({{0x4E, 8}, {0x40, 63ull << 16 | 15ull << 48}, {0x18, 0}, {0x1A, 1}});   // ZBUF_1: page 8, PSMZ32
+    constexpr uint32_t kOld = 0x11223344u, kOldZ = 0x5000, kNew = 0x80AABBCCu;
+    constexpr uint64_t kDepthAlways = 1ull << 16 | 1ull << 17, kDepthGequal = 1ull << 16 | 2ull << 17, kAlphaNever = 1;
+    const uint64_t frame32 = 1ull << 16, frame16 = 16 | 1ull << 16 | 2ull << 24;   // page 0, PSMCT32; page 16, PSMCT16
+    // Fills the frame (FRAME_1 f) with kOld and the depth with kOldZ, draws kNew at depth z with TEST_1 `test`
+    // and FBMSK `mask`, and counts the pixels whose frame (as RGBA) is not wantFrame or depth not wantZ.
+    auto draw = [&](uint64_t f, uint32_t mask, uint64_t test, uint32_t z, uint32_t wantFrame, uint32_t wantZ, uint32_t zpsm = 0x30) {
+        gsWrite({{0x4E, 8 | static_cast<uint64_t>(zpsm & 0xF) << 24}, {0x4C, f}, {0x47, kDepthAlways}, {0x00, 6}, {0x01, kOld},
+                 {0x05, xyz(0, 0, kOldZ)}, {0x05, xyz(64, 16, kOldZ)}, {0x4C, f | static_cast<uint64_t>(mask) << 32}, {0x47, test},
+                 {0x01, kNew}, {0x05, xyz(0, 0, z)}, {0x05, xyz(64, 16, z)}});
+        const auto fbp = static_cast<uint32_t>(f & 0x1FF), psm = static_cast<uint32_t>(f >> 24 & 0x3F);
+        size_t differ = 0;
+        for (int y = 0; y < 16; ++y)
+            for (int x = 0; x < 64; ++x)
+                differ += gs::readPixel32(fbp, 1, psm, x, y) != wantFrame || gs::readPixel32(8, 1, zpsm, x, y) != wantZ;
+        return differ;
+    };
+    constexpr uint32_t kMask = 0xFF00F00Fu;
+    CHECK_EQ(draw(frame32, kMask, kDepthAlways, 0x6000, (kNew & ~kMask) | (kOld & kMask), 0x6000), size_t(0));
+    auto pack16 = [](uint32_t c) { return ((c >> 3) & 0x1F) | ((c >> 11) & 0x1F) << 5 | ((c >> 19) & 0x1F) << 10 | (c >> 31) << 15; };
+    auto expand16 = [](uint32_t c) {
+        return (c & 0x1F) << 3 | ((c >> 5) & 0x1F) << 11 | ((c >> 10) & 0x1F) << 19 | ((c & 0x8000) ? 0x80u : 0u) << 24;
+    };
+    for (const uint64_t f : {frame16, frame16 | 0x8ull << 24})   // PSMCT16, PSMCT16S
+        CHECK_EQ(draw(f, kMask, kDepthAlways, 0x6000, expand16((pack16(kNew) & ~pack16(kMask)) | (pack16(kOld) & pack16(kMask))), 0x6000),
+                 size_t(0));
+    CHECK_EQ(draw(frame32, 0, kDepthAlways | kAlphaNever, 0x6000, kOld, kOldZ), size_t(0));                    // KEEP
+    CHECK_EQ(draw(frame32, 0, kDepthAlways | kAlphaNever | 1 << 12, 0x6000, kNew, kOldZ), size_t(0));          // FB_ONLY
+    CHECK_EQ(draw(frame32, 0, kDepthAlways | kAlphaNever | 2 << 12, 0x6000, kOld, 0x6000), size_t(0));         // ZB_ONLY
+    CHECK_EQ(draw(frame32, 0, kDepthAlways | kAlphaNever | 3 << 12, 0x6000, (kNew & 0xFFFFFF) | (kOld & 0xFF000000u), kOldZ),
+             size_t(0));                                                                                          // RGB_ONLY
+    for (const uint64_t afail : {0ull, 1ull, 2ull, 3ull})
+        CHECK_EQ(draw(frame32, 0, kDepthGequal | kAlphaNever | afail << 12, 0x4000, kOld, kOldZ), size_t(0));
+    CHECK_EQ(draw(frame32, 0, kDepthGequal, 0x4000, kOld, kOldZ), size_t(0));
+    CHECK_EQ(draw(frame32, 0, kDepthGequal, 0x6000, kNew, 0x6000), size_t(0));
+    for (const uint32_t zpsm : {0x31u, 0x32u, 0x3Au}) {   // PSMZ24, PSMZ16, PSMZ16S
+        CHECK_EQ(draw(frame32, 0, kDepthGequal, 0x4000, kOld, kOldZ, zpsm), size_t(0));
+        CHECK_EQ(draw(frame32, 0, kDepthGequal, 0x6000, kNew, 0x6000, zpsm), size_t(0));
+    }
+}
+
+TEST_CASE(gs_blending_takes_what_alpha_picks) {
+    // ALPHA's A, B and D each pick the source colour (0), the frame's (1) or
+    // 0 (2, 3); C the source alpha (0), the frame's (1) or FIX (2, 3). Each
+    // channel is ((A - B) * C >> 7) + D, clamped with COLCLAMP, else wrapped;
+    // the alpha written is the source's. With PABE only a source alpha with
+    // its top bit set blends.
+    gs::init();
+    gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 3ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}, {0x49, 0}});
+    constexpr uint32_t kCd = 0x90FA9632u, kFix = 0x40;   // the frame: (50, 150, 250), alpha 0x90
+    auto blended = [&](uint32_t alpha, bool clamp, uint32_t cs) {
+        const uint32_t a = alpha & 3, b = (alpha >> 2) & 3, c = (alpha >> 4) & 3, d = (alpha >> 6) & 3;
+        const int cv = c == 0 ? static_cast<int>(cs >> 24) : c == 1 ? static_cast<int>(kCd >> 24) : static_cast<int>(kFix);
+        uint32_t out = cs & 0xFF000000u;
+        for (int sh = 0; sh < 24; sh += 8) {
+            const int s = static_cast<int>((cs >> sh) & 0xFF), f = static_cast<int>((kCd >> sh) & 0xFF);
+            const auto pick = [&](uint32_t sel) { return sel == 0 ? s : sel == 1 ? f : 0; };
+            const int v = ((pick(a) - pick(b)) * cv >> 7) + pick(d);
+            out |= static_cast<uint32_t>(clamp ? std::clamp(v, 0, 255) : v & 0xFF) << sh;
+        }
+        return out;
+    };
+    // Fills four pixels with kCd, blends cs over them, and counts those that are not `want`.
+    auto draw = [&](uint32_t cs, uint32_t want) {
+        gsWrite({{0x00, 6}, {0x01, kCd}, {0x05, xyz(0, 0, 0)}, {0x05, xyz(4, 1, 0)},
+                 {0x00, 6 | 1 << 6}, {0x01, cs}, {0x05, xyz(0, 0, 0)}, {0x05, xyz(4, 1, 0)}});
+        size_t differ = 0;
+        for (int x = 0; x < 4; ++x) differ += gs::readPixel32(0, 1, 0x00, x, 0) != want;
+        return differ;
+    };
+    constexpr uint32_t kCs = 0x601E64C8u;   // (200, 100, 30), alpha 0x60
+    size_t differ = 0;
+    for (const bool clamp : {false, true})
+        for (uint32_t alpha = 0; alpha < 256; ++alpha) {
+            gsWrite({{0x46, clamp ? 1u : 0u}, {0x42, alpha | static_cast<uint64_t>(kFix) << 32}});
+            differ += draw(kCs, blended(alpha, clamp, kCs));
+        }
+    CHECK_EQ(differ, size_t(0));
+    gsWrite({{0x49, 1}, {0x46, 1}, {0x42, 0x44}});   // PABE; (Cs - Cd) * As + Cd
+    CHECK_EQ(draw(kCs, kCs), size_t(0));
+    CHECK_EQ(draw(kCs | 0x80000000u, blended(0x44, true, kCs | 0x80000000u)), size_t(0));
+    gsWrite({{0x49, 0}, {0x46, 0}});
 }
 
 namespace {
