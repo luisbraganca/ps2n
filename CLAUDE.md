@@ -3,9 +3,10 @@
 PS2Native (`ps2n`, formerly ps2-uncompiler) recompiles PlayStation 2 EE
 executables into C++ and links them against a runtime that emulates the rest
 of the console at a high level. README.md has the status and roadmap. docs/
-has the depth: architecture.md (the execution model and why), runtime.md
-(options, coverage, where to add things), config.md (game config keys) and
-input.md (controllers, modelled on PCSX2).
+has the depth: games.md (each game's stage, problems and speed),
+architecture.md (the execution model and why), runtime.md (options, coverage,
+where to add things), config.md (game config keys) and input.md (controllers,
+modelled on PCSX2).
 
 ## Build and test
 
@@ -230,14 +231,19 @@ assets/                          branding/ (logo and icons; its README says whic
 
 ## Keeping the docs in step
 
-- README `## Status` holds each game's stage and a progress bar per area.
-  Most bars count the items of their checklist (the collapsed "What each bar
-  counts" block, every item weighing the same). When a feature lands, tick its
-  item, then update the row's count, its percentage and its bar: ten cells,
-  rounded to the nearest. Keep it honest: a gap goes on its list as soon as it
-  is known, not only once it is fixed. The instruction, syscall and IOP
-  function rows are counted instead. Recount them when syscalls or IOP exports
-  change, and update the date:
+- docs/games.md holds each game's stage, what runs, its known problems and its
+  speed. A game's speed measurements go in its Speed section there: where it
+  stands, then what each change bought, before and after. The README keeps a
+  one-paragraph summary of speed and no per-game detail.
+- README `## Status` holds a progress bar per area. The "Games playable" row
+  counts the games docs/games.md rates Playable or Perfect, out of all it
+  lists. Most bars count the items of their checklist (the collapsed "What
+  each bar counts" block, every item weighing the same). When a feature lands,
+  tick its item, then update the row's count, its percentage and its bar: ten
+  cells, rounded to the nearest. Keep it honest: a gap goes on its list as
+  soon as it is known, not only once it is fixed. The instruction, syscall and
+  IOP function rows are counted instead. Recount them when syscalls or IOP
+  exports change, and update the date:
   - Syscalls: `case` labels in `dispatchSyscall`/`handleInterruptSyscall`
     whose line does not call `sysUnimplemented`, out of the 145 numbers
     ps2sdk's `syscallnr.h` names (aliases resolved, reserved numbers left
