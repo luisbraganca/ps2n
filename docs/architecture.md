@@ -214,6 +214,21 @@ Time follows the host clock by default (games run at their real speed);
 `--virtual-clock` advances time by a fixed amount per safepoint and syscall
 instead, making runs reproducible, which is what the tests use.
 
+In real time the EE's work is held to the clock all the same
+(`clockEeWork`): a slice of 2,048 back-edges counts 16,384 EE cycles and a
+syscall 200, what `--virtual-clock` advances by, and the guest thread waits
+while its work is ahead of the clock, after at most a millisecond of credit
+for time it spent behind or idle. Recompiled code runs many times faster than
+the EE, and games bound their polling loops by a count of tries. Agent Under
+Fire waits for its vsync handler to take a finished frame, or to finish
+drawing one, for 5,000,000 polls, about 90 ms on a console, and then resets
+its drawing (`sub_00129fb0`). Polling at the host's speed ran that out within
+a frame, nearly every frame where drawing was heavy: the game redrew stale
+frames with the wrong lightmaps, and a room in its first mission flickered at
+35 to 47 pictures a second; held to the clock, it shows 50. Work that keeps
+the guest behind the clock is never held back, and `--no-throttle` (fast
+forward) holds nothing.
+
 ### The GS thread
 
 On the console the GS draws while the EE runs on. Drawing inside the DMA

@@ -4105,4 +4105,53 @@ TEST_CASE(vblanks_leave_the_threads_half_a_frame_in_two_in_real_time) {
     hw::setIntcMask(hw::INTC_VBLANK_START, wasEnabled);
 }
 
+TEST_CASE(ee_work_keeps_to_the_clock_in_real_time) {
+    // Recompiled code runs far faster than the EE. In real time the EE's work
+    // (a slice of back-edges, a syscall) is held to the clock, so a loop that
+    // gives up after a count of polls lasts as long as on the console: Agent
+    // Under Fire's waits for its vsync handler ran out within a frame and it
+    // reset its drawing. Time spent behind or idle earns a millisecond of
+    // credit, no more. The virtual clock advances by the work; fast forward
+    // does not wait, and leaves nothing owed.
+    reset();
+    constexpr uint64_t kMs = kEeClockHz / 1000;
+    const auto took = [](auto work) {
+        const uint64_t t0 = nowCycles();
+        work();
+        return nowCycles() - t0;
+    };
+    clockInit(false, false);
+    uint64_t t = took([] {   // 360 slices: 20 ms of EE work
+        for (int i = 0; i < 360; ++i) safepoint(0x00100000);
+    });
+    CHECK(t >= 19 * kMs);
+    CHECK(t < 200 * kMs);
+    t = took([] {   // 30,000 syscalls: 20 ms
+        for (int i = 0; i < 30000; ++i) {
+            setGpr(V1, 0x2F);   // GetThreadId
+            syscall(0x00100000);
+        }
+    });
+    CHECK(t >= 19 * kMs);
+    CHECK(t < 200 * kMs);
+    const uint64_t idleUntil = nowCycles() + 50 * kMs;   // 50 ms behind...
+    while (nowCycles() < idleUntil) {
+    }
+    t = took([] { clockEeWork(10 * kMs); });   // ...lend 1 ms to 10 ms of work
+    CHECK(t >= 9 * kMs);
+    CHECK(t < 100 * kMs);
+    clockSetNoThrottle(true);
+    t = took([] { clockEeWork(50 * kMs); });
+    CHECK(t < 5 * kMs);
+    clockSetNoThrottle(false);
+    t = took([] { clockEeWork(5 * kMs); });
+    CHECK(t >= 4 * kMs);
+    CHECK(t < 30 * kMs);
+    clockInit(true, false);
+    const uint64_t v0 = nowCycles();
+    clockEeWork(12345);
+    CHECK_EQ(nowCycles() - v0, 12345u);
+    clockInit(false, false);
+}
+
 int main(int argc, char** argv) { return ::testing::runAll(argc, argv); }

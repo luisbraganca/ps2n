@@ -22,7 +22,7 @@ model.
 | `--memcards DIR` | Directory holding the memory cards (default `memcards`): `DIR/mc0` is the card in port 1, `DIR/mc1` the one in port 2. See [Memory cards](#memory-cards). |
 | `--interpret` | Run everything through the interpreter, except functions the config replaced. See [Diagnosing a run](#diagnosing-a-run). |
 | `--virtual-clock` | Time advances with execution instead of the host clock: runs are reproducible, which is what the tests use. |
-| `--no-throttle` | Host clock, but skip idle time instead of sleeping. |
+| `--no-throttle` | Host clock, but skip idle time instead of sleeping, and let the EE's work run ahead of the clock (it is held to it otherwise: see [architecture.md](architecture.md#safepoints-interrupts-timers-and-preemption)). |
 | `--max-vsyncs N` | Exit after N vertical blanks. |
 | `--dump-frames DIR` | Write each displayed frame as `DIR/frame_NNNNNN.ppm`. |
 | `--dump-every N` | With `--dump-frames`, only every Nth frame. |

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 namespace ps2 {
@@ -21,6 +22,7 @@ bool g_virtual = false;
 std::atomic<bool> g_noThrottle{false};
 uint64_t g_virtualNow = 0;
 uint64_t g_skipped = 0;    // cycles skipped while idle in no-throttle mode
+uint64_t g_eeWork = 0;     // real time: where the EE's work has brought it, in clock cycles
 std::chrono::steady_clock::time_point g_start;
 std::chrono::steady_clock::time_point g_pausedAt;
 bool g_paused = false;
@@ -44,6 +46,7 @@ void clockInit(bool virtualClock, bool noThrottle) {
     g_noThrottle = noThrottle;
     g_virtualNow = 0;
     g_skipped = 0;
+    g_eeWork = 0;
     g_start = std::chrono::steady_clock::now();
     g_paused = false;
     g_events.clear();
@@ -61,6 +64,23 @@ int64_t rtcTime() {
 
 void clockAdvance(uint64_t cycles) {
     if (g_virtual) g_virtualNow += cycles;
+}
+
+void clockEeWork(uint64_t cycles) {
+    if (g_virtual) {
+        g_virtualNow += cycles;
+        return;
+    }
+    constexpr uint64_t kCredit = kEeClockHz / 1000;   // a millisecond
+    const uint64_t now = nowCycles();
+    if (g_eeWork + kCredit < now) g_eeWork = now - kCredit;
+    g_eeWork += cycles;
+    if (g_noThrottle) {   // fast forward: the work keeps no time
+        g_eeWork = now;
+        return;
+    }
+    // Waits of a slice or less: a sleep would take a whole timer tick.
+    while (nowCycles() < g_eeWork) std::this_thread::yield();
 }
 
 void clockWaitUntil(uint64_t target) {

@@ -541,7 +541,7 @@ ctest --test-dir build --output-on-failure
   - the IPU's commands, FIFOs and DMA (against a reference IDCT), and
     scratchpad DMA;
   - SIF RPC end to end, IOP resets and services, discs, recognising programs
-    in RAM, `--strict`;
+    in RAM, `--strict`, the EE's work held to the clock in real time;
   - controller input and settings;
   - the SPU2: ADPCM against psx-spx's rules, the interpolation table's step
     response and every phase, envelope and sweep rates, noise, loop flags, the

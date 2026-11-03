@@ -34,7 +34,7 @@ constexpr int kMaxThreads = 256;
 constexpr int kMaxSemas = 256;
 constexpr int kMaxAlarms = 64;
 constexpr int32_t kSliceLength = 2048;          // back-edges between safepoints
-constexpr uint64_t kSliceCycles = 2048 * 8;     // virtual time charged per slice
+constexpr uint64_t kSliceCycles = 2048 * 8;     // EE time charged per slice (clockEeWork)
 constexpr uint64_t kSyscallCycles = 200;
 constexpr uint32_t kStatusIE = 1u << 0, kStatusEIE = 1u << 16;
 
@@ -1107,7 +1107,7 @@ void syscall(uint32_t pc) {
     if (g_opt.traceSyscalls)
         PS2_INFO("syscall", "%s (%d) a0=0x%08x a1=0x%08x a2=0x%08x from 0x%08x", kernel::syscallName(n), n, ru32(regs::A0),
                  ru32(regs::A1), ru32(regs::A2), pc);
-    clockAdvance(kernel::kSyscallCycles);
+    clockEeWork(kernel::kSyscallCycles);
     if (!kernel::handleInterruptSyscall(n)) kernel::dispatchSyscall(n);
     // A LoadExecPS2 (kTrampExec) waits for the frames to unwind: the old program does no more work.
     if (g_exitRequested || !kernel::hasRunningThread() || cpu.pc == kTrampExec) return;
@@ -1127,7 +1127,7 @@ bool safepoint(uint32_t resumePc) {
         return false;
     }
     cpu.pc = resumePc;
-    clockAdvance(kernel::kSliceCycles);
+    clockEeWork(kernel::kSliceCycles);
     runDueEvents();
     iop::sync();
     kernel::serviceInterrupts();

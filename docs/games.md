@@ -137,3 +137,8 @@ In the order the changes were made:
   vblanks back at 50. With the micro code recompiled too, vblanks stay at 50
   in the heaviest view and drawing allows 39 pictures a second; the lighter
   view shows 50, and the helicopter cutscene 49.
+- **The EE's work held to the clock.** The game's waits for the GS time out
+  after a fixed number of polls. In real time they still ran out early, the
+  recompiled loop polling far faster than the EE, and the game reset its
+  drawing: a room in the first mission flickered, at 35 to 47 pictures a
+  second. With the EE's work held to the clock it shows 50.

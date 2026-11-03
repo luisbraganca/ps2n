@@ -1,10 +1,11 @@
 // Emulated time and the event queue.
 //
 // Time is counted in EE cycles (294.912 MHz). In the default mode it follows
-// the host's monotonic clock, so games run at their real speed; with
-// --virtual-clock it only advances as guest code runs (a fixed amount per
-// safepoint and syscall) and jumps straight to the next event when every
-// thread is idle, which makes runs reproducible.
+// the host's monotonic clock, so games run at their real speed, and the EE's
+// work is held to it (clockEeWork); with --virtual-clock it only advances as
+// guest code runs (a fixed amount per safepoint and syscall) and jumps
+// straight to the next event when every thread is idle, which makes runs
+// reproducible.
 #pragma once
 
 #include <cstdint>
@@ -21,7 +22,15 @@ uint64_t nowCycles();
 // host's time, or with --virtual-clock 2001-07-04 12:00 plus emulated time.
 int64_t rtcTime();
 // Virtual mode: guest work done since the last call (no-op in real-time mode).
+// The IOP's slices; the EE's go through clockEeWork.
 void clockAdvance(uint64_t cycles);
+// EE work done since the last call (a slice of back-edges, a syscall). Virtual
+// mode advances by it. In real time the guest thread waits while its work is
+// ahead of the clock (after at most a millisecond of credit for time it spent
+// behind or idle): recompiled code runs far faster than the EE, and a polling
+// loop that gives up after a count of tries would give up within a frame,
+// where the console takes several.
+void clockEeWork(uint64_t cycles);
 // Idle: wait (or skip, in virtual/no-throttle mode) until `target`.
 void clockWaitUntil(uint64_t target);
 // Any thread: ends the current or next real-time wait early, for an event
