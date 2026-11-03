@@ -1673,61 +1673,151 @@ TEST_CASE(gs_vsync_shows_what_the_draw_threads_drew) {
     std::filesystem::remove_all(dir);
 }
 
-TEST_CASE(gs_triangles_cover_what_the_float_test_covers) {
-    // Rows are narrowed to spans from exact edge functions; the pixels inside
-    // must be exactly those the float weights and the edge rule select over
-    // the whole bounding box. Random triangles in 12.4 coordinates, both
-    // windings, from slivers to ones reaching 4096 pixels (where the float
-    // products round), seen through a 512x512 scissor.
+namespace {
+
+// Whether a triangle with vertices (X, Y), in sixteenths of a pixel, covers
+// pixel (x, y), in integers: its centre is inside every edge, or on a left
+// edge (the triangle to its right) or a top one (level, the triangle below).
+// `onEdge` is set when the centre lies on an edge's line.
+bool topLeftCovers(const int64_t X[3], const int64_t Y[3], int x, int y, bool& onEdge) {
+    onEdge = false;
+    const int64_t area = (X[1] - X[0]) * (Y[2] - Y[0]) - (X[2] - X[0]) * (Y[1] - Y[0]);
+    if (area == 0) return false;
+    const int64_t s = area > 0 ? 1 : -1;
+    bool inside = true;
+    for (int i = 0; i < 3; ++i) {
+        const int j = (i + 1) % 3;
+        // Positive on the triangle's side of the edge from vertex i to vertex j.
+        const int64_t e = s * ((X[j] - X[i]) * (y * 16 - Y[i]) - (Y[j] - Y[i]) * (x * 16 - X[i]));
+        if (e < 0) inside = false;
+        if (e != 0) continue;
+        onEdge = true;
+        const int64_t alongX = -s * (Y[j] - Y[i]), alongY = s * (X[j] - X[i]);   // how e grows to the right and down
+        if (!(alongX > 0 || (alongX == 0 && alongY > 0))) inside = false;      // a right or a bottom edge
+    }
+    return inside;
+}
+
+uint64_t xyz16(int64_t x, int64_t y) { return static_cast<uint64_t>(x) | static_cast<uint64_t>(y) << 16; }
+
+} // namespace
+
+TEST_CASE(gs_triangles_cover_by_the_top_left_rule) {
+    // A pixel is drawn when its centre is inside the triangle, or on a left
+    // or a top edge but not on a right or a bottom one, however the host
+    // rounds: the guest's thread rounds toward zero. Random triangles in 12.4
+    // coordinates, both windings, from slivers to ones reaching 4096 pixels,
+    // some with their vertices on pixel centres, a level or an upright edge,
+    // seen through a 512x512 scissor; each pixel of the bounding box and two
+    // around it is checked.
     gs::init();
+    const int mode = std::fegetround();
     gsWrite({{0x4C, 8ull << 16}, {0x40, 511ull << 16 | 511ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
     uint32_t seed = 12345;
     auto next = [&](uint32_t range) {
         seed = seed * 1664525u + 1013904223u;
         return (seed >> 8) % range;
     };
-    struct V {
-        float x, y;
-    };
-    int drawn = 0;
-    for (int t = 0; t < 60; ++t) {
-        const uint32_t span = (t < 20 ? 64 : t < 40 ? 512 : 4096) * 16;   // in sixteenths of a pixel
-        uint32_t X[3], Y[3];
+    int drawn = 0, onEdges = 0;
+    for (int t = 0; t < 120; ++t) {
+        std::fesetround(t % 2 ? FE_TOWARDZERO : FE_TONEAREST);
+        const uint32_t span = (t < 40 ? 64 : t < 80 ? 512 : 4096) * 16;   // in sixteenths of a pixel
+        int64_t X[3], Y[3];
         for (int i = 0; i < 3; ++i) {
             X[i] = next(span);
             Y[i] = next(span);
         }
-        if (t % 7 == 0) Y[2] = Y[1] + next(3);   // a near-horizontal edge
-        gsWrite({{0x00, 6}, {0x01, 0}, {0x05, xyz(0, 0, 0)}, {0x05, xyz(512, 512, 0)}});
-        gsWrite({{0x00, 3}, {0x01, 0x80FFFFFF},
-                 {0x05, X[0] | static_cast<uint64_t>(Y[0]) << 16}, {0x05, X[1] | static_cast<uint64_t>(Y[1]) << 16},
-                 {0x05, X[2] | static_cast<uint64_t>(Y[2]) << 16}});
-        const V v0{X[0] / 16.0f, Y[0] / 16.0f}, v1{X[1] / 16.0f, Y[1] / 16.0f}, v2{X[2] / 16.0f, Y[2] / 16.0f};
-        const float area = (v1.x - v0.x) * (v2.y - v0.y) - (v2.x - v0.x) * (v1.y - v0.y);
-        const int minX = std::max(static_cast<int>(std::floor(std::min({v0.x, v1.x, v2.x}))), 0);
-        const int maxX = std::min(static_cast<int>(std::ceil(std::max({v0.x, v1.x, v2.x}))), 511);
-        const int minY = std::max(static_cast<int>(std::floor(std::min({v0.y, v1.y, v2.y}))), 0);
-        const int maxY = std::min(static_cast<int>(std::ceil(std::max({v0.y, v1.y, v2.y}))), 511);
+        if (t % 4 == 1)
+            for (int i = 0; i < 3; ++i) X[i] &= ~15, Y[i] &= ~15;   // on pixel centres
+        if (t % 5 == 2) Y[2] = Y[1] &= ~15;                        // a level edge through centres
+        if (t % 5 == 3) X[2] = X[0] &= ~15;                        // an upright one
+        if (t % 7 == 0) Y[2] = std::min<int64_t>(Y[1] + next(3), 65535);   // a nearly level edge
+        gsRect(0, 0, 512, 512, 0);
+        gsWrite({{0x00, 3}, {0x01, 0x80FFFFFF}, {0x05, xyz16(X[0], Y[0])}, {0x05, xyz16(X[1], Y[1])}, {0x05, xyz16(X[2], Y[2])}});
+        const auto lowest = [](const int64_t* c) { return static_cast<int>(std::min({c[0], c[1], c[2]}) / 16); };
+        const auto highest = [](const int64_t* c) { return static_cast<int>(std::max({c[0], c[1], c[2]}) / 16); };
         size_t mismatches = 0;
-        for (int y = minY; y <= maxY; ++y) {
-            for (int x = minX; x <= maxX; ++x) {
-                bool covered = false;
-                if (area != 0) {
-                    const float px = static_cast<float>(x), py = static_cast<float>(y);
-                    const float w0 = ((v1.x - px) * (v2.y - py) - (v2.x - px) * (v1.y - py)) / area;
-                    const float w1 = ((v2.x - px) * (v0.y - py) - (v0.x - px) * (v2.y - py)) / area;
-                    const float w2 = 1.0f - w0 - w1;
-                    covered = w0 >= 0 && w1 >= 0 && w2 >= 0 &&
-                              !((w0 == 0 && w1 + w2 == 1 && py == std::max(v1.y, v2.y)) ||
-                                (px == maxX && (w0 == 0 || w1 == 0 || w2 == 0) && maxX != minX));
-                }
+        for (int y = std::max(lowest(Y) - 2, 0); y <= std::min(highest(Y) + 2, 511); ++y)
+            for (int x = std::max(lowest(X) - 2, 0); x <= std::min(highest(X) + 2, 511); ++x) {
+                bool onEdge = false;
+                const bool covered = topLeftCovers(X, Y, x, y, onEdge);
                 drawn += covered;
+                onEdges += onEdge;
                 mismatches += covered != (gs::readPixel32(0, 8, 0x00, x, y) != 0);
             }
-        }
         CHECK_EQ(mismatches, size_t(0));
     }
+    std::fesetround(mode);
     CHECK(drawn > 100000);
+    CHECK(onEdges > 1000);
+}
+
+TEST_CASE(gs_triangles_sharing_an_edge_draw_it_once) {
+    // Each triangle adds its colour to the frame, so a pixel drawn twice or
+    // missed shows. A mesh over [8, 248) x [8, 248): a grid of vertices 48
+    // pixels apart, the inner ones moved by up to 7.5 pixels in sixteenths
+    // (some left on pixel centres, where the diagonals pass through centres
+    // too), each cell split along one diagonal or the other. Then the two
+    // triangles of a HUD icon in Agent Under Fire, a field from 217.5 down to
+    // 230: rows 218-229 once, row 230 never (rounding toward zero, half of it
+    // came out drawn).
+    gs::init();
+    const int mode = std::fegetround();
+    gsWrite({{0x4C, 8ull << 16}, {0x40, 511ull << 16 | 255ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0},
+             {0x42, 0 | 2 << 2 | 2 << 4 | 1 << 6 | 0x80ull << 32}});   // ALPHA_1: Cs * FIX / 128 + Cd, FIX 128
+    uint32_t seed = 777;
+    auto next = [&](uint32_t range) {
+        seed = seed * 1664525u + 1013904223u;
+        return (seed >> 8) % range;
+    };
+    const auto triangle = [](const int64_t* p, const int64_t* q, const int64_t* r) {
+        gsWrite({{0x00, 3 | 1 << 6}, {0x01, 0x80000010}, {0x05, xyz16(p[0], p[1])}, {0x05, xyz16(q[0], q[1])}, {0x05, xyz16(r[0], r[1])}});
+    };
+    for (const int rounding : {FE_TOWARDZERO, FE_TONEAREST}) {
+        std::fesetround(rounding);
+        gsRect(0, 0, 512, 256, 0);
+        int64_t grid[6][6][2];
+        for (int j = 0; j < 6; ++j)
+            for (int i = 0; i < 6; ++i) {
+                const bool inner = i > 0 && i < 5 && j > 0 && j < 5;
+                const bool moved = inner && next(3) != 0;
+                grid[j][i][0] = (8 + 48 * i) * 16 + (moved ? static_cast<int64_t>(next(241)) - 120 : 0);
+                grid[j][i][1] = (8 + 48 * j) * 16 + (moved ? static_cast<int64_t>(next(241)) - 120 : 0);
+            }
+        for (int j = 0; j < 5; ++j)
+            for (int i = 0; i < 5; ++i) {
+                const int64_t *a = grid[j][i], *b = grid[j][i + 1], *c = grid[j + 1][i], *d = grid[j + 1][i + 1];
+                if ((i + j) % 2) {   // one triangle of each winding
+                    triangle(a, b, d);
+                    triangle(a, c, d);
+                } else {
+                    triangle(a, b, c);
+                    triangle(c, d, b);
+                }
+            }
+        size_t wrong = 0;
+        for (int y = 0; y < 256; ++y)
+            for (int x = 0; x < 256; ++x) {
+                const bool in = x >= 8 && x < 248 && y >= 8 && y < 248;
+                wrong += (gs::readPixel32(0, 8, 0x00, x, y) & 0xFF) != (in ? 0x10u : 0u);
+            }
+        CHECK_EQ(wrong, size_t(0));
+
+        gsWrite({{0x4C, 10ull << 16}, {0x40, 639ull << 16 | 255ull << 48}});   // 640 wide, as the game draws
+        gsRect(0, 0, 640, 256, 0);
+        const int64_t hud[4][2] = {{489 * 16, 217 * 16 + 8}, {520 * 16, 217 * 16 + 8}, {520 * 16, 230 * 16}, {489 * 16, 230 * 16}};
+        triangle(hud[0], hud[1], hud[2]);
+        triangle(hud[0], hud[2], hud[3]);
+        wrong = 0;
+        for (int y = 214; y < 234; ++y)
+            for (int x = 485; x < 525; ++x) {
+                const bool in = x >= 489 && x < 520 && y >= 218 && y < 230;
+                wrong += (gs::readPixel32(0, 10, 0x00, x, y) & 0xFF) != (in ? 0x10u : 0u);
+            }
+        CHECK_EQ(wrong, size_t(0));
+        gsWrite({{0x4C, 8ull << 16}, {0x40, 511ull << 16 | 255ull << 48}});
+    }
+    std::fesetround(mode);
 }
 
 namespace {

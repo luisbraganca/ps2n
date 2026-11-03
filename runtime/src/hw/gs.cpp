@@ -1067,20 +1067,27 @@ void drawTriangle(const Draw& d, const Vertex& v0, const Vertex& v1, const Verte
     const bool gouraud = d.gouraud;
     const bool tex = d.tex;
     const bool persp = tex && !d.fst;
-    // Each row tests only the span its exact edge functions allow, widened by
-    // a margin of area units that the float test's rounding cannot cross:
-    // pixels outside it fail that test anyway (some weight is negative).
-    constexpr double kMargin = 64.0;
+    // A pixel is drawn when its centre (whole coordinates) is inside every
+    // edge, as the exact edge functions say: positive inside, as `sign` turns
+    // them. A centre on an edge belongs to a left edge (the triangle to its
+    // right) or a top one (level, the triangle below it), not to a right or a
+    // bottom one, so an edge two triangles share is drawn once. Each row's
+    // span comes from the edge functions: -k / a is within 2^-40 of the exact
+    // quotient, which is a multiple of 1 / (16 * a) (k in 256ths, a in
+    // sixteenths below 2^17): one that is not whole lies at least 2^-21 from
+    // a whole number, so ceil takes the exact quotient's. Float weights would
+    // round (toward zero on the guest's thread) and miss or add pixels on
+    // edges: half of a sprite-like quad's bottom row came out drawn.
     const double sign = area > 0 ? 1.0 : -1.0;
     const Edge edges[3] = {edgeFunction(v1, v2, sign), edgeFunction(v2, v0, sign), edgeFunction(v0, v1, sign)};
     for (int y = minY; y <= maxY; y = nextRow(y, parts)) {
         double lo = minX, hi = maxX;
         bool empty = false;
-        for (const Edge& g : edges) {   // inside (or nearly): a * px + k >= 0
-            const double k = g.b * y + g.c + kMargin;
-            if (g.a > 0) lo = std::max(lo, std::ceil(-k / g.a) - 1.0);
-            else if (g.a < 0) hi = std::min(hi, std::floor(-k / g.a) + 1.0);
-            else if (k < 0) empty = true;
+        for (const Edge& g : edges) {
+            const double k = g.b * y + g.c;   // the edge function at x = 0, exact
+            if (g.a > 0) lo = std::max(lo, std::ceil(-k / g.a));                 // left: a * x + k >= 0
+            else if (g.a < 0) hi = std::min(hi, std::ceil(-k / g.a) - 1.0);      // right: a * x + k > 0
+            else if (k < 0 || (k == 0 && g.b < 0)) empty = true;                // level: below it, or a bottom edge's row
         }
         if (empty || lo > hi) continue;
         const float py = static_cast<float>(y);
@@ -1096,13 +1103,8 @@ void drawTriangle(const Draw& d, const Vertex& v0, const Vertex& v1, const Verte
                     w0s[i] = ((v1.x - lx) * dy2 - (v2.x - lx) * dy1) / area;
                     w1s[i] = ((v2.x - lx) * dy0 - (v0.x - lx) * dy2) / area;
                 }
-            const float px = static_cast<float>(x);
             const float w0 = w0s[lane], w1 = w1s[lane];
             const float w2 = 1.0f - w0 - w1;
-            if (w0 < 0 || w1 < 0 || w2 < 0) continue;
-            // Exclude the bottom/right edges so shared edges are drawn once.
-            if ((w0 == 0 && w1 + w2 == 1 && py == std::max(v1.y, v2.y)) || (px == maxX && (w0 == 0 || w1 == 0 || w2 == 0) && maxX != minX))
-                continue;
             auto lerp = [&](float a, float b, float c) { return a * w0 + b * w1 + c * w2; };
             // Depth in double, relative to the first vertex: a float keeps 24 of Z's 32 bits, so
             // layers drawn at one depth fought each other under GEQUAL, and a flat triangle stays exact.

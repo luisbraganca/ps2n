@@ -535,7 +535,7 @@ ctest --test-dir build --output-on-failure
     on VU1's registers; guest printf;
   - the GS: swizzling against the manual's block tables, depth, fields, both
     circuits, deinterlacing, drawing on threads matching one thread byte for
-    byte, triangle coverage, every texture format and
+    byte, triangle coverage by the top-left rule, every texture format and
     CLUT layout, blending's choices, the alpha test's fail modes and the
     masks;
   - the IPU's commands, FIFOs and DMA (against a reference IDCT), and

@@ -264,6 +264,18 @@ the queuing thread alone, after the queue.
 
 ### Pixels
 
+A triangle covers the pixels whose centres (whole coordinates) are inside
+it. A centre on an edge belongs to a left edge or a top one (level, the
+triangle below it), not to a right or a bottom one, so an edge two
+triangles share is drawn once: the top-left rule, as PCSX2's rasterizer
+draws and sprites do here. Each row's span comes from the edge functions,
+which doubles hold exactly (vertices are 12.4 fixed point); the float
+weights only interpolate. Deciding edges with the weights went wrong under
+the guest's rounding toward zero: half of a quad's bottom row came out drawn
+(a row of dots under a HUD icon in Agent Under Fire), and pixels on an edge
+two triangles share were drawn by both (a brighter line through a blended
+HUD ring) or by neither (a dotted seam across the pause menu's figure).
+
 Faster pixels must not change a picture: every pixel goes through the same
 float operations in the same order as before. So the rasterizer works out
 ahead what does not change within a primitive. With the drawing state it
