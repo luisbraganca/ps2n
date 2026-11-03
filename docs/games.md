@@ -38,12 +38,17 @@ config lists the other executables under `[input] programs`, as in
 - The language selection, the intro movies, the copyright and title screens,
   the menus, and the first mission, Trouble in Paradise, as far as it has been
   played.
-- Sound in the movies and the menus.
+- Sound in the movies, the menus and the first mission.
 - Controller input, from the keyboard or a game controller.
 
 ### Known problems
 
-- In the first mission the sound breaks up.
+- In real time the first mission's sound still breaks up in places, most of
+  all in its heaviest views. Facing the lobby of the first building, the
+  game's thread misses about one in 20 of the blocks it sends the sound
+  driver. There the vector units' work, which runs on that thread, takes
+  about half of each second, up to 16 ms at a time, longer than one of the
+  driver's blocks lasts (see [Speed](#speed)).
 - In the mission's heaviest views drawing falls behind, and the game shows
   fewer than 50 pictures a second (see [Speed](#speed)).
 - Play tests have heard a glitch in the music on the copyright screen that
@@ -142,3 +147,14 @@ In the order the changes were made:
   recompiled loop polling far faster than the EE, and the game reset its
   drawing: a room in the first mission flickered, at 35 to 47 pictures a
   second. With the EE's work held to the clock it shows 50.
+- **The SPU2 waits for the IOP's answer.** The sound driver mixes into the
+  halves of a looping buffer, and libsd arms the next half when the SPU2's
+  interrupt says one has played. When the SPU2 had fallen behind, it stopped
+  at that interrupt, but arming the next half first brought it up to the
+  clock: it played the backlog before the half was armed, and repeated old
+  blocks. In real time the driver got 82 halves a second facing the lobby of
+  the first building and 90 outdoors, where it should get 93.75, and a run
+  counted 74 and 27 breaks a second in the sound (jumps well above the level
+  around them). Now the driver gets 93.75 halves a second in both, and the
+  breaks fall to 24 and 8.4 a second. A deterministic run of the mission's
+  opening counts 8.5.

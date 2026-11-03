@@ -3826,6 +3826,70 @@ TEST_CASE(spu2_autodma_streams_pcm_through_both_cores) {
     CHECK(ok);
 }
 
+TEST_CASE(spu2_answers_an_interrupt_where_it_stopped) {
+    // libsd arms a looping transfer's next half from the interrupt that says
+    // the last block of the one before went out. After a stall the SPU2
+    // catches up, stopping after the sample that raised it, and the IOP's
+    // answer acts at that sample: the next half follows without a gap however
+    // far behind the clock the SPU2 was. Catching up to the clock before
+    // arming played the backlog with nothing armed, the input area's old
+    // blocks over again: Agent Under Fire's streamed sound broke up in real
+    // time, 256-sample blocks repeating dozens of times a second.
+    FrozenClock frozen;
+    spu2::init();
+    std::vector<int16_t> pcm(4 * 512);   // four 1 KB blocks: 256 left samples of 1000 * k, 256 right of -1000 * k
+    for (int b = 0; b < 4; ++b)
+        for (int i = 0; i < 256; ++i) {
+            pcm[static_cast<size_t>(b * 512 + i)] = static_cast<int16_t>(1000 * (b + 1));
+            pcm[static_cast<size_t>(b * 512 + 256 + i)] = static_cast<int16_t>(-1000 * (b + 1));
+        }
+    iop::mem::writeBlock(0x1E0000, pcm.data(), 4096);
+    sw(0x76C, 0x7FFF);   // the volumes of spu2_autodma_streams_pcm_through_both_cores
+    sw(0x76E, 0x7FFF);
+    sw(0x198, 0x0C0);
+    sw(0x760, 0x3FFF);
+    sw(0x762, 0x3FFF);
+    sw(0x790, 0x7FFF);
+    sw(0x792, 0x7FFF);
+    sw(0x598, 0x00C);
+    sw(0x788, 0x3FFF);
+    sw(0x78A, 0x3FFF);
+    g_heard.clear();
+    spu2::setSink(&hear);
+    static int halvesOut = 0;
+    halvesOut = 0;
+    const spu2::AutoDmaDone counting = [](int) { ++halvesOut; };   // the IOP answers later
+    const spu2::AutoDmaDone libsd = spu2::setAutoDmaDone(counting);
+    spu2::startAutoDma(0, 0x1E0000, 2048);
+    clockAdvance(2048 * (kEeClockHz / 48000));   // the IOP was held up for 43 ms
+    sr(0x7C2);                                   // an access catches up: it stops where the first half went out
+    CHECK_EQ(halvesOut, 1);
+    spu2::startAutoDma(0, 0x1E0800, 2048);       // the IOP's answer
+    runDueEvents();                              // the clock's tick mixes on
+    CHECK_EQ(halvesOut, 2);
+    CHECK_EQ(g_heard.size(), size_t(2 * 2048));
+    size_t wrong = 0;   // silence, then the four blocks in turn
+    for (size_t i = 0; i < 1280 && i * 2 + 1 < g_heard.size(); ++i) {
+        const int k = static_cast<int>(i / 256);
+        const int16_t l = g_heard[i * 2], r = g_heard[i * 2 + 1];
+        wrong += k == 0 ? (l != 0 || r != 0) : (l != 1000 * k - 4 || r != -1000 * k);
+    }
+    CHECK_EQ(wrong, size_t(0));
+    // Power-on ends a stop: an access mixes again.
+    spu2::startAutoDma(0, 0x1E0000, 1024);       // one block: the transfer ends as the input takes it
+    clockAdvance(512 * (kEeClockHz / 48000));
+    sr(0x7C2);                                   // stops there
+    CHECK_EQ(halvesOut, 3);
+    spu2::init();
+    clockAdvance(256 * (kEeClockHz / 48000));
+    g_heard.clear();
+    sr(0x7C2);
+    CHECK_EQ(g_heard.size(), size_t(2 * 256));
+    // The setter hands back the hook it replaced, so libsd's goes back.
+    CHECK(spu2::setAutoDmaDone(nullptr) == counting);
+    spu2::setAutoDmaDone(libsd);
+}
+
 TEST_CASE(spu2_reverb_stays_in_its_work_area) {
     FrozenClock frozen;
     spu2::init();

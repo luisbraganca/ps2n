@@ -356,7 +356,9 @@ Its voices follow the PS1 SPU's, as psx-spx documents them:
 
 It mixes in emulated time: when a register is touched, and every 64 samples
 (1.3 ms). Having fallen behind, it stops after each sample that raises an
-interrupt, so the IOP answers before it mixes on. Not covered: the IOP's DMA
+interrupt, so the IOP answers before it mixes on. While it is stopped, a
+register access mixes nothing, so the answer (libsd arming the next half of
+a looping transfer) acts at that sample. Not covered: the IOP's DMA
 channels 4 and 7 themselves (libsd's transfers are host code, so a driver
 that programs them gets nothing), reading the output back by DMA, S/PDIF
 bypass and compressed output, and `ATTR`'s mute bit (14), which libsd sets

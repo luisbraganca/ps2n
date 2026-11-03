@@ -20,6 +20,7 @@
 #include "log.h"
 
 #include <algorithm>
+#include <utility>
 #include <array>
 #include <cstring>
 #include <vector>
@@ -199,6 +200,7 @@ uint64_t g_samples = 0;                      // samples mixed
 uint64_t g_tickEvent = 0;
 bool g_mixing = false;
 bool g_yield = false;                        // an interrupt went up: the IOP sees it before more is mixed
+bool g_stopped = false;                      // stopped after the sample that raised one, until tick() mixes on
 AutoDmaDone g_admaDone = nullptr;
 Sink g_sink = nullptr;
 std::vector<int16_t> g_outBuf;
@@ -574,7 +576,8 @@ bool catchUp() {
     const uint64_t now = nowCycles();
     if (now <= g_start) return false;
     const uint64_t due = (now - g_start) / kEeCyclesPerSample;
-    return due > g_samples && mix(due - g_samples);
+    g_stopped = due > g_samples && mix(due - g_samples);
+    return g_stopped;
 }
 
 void scheduleTick();
@@ -723,6 +726,7 @@ void init() {
     g_start = nowCycles();
     g_samples = 0;
     g_mixing = false;
+    g_stopped = false;
     g_outBuf.clear();
     scheduleTick();
 }
@@ -733,7 +737,15 @@ void onIopReboot() {
     g_irqInfo = 0;
 }
 
-void sync() { catchUp(); }
+// A register or memory access brings the SPU2 up to the clock first, unless
+// it stopped at an interrupt: then the IOP is answering it, and the answer
+// acts at the sample that raised it, as it would have in time. Catching up
+// first played the backlog with the next half of a looping transfer not yet
+// armed, repeating the input area's old blocks, whenever the EE had held the
+// IOP up for longer than a block (5 ms).
+void sync() {
+    if (!g_stopped) catchUp();
+}
 
 void runSamples(uint32_t samples) {
     while (samples && !g_mixing) {
@@ -805,7 +817,7 @@ void stopAutoDma(int core) {
 
 bool autoDmaActive(int core) { return g_core[core & 1].adma.active; }
 uint32_t autoDmaAddress(int core) { return g_core[core & 1].adma.src; }
-void setAutoDmaDone(AutoDmaDone fn) { g_admaDone = fn; }
+AutoDmaDone setAutoDmaDone(AutoDmaDone fn) { return std::exchange(g_admaDone, fn); }
 void setSink(Sink sink) { g_sink = sink; }
 
 } // namespace ps2::iop::spu2

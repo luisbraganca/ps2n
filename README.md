@@ -545,8 +545,9 @@ ctest --test-dir build --output-on-failure
   - controller input and settings;
   - the SPU2: ADPCM against psx-spx's rules, the interpolation table's step
     response and every phase, envelope and sweep rates, noise, loop flags, the
-    interrupt address, AutoDMA through both cores, reverb in its work area;
-    libsd's register entries and the WAV dump.
+    interrupt address, AutoDMA through both cores, the IOP's answer to an
+    interrupt acting where the SPU2 stopped, reverb in its work area; libsd's
+    register entries and the WAV dump.
 - **`program_*`**: assembly programs recompiled at build time and run twice,
   recompiled and interpreted, against recorded output or a recorded frame:
   control-flow edge cases, a stripped ELF that needs the interpreter, a polling

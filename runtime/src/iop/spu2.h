@@ -46,7 +46,7 @@ bool autoDmaActive(int core);
 // DMA channel's address register shows it; 0 when stopped.
 uint32_t autoDmaAddress(int core);
 using AutoDmaDone = void (*)(int core);
-void setAutoDmaDone(AutoDmaDone fn);
+AutoDmaDone setAutoDmaDone(AutoDmaDone fn);   // returns the hook it replaces
 
 // Where the finished samples go: interleaved left/right, 48 kHz.
 using Sink = void (*)(const int16_t* samples, size_t frames);

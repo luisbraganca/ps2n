@@ -143,11 +143,13 @@ assets/                          branding/ (logo and icons; its README says whic
   runtime", says where a syscall, register, service or library function goes.
 - The SPU2 mixes in emulated time and never runs ahead of an interrupt the
   IOP has not answered: it stops after the sample that raised one, and its
-  event lets the IOP run (`iop::runPending`) before it mixes on. libsd arms
-  the next half of a looping block transfer in its interrupt handler, as
-  the real library does, so a sound driver sees each half once, in order.
-  Arming it earlier, or calling drivers' handlers from events, merges
-  halves after a stall.
+  event lets the IOP run (`iop::runPending`) before it mixes on. While it is
+  stopped, a register or memory access mixes nothing, so the answer acts at
+  that sample. libsd arms the next half of a looping block transfer in its
+  interrupt handler, as the real library does, so a sound driver sees each
+  half once, in order. Arming it earlier, or calling drivers' handlers from
+  events, merges halves after a stall; catching up before the answer plays
+  the backlog without the next half.
 
 ## Tests
 

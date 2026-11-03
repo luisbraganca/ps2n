@@ -395,13 +395,17 @@ mixed when a driver touches its registers and by an event every 64 samples.
 Its interrupts (a transfer done, an address touched) reach the IOP kernel
 like any other. When it has fallen behind (the EE slept, or a frame took
 long to draw), it catches up one interrupt at a time: it stops after the
-sample that raised one, the IOP runs what that woke, and it mixes on. A
-driver that streams PCM thus refills its buffer in order, as on the console,
-and libsd arms each next half of a looping transfer in its interrupt
-handler, as the real library does: if the IOP answers late, the input plays
-what it had, and the driver never sees two transfers merged into one. In
-real time the samples keep pace with the host's audio device, which a ring
-buffer feeds (`audio/`).
+sample that raised one, the IOP runs what that woke, and it mixes on. While
+it is stopped, a register or memory access does not bring it up to the
+clock, as one does otherwise: the IOP's answer acts at the sample that
+raised the interrupt, as it would have in time. A driver that streams PCM
+thus refills its buffer in order, as on the console. libsd arms each next
+half of a looping transfer in its interrupt handler, as the real library
+does, and the half is armed before anything more is mixed: the driver never
+sees two transfers merged into one, and the input never plays its old
+blocks again for want of the next half. A half the driver has not refilled
+in time plays what it had, as on the console. In real time the samples keep
+pace with the host's audio device, which a ring buffer feeds (`audio/`).
 
 ## The vector units
 
