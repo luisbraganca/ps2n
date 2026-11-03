@@ -1,10 +1,14 @@
 // VIF command processing: register-setting codes, MPG (micro program
 // upload), UNPACK (every format, with write masks, the offset/difference
 // modes, skipping and filling writes), MSCAL/MSCNT (start the VU, with VIF1's
-// TOP/TOPS double buffering) and DIRECT/DIRECTHL (GIF PATH2).
+// TOP/TOPS double buffering) and DIRECT/DIRECTHL (GIF PATH2). A code with the
+// i bit interrupts the EE once it has been carried out and stalls the VIF
+// until FBRST.STC.
 #include "hw/vif.h"
 
+#include "hw/dmac.h"
 #include "hw/gs.h"
+#include "hw/hw.h"
 #include "log.h"
 #include "ps2/ops_vu0.h"
 #include "vu.h"
@@ -17,6 +21,11 @@ namespace ps2::vif {
 
 namespace {
 
+// VIFn_STAT bits for the stalls. STC clears all six.
+constexpr uint32_t kStatVss = 1u << 8, kStatVfs = 1u << 9, kStatVis = 1u << 10, kStatInt = 1u << 11,
+                   kStatEr0 = 1u << 12, kStatEr1 = 1u << 13;
+constexpr uint32_t kErrMii = 1;   // VIFn_ERR.MII: the i bit is ignored
+
 struct Unit {
     uint32_t stat = 0, fbrst = 0, err = 0, mark = 0, cycle = 0, mode = 0, num = 0, mask = 0, code = 0;
     uint32_t itops = 0, base = 0, ofst = 0, tops = 0, itop = 0, top = 0;
@@ -25,6 +34,9 @@ struct Unit {
     uint32_t cmd = 0, imm = 0, cmdNum = 0;
     uint32_t wordsLeft = 0;       // payload words still expected
     std::vector<uint32_t> payload;
+    bool irq = false;             // the command in progress has the i bit
+    bool stalled = false;         // stopped after an i-bit command, until FBRST.STC (STAT.VIS)
+    std::vector<uint32_t> fifo;   // words that came in after the stall, decoded when it ends
 };
 
 Unit g_vif[2];
@@ -157,6 +169,17 @@ void startMicro(int unit, Unit& u, uint32_t addrBytes) {
     }
 }
 
+// The command has been carried out. With the i bit (and ERR.MII clear) the VIF
+// interrupts the EE and stalls before the next code: STAT.VIS and STAT.INT.
+void commandDone(int unit, Unit& u) {
+    u.cmd = 0;
+    if (!u.irq) return;
+    u.irq = false;
+    u.stalled = true;
+    u.stat |= kStatVis | kStatInt;
+    hw::raiseIntc(unit ? hw::INTC_VIF1 : hw::INTC_VIF0);
+}
+
 void finishCommand(int unit, Unit& u) {
     switch (u.cmd) {
     case 0x20: u.mask = u.payload.at(0); break;                                  // STMASK
@@ -183,7 +206,7 @@ void finishCommand(int unit, Unit& u) {
         break;
     }
     u.payload.clear();
-    u.cmd = 0;
+    commandDone(unit, u);
 }
 
 void beginCommand(int unit, Unit& u, uint32_t code) {
@@ -191,6 +214,7 @@ void beginCommand(int unit, Unit& u, uint32_t code) {
     u.imm = code & 0xFFFF;
     u.cmdNum = (code >> 16) & 0xFF;
     u.cmd = (code >> 24) & 0x7F;
+    u.irq = (code >> 31) && !(u.err & kErrMii);
     u.wordsLeft = 0;
     switch (u.cmd) {
     case 0x00: break;                                                            // NOP
@@ -228,7 +252,7 @@ void beginCommand(int unit, Unit& u, uint32_t code) {
         }
         break;
     }
-    if (u.wordsLeft == 0) u.cmd = 0;
+    if (u.wordsLeft == 0) commandDone(unit, u);
 }
 
 void feedWord(int unit, uint32_t w) {
@@ -239,6 +263,29 @@ void feedWord(int unit, uint32_t w) {
         return;
     }
     beginCommand(unit, u, w);
+}
+
+// Decodes words until the VIF stalls; returns how many it took.
+size_t feed(int unit, const uint32_t* w, size_t n) {
+    const Unit& u = g_vif[unit];
+    size_t i = 0;
+    while (i < n && !u.stalled) feedWord(unit, w[i++]);
+    return i;
+}
+
+// The stall is over: the words that waited are decoded, then the DMA channel
+// goes on, unless another i bit stalls the VIF first.
+void resume(int unit) {
+    Unit& u = g_vif[unit];
+    u.stalled = false;
+    std::vector<uint32_t> waiting;
+    waiting.swap(u.fifo);
+    const size_t taken = feed(unit, waiting.data(), waiting.size());
+    if (u.stalled) {
+        u.fifo.insert(u.fifo.begin(), waiting.begin() + static_cast<std::ptrdiff_t>(taken), waiting.end());
+        return;
+    }
+    dmac::vifReady(unit);
 }
 
 } // namespace
@@ -276,8 +323,16 @@ void regWrite(uint32_t addr, uint32_t v) {
     const int unit = addr >= 0x10003C00u ? 1 : 0;
     Unit& u = g_vif[unit];
     switch (addr & 0x3F0) {
-    case 0x010:   // FBRST: reset clears the command state
-        if (v & 1) u = Unit{};
+    case 0x010:   // FBRST
+        if (v & 6) PS2_UNIMPL("vif", "VIF ForceBreak / STOP", "VIF%d FBRST 0x%x: ForceBreak and STOP are not modelled", unit, v);
+        if (v & 1) {   // RST clears the command state and a stall; a waiting DMA channel goes on
+            const bool wasStalled = u.stalled;
+            u = Unit{};
+            if (wasStalled) dmac::vifReady(unit);
+        } else if (v & 8) {   // STC cancels a stall
+            u.stat &= ~(kStatVss | kStatVfs | kStatVis | kStatInt | kStatEr0 | kStatEr1);
+            if (u.stalled) resume(unit);
+        }
         break;
     case 0x030: u.mark = v; break;
     case 0x020: u.err = v; break;
@@ -285,20 +340,34 @@ void regWrite(uint32_t addr, uint32_t v) {
     }
 }
 
-void fifoWrite(int unit, const uint64_t q[2]) { transfer(unit, q, 1); }
+void fifoWrite(int unit, const uint64_t q[2]) {
+    Unit& u = g_vif[unit];
+    const auto* w = reinterpret_cast<const uint32_t*>(q);
+    const size_t taken = feed(unit, w, 4);
+    u.fifo.insert(u.fifo.end(), w + taken, w + 4);
+}
 
 uint32_t top(int unit) { return g_vif[unit & 1].top; }
 uint32_t itop(int unit) { return g_vif[unit & 1].itop; }
 
-void transfer(int unit, const uint64_t* qwords, size_t count) {
+size_t transfer(int unit, const uint64_t* qwords, size_t count) {
+    Unit& u = g_vif[unit];
+    if (u.stalled) return 0;
     const auto* w = reinterpret_cast<const uint32_t*>(qwords);
-    for (size_t i = 0; i < count * 4; ++i) feedWord(unit, w[i]);
+    const size_t taken = feed(unit, w, count * 4);
+    // A stall inside a quadword: the rest of it waits in the FIFO.
+    const size_t qw = (taken + 3) / 4;
+    u.fifo.insert(u.fifo.end(), w + taken, w + qw * 4);
+    return qw;
 }
 
 void transferTagWords(int unit, const uint64_t q[2]) {
+    Unit& u = g_vif[unit];
     const auto* w = reinterpret_cast<const uint32_t*>(&q[1]);
-    feedWord(unit, w[0]);
-    feedWord(unit, w[1]);
+    const size_t taken = feed(unit, w, 2);
+    u.fifo.insert(u.fifo.end(), w + taken, w + 2);
 }
+
+bool stalled(int unit) { return g_vif[unit & 1].stalled; }
 
 } // namespace ps2::vif

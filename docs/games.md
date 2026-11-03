@@ -33,11 +33,12 @@ config lists the other executables under `[input] programs`, as in
 
 ### What runs
 
-- The loader, the movie player and `ACTION.UK` run recompiled, and so does the
-  VU1 micro code they upload.
+- The loader, the movie player, `ACTION.UK` and `DRIVING.ELF` run
+  recompiled, and so does the VU1 micro code `ACTION.UK` uploads.
 - The language selection, the intro movies, the copyright and title screens,
-  the menus, and the first mission, Trouble in Paradise, as far as it has been
-  played.
+  the menus, and the first mission, Trouble in Paradise, played to its end.
+- The second mission, a driving mission (`mis02a`) that `DRIVING.ELF` runs, in
+  deterministic runs into its race, with its textures.
 - Sound in the movies, the menus and the first mission.
 - Controller input, from the keyboard or a game controller.
 
@@ -53,8 +54,18 @@ config lists the other executables under `[input] programs`, as in
   fewer than 50 pictures a second (see [Speed](#speed)).
 - Play tests have heard a glitch in the music on the copyright screen that
   recordings of it (`--dump-audio`) do not have. The cause has not been found.
-- The driving missions' executable is not recompiled yet.
-- Nothing past the first mission has been tried.
+- The driving missions read GS memory back through VIF1 about once a frame
+  (reported as `VIF1 to-memory transfer`), which the runtime does not do yet:
+  an 8x8 block of the depth buffer (`PSMZ32`) at a point that drifts with the
+  view, most likely to tell whether the sun is hidden before its glare is
+  drawn. What the glare does without it has not been checked.
+- `DRIVING.ELF`'s VU1 micro code runs on the interpreter. It uploads its
+  programs in many combinations, over 5,000 distinct micro memories in the
+  mission's first two minutes, and they have not been recorded for the VU
+  recompiler.
+- The second mission has been played only to its opening cutscene, while
+  `DRIVING.ELF` still ran on the interpreter; nothing after it has been
+  played.
 
 ### Speed
 

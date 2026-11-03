@@ -140,7 +140,7 @@ the work left is in the runtime, which stands in for the rest of the console:
 - [x] VU0 macro mode
 - [x] Every micro instruction, upper and lower, on VU0 and VU1
 - [x] The pipeline as micro code sees it: flag delays, Q and P latencies, stalls, delay slots, the E bit
-- [x] VIF: every UNPACK format and mode, MPG, MSCAL and the double buffer, DIRECT
+- [x] VIF: every UNPACK format and mode, MPG, MSCAL and the double buffer, DIRECT, the i bit's interrupt and stall
 - [x] XGKICK to the GIF
 - [ ] Micro programs running alongside the EE, with their timing
 - [x] A VU recompiler: micro code the runtime recorded, recompiled with the pipeline's timing worked out ahead
@@ -538,8 +538,9 @@ ctest --test-dir build --output-on-failure
     byte, triangle coverage by the top-left rule, every texture format and
     CLUT layout, blending's choices, the alpha test's fail modes and the
     masks;
-  - the IPU's commands, FIFOs and DMA (against a reference IDCT), and
-    scratchpad DMA;
+  - the IPU's commands, FIFOs and DMA (against a reference IDCT),
+    scratchpad DMA, a VIF stalled by the i bit holding its DMA channel until
+    STC, and GIF chains stopping at IRQ tags;
   - SIF RPC end to end, IOP resets and services, discs, recognising programs
     in RAM, `--strict`, the EE's work held to the clock in real time;
   - controller input and settings;

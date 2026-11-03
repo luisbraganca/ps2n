@@ -2688,6 +2688,154 @@ TEST_CASE(dmac_to_scratchpad_chain) {
     CHECK((read32(kDmaStat) >> 9) & 1);
 }
 
+TEST_CASE(vif_i_bit_stalls_the_vif_and_its_dma_until_stc) {
+    // A VIF code with the i bit interrupts the EE once it has been carried out
+    // (INTC_VIF1, STAT.INT) and stalls the VIF (STAT.VIS) until FBRST.STC. Its
+    // DMA channel stops after the quadword the VIF stalled in and goes on from
+    // there; the rest of that quadword waits in the FIFO. Memory: 0x01800000-0x01802FFF.
+    constexpr uint32_t kD1 = 0x10009000, kStat = 0x10003C00, kFbrst = 0x10003C10, kErr = 0x10003C20;
+    constexpr uint32_t kCycle = 0x10003C40, kMode = 0x10003C50, kCode = 0x10003C80, kIstat = 0x1000F000;
+    constexpr uint32_t kVis = 1u << 10, kInt = 1u << 11, kIntcVif1 = 1u << hw::INTC_VIF1;
+    constexpr uint32_t kNop = 0, kNopI = 0x80000000u;
+    auto stcycl = [](uint32_t v) { return 0x01000000u | v; };
+    auto stmod = [](uint32_t v) { return 0x05000000u | v; };
+    auto reset = [&] {
+        dmac::init();
+        vif::init();
+        write32(kIstat, kIntcVif1);
+    };
+    auto normal = [&](uint32_t madr, uint32_t qwc) {
+        write32(kD1 + 0x10, madr);
+        write32(kD1 + 0x20, qwc);
+        write32(kD1, 0x101);   // to the VIF, normal mode, STR
+    };
+    auto busy = [&] { return (read32(kD1) & 0x100u) != 0; };
+
+    reset();
+    const uint32_t words[12] = {stcycl(0x0101), kNopI, stcycl(0x0202), stmod(1),
+                                stcycl(0x0303), kNop, kNop, kNop,
+                                kNop, kNop, kNop, kNop};
+    writeBytes(0x01800000, words, sizeof words);
+    normal(0x01800000, 3);
+    CHECK_EQ(read32(kCycle), 0x0101u);                 // the codes after the i bit wait...
+    CHECK_EQ(read32(kStat) & (kVis | kInt), kVis | kInt);
+    CHECK_EQ(read32(kCode), kNopI);
+    CHECK(read32(kIstat) & kIntcVif1);
+    CHECK(busy());                                     // ...and so does the channel,
+    CHECK_EQ(read32(kD1 + 0x10), 0x01800010u);         // after the quadword the VIF stalled in
+    CHECK_EQ(read32(kD1 + 0x20), 2u);
+    CHECK(!((read32(kDmaStat) >> 1) & 1));
+    write32(kFbrst, 8);                                // STC
+    CHECK_EQ(read32(kStat) & (kVis | kInt), 0u);
+    CHECK_EQ(read32(kMode), 1u);                       // the rest of that quadword,
+    CHECK_EQ(read32(kCycle), 0x0303u);                 // then the channel's data
+    CHECK(!busy());
+    CHECK_EQ(read32(kD1 + 0x20), 0u);
+    CHECK((read32(kDmaStat) >> 1) & 1);
+
+    // ERR.MII masks the i bit: no interrupt, no stall.
+    reset();
+    write32(kErr, 1);
+    normal(0x01800000, 3);
+    CHECK_EQ(read32(kCycle), 0x0303u);
+    CHECK_EQ(read32(kStat) & (kVis | kInt), 0u);
+    CHECK(!(read32(kIstat) & kIntcVif1));
+    CHECK(!busy());
+    write32(kErr, 0);
+
+    // A channel stopped with STR while it waits does not go on after STC.
+    reset();
+    normal(0x01800000, 3);
+    write32(kD1, 0x001);
+    write32(kFbrst, 8);
+    CHECK_EQ(read32(kCycle), 0x0202u);
+    CHECK_EQ(read32(kD1 + 0x20), 2u);
+
+    // Chain mode with TTE: an i bit in a tag's first VIF code holds back the
+    // second and the tag's data. One in the end tag's two qwords of data stops
+    // the channel in them, and after STC the transfer ends with that data.
+    reset();
+    const uint32_t chain[24] = {0x10000001u, 0, 0x80000000u | stcycl(0x0404), stmod(2),   // cnt, one qword
+                                stcycl(0x0505), kNop, kNop, kNop,
+                                0x70000002u, 0, kNop, kNop,                               // end, two qwords
+                                kNopI, stcycl(0x0808), kNop, kNop,
+                                stmod(3), kNop, kNop, kNop,
+                                stcycl(0x0909), kNop, kNop, kNop};                       // past the end
+    writeBytes(0x01801000, chain, sizeof chain);
+    write32(kD1 + 0x20, 0);
+    write32(kD1 + 0x30, 0x01801000);
+    write32(kD1, 0x145);   // to the VIF, chain mode, TTE, STR
+    CHECK_EQ(read32(kCycle), 0x0404u);
+    CHECK_EQ(read32(kMode), 0u);
+    CHECK_EQ(read32(kD1 + 0x20), 1u);                  // the tag's data has not gone
+    CHECK(busy());
+    write32(kFbrst, 8);
+    CHECK_EQ(read32(kMode), 2u);
+    CHECK_EQ(read32(kCycle), 0x0505u);                 // stalled again in the end tag's data
+    CHECK(read32(kStat) & kVis);
+    CHECK_EQ(read32(kD1 + 0x20), 1u);
+    CHECK(busy());
+    write32(kFbrst, 8);
+    CHECK_EQ(read32(kCycle), 0x0808u);
+    CHECK_EQ(read32(kMode), 3u);
+    CHECK(!busy());
+    CHECK_EQ((read32(kD1) >> 28) & 7u, 7u);            // CHCR.TAG: the end tag
+    CHECK_EQ(read32(kStat) & kVis, 0u);
+
+    // A transfer whose last word stalls the VIF ends at once. One started while
+    // the VIF is stalled waits for STC, behind what the EE wrote to the FIFO.
+    reset();
+    const uint32_t last[8] = {kNop, kNop, kNop, kNopI, stcycl(0x0606), kNop, kNop, kNop};
+    writeBytes(0x01802000, last, sizeof last);
+    normal(0x01802000, 1);
+    CHECK(!busy());
+    CHECK(read32(kStat) & kVis);
+    const uint64_t fifo[2] = {stcycl(0x0707) | (uint64_t{stmod(3)} << 32), 0};
+    write128(0x10005000, fifo);
+    normal(0x01802010, 1);
+    CHECK(busy());
+    CHECK_EQ(read32(kD1 + 0x20), 1u);
+    CHECK_EQ(read32(kMode), 0u);
+    write32(kFbrst, 8);
+    CHECK_EQ(read32(kMode), 3u);                       // the FIFO first,
+    CHECK_EQ(read32(kCycle), 0x0606u);                 // then the waiting channel
+    CHECK(!busy());
+
+    // FBRST.RST ends a stall too, dropping what waited in the FIFO; the waiting
+    // channel goes on into the reset VIF.
+    reset();
+    normal(0x01800000, 3);
+    CHECK(busy());
+    write32(kFbrst, 1);
+    CHECK(!busy());
+    CHECK_EQ(read32(kCycle), 0x0303u);
+    CHECK_EQ(read32(kMode), 0u);
+    reset();
+}
+
+TEST_CASE(dmac_gif_chain_stops_at_an_irq_tag_and_goes_on) {
+    // With TIE, a chain stops after a tag with IRQ: STR clears, the channel's
+    // interrupt is raised and CHCR keeps the tag's upper half, whose spare bits
+    // games use to mark tags. Restarted, it goes on from TADR. Memory: 0x01803000.
+    constexpr uint32_t kD2 = 0x1000A000;
+    dmac::init();
+    const uint64_t list[4] = {0x90EA0000ull, 0, 0x70000000ull, 0};   // cnt with IRQ and a mark, then end
+    writeBytes(0x01803000, list, sizeof list);
+    write32(kD2 + 0x20, 0);
+    write32(kD2 + 0x30, 0x01803000);
+    write32(kD2, 0x184);   // chain mode, TIE, STR
+    CHECK_EQ(read32(kD2) & 0x100u, 0u);
+    CHECK_EQ((read32(kD2) >> 16) & 0x1FFu, 0xEAu);
+    CHECK_EQ(read32(kD2 + 0x30), 0x01803010u);
+    CHECK((read32(kDmaStat) >> 2) & 1);
+    write32(kDmaStat, 1u << 2);
+    write32(kD2, 0x184);
+    CHECK_EQ(read32(kD2) & 0x100u, 0u);
+    CHECK_EQ((read32(kD2) >> 28) & 7u, 7u);
+    CHECK((read32(kDmaStat) >> 2) & 1);
+    dmac::init();
+}
+
 TEST_CASE(mpeg_idct_meets_ieee_1180) {
     // IEEE 1180: random pixel blocks, forward-transformed in double precision and
     // rounded, must come back within 1 of the double inverse, with small mean errors.

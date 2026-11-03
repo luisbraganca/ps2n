@@ -3,7 +3,9 @@
 // interrupt) exactly as on hardware, so code that polls or waits on
 // interrupts behaves. The IPU's channels are the exception: they move data
 // only as fast as the IPU's FIFOs take or give it, so a transfer stays in
-// progress until the IPU has consumed or produced its data.
+// progress until the IPU has consumed or produced its data. So does a VIF
+// channel whose VIF an i bit stalled: it stops after the quadword the VIF
+// stalled in, and goes on from there (MADR, QWC, TADR) when the stall ends.
 #pragma once
 
 #include <cstdint>
@@ -28,5 +30,7 @@ uint32_t toIpu(uint64_t* dst, uint32_t max);
 bool toIpuReady();      // channel 4 is running and has data to give
 // Channel 3 (fromIPU): takes up to `count` qwords of IPU output; returns how many.
 uint32_t fromIpu(const uint64_t* src, uint32_t count);
+// VIF `unit` is no longer stalled: its channel goes on if it was waiting.
+void vifReady(int unit);
 
 } // namespace ps2::dmac

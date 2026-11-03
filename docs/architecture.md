@@ -198,6 +198,18 @@ late, so it acts on what happened since it was scheduled rather than on the
 state it finds: a timer's compare interrupt comes because the counter passed
 its compare value, not because the two are equal when the event runs.
 
+DMA transfers end the moment they start, except where the guest has to see
+one stop. A VIF code with the i bit interrupts the EE once it has been carried
+out and stalls the VIF until the EE writes `FBRST.STC`. The VIF's DMA channel
+then stops after the quadword the VIF stalled in, keeps `STR` set, and goes
+on from where `MADR`, `QWC` and `TADR` say when the stall ends
+(`dmac::vifReady`). Games use this to keep two paths in step. Agent Under
+Fire's driving missions stop VIF1 at points in each frame's geometry and the
+GIF's texture chain at IRQ tags, and their handlers restart both once both
+have arrived. Before VIF1 stalled, the texture chain never went on past its
+first stop: surfaces showed the wrong textures, and every frame ended with
+the game's wait for the chain timing out.
+
 In real time a vblank also waits until the threads have had half a frame
 over the last two frames (`kernel::interruptCycles()` counts the time spent
 in handlers). A handler can take longer than a frame here: a game that draws

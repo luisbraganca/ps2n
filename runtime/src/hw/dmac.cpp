@@ -25,6 +25,8 @@ struct Channel {
     uint32_t chcr = 0, madr = 0, qwc = 0, tadr = 0, asr0 = 0, asr1 = 0, sadr = 0;
     bool running = false;   // an IPU channel's transfer in progress
     bool lastTag = false;   // toIPU chain: the current tag's data ends the transfer
+    bool waiting = false;   // a VIF channel stopped by its stalled VIF, STR still set
+    bool endAfterData = false;   // chain mode: the current tag ends the transfer once its data has gone
 };
 
 Channel g_ch[10];
@@ -54,11 +56,13 @@ std::vector<uint64_t> fetch(uint32_t addr, uint32_t qwc) {
     return q;
 }
 
-void deliver(int ch, const uint64_t* data, size_t qwc) {
-    if (!qwc) return;
+// Hands data to the channel's destination; returns how many quadwords it took.
+// Only a VIF takes fewer: it stalled.
+size_t deliver(int ch, const uint64_t* data, size_t qwc) {
+    if (!qwc) return 0;
     switch (ch) {
-    case hw::DMA_VIF0: vif::transfer(0, data, qwc); break;
-    case hw::DMA_VIF1: vif::transfer(1, data, qwc); break;
+    case hw::DMA_VIF0: return vif::transfer(0, data, qwc);
+    case hw::DMA_VIF1: return vif::transfer(1, data, qwc);
     case hw::DMA_GIF: gs::gifTransfer(data, qwc, 3); break;
     case hw::DMA_SPR_TO: {   // chain mode: into the scratchpad from SADR on
         Channel& c = g_ch[ch];
@@ -68,24 +72,43 @@ void deliver(int ch, const uint64_t* data, size_t qwc) {
     }
     default: break;
     }
+    return qwc;
 }
 
-void runNormal(int ch) {
+bool vifStalled(int ch) {
+    if (ch == hw::DMA_VIF0) return vif::stalled(0);
+    if (ch == hw::DMA_VIF1) return vif::stalled(1);
+    return false;
+}
+
+// Moves the channel's current data (MADR, QWC). False when a stalled VIF left
+// some of it: MADR and QWC then say what is left.
+bool runNormal(int ch) {
     Channel& c = g_ch[ch];
+    if (!c.qwc) return true;
     const auto data = fetch(c.madr, c.qwc);
-    deliver(ch, data.data(), c.qwc);
-    c.madr += c.qwc * 16;
-    c.qwc = 0;
+    const auto taken = static_cast<uint32_t>(deliver(ch, data.data(), c.qwc));
+    c.madr += taken * 16;
+    c.qwc -= taken;
+    return c.qwc == 0;
 }
 
-// Source chain mode: follow DMAtags until an end condition.
-void runChain(int ch) {
+// Source chain mode: the current data, then DMAtags until one ends the
+// transfer. False when the channel's VIF stalled first: the transfer goes on
+// from there (MADR and QWC, then TADR) when the stall ends. No tag is read
+// while the VIF is stalled.
+bool runChain(int ch) {
     Channel& c = g_ch[ch];
     const bool tte = (c.chcr >> 6) & 1;
     const bool tie = (c.chcr >> 7) & 1;
+    if (!runNormal(ch)) return false;   // residual data from a previous tag, or what a stall left
+    if (c.endAfterData) {
+        c.endAfterData = false;
+        return true;
+    }
     int asp = static_cast<int>((c.chcr >> 4) & 3);
-    if (c.qwc) runNormal(ch);   // residual data from a previous tag
     for (int guard = 0; guard < 1 << 20; ++guard) {
+        if (vifStalled(ch)) return false;
         uint64_t tag[2];
         const uint32_t ta = c.tadr;
         read128((ta & 0x80000000u) ? (kSprBase | (ta & 0x3FF0u)) : (ta & 0x01FFFFF0u), tag);
@@ -94,13 +117,6 @@ void runChain(int ch) {
         const bool irq = (tag[0] >> 31) & 1;
         const uint32_t addr = static_cast<uint32_t>((tag[0] >> 32) & 0xFFFFFFF0u);
         c.chcr = (c.chcr & 0xFFFFu) | (static_cast<uint32_t>(tag[0]) & 0xFFFF0000u);
-        if (tte && (ch == hw::DMA_VIF0 || ch == hw::DMA_VIF1)) {
-            // The upper 64 bits of the tag are VIF codes, executed before the data.
-            const uint64_t q[2] = {0, tag[1]};
-            vif::transferTagWords(ch == hw::DMA_VIF0 ? 0 : 1, q);
-        } else if (tte && ch == hw::DMA_SPR_TO) {
-            deliver(ch, tag, 1);   // the whole tag goes to the scratchpad first
-        }
         bool done = false;
         uint32_t dataAddr = ta + 16;
         switch (id) {
@@ -125,12 +141,24 @@ void runChain(int ch) {
             break;
         case 7: done = true; break;                                        // end
         }
-        const auto data = fetch(dataAddr, qwc);
-        deliver(ch, data.data(), qwc);
-        c.madr = dataAddr + qwc * 16;
-        if (done || (irq && tie)) break;
+        c.chcr = (c.chcr & ~0x30u) | (static_cast<uint32_t>(asp & 3) << 4);
+        c.madr = dataAddr;
+        c.qwc = qwc;
+        c.endAfterData = done || (irq && tie);
+        if (tte && (ch == hw::DMA_VIF0 || ch == hw::DMA_VIF1)) {
+            // The upper 64 bits of the tag are VIF codes, executed before the data.
+            const uint64_t q[2] = {0, tag[1]};
+            vif::transferTagWords(ch == hw::DMA_VIF0 ? 0 : 1, q);
+        } else if (tte && ch == hw::DMA_SPR_TO) {
+            deliver(ch, tag, 1);   // the whole tag goes to the scratchpad first
+        }
+        if (!runNormal(ch)) return false;
+        if (c.endAfterData) {
+            c.endAfterData = false;
+            return true;
+        }
     }
-    c.chcr = (c.chcr & ~0x30u) | (static_cast<uint32_t>(asp & 3) << 4);
+    return true;
 }
 
 void runSpr(int ch) {
@@ -242,8 +270,8 @@ void start(int ch) {
             PS2_UNIMPL("dmac", "VIF1 to-memory transfer", "VIF1 DMA in the GS->EE direction (image readback) is not implemented");
             break;
         }
-        if (mode == 1) runChain(ch);
-        else runNormal(ch);
+        c.waiting = !(mode == 1 ? runChain(ch) : runNormal(ch));
+        if (c.waiting) return;   // its VIF stalled: STR stays set until the rest has gone
         break;
     case hw::DMA_SPR_FROM:
     case hw::DMA_SPR_TO:
@@ -318,8 +346,13 @@ void regWrite(uint32_t addr, uint32_t v) {
     switch (addr - kBase[ch]) {
     case 0x00:
         c.chcr = (c.chcr & 0xFFFF0000u) | (v & 0xFFFFu);
-        if (!(v & 0x100u)) c.running = false;   // STR off stops an IPU transfer
-        else if (!held() && !c.running) start(ch);
+        if (!(v & 0x100u)) {   // STR off stops an IPU transfer, or one waiting for its VIF
+            c.running = false;
+            c.waiting = false;
+            c.endAfterData = false;
+        } else if (!held() && !c.running && !c.waiting) {
+            start(ch);
+        }
         return;
     case 0x10: c.madr = v; return;
     case 0x20: c.qwc = v & 0xFFFF; return;
@@ -336,10 +369,17 @@ void enableRegWrite(uint32_t, uint32_t v) {
     const bool released = held() && !(v & 0x10000u);
     g_enable = v;
     if (!released) return;
-    // Channels started while the DMAC was held begin now; IPU transfers resume.
+    // Channels started while the DMAC was held begin now, and VIF channels go
+    // on (one whose VIF is still stalled goes back to waiting); IPU transfers resume.
     for (int ch = 0; ch < 10; ++ch)
         if ((g_ch[ch].chcr & 0x100u) && !g_ch[ch].running) start(ch);
     ipu::run();
+}
+
+void vifReady(int unit) {
+    const int ch = unit ? hw::DMA_VIF1 : hw::DMA_VIF0;
+    if (!g_ch[ch].waiting || held()) return;   // a held DMAC carries on when it is released
+    start(ch);
 }
 
 uint32_t toIpu(uint64_t* dst, uint32_t max) {
