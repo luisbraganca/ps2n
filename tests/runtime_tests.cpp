@@ -2246,6 +2246,73 @@ TEST_CASE(gs_triangles_sharing_an_edge_draw_it_once) {
     std::fesetround(mode);
 }
 
+TEST_CASE(gs_triangles_keep_what_their_vertices_share) {
+    // A Gouraud triangle whose vertices share a colour draws that colour at
+    // every pixel a flat one draws, however the host rounds (the guest's
+    // thread rounds toward zero), behind an alpha test of 128 or more as
+    // Code: Veronica X draws its text: where alpha 128 came out 127 the text
+    // failed it, and the sprites drawn after it covered those pixels. Texture
+    // coordinates the vertices share, by UV or by STQ, sample one texel: 5.0
+    // must not become 4.99. Random triangles in 12.4, both windings.
+    gs::init();
+    const int mode = std::fegetround();
+    gsWrite({{0x4C, 4ull << 16}, {0x40, 255ull << 16 | 127ull << 48}, {0x18, 0}, {0x1A, 1}, {0x14, 0}, {0x08, 0}});
+    constexpr uint64_t kAlphaTest = 1 | 5 << 1 | 0x80 << 4;   // TEST_1: alpha >= 0x80, else keep the pixel
+    std::vector<uint32_t> texels = pseudoRandom(16 * 16, 91);
+    for (uint32_t& t : texels) t = (t & 0x00FFFFFFu) | 0x80000000u;
+    gsUpload(64 * 32, 1, 0x00, 16, 16, texels);   // 16x16 PSMCT32 at page 64
+    const uint64_t tex0 = 64 * 32 | 1ull << 14 | 4ull << 26 | 4ull << 30 | 1ull << 34;   // TW, TH 16; TCC; MODULATE
+    const uint32_t shared = texels[7 * 16 + 5];
+    uint32_t seed = 4242;
+    auto next = [&](uint32_t range) {
+        seed = seed * 1664525u + 1013904223u;
+        return (seed >> 8) % range;
+    };
+    auto frame = [] {
+        std::vector<uint32_t> f(256 * 128);
+        for (int y = 0; y < 128; ++y)
+            for (int x = 0; x < 256; ++x) f[static_cast<size_t>(y * 256 + x)] = gs::readPixel32(0, 4, 0x00, x, y);
+        return f;
+    };
+    for (const int rounding : {FE_TOWARDZERO, FE_TONEAREST}) {
+        std::fesetround(rounding);
+        size_t drawn = 0, wrong = 0;
+        for (int n = 0; n < 40; ++n) {
+            int64_t p[3][2];
+            for (auto& v : p) {
+                v[0] = static_cast<int64_t>(next(250 * 16) + 3 * 16);
+                v[1] = static_cast<int64_t>(next(122 * 16) + 3 * 16);
+            }
+            const uint64_t rgba = 0x80000000u | next(256) << 16 | next(256) << 8 | next(256);
+            // Draws the triangle with PRIM `prim`, each vertex with `colour` (Q 1), UV (5, 7) and ST (5/16, 7/16).
+            auto draw = [&](uint64_t prim, uint64_t colour) {
+                gsWrite({{0x47, 0}});
+                gsRect(0, 0, 256, 128, 0);
+                gsWrite({{0x47, kAlphaTest}, {0x00, prim}});
+                for (const auto& v : p)
+                    gsWrite({{0x01, colour | bits64(1.0f) << 32}, {0x02, bits64(0.3125f) | bits64(0.4375f) << 32},
+                             {0x03, 5 * 16 | 7 * 16 << 16}, {0x05, xyz16(v[0], v[1])}});
+                return frame();
+            };
+            gsWrite({{0x06, tex0}});
+            const std::vector<uint32_t> flat = draw(3, rgba);
+            const std::vector<uint32_t> gouraud = draw(3 | 1 << 3, rgba);
+            const std::vector<uint32_t> byUv = draw(3 | 1 << 3 | 1 << 4 | 1 << 8, 0x80808080u);
+            const std::vector<uint32_t> byStq = draw(3 | 1 << 3 | 1 << 4, 0x80808080u);
+            for (size_t i = 0; i < flat.size(); ++i) {
+                const bool in = flat[i] != 0;
+                drawn += in;
+                wrong += gouraud[i] != flat[i];
+                wrong += byUv[i] != (in ? shared : 0u);
+                wrong += byStq[i] != (in ? shared : 0u);
+            }
+        }
+        CHECK(drawn > 20000);
+        CHECK_EQ(wrong, size_t(0));
+    }
+    std::fesetround(mode);
+}
+
 namespace {
 
 // Texel (x, y) of the 4x4 texture the filtering test samples.
@@ -2626,10 +2693,11 @@ TEST_CASE(gs_textures_read_every_format) {
     // A 256x256 texture, two pages or more each way in every format, drawn
     // 1:1 by a sprite (by UV, nearest, decal, TCC): each pixel shows its
     // texel as uploaded. A 24 or 16-bit texel takes its alpha from TEXA (AEM:
-    // 0 for black); a CLUT index takes its entry from a 32-bit, CT16 or CT16S
-    // CLUT, which sits in CSM1 order (entries 8-15 of each 32 after 16-23), a
-    // 4-bit one 16 entries a step of CSA in (only CSA's low 4 bits with a
-    // 32-bit CLUT). A 16-bit entry takes alpha 0 or 0x80, without TEXA.
+    // 0 for black, a 16-bit one only without its A bit); a CLUT index takes
+    // its entry from a 32-bit, CT16 or CT16S CLUT, which sits in CSM1 order
+    // (entries 8-15 of each 32 after 16-23), a 4-bit one 16 entries a step of
+    // CSA in (only CSA's low 4 bits with a 32-bit CLUT). A 16-bit entry takes
+    // its alpha from TEXA too.
     gs::init();
     constexpr int kW = 256, kH = 256;
     constexpr uint64_t kTexa = 0x40 | 1ull << 15 | 0xC0ull << 32;   // TA0 0x40, AEM, TA1 0xC0
@@ -2647,21 +2715,24 @@ TEST_CASE(gs_textures_read_every_format) {
     };
     auto expand16 = [](uint32_t c, uint32_t ta0, uint32_t ta1, bool aem) {
         uint32_t a = (c & 0x8000) ? ta1 : ta0;
-        if (aem && (c & 0x7FFF) == 0) a = 0;
+        if (aem && c == 0) a = 0;
         return (c & 0x1F) << 3 | ((c >> 5) & 0x1F) << 11 | ((c >> 10) & 0x1F) << 19 | a << 24;
     };
-    // The CLUT: 16x16 at page 128, random, as 32-bit or 16-bit entries.
-    const std::vector<uint32_t> clut = pseudoRandom(256, 31);
+    // The CLUT: 16x16 at page 128, random, as 32-bit or 16-bit entries; as
+    // 16-bit ones, entry 0 is all zero and entry 1 black with its A bit.
+    std::vector<uint32_t> clut = pseudoRandom(256, 31);
+    clut[0] = 0x80000000u;
     auto entry = [&](uint32_t cpsm, uint32_t i) -> uint32_t {
         const uint32_t x = (i & 7) | (i & 0x10) >> 1, y = (i >> 3 & 1) | (i >> 4 & 0xE);   // CSM1, i < 256
-        return cpsm == 0x00 ? clut[y * 16 + x] : expand16(texelBits(clut, y * 16 + x, 16), 0, 0x80, false);
+        return cpsm == 0x00 ? clut[y * 16 + x] : expand16(texelBits(clut, y * 16 + x, 16), 0x40, 0xC0, true);
     };
     int draws = 0;
     // Uploads texels in `psm` (`bits` a texel) to page 32, draws them, and
     // counts the pixels that differ from colour(texel bits).
     auto check = [&](uint32_t psm, int bits, uint64_t clutFields, auto colour) {
         std::vector<uint32_t> words = pseudoRandom(static_cast<size_t>(kW * kH * bits / 32), 40 + static_cast<uint32_t>(draws));
-        words[0] = words[1] = 0;   // the first texels black
+        words[0] = 0;              // the first texels black
+        words[1] = 0x80008000u;    // as 16-bit texels, black with the A bit
         gsUpload(32 * 32, 4, psm, kW, kH, words);
         const uint64_t tex0 = 32 * 32 | 4ull << 14 | static_cast<uint64_t>(psm) << 20 | 8ull << 26 | 8ull << 30 | 1ull << 34 | 1ull << 35 |
                               128ull * 32 << 37 | clutFields;

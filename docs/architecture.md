@@ -361,6 +361,17 @@ the guest's rounding toward zero: half of a quad's bottom row came out drawn
 two triangles share were drawn by both (a brighter line through a blended
 HUD ring) or by neither (a dotted seam across the pause menu's figure).
 
+The weights carry each value from the first vertex, as the GS steps it
+from a start: the colour is the first vertex's plus the other two's
+differences from it, each times its weight, and so are the texture
+coordinates and the fog (the depth too, in doubles). A value the three
+vertices share comes out exact. Weighing all three vertices' values rounded
+below them toward zero: an alpha of 128 came out 127 at scattered pixels
+and failed alpha tests against 128 (Code: Veronica X's text, item models
+and Rodrigo's arms), and a texture coordinate on a texel's edge took the
+texel before. A gradient can still come out a step below the exact value
+at a few pixels: 80 of the 10,601 inside `tests/programs/gs.s`'s triangle.
+
 Faster pixels must not change a picture: every pixel goes through the same
 float operations in the same order as before. So the rasterizer works out
 ahead what does not change within a primitive. With the drawing state it

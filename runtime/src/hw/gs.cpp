@@ -235,11 +235,13 @@ uint32_t bitsPerPixel(uint32_t psm) {
     }
 }
 
-// 16-bit 1:5:5:5 colour -> 32-bit RGBA (alpha per TEXA).
+// 16-bit 1:5:5:5 colour -> 32-bit RGBA, alpha per TEXA: TA1 with the A bit
+// set, else TA0, or 0 with AEM when all 16 bits are 0. Black with the A bit
+// set keeps TA1.
 uint32_t expand16(uint32_t c, uint32_t ta0 = 0, uint32_t ta1 = 0x80, bool aem = false) {
     const uint32_t r = (c & 0x1F) << 3, g = ((c >> 5) & 0x1F) << 3, b = ((c >> 10) & 0x1F) << 3;
     uint32_t a = (c & 0x8000) ? ta1 : ta0;
-    if (aem && (c & 0x7FFF) == 0) a = 0;
+    if (aem && (c & 0xFFFF) == 0) a = 0;
     return r | (g << 8) | (b << 16) | (a << 24);
 }
 uint32_t pack16(uint32_t c) {
@@ -532,13 +534,13 @@ bool g_drawDirty = true;   // a drawing register changed since g_draw was decode
 uint64_t g_drawGen = 0;    // counts the decodings, which tells states apart
 
 // A CLUT entry as RGBA, read from local memory as it is now. A 16-bit entry
-// takes alpha 0 or 0x80 (TEXA is not applied).
+// is expanded as a 16-bit texel is, its alpha from TEXA.
 PS2_ALWAYS_INLINE uint32_t clutColour(const Draw& d, uint32_t index) {
     const uint32_t at = d.clutBase + d.clutOffsets[index];
     if (d.clutWide) return g_vram[at & 0xFFFFF];
     uint16_t h;
     std::memcpy(&h, vramBytes() + 2 * (at & 0x1FFFFF), 2);
-    return expand16(h);
+    return expand16(h, d.ta0, d.ta1, d.aem);
 }
 
 uint32_t wrapCoord(int c, int size, uint32_t mode, int minv, int maxv) {
@@ -1108,7 +1110,11 @@ void drawTriangle(const Draw& d, const Vertex& v0, const Vertex& v1, const Verte
                 }
             const float w0 = w0s[lane], w1 = w1s[lane];
             const float w2 = 1.0f - w0 - w1;
-            auto lerp = [&](float a, float b, float c) { return a * w0 + b * w1 + c * w2; };
+            // From the first vertex by the other two's weights, as the GS steps a value from its start: one
+            // the three vertices share comes out exact. Weighing all three rounds below it (toward zero on the
+            // guest's thread): an alpha of 128 became 127 at scattered pixels and failed an alpha test
+            // against 128, and a texture coordinate on a texel's edge took the texel before.
+            auto lerp = [&](float a, float b, float c) { return a + (b - a) * w1 + (c - a) * w2; };
             // Depth in double, relative to the first vertex: a float keeps 24 of Z's 32 bits, so
             // layers drawn at one depth fought each other under GEQUAL, and a flat triangle stays exact.
             uint32_t z = 0;   // only the depth test reads it

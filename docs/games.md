@@ -222,6 +222,9 @@ interpreter. PCSX2 rates this release Perfect, with no game fixes.
   (with no save data), and a new game: the prologue, the long opening movie,
   and the first moments in the game proper, where the status screen opens on
   the Playing Manual.
+- The first areas, played in real time with a controller: walking, fights,
+  doors, picking items up and saving at a typewriter. The status screen with
+  its item and file views, and the cutscene where Rodrigo frees Claire.
 - Sound and music in the menus and the movies.
 - Controller input.
 
@@ -248,18 +251,24 @@ interpreter. PCSX2 rates this release Perfect, with no game fixes.
   module to register it. Before, the sound driver's upload of its samples
   took a tick per kilobyte, the game's bind to the driver gave up, and the
   game hung at start-up.
+- The GS interpolates a triangle's colours and texture coordinates from its
+  first vertex by the other two's weights, so a value its three vertices
+  share comes out exact ([architecture.md](architecture.md#pixels)). The
+  game draws text, item models and characters with an alpha of 128 behind
+  an alpha test of 128 or more; weighing all three vertices under the EE's
+  rounding toward zero gave 127 at scattered pixels, which failed it. The
+  status screen's letters came out hollow (sprites drawn after the text, at
+  a lower depth, covered every pixel that had failed), its item and file
+  models speckled, with blue streaks behind them, and Rodrigo's arms partly
+  missing, in the cutscenes and in play.
 
 ### Known problems
 
-- The status screen draws wrongly: the 3D view of the file in its left
-  window is garbled, and the caption under it shows hollow letters. Not
-  investigated yet.
-- Nothing past the first moments in the game proper has been tried: walking
-  around, fights and saves have not.
-- The game's own code turns a centred left stick into UP (its test for an
-  upward push compares the wrong way round), so it holds UP throughout, as it
-  would on a console. Menus read new presses and work; what it does in play
-  has not been seen.
+- Only the first areas have been played (2026-11-04).
+- The game's own code turns a centred left stick into UP in one of its input
+  words (its test for an upward push compares the wrong way round), as it
+  would on a console. Neither the menus nor play go by that word: with the
+  stick untouched, Claire stands still.
 
 ### Speed
 
