@@ -94,6 +94,10 @@ void setDrawThreads(int n);
 // Direct access for tests and tools. readPixel32 waits for the GS thread and
 // the draw threads.
 uint32_t readPixel32(uint32_t fbp, uint32_t fbw, uint32_t psm, int x, int y);
+// Primitives the draw threads did not share, drawn by the queuing thread
+// alone (they read memory they draw into, or in an unsupported format), since
+// start-up. Waits like readPixel32.
+uint64_t primitivesDrawnAlone();
 // Index of the memory unit holding pixel (x, y): a word for 32/24-bit
 // formats, halfword for 16-bit, byte for T8 and nibble for T4.
 uint32_t debugAddress(uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32_t y);

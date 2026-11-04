@@ -345,7 +345,11 @@ queue to be drawn wherever that order could show:
 
 A primitive that reads what it writes itself (a texture or CLUT in its own
 frame or depth buffer, or frame and depth buffers that overlap) is drawn by
-the queuing thread alone, after the queue.
+the queuing thread alone, after the queue. A CLUT counts as the words its
+entries can be read from: 256 entries for an 8-bit texture, 16 from CSA's
+for a 4-bit one. Counting a page from CBP made a CLUT in memory's last
+blocks seem to wrap round its end, and Code: Veronica X's fire went to one
+thread. `gs::primitivesDrawnAlone` counts these primitives for the tests.
 
 ### Pixels
 

@@ -1420,6 +1420,21 @@ uint32_t layout(uint32_t bp, uint32_t bw, uint32_t psm) {
     }
     return bp | bw << 14 | family << 20;
 }
+// The words holding the CLUT entries a texel can pick: 256 for an 8-bit
+// texture, 16 from CSA's for a 4-bit one. A page from CBP on was too much:
+// a CLUT in the last blocks of memory seemed to wrap round its end, and
+// every primitive using it went to one thread (Code: Veronica X's fire).
+Span clutSpan(const Draw& d) {
+    const uint32_t entries = d.tpsm == PSMT8 || d.tpsm == PSMT8H ? 256 : 16;
+    uint32_t lo = ~0u, hi = 0;
+    for (uint32_t i = 0; i < entries; ++i) {
+        lo = std::min<uint32_t>(lo, d.clutOffsets[i]);
+        hi = std::max<uint32_t>(hi, d.clutOffsets[i]);
+    }
+    const uint64_t first = static_cast<uint64_t>(d.clutBase) + lo, last = static_cast<uint64_t>(d.clutBase) + hi;
+    return d.clutWide ? Span{first, last + 1} : Span{first / 2, last / 2 + 1};   // 16-bit entries: halfwords
+}
+
 Access accessOf(const Draw& d) {
     const Env& e = d.e;
     Access a;
@@ -1438,7 +1453,7 @@ Access accessOf(const Draw& d) {
         switch (d.tpsm) {
         case PSMCT32: case PSMCT24: case PSMCT16: case PSMCT16S: break;
         case PSMT8: case PSMT4: case PSMT8H: case PSMT4HL: case PSMT4HH: {
-            const Span clut{static_cast<uint64_t>(d.cbp) * 64, static_cast<uint64_t>(d.cbp) * 64 + 2048};
+            const Span clut = clutSpan(d);
             if (meets(clut, frame) || (d.zte && meets(clut, depth))) a.alone = true;
             a.reads.add(clut);
             break;
@@ -1468,6 +1483,9 @@ Access accessOf(const Draw& d) {
 // primitive that reads what the batch writes, writes what it reads, or writes
 // memory the batch writes under another layout. A primitive that reads what
 // it writes itself is drawn by the queuing thread alone, after the batch.
+// Primitives drawn by the queuing thread alone (primitivesDrawnAlone).
+std::atomic<uint64_t> g_drawnAlone{0};
+
 class DrawThreads {
 public:
     ~DrawThreads() { stop(); }
@@ -1496,6 +1514,7 @@ public:
         if (state_ == -1) state_ = addState(d);
         if (state_ == kAlone) {
             finish();
+            g_drawnAlone.fetch_add(1, std::memory_order_relaxed);
             return drawShape(d, shape, v, 0, 1);
         }
         Prim& p = prims_[queued_++];
@@ -2319,6 +2338,11 @@ void setPath3Masked(bool masked) { g_path3Masked = masked; }
 uint32_t readPixel32(uint32_t fbp, uint32_t fbw, uint32_t psm, int x, int y) {
     drawn();
     return pixel32(fbp, fbw, psm, x, y);
+}
+
+uint64_t primitivesDrawnAlone() {
+    drawn();
+    return g_drawnAlone.load(std::memory_order_relaxed);
 }
 
 uint32_t debugAddress(uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32_t y) {

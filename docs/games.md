@@ -277,3 +277,17 @@ screen and its menu, and the start of a new game. The game proper has not
 been measured in real time. A deterministic run (`--virtual-clock`) takes
 about three minutes from start-up to the first moments in the game proper,
 21,000 vblanks.
+
+The explosion in the graveyard, before the first zombies, slowed real-time
+play down (2026-11-04). The game draws a picture every second vblank; there
+it draws up to 4.5 million pixels a picture (15 times the screen), most of
+them in about 40 fire triangles of up to 300,000 pixels each, from 4-bit
+textures whose CLUT sits in the last blocks of GS memory. The draw threads
+took the CLUT for a page long, as if it wrapped round the end of memory, so
+those triangles went to one thread. With the CLUT's real extent, a
+deterministic run from the save in front of the prison (8 draw threads) takes
+about 50 ms a picture at the explosion's height instead of 150 (25 ms
+elsewhere); every dumped frame is the same as before. Still drawn by one
+thread: the full-screen copy of the picture the effect draws from (its
+texture is the other frame buffer, declared 512 lines high) and primitives
+whose CLUT lies in the depth buffer's memory.

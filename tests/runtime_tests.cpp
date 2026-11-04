@@ -1481,6 +1481,53 @@ TEST_CASE(gs_threads_share_small_primitives_in_order) {
     }
 }
 
+TEST_CASE(gs_threads_share_primitives_whose_clut_ends_memory) {
+    // The draw threads share a primitive with a CLUT unless the entries its
+    // texels can pick sit in memory it draws into. A 32-bit CLUT in the last
+    // blocks of memory (Code: Veronica X's fire) used to count a whole page
+    // from CBP, as if it wrapped round the end of memory, and every
+    // primitive using it went to one thread. Either way the picture is one
+    // thread's. Two triangles over a 256x128 frame at page 0, from a 64x64
+    // 4-bit texture at page 64; a 32-bit CLUT at block 16376, a 16-bit one
+    // in the last two blocks, or a 32-bit one in the frame.
+    const int mode = std::fegetround();
+    auto draw = [](int threads, uint32_t cbp, uint32_t cpsm, uint64_t& alone) {
+        gs::init();
+        gs::setDrawThreads(threads);
+        gs::setOwnThread(false);
+        std::fesetround(FE_TOWARDZERO);
+        gsUpload(64 * 32, 1, 0x14, 64, 64, pseudoRandom(64 * 64 / 8, 21));
+        gsUpload(cbp, 1, cpsm, 16, 16, pseudoRandom(cpsm ? 128 : 256, 22));
+        gsWrite({{0x4C, 4ull << 16}, {0x40, 255ull << 16 | 127ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}, {0x14, 0}, {0x08, 0},
+                 {0x06, 64 * 32 | 1ull << 14 | 0x14ull << 20 | 6ull << 26 | 6ull << 30 | 1ull << 34 | static_cast<uint64_t>(cbp) << 37 |
+                            static_cast<uint64_t>(cpsm) << 51},
+                 {0x00, 3 | 1 << 4}});
+        const uint64_t before = gs::primitivesDrawnAlone();
+        const int corners[2][3][2] = {{{0, 0}, {256, 0}, {0, 128}}, {{256, 0}, {256, 128}, {0, 128}}};
+        for (const auto& triangle : corners)
+            for (const auto& p : triangle)
+                gsWrite({{0x02, bits64(static_cast<float>(p[0]) / 256.0f) | bits64(static_cast<float>(p[1]) / 128.0f) << 32},
+                         {0x01, 0x80808080u | bits64(1.0f) << 32}, {0x05, xyz(p[0], p[1], 0)}});
+        std::vector<uint32_t> frame(256 * 128);
+        for (int y = 0; y < 128; ++y)
+            for (int x = 0; x < 256; ++x) frame[static_cast<size_t>(y * 256 + x)] = gs::readPixel32(0, 4, 0x00, x, y);
+        alone = gs::primitivesDrawnAlone() - before;
+        return frame;
+    };
+    for (const auto& [cbp, cpsm] : {std::pair{16376u, 0x00u}, std::pair{16382u, 0x02u}, std::pair{32u, 0x00u}}) {   // page 1 is in the frame
+        uint64_t alone1 = 0, alone4 = 0;
+        const std::vector<uint32_t> one = draw(1, cbp, cpsm, alone1), four = draw(4, cbp, cpsm, alone4);
+        CHECK(std::set<uint32_t>(one.begin(), one.end()).size() > 10);
+        size_t differ = 0;
+        for (size_t i = 0; i < one.size(); ++i) differ += one[i] != four[i];
+        CHECK_EQ(differ, size_t(0));
+        CHECK_EQ(alone4, cbp == 32 ? uint64_t(2) : uint64_t(0));
+    }
+    std::fesetround(mode);
+    gs::setOwnThread(false);
+    gs::setDrawThreads(0);
+}
+
 TEST_CASE(gs_thread_draws_what_the_guest_thread_draws) {
     // The GS thread takes the guest's rounding, and reading back waits for it.
     const std::vector<uint32_t> guest = drawScene(1);
