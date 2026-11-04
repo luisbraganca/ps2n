@@ -69,6 +69,8 @@ constexpr uint32_t kExitPc = 0xFFFFFFFFu;
 
 // Kernel-area layout (the real EE kernel occupies 0x0-0x7FFFF; we put our own
 // data there instead).
+constexpr uint32_t kKernelAreaEnd = 0x00080000u;
+constexpr uint32_t kSyscallTable = 0x00000800u;   // the handlers SetSyscall installs, where games search for them
 constexpr uint32_t kInterruptStackTop = 0x0007F000u;
 constexpr uint32_t kKernelScratch = 0x00070000u;
 

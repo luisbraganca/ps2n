@@ -52,17 +52,19 @@ L_001001a4:
 
 ## Status
 
-**Early development: no game is playable yet.** Two games have been tried,
-and both are In-game on PCSX2's scale. 007: Agent Under Fire runs its menus,
-its whole first mission and its second mission's race, with sound. Resident
+**Early development: no game is playable yet.** Three games have been tried.
+Two are In-game on PCSX2's scale: 007: Agent Under Fire runs its menus, its
+whole first mission and its second mission's race, with sound, and Resident
 Evil Code: Veronica X runs its menus and movies at full speed, and its first
-areas play with a controller. [docs/games.md](docs/games.md) has what runs,
-the known problems and the speed, game by game.
+areas play with a controller. Secret Agent Clank gets through its start-up
+and waits at its first loading screen.
+[docs/games.md](docs/games.md) has what runs, the known problems and the
+speed, game by game.
 
 The recompiler, the part that translates code, is the furthest along: it
-covers the whole EE instruction set and has recompiled two retail games. Most
-of the work left is in the runtime, which stands in for the rest of the
-console:
+covers the whole EE instruction set and has recompiled the executables of
+three retail games. Most of the work left is in the runtime, which stands in
+for the rest of the console:
 
 - The graphics come from a software renderer, drawing on threads of its own
   alongside the EE. It keeps the first game at full speed in the heaviest
@@ -71,7 +73,7 @@ console:
 - The vector units run their micro code recompiled or interpreted. In
   real-time runs VU1 has a thread of its own, but a program still takes no
   emulated time.
-- The IOP services cover what the two games needed.
+- The IOP services cover what the first two games needed.
 - The sound comes from an SPU2 emulated at its registers.
 - Windows is the only platform built and tested. Linux has never been built,
   and macOS not since the project moved to Windows.
@@ -80,9 +82,9 @@ console:
 
 | Area | Progress | Count | Biggest gaps |
 |---|---|--:|---|
-| [Games playable](docs/games.md) | `░░░░░░░░░░` 0% | 0 / 2 | Agent Under Fire played into its second mission and Code: Veronica X through its first areas; neither tried further |
+| [Games playable](docs/games.md) | `░░░░░░░░░░` 0% | 0 / 3 | Agent Under Fire played into its second mission and Code: Veronica X through its first areas, neither tried further; Secret Agent Clank waits at its first loading screen |
 | EE instructions | `██████████` 100% | 359 / 359 | |
-| Recompiler | `█████████░` 89% | 8 / 9 | overlays |
+| Recompiler | `████████░░` 80% | 8 / 10 | overlays, relocatable modules |
 | EE kernel syscalls | `█████████░` 88% | 127 / 145 | event flags, `ExecPS2`, the TLB, CPU timers |
 | DMA, interrupts, timers | `█████░░░░░` 50% | 4 / 8 | MFIFO, stall control, transfer timing |
 | Graphics (GS) | `███████░░░` 68% | 15 / 22 | the CLUT buffer, reading back to the EE |
@@ -99,7 +101,7 @@ console:
 <details>
 <summary><b>What each bar counts</b></summary>
 
-**Recompiler**: 8 of 9
+**Recompiler**: 8 of 10
 - [x] Function discovery: ELF symbols, Ghidra maps, call targets, code and data pointers, prologues
 - [x] Jump tables, as `switch` statements
 - [x] Delay slots (and jumps into them), branch-likely, tail calls, fall-through between functions
@@ -109,6 +111,7 @@ console:
 - [x] Missed code runs on the interpreter and is recorded for the next recompile
 - [x] Config bindings: stubs, skips, C++ overrides, instruction patches
 - [ ] Overlays: code replaced while its program runs
+- [ ] Relocatable modules a game loads and links itself (Secret Agent Clank's `SNR2` files)
 
 **DMA, interrupts, timers**: 4 of 8
 - [x] The interrupt controller
@@ -273,11 +276,13 @@ Roughly in order:
    Stepped interpolation would be faster but rounds differently, so pictures
    would change; then a GPU renderer, which higher resolutions also need.
 5. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
-   `ExecPS2`, dual-layer discs, code overlays, and Code: Veronica X past its
-   first areas.
+   `ExecPS2`, dual-layer discs, code overlays and relocatable modules,
+   Code: Veronica X past its first areas, and Secret Agent Clank past its
+   first loading screen.
 6. **Vector units**: their timing (a program takes no emulated time).
 7. **Widescreen and higher resolutions**, the way PCSX2 does them. 16:9
-   works: both games play in 16:9 with PCSX2's patch files (`[pnach]`).
+   works: Agent Under Fire and Code: Veronica X play in 16:9 with PCSX2's
+   patch files (`[pnach]`).
    Left: the no-interlacing patches, the codes that act while a game runs
    (conditions on memory the executable does not initialise, the increment,
    copy, pointer and bitwise codes, `dpatch`), and the files for the

@@ -35,6 +35,8 @@ ps2n_program_test(stripped STRIP)
 # back-edge must still be a safepoint, or the vblank interrupt never comes.
 ps2n_program_test(split_loop STRIP)
 ps2n_program_test(kernel)
+# SetSyscall: handlers a program installs, the table it finds in kernel memory, handlers in kernel memory.
+ps2n_program_test(setsyscall)
 ps2n_program_test(deci2)
 # Skip, stub, override and patch; --max-vsyncs turns an ignored skip into a failure instead of a hang.
 ps2n_program_test(bindings SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/bindings_override.cpp" RUN_ARGS --max-vsyncs 100)

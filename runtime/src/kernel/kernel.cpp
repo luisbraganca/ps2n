@@ -90,6 +90,10 @@ int g_current = -1;
 uint64_t g_readyCounter = 0;
 bool g_needResched = false;
 int g_interruptDepth = 0;
+// Syscall handlers the game installed (SetSyscall) that are running. The
+// kernel runs them with interrupts off: interrupts and thread switches wait
+// until they return.
+int g_kernelMode = 0;
 uint64_t g_interruptCycles = 0;   // time spent in handlers that have returned
 uint64_t g_interruptStart = 0;    // when the running one started
 bool g_dispatchDisabled = false;
@@ -155,10 +159,11 @@ void switchTo(int next) {
     PS2_TRACE("kernel", "switch to thread %d", next);
 }
 
-// Re-evaluates who should run. Only switches outside interrupt context; the
-// current thread keeps running if it is still the best candidate.
+// Re-evaluates who should run. Only switches outside interrupt context and
+// installed syscall handlers; the current thread keeps running if it is still
+// the best candidate.
 void reschedule() {
-    if (g_interruptDepth > 0) {
+    if (g_interruptDepth > 0 || g_kernelMode > 0) {
         g_needResched = true;
         return;
     }
@@ -174,8 +179,8 @@ void reschedule() {
 // The current thread stops running (it waits, sleeps, exits...): save its
 // context and run someone else, or nobody.
 void blockCurrent() {
-    if (g_interruptDepth > 0) {
-        PS2_ERROR("kernel", "blocking syscall from an interrupt handler (pc 0x%08x); ignoring", cpu.pc);
+    if (g_interruptDepth > 0 || g_kernelMode > 0) {
+        PS2_ERROR("kernel", "blocking syscall from an interrupt or syscall handler (pc 0x%08x); ignoring", cpu.pc);
         return;
     }
     const int cur = g_current;
@@ -547,7 +552,7 @@ void runHandlers(const std::vector<Handler>& list, uint32_t cause) {
 }
 
 bool interruptsEnabled() {
-    if (g_interruptDepth > 0) return false;
+    if (g_interruptDepth > 0 || g_kernelMode > 0) return false;
     if (g_current < 0) return true;   // the idle thread always takes interrupts
     const uint32_t st = cpu.cop0[COP0_STATUS];
     return (st & kStatusEIE) && (st & kStatusIE);
@@ -750,12 +755,69 @@ void sysDeci2Call() {
     }
 }
 
+// ---- SetSyscall ---------------------------------------------------------------------
+// The kernel keeps a table of syscall handlers in its memory, and SetSyscall
+// writes one into it. Sony's libkernel installs a few of its own at start-up
+// (Copy, FindAddress) and finds the table by searching kernel memory for them.
+// It then copies patches for the console's kernel (alarms, ExecPS2, the TLB
+// functions) into kernel memory and points syscalls at them. The table sits in
+// kernel memory here too, where the game can find and read it. A handler in
+// user memory runs for its number from then on, as on the console. One in
+// kernel memory is such a patch, which needs the console's kernel: the
+// runtime's own syscall stands in, or the call is reported.
+constexpr uint32_t kSyscallEntries = 0x200;
+
+bool inKernelMemory(uint32_t address) { return (address & 0x1FFFFFFFu) < kKernelAreaEnd; }
+
+// The handler installed for syscall n, or 0. -n reaches the same entry, as
+// libkernel's interrupt-context calls do.
+uint32_t installedHandler(int32_t n) {
+    const uint32_t i = n < 0 ? 0u - static_cast<uint32_t>(n) : static_cast<uint32_t>(n);
+    return i < kSyscallEntries ? read32(kSyscallTable + 4 * i) : 0;
+}
+
+void sysSetSyscall() {
+    const int32_t n = sarg(0);
+    const uint32_t handler = arg(1);
+    if (n >= 0 && static_cast<uint32_t>(n) < kSyscallEntries) {
+        write32(kSyscallTable + 4 * static_cast<uint32_t>(n), handler);
+        PS2_DEBUG("kernel", "SetSyscall(0x%x, 0x%08x)%s", n, handler,
+                  handler && inKernelMemory(handler) ? ": in kernel memory, not run" : "");
+    } else {
+        PS2_FALLBACK("kernel", "SetSyscall outside the table",
+                     "SetSyscall(%d, 0x%08x): outside the syscall table, a write into the console's kernel; ignored", n, handler);
+    }
+    ret(0);
+}
+
+// Runs the handler the game installed for syscall n the way the kernel does:
+// called like a function with the caller's registers, its result in v0 and
+// every other register as the caller left it, with interrupts and thread
+// switches held off until it returns. False when n has none that runs here.
+bool runInstalledHandler(int32_t n) {
+    const uint32_t handler = installedHandler(n);
+    if (!handler || inKernelMemory(handler)) return false;
+    PS2_TRACE("kernel", "syscall %d runs the handler the game installed, 0x%08x", n, handler);
+    ++g_kernelMode;
+    const uint64_t v0 = callGuest(handler, nullptr, 0);
+    --g_kernelMode;
+    ret(static_cast<int64_t>(v0));
+    return true;
+}
+
 void sysUnimplemented(int32_t n) {
     char key[96];
     std::snprintf(key, sizeof key, "syscall %d (%s)", n, syscallName(n));
     // cpu.pc is still syscall + 4 here; $ra usually identifies the game code
-    // that called the libkernel wrapper.
-    PS2_UNIMPL("kernel", key, "unimplemented %s at 0x%08x ($ra 0x%08x); returning 0", key, cpu.pc - 4, ru32(RA));
+    // that called the libkernel wrapper. A handler installed for n would
+    // already have run unless it is in kernel memory.
+    if (const uint32_t handler = installedHandler(n))
+        PS2_UNIMPL("kernel", key,
+                   "unimplemented %s at 0x%08x ($ra 0x%08x): its handler 0x%08x is in kernel memory, "
+                   "a patch for the console's kernel; returning 0",
+                   key, cpu.pc - 4, ru32(RA), handler);
+    else
+        PS2_UNIMPL("kernel", key, "unimplemented %s at 0x%08x ($ra 0x%08x); returning 0", key, cpu.pc - 4, ru32(RA));
     ret(0);
 }
 
@@ -829,7 +891,7 @@ void dispatchSyscall(int32_t n) {
     case 0x71: case -0x71: ret(static_cast<int64_t>(gs::putImr(arg(0)))); break; // GsPutIMR
     case 0x72: ret(0); break;                                       // SetPgifHandler
     case 0x73: g_vsyncFlagAddr = arg(0); g_vsyncCsrAddr = arg(1); ret(0); break; // SetVSyncFlag
-    case 0x74: PS2_DEBUG("kernel", "SetSyscall(0x%x) ignored (kernel patch)", arg(0)); ret(0); break;
+    case 0x74: sysSetSyscall(); break;
     case 0x75: hostPrint(formatGuestString(arg(0), 1)); ret(0); break;   // _print
     case 0x76: case -0x76: ret(iop::sifDmaStat(arg(0))); break;     // SifDmaStat
     case 0x77: case -0x77: ret(iop::sifSetDma(arg(0), sarg(1))); break;   // SifSetDma
@@ -971,6 +1033,7 @@ const char* syscallName(int32_t n) {
     case 0x7B: return "ExecOSD";
     case 0x7C: return "Deci2Call";
     case 0x7F: return "GetMemorySize";
+    case 0x83: return "FindAddress";
     default: return "?";
     }
 }
@@ -988,8 +1051,10 @@ void init(uint32_t entry, std::vector<std::string> argv) {
     for (auto& l : g_intcHandlers) l.clear();
     for (auto& l : g_dmacHandlers) l.clear();
     for (auto& s : g_deci2) s = Deci2Socket{};
+    fillBytes(kSyscallTable, 0, 4 * kSyscallEntries);   // every syscall is the runtime's own again
     g_needResched = g_dispatchDisabled = false;
     g_interruptDepth = 0;
+    g_kernelMode = 0;
     g_heapStart = g_heapEnd = 0;
     g_vsyncFlagAddr = g_vsyncCsrAddr = 0;
     g_argv = std::move(argv);
@@ -1125,7 +1190,7 @@ void syscall(uint32_t pc) {
         PS2_INFO("syscall", "%s (%d) a0=0x%08x a1=0x%08x a2=0x%08x from 0x%08x", kernel::syscallName(n), n, ru32(regs::A0),
                  ru32(regs::A1), ru32(regs::A2), pc);
     clockEeWork(kernel::kSyscallCycles);
-    if (!kernel::handleInterruptSyscall(n)) kernel::dispatchSyscall(n);
+    if (!kernel::runInstalledHandler(n) && !kernel::handleInterruptSyscall(n)) kernel::dispatchSyscall(n);
     // A LoadExecPS2 (kTrampExec) waits for the frames to unwind: the old program does no more work.
     if (g_exitRequested || !kernel::hasRunningThread() || cpu.pc == kTrampExec) return;
     runDueEvents();

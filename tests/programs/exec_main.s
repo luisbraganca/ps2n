@@ -115,6 +115,12 @@ main:   addiu   $sp, $sp, -16
         la      $a0, s_vblanks
         jal     printf
         nop
+        li      $v1, 0x81               # the boot program's SetSyscall is gone: unimplemented
+        syscall
+        move    $a1, $v0
+        la      $a0, s_syscall
+        jal     printf
+        nop
 
         la      $a0, s_extra_path
         move    $a1, $zero
@@ -136,6 +142,7 @@ s_argv:         .asciz " argv[%d]=%s"
 s_newline:      .asciz "\n"
 s_main:         .asciz "main"
 s_vblanks:      .asciz "main: three vblanks\n"
+s_syscall:      .asciz "main: syscall 0x81 returned %d\n"
 s_extra_path:   .asciz "host:exec_extra.elf"
 s_returned:     .asciz "main: LoadExecPS2 returned\n"
 

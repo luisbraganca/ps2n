@@ -1,7 +1,8 @@
 # exec_boot.s - LoadExecPS2, part 1 of 3 (exec_main.s, exec_extra.s): the
-# boot program. Its first run leaves a ready thread and a vblank handler behind,
-# both of which would print if they ever ran again, and starts exec_main.elf
-# with two arguments. exec_extra.elf starts it again with one argument.
+# boot program. Its first run leaves a ready thread, a vblank handler and a
+# syscall handler (SetSyscall) behind, each of which would print if it ever ran
+# again, and starts exec_main.elf with two arguments. exec_extra.elf starts it
+# again with one argument.
         .set noreorder
         .text
 
@@ -109,6 +110,10 @@ main:   addiu   $sp, $sp, -16
         li      $a0, 2
         li      $v1, 0x14               # _EnableIntc
         syscall
+        li      $a0, 0x81               # a number the runtime does not implement
+        la      $a1, leftover_syscall
+        li      $v1, 0x74               # SetSyscall
+        syscall
 
         la      $a0, s_main_path
         li      $a1, 2
@@ -153,6 +158,15 @@ leftover_handler:
         move    $v0, $zero
         .end leftover_handler
 
+        .ent leftover_syscall
+leftover_syscall:
+        la      $a0, s_leftover_syscall
+        li      $v1, 0x75
+        syscall
+        jr      $ra
+        li      $v0, 1
+        .end leftover_syscall
+
         .rodata
 s_argc:             .asciz "%s: argc=%d"
 s_argv:             .asciz " argv[%d]=%s"
@@ -166,6 +180,7 @@ s_returned:         .asciz "boot: LoadExecPS2 returned\n"
 s_done:             .asciz "boot: done\n"
 s_leftover_thread:  .asciz "boot: leftover thread ran\n"
 s_leftover_handler: .asciz "boot: leftover vblank handler ran\n"
+s_leftover_syscall: .asciz "boot: leftover syscall handler ran\n"
 
         .data
         .align 2

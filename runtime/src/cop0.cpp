@@ -90,7 +90,17 @@ void breakpoint(uint32_t pc, uint32_t code) {
                code == 7 ? " (division by zero check)" : code == 6 ? " (overflow check)" : "");
 }
 
+// With Status.ERL set, ERET returns to ErrorEPC and clears ERL. Libkernel's
+// timer functions (SetT2) set ERL themselves to write a timer register in
+// kernel mode, and return through ErrorEPC. Otherwise ERET leaves an exception
+// handler, which never runs here, for EPC.
 void eret(uint32_t pc) {
+    constexpr uint32_t kStatusErl = 1u << 2;
+    if (cpu.cop0[COP0_STATUS] & kStatusErl) {
+        cpu.cop0[COP0_STATUS] &= ~kStatusErl;
+        cpu.pc = cpu.cop0[COP0_ERROREPC];
+        return;
+    }
     PS2_UNIMPL("cpu", "ERET", "ERET at 0x%08x: guest exception handlers are not supported; returning to EPC 0x%08x", pc,
                cpu.cop0[COP0_EPC]);
     cpu.pc = cpu.cop0[COP0_EPC];

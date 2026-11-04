@@ -11,6 +11,7 @@ recompiled there.
 |---|---|---|
 | [agent-under-fire](agent-under-fire) | 007: Agent Under Fire, Europe (SLES-50539) | `SLES_505.39`, `MOVIE.ELF`, `ACTION.UK`, `DRIVING.ELF` |
 | [code-veronica-x](code-veronica-x) | Resident Evil Code: Veronica X, USA (SLUS-20184) | `SLUS_201.84` |
+| [secret-agent-clank](secret-agent-clank) | Secret Agent Clank, USA (SCUS-97623) | `SCUS_976.23` |
 
 The `*-entries.toml` files list entry points the analysis does not find by
 itself: addresses the runtime had to interpret in play sessions, so that a

@@ -44,6 +44,7 @@ not been tried, and how yours copes is worth reporting.
 |---|---|---|---|
 | 007: Agent Under Fire | Europe (PAL) | SLES-50539 | the menus, the first mission and the second mission's race |
 | Resident Evil Code: Veronica X | USA (NTSC) | SLUS-20184 | the menus, the movies and the first areas |
+| Secret Agent Clank | USA (NTSC) | SCUS-97623 | nothing yet: it shows its loading sign and goes no further |
 
 The serial is printed on the disc and on the back of the case. Another
 release of these games (another region, or a reprint with another serial)
@@ -291,6 +292,49 @@ At the language screen, choose English. Only `ACTION.UK` is recompiled: the
 other languages would run on PS2Native's interpreter, much too slowly to
 play.
 
+### Secret Agent Clank
+
+Make the folder and the image, and check the release:
+
+```sh
+mkdir -p ~/ps2/secret-agent-clank
+cd ~/ps2/secret-agent-clank
+dd if=/dev/sr0 of=sac.iso bs=2048 status=progress
+bsdtar -xOf sac.iso SYSTEM.CNF
+```
+
+The last command must show `BOOT2 = cdrom0:\SCUS_976.23;1`. Take the program
+out of the image, copy the game's config, recompile and build, and make the
+launcher. Copy the whole block:
+
+```sh
+mkdir -p disc
+bsdtar -xf sac.iso -C disc SCUS_976.23
+cp ~/ps2/ps2n/games/secret-agent-clank/*.toml .
+~/ps2/ps2n/build/recompiler/ps2n recompile sac.toml
+cmake -S out/sac -B out/sac/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+cmake --build out/sac/build
+cat > play.sh <<'EOF'
+#!/bin/sh
+# Starts the game, keeping its log in logs/.
+cd "$(dirname "$0")" || exit 1
+mkdir -p logs
+./out/sac/build/sac --cdrom sac.iso "$@" 2>&1 | tee -i "logs/$(date +%Y-%m-%d_%H-%M-%S).log"
+EOF
+chmod +x play.sh
+```
+
+From now on, start the game with:
+
+```sh
+~/ps2/secret-agent-clank/play.sh
+```
+
+For now the game shows only its loading sign, a turning blue arrow in the
+bottom-right corner, and goes no further
+([docs/games.md](docs/games.md#secret-agent-clank) says why). Close the
+window to quit.
+
 ### Another game
 
 Other games have not been tried, and most will stop early, but what happens
@@ -450,6 +494,15 @@ cp ~/ps2/ps2n/games/agent-under-fire/*.toml .
 cmake --build out/auf/build
 ```
 
+Secret Agent Clank:
+
+```sh
+cd ~/ps2/secret-agent-clank
+cp ~/ps2/ps2n/games/secret-agent-clank/*.toml .
+~/ps2/ps2n/build/recompiler/ps2n recompile sac.toml
+cmake --build out/sac/build
+```
+
 Another game:
 
 ```sh
@@ -485,8 +538,8 @@ cmake --build out/game/build
   It ran out of memory: run the build command again with `-j 2` at the end.
 - **The game freezes.** Wait ten seconds, then press Ctrl+C in the terminal:
   the game stops and prints its summary. If nothing happens, open another
-  terminal and run `pkill -KILL -x cvx` (or `auf`, or `game`), and send the
-  session's log.
+  terminal and run `pkill -KILL -x cvx` (or `auf`, `sac` or `game`), and send
+  the session's log.
 - **A controller does nothing.** Press Escape and choose Controller Settings,
   then Controller Port 1, then Automatic Mapping.
 - **No window opens, or the game stops at once.** Send the session's log.

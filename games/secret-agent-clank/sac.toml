@@ -1,0 +1,20 @@
+# Secret Agent Clank (USA, SCUS-97623). Copy this file into the game's
+# folder, beside a folder named disc that holds SCUS_976.23, taken from the
+# disc image (see GETTING_STARTED.md).
+#
+# One executable, without symbols. The front end and the levels are
+# relocatable modules the game loads itself (BIN/FE.REL, BIN/LEVEL*.REL, in
+# the SNR2 format), which the recompiler does not read.
+[input]
+elf = "disc/SCUS_976.23"
+
+[output]
+dir = "out/sac"
+name = "sac"
+
+[analysis]
+# Mid-function entries the game reached on the interpreter (2026-11-04),
+# among them the syscall handlers it installs at start-up. Then whatever it
+# still interprets, written when the game exits.
+entries = [0x00100918, 0x0019a610, 0x0019ac40, 0x0019cab0]
+entries_files = ["ps2n_missing.toml"]

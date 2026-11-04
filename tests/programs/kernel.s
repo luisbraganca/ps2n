@@ -1,4 +1,5 @@
-# kernel.s - EE kernel HLE: scheduling, semaphores, interrupts, alarms, timers.
+# kernel.s - EE kernel HLE: scheduling, semaphores, interrupts, alarms, timers,
+# and ERET from kernel mode as libkernel's timer functions use it.
         .set noreorder
         .text
 
@@ -168,6 +169,23 @@ thread_f:
         li      $v1, 0x23
         syscall
         .end thread_f
+
+# set_t2_comp(value), as libkernel's SetT2 writes a timer register: set
+# Status.ERL (kernel mode), store through kseg1, and return through ErrorEPC.
+        .ent set_t2_comp
+set_t2_comp:
+        mfc0    $t0, Status
+        ori     $t0, $t0, 4             # ERL
+        mtc0    $t0, Status
+        sync.p
+        lui     $t1, 0xb000
+        sw      $a0, 0x1020($t1)        # T2_COMP
+        mtc0    $ra, ErrorEPC
+        sync.p
+        eret                            # to ErrorEPC, clearing ERL
+        jr      $ra                     # not reached
+        nop
+        .end set_t2_comp
 
 # ---------------------------------------------------------------------------
         .globl main
@@ -382,6 +400,17 @@ main:   addiu   $sp, $sp, -32
         jal     printf
         nop
 
+        # 10. ERET with Status.ERL set returns to ErrorEPC (libkernel's SetT2).
+        jal     set_t2_comp
+        li      $a0, 0x1234
+        lui     $t0, 0x1000
+        lw      $a1, 0x1020($t0)        # T2_COMP
+        mfc0    $t1, Status
+        andi    $a2, $t1, 4             # ERL, cleared by ERET
+        la      $a0, s_set_t2
+        jal     printf
+        nop
+
         ld      $s0, 8($sp)
         ld      $ra, 0($sp)
         move    $v0, $zero
@@ -405,6 +434,7 @@ s_e_status:     .asciz "E status after exit: %d\n"
 s_f_result:     .asciz "F wait result %d\n"
 s_timer:        .asciz "timer advanced: %d\n"
 s_vsync_flag:   .asciz "vsync flag after two more vblanks: %d\n"
+s_set_t2:       .asciz "returned through ErrorEPC: T2_COMP 0x%x, ERL %d\n"
 
         .data
         .align 2

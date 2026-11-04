@@ -18,6 +18,7 @@ Playable or Perfect.
 |---|---|---|---|---|
 | [007: Agent Under Fire](#007-agent-under-fire) | Europe | SLES-50539 | In-game | 2026-11-04 |
 | [Resident Evil Code: Veronica X](#resident-evil-code-veronica-x) | USA | SLUS-20184 | In-game | 2026-11-04 |
+| [Secret Agent Clank](#secret-agent-clank) | USA | SCUS-97623 | Nothing | 2026-11-04 |
 
 To bring up another game, start with the README's
 [Porting a game](../README.md#porting-a-game). Then give the game a section
@@ -339,3 +340,52 @@ elsewhere); every dumped frame is the same as before. Still drawn by one
 thread: the full-screen copy of the picture the effect draws from (its
 texture is the other frame buffer, declared 512 lines high) and primitives
 whose CLUT lies in the depth buffer's memory.
+
+## Secret Agent Clank
+
+The USA release, an NTSC game: it needs no `--region`. It is one executable,
+`SCUS_976.23`, without symbols, so its config
+([games/secret-agent-clank/sac.toml](../games/secret-agent-clank/sac.toml))
+names little more than the ELF and a few entry points. The front end and the levels are relocatable
+modules that the game loads itself (`BIN/FE.REL` and `BIN/LEVEL*.REL`, in a
+format whose files start with `SNR2`). The recompiler does not read them, so
+their code would run on the interpreter. The disc also carries an IOP image
+of its own (`IOPRP310.IMG`) and FMOD Ex's IOP module (`FMODEX.IRX`).
+
+### What runs
+
+The executable runs recompiled. Sony's start-up code runs: it finds the
+kernel's syscall table, installs its patches for the kernel and starts its
+timers. The IOP restarts with the game's own image, and FMOD Ex's module
+loads. The game then draws its loading sign, a turning blue arrow in the
+bottom-right corner, and stays there (2026-11-04): see the first known
+problem.
+
+### What it took
+
+- The runtime keeps a syscall table in kernel memory, where `SetSyscall`
+  writes, and runs the handlers a game installs in user memory. At start-up
+  libkernel installs its own `FindAddress` (131) and `Copy` (90), then
+  searches kernel memory for them to find the table. The runtime ignored
+  `SetSyscall`, so syscall 131 returned 0 and the search never ended: 71
+  million calls in a 50-second run, before the game drew anything.
+- An `ERET` with `Status.ERL` set returns to ErrorEPC. libkernel's timer
+  functions (`SetT2`, which `InitTimer` uses at start-up) set ERL to write a
+  timer register in kernel mode, then return that way. The runtime went to
+  EPC, which was 0, and ran kernel memory as code.
+
+### Known problems
+
+- The game prints that it is loading its front end (`BIN/FE.REL`) and makes
+  its first FILEIO request (function 0), which goes unanswered. Its IOP
+  image, from SDK 3.1, carries FILEIO release 3100, whose replies are
+  asynchronous, and the runtime speaks only releases 1000 and 2100: it
+  reports the request, and the game keeps waiting on its loading screen.
+- Not reached yet: the relocatable modules, and FMOD Ex's sound.
+- The executable's `.data` section is marked executable, and with no symbols
+  the analysis takes it for code: `report.txt` lists 6,224 unknown
+  instructions, most likely that data.
+
+### Speed
+
+Not measured: the game does not get far enough.

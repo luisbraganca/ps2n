@@ -1,0 +1,8 @@
+both handlers found in one table: 1
+entry 0x5a read with Copy holds its handler: 1
+sum 10, caller's registers kept: 1
+-0x81 reaches the same entry: sum 26
+GetMemorySize 0x1234 with a handler, 0x2000000 without
+handlers in kernel memory: GetMemorySize 0x2000000, syscall 0x81 0x0
+vblanks taken while a handler ran: 0, taken after it: 1
+woken thread ran inside the handler: 0, after it: 1

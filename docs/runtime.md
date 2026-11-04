@@ -244,8 +244,10 @@ both modes.
 
 Guest exceptions are not delivered: integer overflow leaves the destination
 unchanged, trap and `BREAK` instructions are reported and execution continues,
-`ERET` returns to EPC, TLB instructions are ignored (the default TLB layout is
-assumed).
+`ERET` returns to EPC (reported), TLB instructions are ignored (the default TLB
+layout is assumed). An `ERET` with `Status.ERL` set returns to ErrorEPC and
+clears ERL, as on the console: libkernel's timer functions (`SetT2`) set ERL
+themselves to write a timer register in kernel mode, then return that way.
 
 ### Memory map
 
@@ -260,7 +262,8 @@ assumed).
 | `0x1FC00000`-`0x1FFFFFFF` | BIOS window: zeros except the `ROMVER` string some games read (region from `--region`) |
 
 The first 512 KB of RDRAM hold the kernel on a real console; the runtime keeps
-its own small structures there (the interrupt stack, kernel scratch data).
+its own small structures there (the syscall table, the interrupt stack, kernel
+scratch data).
 Accesses to unmapped addresses are reported.
 
 ### EE kernel
@@ -279,11 +282,28 @@ threads run on one host thread.
 | Video | `SetGsCrt` (NTSC/PAL timing, interlace), `GsGetIMR`, `GsPutIMR`, `SetVSyncFlag`, `Get/SetGsHParam`, `Get/SetGsVParam` |
 | SIF | `SifSetDma`, `SifDmaStat`, `SifSetDChain`, `SifSetReg`, `SifGetReg`, `SifStopDma` |
 | Configuration | `Get/SetOsdConfigParam` (English, 4:3), `Get/SetOsdConfigParam2`, `MachineType`, `PSMode` |
-| Program control | `Exit`, `ExecOSD` (exit), `LoadExecPS2` (starts another executable, see [Several executables](#several-executables); `rom0:` paths such as `rom0:OSDSYS` exit), `_print` (debug output), `SetSyscall` (ignored), `Deci2Call` (see below) |
+| Program control | `Exit`, `ExecOSD` (exit), `LoadExecPS2` (starts another executable, see [Several executables](#several-executables); `rom0:` paths such as `rom0:OSDSYS` exit), `_print` (debug output), `SetSyscall` (see below), `Deci2Call` (see below) |
 
 Not implemented (reported, return 0): `ExecPS2`, event flags
 (`CreateEventFlag` and friends), the TLB entry calls, `SetCPUTimerHandler` and
-`SetCPUTimer`, and any syscall number not listed above.
+`SetCPUTimer`, and any syscall number not listed above that the game has not
+installed a handler for.
+
+`SetSyscall` writes a handler into a syscall table in kernel memory, as on the
+console, where the game can search for it and read it. Sony's libkernel does
+both at start-up: it installs its own `Copy` (90) and `FindAddress` (131) and
+searches kernel memory for them to find the table. A handler in user memory
+runs for its number from then on, whatever the number, the way the kernel runs
+one: called like a function with the caller's registers, its result in v0 and
+every other register as the caller left it, with interrupts and thread
+switches held off until it returns. A negative number, as libkernel's
+interrupt-context calls use, reaches the same entry. A handler in kernel memory
+is one of the patches libkernel copies there for the console's own kernel
+(alarms, `ExecPS2`, the TLB functions), so it never runs: the runtime's own
+syscall stands in, or the call is reported. Setting 0 gives the number back to
+the runtime. A number outside the table's 512 entries (on the console, a write
+into the kernel's own memory) is ignored and reported. `LoadExecPS2` starts the
+next program with an empty table.
 
 `Deci2Call` is the link to the debugger of development consoles. Sony's
 libkernel sends `printf` output through it: `sceTtyWrite` opens a socket for
