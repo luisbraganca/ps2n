@@ -239,7 +239,13 @@ a frame, nearly every frame where drawing was heavy: the game redrew stale
 frames with the wrong lightmaps, and a room in its first mission flickered at
 35 to 47 pictures a second; held to the clock, it shows 50. Work that keeps
 the guest behind the clock is never held back, and `--no-throttle` (fast
-forward) holds nothing.
+forward) holds nothing. An interrupt cuts the current slice short, so that
+the next back-edge takes it (`kernel::kickInterrupts`); in real time such a
+slice counts only the back-edges it ran, 8 cycles each. Counted as whole
+slices, the thousands of VIF and GIF interrupts a second of Agent Under
+Fire's driving missions held the game to about 30 vblanks a second. The
+virtual clock still advances by a whole slice at every safepoint, so
+deterministic runs keep their timing.
 
 ### The GS thread
 

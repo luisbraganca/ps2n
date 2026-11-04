@@ -37,8 +37,8 @@ config lists the other executables under `[input] programs`, as in
   recompiled, and so does the VU1 micro code `ACTION.UK` uploads.
 - The language selection, the intro movies, the copyright and title screens,
   the menus, and the first mission, Trouble in Paradise, played to its end.
-- The second mission, a driving mission (`mis02a`) that `DRIVING.ELF` runs, in
-  deterministic runs into its race, with its textures.
+- The second mission, a driving mission (`mis02a`) that `DRIVING.ELF` runs:
+  its opening movie and its race, with their textures.
 - Sound in the movies, the menus and the first mission.
 - Controller input, from the keyboard or a game controller.
 
@@ -63,9 +63,13 @@ config lists the other executables under `[input] programs`, as in
   programs in many combinations, over 5,000 distinct micro memories in the
   mission's first two minutes, and they have not been recorded for the VU
   recompiler.
-- The second mission has been played only to its opening cutscene, while
-  `DRIVING.ELF` still ran on the interpreter; nothing after it has been
-  played.
+- In real time the second mission's race runs below full speed, at 38 to 46
+  vblanks a second in its heaviest stretch, and its sound breaks up: the
+  driver repeats blocks the game's thread was late to send, and voices sound
+  robotic. Most of that thread's time goes to the mission's VU1 programs on
+  the interpreter (see [Speed](#speed)).
+- The second mission has been played into its race; how far it can be
+  played has not been tried.
 
 ### Speed
 
@@ -84,6 +88,11 @@ building, the heaviest view measured, the game shows 39 pictures a second at
 interpreted, the game itself slows to 46 vblanks a second there, and drawing
 keeps up. A lighter view in the building shows 50 pictures a second, and the
 helicopter cutscene that opens the mission 49.
+
+The second mission's race runs at 38 to 46 vblanks a second in real time in
+its heaviest stretch measured (vblanks 6,800 to 9,000 of a scripted run that
+starts it in place of the first mission). The game's thread is the limit,
+most of it running the mission's VU1 micro code on the interpreter.
 
 #### What each change bought
 
@@ -169,3 +178,9 @@ In the order the changes were made:
   around them). Now the driver gets 93.75 halves a second in both, and the
   breaks fall to 24 and 8.4 a second. A deterministic run of the mission's
   opening counts 8.5.
+- **Interrupts charge only the work done.** An interrupt cuts the EE's
+  current slice of back-edges short, and each slice was charged whole. The
+  second mission's race takes thousands of VIF and GIF interrupts a second,
+  and in real time the extra charge held it to 29 to 32 vblanks a second in
+  its heaviest stretch. Charging only the back-edges that ran, the same
+  stretch runs at 38 to 46. The sound there still breaks up about as often.

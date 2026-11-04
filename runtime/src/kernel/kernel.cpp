@@ -36,6 +36,10 @@ constexpr int kMaxAlarms = 64;
 constexpr int32_t kSliceLength = 2048;          // back-edges between safepoints
 constexpr uint64_t kSliceCycles = 2048 * 8;     // EE time charged per slice (clockEeWork)
 constexpr uint64_t kSyscallCycles = 200;
+// An interrupt (kickInterrupts) cuts a slice short: g_slice then counts down
+// from g_sliceFrom, after g_sliceRan back-edges before the cut. In real time
+// such a slice charges only the back-edges it ran.
+int32_t g_sliceFrom = 0, g_sliceRan = 0;
 constexpr uint32_t kStatusIE = 1u << 0, kStatusEIE = 1u << 16;
 
 enum ThreadStatus : int { THS_RUN = 1, THS_READY = 2, THS_WAIT = 4, THS_SUSPEND = 8, THS_WAITSUSPEND = 12, THS_DORMANT = 16 };
@@ -996,7 +1000,8 @@ void init(uint32_t entry, std::vector<std::string> argv) {
     cpu.pc = entry;
     cpu.gpr[SP].d[0] = kRamSize - 0x100;
     cpu.gpr[RA].d[0] = static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(kTrampThreadExit)));
-    g_slice = kSliceLength;
+    g_sliceFrom = g_slice = kSliceLength;
+    g_sliceRan = 0;
 }
 
 bool hasRunningThread() { return g_current >= 0; }
@@ -1017,7 +1022,10 @@ InterruptScope::~InterruptScope() {
     if (--g_interruptDepth == 0) g_interruptCycles += nowCycles() - g_interruptStart;
 }
 void markRescheduleNeeded() { g_needResched = true; }
-void kickInterrupts() { g_slice = 0; }
+void kickInterrupts() {
+    g_sliceRan += g_sliceFrom - g_slice;
+    g_sliceFrom = g_slice = 0;
+}
 
 int signalSemaFromHost(int id) {
     const int r = signalSema(id);
@@ -1117,7 +1125,9 @@ void syscall(uint32_t pc) {
 }
 
 bool safepoint(uint32_t resumePc) {
-    g_slice = kernel::kSliceLength;
+    const int32_t ran = kernel::g_sliceRan + (kernel::g_sliceFrom - g_slice);   // back-edges since the last safepoint
+    kernel::g_sliceRan = 0;
+    kernel::g_sliceFrom = g_slice = kernel::kSliceLength;
     if (g_interruptRequested && !g_exitRequested) {
         PS2_INFO("runtime", "interrupted");
         requestExit(130);
@@ -1127,7 +1137,10 @@ bool safepoint(uint32_t resumePc) {
         return false;
     }
     cpu.pc = resumePc;
-    clockEeWork(kernel::kSliceCycles);
+    // A slice an interrupt cut short charges real time for the back-edges it
+    // ran; the virtual clock charges a whole slice, as it always has.
+    const bool whole = clockVirtual() || ran >= kernel::kSliceLength;
+    clockEeWork(whole ? kernel::kSliceCycles : static_cast<uint64_t>(std::max(ran, 1)) * (kernel::kSliceCycles / kernel::kSliceLength));
     runDueEvents();
     iop::sync();
     kernel::serviceInterrupts();

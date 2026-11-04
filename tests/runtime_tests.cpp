@@ -4323,8 +4323,11 @@ TEST_CASE(ee_work_keeps_to_the_clock_in_real_time) {
     // gives up after a count of polls lasts as long as on the console: Agent
     // Under Fire's waits for its vsync handler ran out within a frame and it
     // reset its drawing. Time spent behind or idle earns a millisecond of
-    // credit, no more. The virtual clock advances by the work; fast forward
-    // does not wait, and leaves nothing owed.
+    // credit, no more. A slice an interrupt cuts short charges only the
+    // back-edges it ran: Agent Under Fire's driving missions take thousands of
+    // VIF and GIF interrupts a second, and a whole slice for each held the
+    // game back. The virtual clock advances by the work, a whole slice at
+    // every safepoint; fast forward does not wait, and leaves nothing owed.
     reset();
     constexpr uint64_t kMs = kEeClockHz / 1000;
     const auto took = [](auto work) {
@@ -4332,12 +4335,29 @@ TEST_CASE(ee_work_keeps_to_the_clock_in_real_time) {
         work();
         return nowCycles() - t0;
     };
+    const auto cutShort = [](int32_t backEdges) {   // as PS2_BACKEDGE runs them, with an interrupt after the first
+        g_slice -= backEdges - 1;
+        kernel::kickInterrupts();
+        if (--g_slice < 0) safepoint(0x00100000);
+    };
     clockInit(false, false);
     uint64_t t = took([] {   // 360 slices: 20 ms of EE work
-        for (int i = 0; i < 360; ++i) safepoint(0x00100000);
+        for (int i = 0; i < 360; ++i) {
+            g_slice = -1;   // run out
+            safepoint(0x00100000);
+        }
     });
     CHECK(t >= 19 * kMs);
     CHECK(t < 200 * kMs);
+    t = took([&] {   // 750 slices cut after 1,001 back-edges: 20 ms
+        for (int i = 0; i < 750; ++i) cutShort(1001);
+    });
+    CHECK(t >= 19 * kMs);
+    CHECK(t < 200 * kMs);
+    t = took([&] {   // 10,000 cut after their first back-edge: 0.3 ms, not 550
+        for (int i = 0; i < 10000; ++i) cutShort(1);
+    });
+    CHECK(t < 30 * kMs);
     t = took([] {   // 30,000 syscalls: 20 ms
         for (int i = 0; i < 30000; ++i) {
             setGpr(V1, 0x2F);   // GetThreadId
@@ -4363,6 +4383,9 @@ TEST_CASE(ee_work_keeps_to_the_clock_in_real_time) {
     const uint64_t v0 = nowCycles();
     clockEeWork(12345);
     CHECK_EQ(nowCycles() - v0, 12345u);
+    const uint64_t v1 = nowCycles();
+    cutShort(1);
+    CHECK(nowCycles() - v1 >= 2048u * 8);   // a whole slice, however short
     clockInit(false, false);
 }
 
