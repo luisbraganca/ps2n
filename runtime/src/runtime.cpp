@@ -1,6 +1,7 @@
 // ps2::run(): command line, ELF loading, subsystem start-up and the main
 // dispatch loop.
 #include "audio/audio.h"
+#include "axiom.h"
 #include "clock.h"
 #include "hw/dmac.h"
 #include "hw/gs.h"
@@ -405,17 +406,40 @@ void startPendingProgram() {
     ++g_switchGeneration;
 }
 
+namespace {
+
+// The settings file's [Axiom] section: where this run's log goes, if anywhere.
+void startAxiom(const std::filesystem::path& settingsFile, const GameInfo& game, int argc, char** argv) {
+    settings::Ini ini;
+    ini.load(settingsFile);
+    const axiom::Config cfg = axiom::readConfig(ini);
+    if (!cfg.problem.empty()) PS2_WARN("axiom", "%s", cfg.problem.c_str());
+    axiom::start(cfg, game, std::vector<std::string>(argv, argv + argc), buildCommit());
+}
+
+} // namespace
+
 int run(int argc, char** argv, const GameInfo& game) {
 #if defined(_WIN32)
     // Guest output is a byte stream; text mode would turn every "\n" into "\r\n".
     _setmode(_fileno(stdout), _O_BINARY);
 #endif
     if (!parseOptions(argc, argv)) return 0;
+    // The settings file counts when someone is there to press its bindings:
+    // headless runs (the tests) keep the default bindings whatever the file
+    // says, and send nothing to Axiom.
+    const bool useSettings = g_opt.window || !g_opt.settingsFile.empty();
+    const std::filesystem::path settingsFile = settings::locate(executableDir(argc > 0 ? argv[0] : ""), g_opt.settingsFile);
+    if (useSettings) startAxiom(settingsFile, game, argc, argv);
     g_opt.elfPath = findElf(argc > 0 ? argv[0] : "", game);
-    PS2_INFO("runtime", "%s, recompiled by %s: %zu functions", game.name, game.generator, game.functionCount);
+    PS2_INFO("runtime", "%s, recompiled by %s: %zu functions; runtime %s", game.name, game.generator, game.functionCount,
+             buildCommit());
 
     clockInit(g_opt.virtualClock, g_opt.noThrottle);
-    if (!loadElf(game)) return 1;
+    if (!loadElf(game)) {
+        axiom::finish(1, issueCounts());
+        return 1;
+    }
     applyMemoryPatches(game, false);
     if (game.memoryPatches)
         PS2_INFO("runtime", "%zu write(s) to memory from the config's [pnach], made at the entry point or every vsync", game.memoryPatchCount);
@@ -430,10 +454,7 @@ int run(int argc, char** argv, const GameInfo& game) {
     vif::init();
     ipu::init();
     iop::init();
-    // Bindings come from the settings file when someone is there to press
-    // them; headless runs (the tests) keep the defaults whatever the file says.
-    if (g_opt.window || !g_opt.settingsFile.empty())
-        input::init(settings::locate(executableDir(argc > 0 ? argv[0] : ""), g_opt.settingsFile));
+    if (useSettings) input::init(settingsFile);
     video::init();
     audio::init();
     initDispatch(game);
@@ -450,6 +471,7 @@ int run(int argc, char** argv, const GameInfo& game) {
     audio::shutdown();
     video::shutdown();
     PS2_INFO("runtime", "exit code %d", g_exitCode);
+    axiom::finish(g_exitCode, issueCounts());
     return g_exitCode;
 }
 

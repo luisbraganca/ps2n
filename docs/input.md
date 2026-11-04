@@ -78,7 +78,9 @@ ToggleFullscreen = Keyboard/Alt & Keyboard/Return
 ```
 
 A key may repeat: each line is one more binding for that input. Sections the
-runtime does not use are kept as they are when it writes the file.
+runtime does not use are kept as they are when it writes the file. An
+`[Axiom]` section sends a tester's log to a log service
+([runtime.md](runtime.md#a-testers-log-in-axiom)).
 
 ### Bindings
 

@@ -404,7 +404,9 @@ The recompiled game takes runtime options; `--help` lists them and
 The common ones are `--cdrom` (an ISO image or a directory), `--region europe`
 for PAL games, `--memcards DIR`, `--interpret`, `--strict`, `--virtual-clock`
 (reproducible runs), `--pad-script FILE`, `--dump-frames DIR`,
-`--trace-syscalls` and `--log-level`.
+`--trace-syscalls` and `--log-level`. A tester's runs can send their log to
+Axiom, a log service, for a developer to read
+([docs/runtime.md](docs/runtime.md#a-testers-log-in-axiom)).
 
 ## Configuration
 

@@ -9,6 +9,8 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace ps2 {
 
@@ -21,6 +23,8 @@ void logf(LogLevel level, const char* category, const char* fmt, ...) PS2_PRINTF
 // times it has been seen, including this one. A `gap` (emulation that is
 // missing or wrong) stops the run under --strict.
 uint64_t noteIssue(const std::string& key, bool gap = true);
+// The counts so far, most often first: what the exit summary prints.
+std::vector<std::pair<std::string, uint64_t>> issueCounts();
 void printIssueSummary();
 
 } // namespace ps2

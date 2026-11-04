@@ -13,6 +13,7 @@
 #include "log.h"
 #include "stubs/format.h"
 
+#include <atomic>
 #include <cstdio>
 #include <string>
 #include <unordered_map>
@@ -36,7 +37,7 @@ Timer g_timers[4];
 // ---- video timing ----------------------------------------------------------------
 bool g_pal = false;
 bool g_interlace = true;
-uint64_t g_vsyncs = 0;
+std::atomic<uint64_t> g_vsyncs{0};   // also read on the Axiom sender's thread
 uint64_t g_frameCycles = 0, g_vblankCycles = 0;
 uint64_t g_lastVblank = 0, g_lastVblankHandlers = 0;   // when the last vblank came, and kernel::interruptCycles() then
 uint64_t g_lastThreads = 0;   // the threads' time between the two vblanks before

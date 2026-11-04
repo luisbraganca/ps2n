@@ -57,7 +57,8 @@ recompiler/src/                  analysis.cpp (function discovery), codegen.cpp,
 runtime/include/ps2/ops_*.h      instruction semantics, shared by generated code and the interpreter
 runtime/include/ps2/vu_micro.h   VU micro operations, shared by recompiled micro programs and vu.cpp
 runtime/src/                     runtime.cpp (options, start-up), dispatch.cpp, interpreter.cpp, vu.cpp, clock.cpp,
-                                 vu_thread.cpp (VU1's own thread), ring.h (a ring between two host threads)
+                                 vu_thread.cpp (VU1's own thread), ring.h (a ring between two host threads),
+                                 axiom.cpp (a tester's log sent to Axiom), version.cpp (the runtime's commit)
   kernel/kernel.cpp              EE syscalls
   hw/                            hw.cpp (EE registers), dmac, gs (rasterizer, GS thread, draw threads, display), vif, ipu, mpeg
   iop/                           cpu (R3000A), kernel, libs, hle (host libraries), modules (IRX loading),

@@ -3,6 +3,7 @@
 # points) and ps2/runtime.h (the table types and ps2::run).
 
 add_library(ps2n_runtime STATIC
+    src/axiom.cpp
     src/clock.cpp
     src/cop0.cpp
     src/dispatch.cpp
@@ -11,6 +12,7 @@ add_library(ps2n_runtime STATIC
     src/memory.cpp
     src/runtime.cpp
     src/settings.cpp
+    src/version.cpp
     src/vu.cpp
     src/vu_thread.cpp
     src/audio/audio.cpp
@@ -62,6 +64,18 @@ ps2n_set_warnings(ps2n_runtime)
 
 find_package(Threads REQUIRED)
 target_link_libraries(ps2n_runtime PUBLIC Threads::Threads)
+
+# The runtime's commit, for its logs (src/version.cpp): looked up at every
+# build, and the header rewritten only when it changes.
+find_package(Git QUIET)
+set(ps2n_version_dir "${CMAKE_CURRENT_BINARY_DIR}/version")
+add_custom_target(ps2n_version
+    COMMAND "${CMAKE_COMMAND}" "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}" "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DOUTPUT=${ps2n_version_dir}/ps2n_version.h" -P "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/Ps2nVersion.cmake"
+    BYPRODUCTS "${ps2n_version_dir}/ps2n_version.h"
+    VERBATIM)
+add_dependencies(ps2n_runtime ps2n_version)
+target_include_directories(ps2n_runtime PRIVATE "${ps2n_version_dir}")
 
 # Every executable linked with the runtime (a game, the runtime tests) gets
 # the PS2Native icon. An interface source, so that generated game projects

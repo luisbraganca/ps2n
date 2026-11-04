@@ -43,6 +43,9 @@ extern Options g_opt;
 // The console's ROMVER string ("0160AC20010704\n"): BIOS version, region,
 // console type and date. The BIOS windows and the rom0:ROMVER file show it.
 std::string_view romVersion();
+// The runtime's commit as `git describe --always --dirty` gave it when the
+// runtime was built ("unknown" without git): the logs say which code ran.
+const char* buildCommit();
 extern const GameInfo* g_game;
 extern volatile std::sig_atomic_t g_interruptRequested;   // set by SIGINT
 extern bool g_exitRequested;

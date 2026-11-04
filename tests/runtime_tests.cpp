@@ -2,6 +2,7 @@
 #include "testing.h"
 
 #include "audio/audio.h"
+#include "axiom.h"
 #include "clock.h"
 #include "hw/dmac.h"
 #include "hw/gs.h"
@@ -5361,6 +5362,318 @@ TEST_CASE(window_knows_a_film_by_the_ipu_decoding) {
     CHECK(!video::filmPlaying());
     resetIpu();
     video::init();
+}
+
+// ---- Axiom: a run's log sent to a log service (axiom.h) ----
+
+namespace {
+
+axiom::Config axiomConfig() {
+    axiom::Config c;
+    c.token = "xaat-test";
+    c.dataset = "ps2n-test";
+    c.domain = "eu-central-1.aws.edge.axiom.co";
+    c.enabled = true;
+    return c;
+}
+
+GameInfo axiomGame() {
+    GameInfo g{};
+    g.name = "axiom_test";
+    g.generator = "ps2n test";
+    g.functionCount = 7;
+    return g;
+}
+
+// Stands in for curl: keeps every request and gives the answers it is told
+// to, in turn, then takes everything.
+struct FakeAxiom {
+    std::mutex mutex;
+    std::vector<std::pair<std::string, axiom::Delivery::Outcome>> requests;
+    std::vector<axiom::Delivery> answers;
+
+    axiom::Transport transport() {
+        return [this](const std::string& body) {
+            const std::lock_guard<std::mutex> lock(mutex);
+            const axiom::Delivery d = requests.size() < answers.size() ? answers[requests.size()] : axiom::Delivery{};
+            requests.emplace_back(body, d.outcome);
+            return d;
+        };
+    }
+    size_t count() {
+        const std::lock_guard<std::mutex> lock(mutex);
+        return requests.size();
+    }
+    // The events of the requests the service took, in order.
+    std::vector<std::string> delivered() {
+        const std::lock_guard<std::mutex> lock(mutex);
+        std::vector<std::string> out;
+        for (const auto& [body, outcome] : requests) {
+            if (outcome != axiom::Delivery::Outcome::Sent) continue;
+            for (size_t at = 0; at < body.size();) {
+                const size_t end = body.find('\n', at);
+                out.push_back(body.substr(at, end - at));
+                at = end + 1;
+            }
+        }
+        return out;
+    }
+    bool delivers(std::string_view text) {
+        for (const std::string& e : delivered())
+            if (e.find(text) != std::string::npos) return true;
+        return false;
+    }
+};
+
+// A field of a flat JSON event: a string's characters or a number's digits.
+std::string eventField(const std::string& event, const std::string& key) {
+    const std::string pattern = "\"" + key + "\":";
+    const size_t at = event.find(pattern);
+    if (at == std::string::npos) return "<none>";
+    size_t i = at + pattern.size();
+    if (event[i] != '"') return event.substr(i, event.find_first_of(",}", i) - i);
+    std::string out;
+    for (++i; i < event.size() && event[i] != '"'; ++i) {
+        if (event[i] == '\\') ++i;
+        out += event[i];
+    }
+    return out;
+}
+
+bool waitFor(const std::function<bool()>& done) {
+    const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!done()) {
+        if (std::chrono::steady_clock::now() > limit) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return true;
+}
+
+std::string homeForTests() {
+#if defined(_WIN32)
+    const char* home = std::getenv("USERPROFILE");
+#else
+    const char* home = std::getenv("HOME");
+#endif
+    return home ? home : "";
+}
+
+} // namespace
+
+TEST_CASE(axiom_needs_a_token_a_dataset_and_a_domain) {
+    auto config = [](std::string_view text) {
+        settings::Ini ini;
+        ini.parse(text);
+        return axiom::readConfig(ini);
+    };
+    CHECK(!config("[Pad1]\nType = DualShock2\n").enabled);
+    CHECK(config("[Pad1]\nType = DualShock2\n").problem.empty());
+    const axiom::Config full = config("[Axiom]\nToken = xaat-0123\nDataset = ps2n-beta\nDomain = eu-central-1.aws.edge.axiom.co\n");
+    CHECK(full.enabled);
+    CHECK_EQ(full.token, std::string("xaat-0123"));
+    CHECK_EQ(axiom::ingestUrl(full), std::string("https://eu-central-1.aws.edge.axiom.co/v1/ingest/ps2n-beta?timestamp-field=_time"));
+    // Switched off on purpose: nothing sent, nothing to complain about.
+    const axiom::Config off =
+        config("[Axiom]\nToken = xaat-0123\nDataset = ps2n-beta\nDomain = eu-central-1.aws.edge.axiom.co\nEnabled = false\n");
+    CHECK(!off.enabled);
+    CHECK(off.problem.empty());
+    // A key missing, or a value that cannot go into a header, a path or a host name.
+    for (const char* text : {"[Axiom]\nToken = xaat-0123\nDataset = ps2n-beta\n",
+                             "[Axiom]\nToken = xaat 0123\nDataset = ps2n-beta\nDomain = eu-central-1.aws.edge.axiom.co\n",
+                             "[Axiom]\nToken = xaat-0123\nDataset = ps2n/beta\nDomain = eu-central-1.aws.edge.axiom.co\n",
+                             "[Axiom]\nToken = xaat-0123\nDataset = ps2n-beta\nDomain = example.com/x?\n"}) {
+        const axiom::Config c = config(text);
+        CHECK(!c.enabled);
+        CHECK(!c.problem.empty());
+    }
+}
+
+TEST_CASE(axiom_writes_json_strings_and_times) {
+    CHECK_EQ(axiom::jsonString("a\"b\\c\nd\te\x01\x7f"), std::string("\"a\\\"b\\\\c\\nd\\te\\u0001\x7f\""));
+    // UTF-8 goes as it is (é, €, a gamepad); other bytes become U+FFFD, one each.
+    CHECK_EQ(axiom::jsonString("caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x8e\xae"), std::string("\"caf\xc3\xa9 \xe2\x82\xac \xf0\x9f\x8e\xae\""));
+    CHECK_EQ(axiom::jsonString("\xff" "a\xc3" "b\xed\xa0\x80" "c\xe0\x80\x80"),
+             std::string("\"\\ufffda\\ufffdb\\ufffd\\ufffd\\ufffdc\\ufffd\\ufffd\\ufffd\""));
+    CHECK_EQ(axiom::jsonString("\xc0\xaf|\xf4\x90\x80\x80|\xe2\x82"),
+             std::string("\"\\ufffd\\ufffd|\\ufffd\\ufffd\\ufffd\\ufffd|\\ufffd\\ufffd\""));
+    CHECK_EQ(axiom::isoTime(0), std::string("1970-01-01T00:00:00.000Z"));
+    CHECK_EQ(axiom::isoTime(951782400000), std::string("2000-02-29T00:00:00.000Z"));
+    CHECK_EQ(axiom::isoTime(1793798521123), std::string("2026-11-04T13:22:01.123Z"));
+    CHECK_EQ(axiom::isoTime(-1), std::string("1969-12-31T23:59:59.999Z"));
+}
+
+TEST_CASE(axiom_writes_the_home_folder_as_a_tilde) {
+    CHECK_EQ(axiom::withoutHome("cannot open /home/ana/games/auf.iso", "/home/ana"), std::string("cannot open ~/games/auf.iso"));
+    CHECK_EQ(axiom::withoutHome("/home/anabel/x and /home/ana", "/home/ana"), std::string("/home/anabel/x and ~"));
+    CHECK_EQ(axiom::withoutHome("/x/home/ana/y", "/home/ana"), std::string("/x/home/ana/y"));
+    CHECK_EQ(axiom::withoutHome("\"C:\\Users\\lb\\ps2\\auf.iso\" C:/Users/lb/x", "C:\\Users\\lb"), std::string("\"~\\ps2\\auf.iso\" ~/x"));
+    CHECK_EQ(axiom::withoutHome("/home/ana/", "/home/ana/"), std::string("~/"));
+    CHECK_EQ(axiom::withoutHome("/ab", "/"), std::string("/ab"));
+    CHECK_EQ(axiom::withoutHome("cd / && ls", "/"), std::string("cd / && ls"));
+}
+
+TEST_CASE(axiom_quotes_arguments_as_windows_splits_them) {
+    CHECK_EQ(axiom::quoteForWindows("plain"), std::string("plain"));
+    CHECK_EQ(axiom::quoteForWindows(""), std::string("\"\""));
+    CHECK_EQ(axiom::quoteForWindows("C:\\Users\\Ana Maria\\x"), std::string("\"C:\\Users\\Ana Maria\\x\""));
+    CHECK_EQ(axiom::quoteForWindows("a\"b"), std::string("\"a\\\"b\""));
+    CHECK_EQ(axiom::quoteForWindows("dir with space\\"), std::string("\"dir with space\\\\\""));
+    CHECK_EQ(axiom::quoteForWindows("a b\\\\\"c"), std::string("\"a b\\\\\\\\\\\"c\""));
+    CHECK_EQ(axiom::quoteForWindows("%{stderr}HTTP %{http_code}\\n"), std::string("\"%{stderr}HTTP %{http_code}\\n\""));
+}
+
+TEST_CASE(axiom_gives_curl_the_token_in_a_file) {
+    axiom::Config cfg = axiomConfig();
+    cfg.token = "xaat-secret";
+    const std::vector<std::string> args = axiom::curlArguments(cfg, "/t/headers.txt", "/t/batch.ndjson", "/t/response.json", "/t/curl.log");
+    auto pair = [&](std::string_view a, std::string_view b) {
+        for (size_t i = 0; i + 1 < args.size(); ++i)
+            if (args[i] == a && args[i + 1] == b) return true;
+        return false;
+    };
+    for (const std::string& a : args) CHECK(a.find("xaat-secret") == std::string::npos);
+    CHECK(pair("-H", "@/t/headers.txt"));
+    CHECK(pair("--data-binary", "@/t/batch.ndjson"));
+    CHECK(pair("-o", "/t/response.json"));
+    CHECK(pair("--stderr", "/t/curl.log"));
+    CHECK(pair("-w", "%{stderr}HTTP %{http_code}\\n"));
+    CHECK(pair("--proto", "=https"));
+    CHECK_EQ(args.back(), axiom::ingestUrl(cfg));
+}
+
+TEST_CASE(axiom_judges_what_the_service_answers) {
+    using Outcome = axiom::Delivery::Outcome;
+    const axiom::Delivery ok = axiom::judge(200, R"({"ingested":3,"failed":0,"failures":[],"processedBytes":104,"blocksCreated":0,"walLength":1})");
+    CHECK(ok.outcome == Outcome::Sent);
+    CHECK(ok.message.empty());
+    const axiom::Delivery partly =
+        axiom::judge(200, R"({"ingested":2,"failed":1,"failures":[{"timestamp":"2026-11-04T00:00:00Z","error":"too many fields"}]})");
+    CHECK(partly.outcome == Outcome::Sent);
+    CHECK(partly.message.find("too many fields") != std::string::npos);
+    const axiom::Delivery region = axiom::judge(400, R"({"code":400,"message":"mismatched region"})");
+    CHECK(region.outcome == Outcome::GiveUp);
+    CHECK_EQ(region.message, std::string("HTTP 400: mismatched region"));
+    CHECK(axiom::judge(403, R"({"code":403,"message":"forbidden"})").outcome == Outcome::GiveUp);
+    CHECK(axiom::judge(429, "").outcome == Outcome::Retry);
+    CHECK(axiom::judge(503, "").outcome == Outcome::Retry);
+    CHECK(axiom::judge(0, "").outcome == Outcome::Retry);
+}
+
+TEST_CASE(axiom_sends_nothing_unless_configured) {
+    FakeAxiom fake;
+    axiom::start(axiom::Config{}, axiomGame(), {"game.exe"}, "4d11f92", fake.transport());
+    CHECK(!axiom::active());
+    PS2_INFO("axiomtest", "a line nobody receives");
+    axiom::finish(0, {});
+    CHECK_EQ(fake.count(), size_t(0));
+}
+
+TEST_CASE(axiom_sends_a_run_s_log) {
+    Watchdog watchdog("axiom_sends_a_run_s_log");
+    FakeAxiom fake;
+    const std::string home = homeForTests();
+    axiom::start(axiomConfig(), axiomGame(), {"auf.exe", "--cdrom", home + "/games/auf.iso"}, "4d11f92", fake.transport());
+    CHECK(axiom::active());
+    PS2_INFO("axiomtest", "a line with \"quotes\" from %s", (home + "/x").c_str());
+    axiom::onLog(LogLevel::Debug, "axiomtest", "debug lines stay here");
+    PS2_INFO("axiom", "the sender's own lines stay here");
+    axiom::finish(3, {{"syscall 0x7b", 2}, {"interpreted 0x00100000", 1}});
+    CHECK(!axiom::active());
+
+    const std::vector<std::string> events = fake.delivered();
+    std::vector<std::string> kinds;
+    for (const std::string& e : events) kinds.push_back(eventField(e, "kind"));
+    CHECK(kinds == (std::vector<std::string>{"start", "log", "issue", "issue", "end"}));
+    if (kinds.size() != 5) return;
+    for (const std::string& e : events) {
+        CHECK_EQ(eventField(e, "session"), eventField(events[0], "session"));
+        CHECK_EQ(eventField(e, "game"), std::string("axiom_test"));
+        const std::string time = eventField(e, "_time");
+        CHECK(time.size() == 24 && time[10] == 'T' && time.back() == 'Z');
+        CHECK(e.find("stay here") == std::string::npos);
+    }
+    CHECK_EQ(eventField(events[0], "session").size(), size_t(16));
+    CHECK_EQ(eventField(events[0], "build"), std::string("4d11f92"));
+    CHECK_EQ(eventField(events[0], "generator"), std::string("ps2n test"));
+    CHECK_EQ(eventField(events[0], "functions"), std::string("7"));
+    if (home.size() >= 3) {
+        CHECK_EQ(eventField(events[0], "args"), std::string("auf.exe --cdrom ~/games/auf.iso"));
+        CHECK_EQ(eventField(events[1], "message"), std::string("a line with \"quotes\" from ~/x"));
+    }
+    CHECK_EQ(eventField(events[1], "level"), std::string("info"));
+    CHECK_EQ(eventField(events[1], "category"), std::string("axiomtest"));
+    CHECK_EQ(eventField(events[2], "key"), std::string("syscall 0x7b"));
+    CHECK_EQ(eventField(events[2], "count"), std::string("2"));
+    CHECK_EQ(eventField(events[3], "key"), std::string("interpreted 0x00100000"));
+    CHECK_EQ(eventField(events[4], "exit_code"), std::string("3"));
+    CHECK_EQ(eventField(events[4], "dropped"), std::string("0"));
+}
+
+// A warning goes within a second; other lines wait for the next batch.
+TEST_CASE(axiom_sends_a_warning_at_once) {
+    Watchdog watchdog("axiom_sends_a_warning_at_once");
+    FakeAxiom fake;
+    axiom::setIntervalsForTests(std::chrono::hours(1), std::chrono::hours(1));
+    axiom::start(axiomConfig(), axiomGame(), {"game.exe"}, "4d11f92", fake.transport());
+    CHECK(waitFor([&] { return fake.count() >= 1; }));   // the start event, at once
+    PS2_INFO("axiomtest", "an info line waits");
+    PS2_WARN("axiomtest", "a warning goes");
+    CHECK(waitFor([&] { return fake.delivers("a warning goes"); }));
+    PS2_INFO("axiomtest", "a later line waits");
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK(!fake.delivers("a later line waits"));
+    axiom::finish(0, {});
+    CHECK(fake.delivers("a later line waits"));
+    axiom::setIntervalsForTests(std::chrono::seconds(10), std::chrono::seconds(10));
+}
+
+// A batch that did not get through goes again, once, ahead of what came since.
+TEST_CASE(axiom_sends_a_batch_again_after_a_failure) {
+    Watchdog watchdog("axiom_sends_a_batch_again_after_a_failure");
+    FakeAxiom fake;
+    fake.answers = {{axiom::Delivery::Outcome::Retry, "no network"}};
+    axiom::setIntervalsForTests(std::chrono::hours(1), std::chrono::hours(1));
+    axiom::start(axiomConfig(), axiomGame(), {"game.exe"}, "4d11f92", fake.transport());
+    CHECK(waitFor([&] { return fake.count() >= 1; }));
+    PS2_INFO("axiomtest", "after the failure");
+    axiom::finish(0, {});
+    CHECK_EQ(fake.count(), size_t(2));
+    std::vector<std::string> kinds;
+    for (const std::string& e : fake.delivered()) kinds.push_back(eventField(e, "kind"));
+    CHECK(kinds == (std::vector<std::string>{"start", "log", "end"}));
+    axiom::setIntervalsForTests(std::chrono::seconds(10), std::chrono::seconds(10));
+}
+
+// A refusal that another try would not change (a wrong token, region or
+// dataset) ends the sending.
+TEST_CASE(axiom_stops_when_the_service_refuses) {
+    Watchdog watchdog("axiom_stops_when_the_service_refuses");
+    FakeAxiom fake;
+    fake.answers = {{axiom::Delivery::Outcome::GiveUp, "HTTP 400: mismatched region"}};
+    axiom::start(axiomConfig(), axiomGame(), {"game.exe"}, "4d11f92", fake.transport());
+    CHECK(waitFor([&] { return fake.count() >= 1; }));
+    PS2_WARN("axiomtest", "never sent");
+    axiom::finish(0, {});
+    CHECK_EQ(fake.count(), size_t(1));
+}
+
+TEST_CASE(axiom_samples_the_vblank_rate) {
+    Watchdog watchdog("axiom_samples_the_vblank_rate");
+    FakeAxiom fake;
+    axiom::setIntervalsForTests(std::chrono::hours(1), std::chrono::milliseconds(50));
+    axiom::start(axiomConfig(), axiomGame(), {"game.exe"}, "4d11f92", fake.transport());
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    axiom::finish(0, {});
+    axiom::setIntervalsForTests(std::chrono::seconds(10), std::chrono::seconds(10));
+    int samples = 0;
+    for (const std::string& e : fake.delivered()) {
+        if (eventField(e, "kind") != "speed") continue;
+        ++samples;
+        CHECK_EQ(eventField(e, "vsync"), std::to_string(hw::vsyncCount()));
+        CHECK(eventField(e, "vblanks_per_second") != "<none>");
+        CHECK(std::atof(eventField(e, "seconds").c_str()) >= 0.04);
+    }
+    CHECK(samples >= 2);
 }
 
 int main(int argc, char** argv) { return ::testing::runAll(argc, argv); }

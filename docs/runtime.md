@@ -37,7 +37,7 @@ model.
 | `--trace-functions` | Log every function the dispatcher enters (not direct calls between recompiled functions). |
 | `--log-level LEVEL` | `error`, `warn`, `info` (default), `debug`, `trace`. |
 | `--pad-script FILE` | Controller input from a script instead of the keyboard and game controllers. See [Controllers](#controllers). |
-| `--settings FILE` | The settings file with the controller bindings and hotkeys. Default: `ps2n.ini` next to the executable when there is one, else the per-user one. Runs without a window ignore the default file and keep the default bindings. See [input.md](input.md). |
+| `--settings FILE` | The settings file with the controller bindings and hotkeys, and where a tester's log goes ([Axiom](#a-testers-log-in-axiom)). Default: `ps2n.ini` next to the executable when there is one, else the per-user one. Runs without a window ignore the default file, keep the default bindings and send nothing. See [input.md](input.md). |
 | `--region REGION` | The console's region as `ROMVER` reports it: `usa` (default), `europe`, `japan`, `asia`, `china`. Libraries such as libgraph pick PAL for `europe`. |
 | `--missing-out FILE` | Where to write the addresses that had to be interpreted (default `ps2n_missing.toml`; an empty string disables it). The game's other executables get their own file next to it, named after the executable (`ps2n_missing.MAIN.ELF.toml`), and the VU micro code the interpreter ran goes to `ps2n_missing.vu.toml` beside it. |
 
@@ -54,7 +54,9 @@ separators, and the `;1` version suffix of ISO 9660 names is dropped.
 **Output.** The game's console output (`printf` stubs, the `_print` syscall,
 the SIO debug port, FILEIO writes to `tty:`, and the DECI2 TTY and `kputs`
 that Sony's libkernel prints through) goes to stdout. The runtime's own
-messages go to stderr as `[level:category] message`.
+messages go to stderr as `[level:category] message`. The first one names the
+game, the recompiler and the runtime's commit, as `git describe --always
+--dirty` gave it when the runtime was built.
 
 **Video.** Built with SDL2 (found automatically; `-DPS2N_WITH_SDL2=OFF` to
 disable), the runtime opens a window at start-up. The picture keeps the
@@ -175,6 +177,55 @@ That list is the to-do list for a port. The tools for working through it:
   and destination (`[trace:cdvd]`).
 - **`report.txt`**, next to the generated code, lists unresolved indirect
   jumps and unknown instructions found at recompile time.
+
+### A tester's log in Axiom
+
+A run can send its log to [Axiom](https://axiom.co), a log service, so that
+a developer sees what happened in a tester's runs without asking for files.
+It is off unless the settings file ([input.md](input.md#the-settings-file))
+has an `[Axiom]` section:
+
+```ini
+[Axiom]
+Token = xaat-...
+Dataset = ps2n-beta
+Domain = eu-central-1.aws.edge.axiom.co
+```
+
+`Token` is an API token that may ingest into `Dataset`. Give each tester a
+token of their own, so that one can be revoked alone; the file holds it in
+plain text. `Domain` is the dataset's edge deployment,
+`us-east-1.aws.edge.axiom.co` or `eu-central-1.aws.edge.axiom.co` (Axiom
+shows the organisation's under Settings > General); the other one answers
+"mismatched region". `Enabled = false` keeps the section and sends nothing.
+Runs that read no settings file (without a window and without `--settings`,
+as the tests run) never send.
+
+Each event is a flat object with `_time`, `session` (one per run), `kind` and
+`game`, and the fields of its kind:
+
+| `kind` | Fields |
+|---|---|
+| `start` | `build` (the runtime's commit), `generator`, `functions`, `os`, `cpu`, `threads`, `display` (`x11` or `wayland` on Linux), `args` |
+| `log` | `level`, `category`, `message`, `vsync`: every line at info level and above |
+| `speed` | `vsync`, `vblanks`, `seconds`, `vblanks_per_second`: every ten seconds |
+| `issue` | `key`, `count`: the lines of the exit summary |
+| `end` | `exit_code`, `vsync`, `seconds`, `dropped` (events that did not fit) |
+
+The user's home folder reads `~` in the command line, the messages and the
+exit summary's keys. The events go in batches
+from a thread of their own, through the `curl` program (part of Windows since
+version 1803; on Linux, install it where `curl --version` fails): at once
+after a warning or an error, otherwise every ten seconds, and at exit, which
+waits for the last request (at most 20 seconds). A request that fails goes
+again after 30 seconds. A refusal that another try would not change (a wrong
+token, region or dataset) ends the sending, with a warning. The lines about
+it (`[info:axiom]`) are not sent. A whole Agent Under Fire session logs about
+40 lines.
+
+Not covered yet: a run that crashes loses what it had not sent (up to ten
+seconds of info lines; its log ends without an `end` event), and nothing says
+where it crashed.
 
 ## What is covered
 
