@@ -2814,6 +2814,27 @@ TEST_CASE(gs_textures_read_every_format) {
     CHECK_EQ(check(0x14, 4, 0x02ull << 51 | 21ull << 56, [&](uint32_t i) { return entry(0x02, 80 + i); }), size_t(0));
 }
 
+TEST_CASE(gs_tex2_keeps_tex0s_texture) {
+    // TEX2 replaces TEX0's format and CLUT fields and keeps the rest: TBP0,
+    // all six bits of TBW, TW, TH, TCC and TFX, whatever TEX2's bits there
+    // say. A 64x64 PSMCT32 texture in a buffer 1024 texels wide (TBW 16, a
+    // bit TBW lost through TEX2), drawn 1:1 by UV, decal, after a TEX2 write
+    // whose kept fields are all ones, then all zeros: each pixel is its texel.
+    gs::init();
+    gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}, {0x14, 0}, {0x08, 0}});
+    const std::vector<uint32_t> texels = pseudoRandom(64 * 64, 61);
+    gsUpload(0x1000, 16, 0x00, 64, 64, texels);
+    const uint64_t tex0 = 0x1000 | 16ull << 14 | 6ull << 26 | 6ull << 30 | 1ull << 34 | 1ull << 35;   // TCC, DECAL
+    for (const uint64_t kept : {0xFFFFFull | 0xFull << 26 | 0xFull << 30 | 0x7ull << 34, 0ull}) {
+        gsWrite({{0x06, tex0}, {0x16, kept | 0x2000ull << 37}, {0x00, 6 | 1 << 4 | 1 << 8}, {0x01, 0x40404040u}, {0x03, 0},
+                 {0x05, xyz(0, 0, 0)}, {0x03, 64 * 16 | 64ull * 16 << 16}, {0x05, xyz(64, 64, 0)}});
+        size_t differ = 0;
+        for (int y = 0; y < 64; ++y)
+            for (int x = 0; x < 64; ++x) differ += gs::readPixel32(0, 1, 0x00, x, y) != texels[static_cast<size_t>(y * 64 + x)];
+        CHECK_EQ(differ, size_t(0));
+    }
+}
+
 TEST_CASE(gs_pixels_write_what_the_tests_and_masks_allow) {
     // A sprite over a frame and a depth buffer filled beforehand. FBMSK keeps
     // the frame's bits it sets, in the frame's format. A failed alpha test

@@ -1825,7 +1825,7 @@ void writeReg(uint32_t reg, uint64_t v) {
         break;
     case TEX2_1:
     case TEX2_2: {   // replaces the CLUT/PSM fields of TEX0
-        const uint64_t keep = 0x3FFFFull | (0xFull << 26) | (0xFull << 30) | (0x7ull << 34);   // TBP0 TBW TW TH TCC TFX
+        const uint64_t keep = 0xFFFFFull | (0xFull << 26) | (0xFull << 30) | (0x7ull << 34);   // TBP0 TBW TW TH TCC TFX
         uint64_t& t0 = g_regs[TEX0_1 + (reg - TEX2_1)];
         t0 = (t0 & keep) | (v & ~keep);
         loadClut(t0);
