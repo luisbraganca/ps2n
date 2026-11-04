@@ -148,7 +148,7 @@ void savePad(settings::Ini& ini, int port, const PadConfig& cfg);
 // As in PCSX2, a hotkey acts when it is released, except HoldTurbo, which
 // lasts while it is held.
 enum class Hotkey : uint8_t {
-    OpenPauseMenu, ToggleFullscreen, TogglePause, ToggleFrameLimit, ToggleTurbo, HoldTurbo, CycleInterlaceMode,
+    OpenPauseMenu, ToggleFullscreen, TogglePause, ToggleFrameLimit, ToggleTurbo, HoldTurbo, CycleAspectRatio, CycleInterlaceMode,
     Screenshot, ShutdownVM, Mute, IncreaseVolume, DecreaseVolume, Count
 };
 const char* hotkeyKey(Hotkey h);       // "ToggleFullscreen"

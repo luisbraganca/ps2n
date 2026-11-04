@@ -52,7 +52,7 @@ core/include/ps2n/r5900_ops.inc  the one instruction table: decoder, disassemble
 core/include/ps2n/r5900_sem.inc  instruction -> runtime op, read by codegen and the interpreter
 core/include/ps2n/vu_micro.h     VU micro pairs: decoding and the pipeline's timing, for vu.cpp and vu_codegen.cpp
 recompiler/src/                  analysis.cpp (function discovery), codegen.cpp, config.cpp, main.cpp (CLI),
-                                 vu_codegen.cpp (recorded VU micro code to C++)
+                                 vu_codegen.cpp (recorded VU micro code to C++), pnach.cpp (PCSX2 patch files)
 runtime/include/ps2/ops_*.h      instruction semantics, shared by generated code and the interpreter
 runtime/include/ps2/vu_micro.h   VU micro operations, shared by recompiled micro programs and vu.cpp
 runtime/src/                     runtime.cpp (options, start-up), dispatch.cpp, interpreter.cpp, vu.cpp, clock.cpp,

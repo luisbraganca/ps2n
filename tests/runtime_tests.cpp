@@ -24,6 +24,7 @@
 #include "ps2/recomp.h"
 #include "settings.h"
 #include "stubs/format.h"
+#include "video/video.h"
 #include "vu.h"
 
 #include "ps2n/elf.h"
@@ -4223,10 +4224,10 @@ TEST_CASE(dispatch_checks_programs_against_ram) {
                                         {0x00200008u, 0x00200010u, &noop, "x_b", false, checksumOf(kX + 2, 2)}};
     static const FunctionInfo yFns[] = {{0x00200000u, 0x00200008u, &noop, "y_a", false, checksumOf(kY, 2)},
                                         {0x00200008u, 0x00200010u, &noop, "y_b", false, checksumOf(kY + 2, 2)}};
-    static const GameInfo x = {"x", "X.ELF", 0, 0x00200000u, xFns, 2, nullptr, 0, "test", nullptr, 0, nullptr, 0, nullptr, 0};
-    static const GameInfo y = {"y", "Y.ELF", 0, 0x00200000u, yFns, 2, nullptr, 0, "test", nullptr, 0, nullptr, 0, nullptr, 0};
+    static const GameInfo x = {"x", "X.ELF", 0, 0x00200000u, xFns, 2, nullptr, 0, "test", nullptr, 0, nullptr, 0, nullptr, 0, nullptr};
+    static const GameInfo y = {"y", "Y.ELF", 0, 0x00200000u, yFns, 2, nullptr, 0, "test", nullptr, 0, nullptr, 0, nullptr, 0, nullptr};
     static const GameInfo* const others[] = {&x, &y};
-    static const GameInfo boot = {"boot", "BOOT.ELF", 0, 0x00100000u, bootFns, 1, nullptr, 0, "test", nullptr, 0, others, 2, nullptr, 0};
+    static const GameInfo boot = {"boot", "BOOT.ELF", 0, 0x00100000u, bootFns, 1, nullptr, 0, "test", nullptr, 0, others, 2, nullptr, 0, nullptr};
     initDispatch(boot);
     CHECK(hasCompiledEntry(0x00100000u));                // loaded by the runtime: no check needed
 
@@ -5212,6 +5213,77 @@ TEST_CASE(clock_short_waits_last_their_time_not_a_timer_tick) {
     CHECK(took >= std::chrono::milliseconds(4));     // 50 waits of 0.1 ms (an earlier wake-up may end the first)
     CHECK(took < std::chrono::milliseconds(100));    // a tick each would be 780 ms
     clockInit(false, false);
+}
+
+// The window's aspect ratio settings, PCSX2's: their spellings in the
+// settings file, the shape they give the picture, and where it goes.
+TEST_CASE(window_aspect_ratio_follows_the_settings_and_the_games_patches) {
+    using video::AspectRatio;
+    using video::FmvAspectRatio;
+    CHECK(video::parseAspectRatio("Auto 4:3/3:2") == AspectRatio::Auto);
+    CHECK(video::parseAspectRatio("16:9") == AspectRatio::R16_9);
+    CHECK(video::parseAspectRatio(" stretch ") == AspectRatio::Stretch);
+    CHECK(!video::parseAspectRatio("21:9"));
+    CHECK(video::parseFmvAspectRatio("Off") == FmvAspectRatio::Off);
+    CHECK(!video::parseFmvAspectRatio("Stretch"));
+    for (size_t i = 0; i < size_t(AspectRatio::Count); ++i)
+        CHECK(video::parseAspectRatio(video::aspectRatioName(AspectRatio(i))) == AspectRatio(i));
+    for (size_t i = 0; i < size_t(FmvAspectRatio::Count); ++i)
+        CHECK(video::parseFmvAspectRatio(video::fmvAspectRatioName(FmvAspectRatio(i))) == FmvAspectRatio(i));
+
+    // Auto is 4:3 (3:2 for a progressive picture), or what the game's patches
+    // ask for: any N:D, as PCSX2 takes them.
+    CHECK_EQ(video::pictureAspect(AspectRatio::Auto, FmvAspectRatio::Off, false, false, nullptr), 4.0 / 3.0);
+    CHECK_EQ(video::pictureAspect(AspectRatio::Auto, FmvAspectRatio::Off, false, true, nullptr), 3.0 / 2.0);
+    CHECK_EQ(video::pictureAspect(AspectRatio::Auto, FmvAspectRatio::Off, false, false, "16:9"), 16.0 / 9.0);
+    CHECK_EQ(video::pictureAspect(AspectRatio::Auto, FmvAspectRatio::Off, false, false, "21:9"), 21.0 / 9.0);
+    CHECK_EQ(video::pictureAspect(AspectRatio::Auto, FmvAspectRatio::Off, false, false, "16:0"), 4.0 / 3.0);
+    CHECK_EQ(video::pictureAspect(AspectRatio::R4_3, FmvAspectRatio::Off, false, false, "16:9"), 4.0 / 3.0);
+    CHECK_EQ(video::pictureAspect(AspectRatio::R10_7, FmvAspectRatio::Off, false, false, nullptr), 10.0 / 7.0);
+    CHECK_EQ(video::pictureAspect(AspectRatio::Stretch, FmvAspectRatio::Off, false, false, "16:9"), 0.0);
+    // While a film plays, the FMV setting decides, unless it is Off; its Auto
+    // also lets the patches have their say.
+    CHECK_EQ(video::pictureAspect(AspectRatio::Auto, FmvAspectRatio::R4_3, true, false, "16:9"), 4.0 / 3.0);
+    CHECK_EQ(video::pictureAspect(AspectRatio::R16_9, FmvAspectRatio::Auto, true, false, nullptr), 4.0 / 3.0);
+    CHECK_EQ(video::pictureAspect(AspectRatio::R4_3, FmvAspectRatio::Auto, true, false, "16:9"), 16.0 / 9.0);
+    CHECK_EQ(video::pictureAspect(AspectRatio::Auto, FmvAspectRatio::Off, true, false, "16:9"), 16.0 / 9.0);
+    CHECK_EQ(video::pictureAspect(AspectRatio::Auto, FmvAspectRatio::R4_3, false, false, "16:9"), 16.0 / 9.0);
+
+    // As large as the window takes, centred; Stretch fills it.
+    auto same = [](video::Rect r, int x, int y, int w, int h) { return r.x == x && r.y == y && r.w == w && r.h == h; };
+    CHECK(same(video::fitPicture(1920, 1080, 16.0 / 9.0), 0, 0, 1920, 1080));
+    CHECK(same(video::fitPicture(1920, 1080, 4.0 / 3.0), 240, 0, 1440, 1080));
+    CHECK(same(video::fitPicture(1440, 1080, 16.0 / 9.0), 0, 135, 1440, 810));
+    CHECK(same(video::fitPicture(1000, 700, 0.0), 0, 0, 1000, 700));
+}
+
+// PCSX2's FMV switch knows a film by the IPU decoding its bit stream: every
+// seventh VDEC starts one at the next vsync, and it ends at the first vsync
+// 60,000,000 cycles after the last VDEC.
+TEST_CASE(window_knows_a_film_by_the_ipu_decoding) {
+    FrozenClock frozen;
+    video::init();
+    auto command = [](uint32_t cmd) {   // each on a reset IPU: a VDEC with no data waits for some
+        write32(kIpuCtrl, 0x40000000);
+        write32(kIpuCmd, cmd);
+    };
+    resetIpu();
+    for (int i = 0; i < 6; ++i) command(0x30000000);   // VDEC
+    command(0x90000000);                               // SETTH: not a film's
+    video::onVsync();
+    CHECK(!video::filmPlaying());
+    command(0x30000000);   // the seventh VDEC
+    CHECK(!video::filmPlaying());
+    video::onVsync();
+    CHECK(video::filmPlaying());
+    clockAdvance(kEeClockHz / 10);
+    video::onVsync();
+    CHECK(video::filmPlaying());
+    clockAdvance(kEeClockHz / 8);
+    video::onVsync();
+    CHECK(!video::filmPlaying());
+    resetIpu();
+    video::init();
 }
 
 int main(int argc, char** argv) { return ::testing::runAll(argc, argv); }

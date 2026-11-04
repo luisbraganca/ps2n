@@ -57,13 +57,31 @@ that Sony's libkernel prints through) goes to stdout. The runtime's own
 messages go to stderr as `[level:category] message`.
 
 **Video.** Built with SDL2 (found automatically; `-DPS2N_WITH_SDL2=OFF` to
-disable), the runtime opens a window at start-up. The picture keeps the 4:3
-of the television the game drew for, letterboxed in the window; F11 or
-Alt+Enter switches to fullscreen, and closing the window ends the program.
+disable), the runtime opens a window at start-up. The picture keeps the
+shape of the television the game drew for, centred in the window with black
+bars where the shapes differ; F11 or Alt+Enter switches to fullscreen, and
+closing the window ends the program.
 Without SDL2, or with `--no-window`, use `--dump-frames`; most image viewers
 open PPM files, and ImageMagick or Pillow convert them. The window runs on the
 main thread and the game on a worker thread, as macOS requires. Play with the
 real-time clock: `--virtual-clock` runs the game as fast as the host can.
+
+The shape comes from PCSX2's settings, kept in the settings file's
+`[EmuCore/GS]` and set in the pause menu's Graphics Settings:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `AspectRatio` | `Auto 4:3/3:2` | `Auto 4:3/3:2`: 4:3, or what the game's patches ask for (their `gsaspectratio`, applied when the game was recompiled: see [config.md](config.md#pnach-pcsx2s-patch-files)). `4:3`, `16:9`, `10:7`: that shape. `Stretch`: the window's. |
+| `FMVAspectRatioSwitch` | `Off` | The shape while a film plays: `Off` keeps `AspectRatio`'s; `Auto 4:3/3:2`, `4:3`, `16:9` and `10:7` as above, the patches having their say under Auto here too, as in PCSX2. A film plays from the seventh time the IPU decodes a bit stream (`VDEC`) until 60,000,000 EE cycles (a fifth of a second) pass without one, as PCSX2 tells them. |
+
+A game patched for 16:9 draws a wider view into as many pixels as before,
+which the window stretches to 16:9: the picture is wider, not sharper, and
+drawing it costs the same. Cycle Aspect Ratio (F6) goes through `AspectRatio`'s
+values for the run without saving them. The window opens in the shape the
+settings give. Not covered: the 3:2 of Auto for a progressive (480p)
+picture, which the runtime does not show (Auto is 4:3), and PCSX2's other
+display settings (crop, vertical stretch, integer scaling, the picture's
+alignment and offsets).
 
 Games that render each field of an interlaced picture (FIELD mode: half the
 lines, redrawn every vsync a line lower on odd fields) are deinterlaced as

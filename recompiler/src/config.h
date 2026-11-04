@@ -73,6 +73,14 @@ struct Config {
     // [[patches]]
     std::vector<Patch> patches;
 
+    // [pnach]: PCSX2 patch files and the groups to apply from them, read from
+    // the boot program's config and applied to every executable of the game.
+    std::vector<std::filesystem::path> pnachFiles;
+    std::vector<std::string> pnachGroups;
+    // The aspect ratio the applied groups ask for (gsaspectratio), passed to
+    // the runtime with the boot program; empty if none does.
+    std::string aspectRatio;
+
     static Config load(const std::filesystem::path& file);
     // A config for an ELF without a TOML file (analyze, quick runs).
     static Config forElf(const std::filesystem::path& elf);

@@ -1,0 +1,10 @@
+# Config for pnach.s: a PCSX2 patch file's group, applied when the program is recompiled.
+[input]
+elf = "pnach.elf"
+
+[stubs]
+auto = true
+
+[pnach]
+files = ["pnach.pnach"]
+groups = ["Widescreen 16:9"]

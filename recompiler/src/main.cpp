@@ -2,6 +2,7 @@
 #include "analysis.h"
 #include "codegen.h"
 #include "config.h"
+#include "pnach.h"
 #include "report.h"
 #include "version.h"
 
@@ -125,18 +126,17 @@ int cmdRecompile(int argc, char** argv) {
     const bool quiet = a.has("--quiet");
 
     const ElfFile elf = loadExecutable(cfg.elf);
-    const Program prog = analyze(elf, cfg);
 
-    // The game's other executables, each analysed with its own config (or the
-    // defaults) and written to its own folder. Deques keep the addresses that
+    // The game's other executables, each with its own config (or the
+    // defaults), written to its own folder. Deques keep the addresses that
     // Program and ExtraProgram point to stable.
     std::deque<Config> programCfgs;
     std::deque<ElfFile> programElves;
-    std::deque<Program> programs;
-    std::vector<ExtraProgram> extras;
+    std::vector<std::string> ids;
     for (const auto& path : cfg.programs) {
         Config& pc = programCfgs.emplace_back(loadConfigOrElf(path.string()));
         if (!pc.programs.empty()) throw Error(path.string() + ": [input] programs is only read from the boot program's config");
+        if (!pc.pnachFiles.empty()) throw Error(path.string() + ": [pnach] is only read from the boot program's config");
         pc.name = pc.elf.filename().string();
         pc.files = cfg.files;
         pc.singleFile = cfg.singleFile;
@@ -144,12 +144,30 @@ int cmdRecompile(int argc, char** argv) {
         const ElfFile& pe = programElves.emplace_back(loadExecutable(pc.elf));
         const std::string id = programId(pc.elf);
         if (pe.crc32() == elf.crc32()) throw Error(pc.elf.string() + " is the boot ELF itself; [input] programs lists the other executables");
-        for (const auto& e : extras) {
-            if (e.prog->elf->crc32() == pe.crc32()) throw Error(pc.elf.string() + " is listed twice in [input] programs");
-            if (e.id == id) throw Error(pc.elf.string() + " and " + e.cfg->elf.string() + " would share the generated name " + id);
+        for (size_t i = 0; i + 1 < programElves.size(); ++i) {
+            if (programElves[i].crc32() == pe.crc32()) throw Error(pc.elf.string() + " is listed twice in [input] programs");
+            if (ids[i] == id) throw Error(pc.elf.string() + " and " + programCfgs[i].elf.string() + " would share the generated name " + id);
         }
-        extras.push_back({&programs.emplace_back(analyze(pe, pc)), &pc, id});
+        ids.push_back(id);
     }
+
+    // [pnach]: PCSX2's patches go into every executable, as PCSX2 writes them
+    // to memory while each runs.
+    std::string pnachSummary;
+    std::vector<std::string> pnachWarnings;
+    if (!cfg.pnachFiles.empty()) {
+        const pnach::Patches patches = pnach::Patches::load(cfg.pnachFiles, cfg.pnachGroups);
+        std::vector<pnach::Program> all{{&elf, &cfg, true}};
+        for (size_t i = 0; i < programCfgs.size(); ++i) all.push_back({&programElves[i], &programCfgs[i], false});
+        pnachWarnings = pnach::applyToGame(patches, cfg.pnachFiles, all, pnachSummary);
+        cfg.aspectRatio = patches.aspectRatio();
+    }
+
+    const Program prog = analyze(elf, cfg);
+    std::deque<Program> programs;
+    std::vector<ExtraProgram> extras;
+    for (size_t i = 0; i < programCfgs.size(); ++i)
+        extras.push_back({&programs.emplace_back(analyze(programElves[i], programCfgs[i])), &programCfgs[i], ids[i]});
 
     const GenerateResult res = generate(prog, cfg, extras);
     writeFileIfChanged(cfg.outDir / "report.txt", buildReport(prog, cfg));
@@ -158,6 +176,11 @@ int cmdRecompile(int argc, char** argv) {
     if (!quiet) {
         printSummary(cfg, prog);
         for (const auto& e : extras) printSummary(*e.cfg, *e.prog);
+        if (!pnachSummary.empty()) {
+            std::printf("pnach: %s\n", pnachSummary.c_str());
+            if (!cfg.aspectRatio.empty()) std::printf("  the patches ask for a %s picture (gsaspectratio)\n", cfg.aspectRatio.c_str());
+            for (const auto& w : pnachWarnings) std::printf("  warning: %s\n", w.c_str());
+        }
         if (res.vu.images)
             std::printf("VU micro code: %zu image(s), %zu program entr%s, %zu blocks, %zu pairs, %zu hand-overs to the interpreter\n",
                         res.vu.images, res.vu.entries, res.vu.entries == 1 ? "y" : "ies", res.vu.blocks, res.vu.pairs, res.vu.handovers);

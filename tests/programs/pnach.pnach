@@ -1,0 +1,20 @@
+gametitle=ps2n test program for [pnach] (tests/programs/pnach.s)
+comment=What pnach.s expects; pnach.toml chooses the first group.
+
+[Widescreen 16:9]
+gsaspectratio=16:9
+description=The group pnach.toml chooses
+// scale: its immediate is 0x3f80, so the next line applies
+patch=1,EE,D0100000,extended,01003F80
+patch=1,EE,10100000,extended,00003FAB
+// choice: li $v0, 5 in its delay slot
+patch=1,EE,00100010,word,24020005
+// number, in .data: 200
+patch=1,EE,001001C0,word,000000C8
+// kept: its delay slot does not hold 0x1234, so the next line does not apply
+patch=1,EE,D0100018,extended,01001234
+patch=1,EE,20100018,extended,24020009
+
+[Other]
+// not chosen: kept stays 7
+patch=1,EE,00100018,word,24020008

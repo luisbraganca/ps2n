@@ -52,6 +52,7 @@ constexpr HotkeyInfo kHotkeys[] = {
     {"ToggleFrameLimit", "Toggle Frame Limit", "Speed"},
     {"ToggleTurbo", "Toggle Turbo / Fast Forward", "Speed"},
     {"HoldTurbo", "Turbo / Fast Forward (Hold)", "Speed"},
+    {"CycleAspectRatio", "Cycle Aspect Ratio", "Graphics"},
     {"CycleInterlaceMode", "Cycle Deinterlace Mode", "Graphics"},
     {"Screenshot", "Save Screenshot", "Graphics"},
     {"ShutdownVM", "Quit the Game", "System"},
@@ -427,6 +428,7 @@ HotkeyConfig defaultHotkeys() {
     add(Hotkey::ToggleFrameLimit, "Keyboard/F4");
     add(Hotkey::ToggleTurbo, "Keyboard/Tab");
     add(Hotkey::HoldTurbo, "Keyboard/Period");
+    add(Hotkey::CycleAspectRatio, "Keyboard/F6");
     add(Hotkey::CycleInterlaceMode, "Keyboard/F5");
     add(Hotkey::Screenshot, "Keyboard/F8");
     return c;

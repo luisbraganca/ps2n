@@ -134,7 +134,7 @@ Config Config::load(const std::filesystem::path& file) {
     }
     Config c;
     c.configDir = std::filesystem::absolute(file).parent_path();
-    checkKeys(root, {"input", "output", "analysis", "vu", "stubs", "functions", "patches"}, "root");
+    checkKeys(root, {"input", "output", "analysis", "vu", "stubs", "functions", "patches", "pnach"}, "root");
 
     if (const toml::table* in = root["input"].as_table()) {
         checkKeys(*in, {"elf", "ghidra_map", "map_files", "programs"}, "input");
@@ -228,6 +228,15 @@ Config Config::load(const std::filesystem::path& file) {
             if (const toml::node* e = pt->get("expect")) p.expect = toAddress(*e);
             c.patches.push_back(p);
         }
+    }
+
+    if (const toml::node* pn = root.get("pnach")) {
+        const toml::table* t = pn->as_table();
+        if (!t) fail(*pn, "pnach must be a table ([pnach])");
+        checkKeys(*t, {"files", "groups"}, "pnach");
+        for (const auto& f : stringList(*t, "files")) c.pnachFiles.push_back(c.resolve(f));
+        c.pnachGroups = stringList(*t, "groups");
+        if (c.pnachFiles.empty()) fail(*pn, "[pnach] needs files");
     }
     return c;
 }

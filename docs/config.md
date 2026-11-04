@@ -68,7 +68,8 @@ An entry is an ELF, recompiled with the default settings, or a config file
 for that ELF when it needs settings of its own: its `[analysis]` (its own
 `entries_files`, for example), `[stubs]`, `[functions]` and `[[patches]]`
 apply, and its `[output] extra_sources` are built too. The rest of its
-`[output]` comes from the boot program's config. Each program's code goes to a
+`[output]` comes from the boot program's config, and `[pnach]` is read from
+the boot program's config alone. Each program's code goes to a
 folder of the output named after its ELF file (`ACTION_UK/`).
 
 At run time `LoadExecPS2` loads the file the game names, from the disc or
@@ -273,6 +274,64 @@ startup, so the interpreter, and code that reads its own instructions, see
 the same words. If `expect` is given and the ELF holds a different word, the
 recompile stops with `patch at 0x00100abc expects 0x0c040000 but the ELF has
 ...: this config was written for a different build`. Always give `expect`.
+
+## `[pnach]`: PCSX2's patch files
+
+PCSX2's per-game patches (`.pnach` files: widescreen, no-interlacing and
+fixes) carry over, because a recompiled game keeps every guest address. The
+files are read from wherever the config says: PCSX2 bundles them in
+`resources/patches.zip` (copy the game's file out) and keeps the user's own
+in its `patches/` folder. ps2n does not ship any.
+
+```toml
+[pnach]
+files = ["patches/SLES-50539_992B46DC.pnach"]
+groups = ["Widescreen 16:9"]
+```
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `files` | array of paths | (required) | The patch files. PCSX2 names them `<SERIAL>_<CRC>.pnach`, with the CRC of the executable it loaded them for: the exclusive or of the file's 32-bit words. A name with another CRC than the boot program's gets a warning. |
+| `groups` | array of strings | `[]` | The `[group]`s to apply, by their exact names, as PCSX2's per-game Patches page enables them (`Widescreen 16:9` is what its Apply Widescreen Patches setting enables). The lines before a file's first group always apply, as in PCSX2. |
+
+The lines are applied when the game is recompiled: each executable's image
+gets what PCSX2 would write to memory while it runs, once at its entry point
+(places 0, 2 and 3) and as at every vsync (places 1 and 2), and the words
+they change become `[[patches]]` of that executable, with the ELF's words as
+`expect`. A condition (extended codes `D` and `E`) tests the image as the
+lines left it. A file in the boot program's config applies to every
+executable of the game, with the entry-point lines for the boot program
+alone: PCSX2 keeps the boot executable's file while a game loads its other
+executables by itself, as Agent Under Fire does. A group's `gsaspectratio`
+(any `N:D`) goes with the boot program to the runtime, whose window shows
+that shape under Auto ([runtime.md](runtime.md#running-a-recompiled-game)).
+The recompile prints what each executable got:
+
+```
+pnach: SLES-50539_992B46DC.pnach [Widescreen 16:9]: SLES_505.39 0 words (6 conditions on memory it does not initialise), MOVIE.ELF 0 words (6 conditions on memory it does not initialise), ACTION.UK 1 word, DRIVING.ELF 4 words
+  the patches ask for a 16:9 picture (gsaspectratio)
+```
+
+What is read as PCSX2 reads it: `patch=place,cpu,address,type,data` with
+the types `byte`, `short`, `word`, `double`, `extended`, `beshort`,
+`beword`, `bedouble` and `bytes`, keys and names matched with their case,
+`//` comments, and of the extended codes the writes (`0`, `1`, `2`), the
+serial write (`4`) and the conditions (`D`, `E`, on a halfword or a byte),
+where a false test skips the extended lines after it. Lines PCSX2 skips as
+malformed, codes it ignores (`8`, `9`, `A`, `B`, `C`, `F`) and
+`gsinterlacemode` (the runtime's deinterlacing is chosen with
+`--deinterlace`) are warnings. Not covered, and an error when a chosen group
+has them:
+
+- the increment, copy, pointer and bitwise codes (`3`, `5`, `6`, `7`), which
+  act on values the game keeps changing;
+- `dpatch` (a patch placed by matching code) and patches to the IOP;
+- writes to memory the executable does not initialise (BSS, the heap), which
+  PCSX2 keeps rewriting while the game runs: a warning, as the recompile
+  cannot know what is there. A condition on such memory counts as false;
+- a game that starts its executables with `LoadExecPS2`, for which PCSX2
+  switches to the file named for each: `[pnach]` is read from the boot
+  program's config only.
 
 ## Command-line overrides
 

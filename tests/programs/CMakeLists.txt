@@ -1,7 +1,7 @@
 # End-to-end programs: assembled, recompiled at build time, then run in both
 # recompiled and interpreted mode and compared against a recorded output.
 function(ps2n_program_test name)
-    cmake_parse_arguments(P "STRIP" "FILES" "RUN_ARGS;SOURCES" ${ARGN})
+    cmake_parse_arguments(P "STRIP" "FILES" "RUN_ARGS;SOURCES;DEPENDS" ${ARGN})
     set(elf "${CMAKE_CURRENT_BINARY_DIR}/${name}.elf")
     if(P_STRIP)
         ps2n_assemble(OUTPUT "${elf}" SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/${name}.s" STRIP)
@@ -15,7 +15,8 @@ function(ps2n_program_test name)
     if(NOT P_FILES)
         set(P_FILES 1)
     endif()
-    ps2n_add_recompiled_game(TARGET prog_${name} CONFIG "${config}" ELF "${elf}" FILES ${P_FILES} SOURCES ${P_SOURCES})
+    ps2n_add_recompiled_game(TARGET prog_${name} CONFIG "${config}" ELF "${elf}" FILES ${P_FILES} SOURCES ${P_SOURCES}
+                             DEPENDS ${P_DEPENDS})
     foreach(mode recompiled interpreted)
         set(args --elf "${elf}" --virtual-clock --no-window --missing-out "${CMAKE_CURRENT_BINARY_DIR}/${name}_${mode}_missing.toml" ${P_RUN_ARGS})
         if(mode STREQUAL "interpreted")
@@ -37,6 +38,8 @@ ps2n_program_test(kernel)
 ps2n_program_test(deci2)
 # Skip, stub, override and patch; --max-vsyncs turns an ignored skip into a failure instead of a hang.
 ps2n_program_test(bindings SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/bindings_override.cpp" RUN_ARGS --max-vsyncs 100)
+# A PCSX2 patch file's group ([pnach]): an immediate under a condition, an instruction and a data word.
+ps2n_program_test(pnach DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/pnach.pnach")
 
 # LoadExecPS2: a boot program starts a second recompiled program, which starts
 # a third one that was not recompiled (interpreted), which starts the boot

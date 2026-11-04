@@ -13,14 +13,18 @@ Headless runs (`--no-window`, the tests) keep the default bindings, and
 
 ## Using it
 
-- **Escape** opens the pause menu: Resume Game, Controller Settings, Toggle
-  Fullscreen, Quit Game. The game is paused while it is open and sees no
-  input; whatever was held when the menu closed (the Return that chose
-  Resume Game) reaches the game only after it is released.
+- **Escape** opens the pause menu: Resume Game, Controller Settings,
+  Graphics Settings, Toggle Fullscreen, Quit Game. The game is paused while
+  it is open and sees no input; whatever was held when the menu closed (the
+  Return that chose Resume Game) reaches the game only after it is released.
 - **Controller Settings** has PCSX2's pages: Global Settings, Controller
   Port 1, Controller Port 2 and Hotkeys. It works with the mouse, the
   keyboard (arrows, Return, Escape) or a controller (d-pad or left stick,
   the bottom face button selects, the right one goes back).
+- **Graphics Settings** has the two settings of PCSX2's Display tab that the
+  window has, with its labels: Aspect Ratio and FMV Aspect Ratio Override
+  (see [runtime.md](runtime.md#running-a-recompiled-game)). A choice is
+  saved at once.
 - A **port page** has a Controller Type (DualShock 2 or Not Connected), a
   Bindings and a Settings tab, and Automatic Mapping and Clear Mapping. The
   bindings are laid out as in PCSX2: the d-pad and the left stick on the
@@ -163,6 +167,7 @@ controller's motors.
 | `ToggleTurbo` | Speed | `Tab` |
 | `HoldTurbo` | Speed | `Period` |
 | `ShutdownVM` | System | none: quits the game |
+| `CycleAspectRatio` | Graphics | `F6`: Stretch, Auto 4:3/3:2, 4:3, 16:9, 10:7, for the run, not saved |
 | `CycleInterlaceMode` | Graphics | `F5`: Adaptive, Weave, Bob deinterlacing (see [runtime.md](runtime.md#running-a-recompiled-game)) |
 | `Screenshot` | Graphics | `F8`: the picture as a BMP in `snaps/` under the working directory |
 | `Mute` | Audio | none: Toggle Mute |

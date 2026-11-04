@@ -6,6 +6,7 @@ add_library(ps2n_recomp STATIC
     src/codegen.cpp
     src/config.cpp
     src/function_map.cpp
+    src/pnach.cpp
     src/report.cpp
     src/vu_codegen.cpp
 )

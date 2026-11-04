@@ -51,6 +51,9 @@ struct GameInfo {
     // Only the boot program's table lists them.
     const vu::CompiledProgram* vuPrograms;
     size_t vuProgramCount;
+    // The aspect ratio the game's patches ask for ([pnach], gsaspectratio):
+    // "16:9", "4:3", ... or nullptr. Only the boot program's table has it.
+    const char* aspectRatio;
 };
 
 // Loads the ELF, sets up the emulated kernel, hardware and IOP, runs the game.

@@ -4,6 +4,7 @@
 #include "hw/hw.h"
 #include "hw/mpeg.h"
 #include "log.h"
+#include "video/video.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -495,7 +496,10 @@ void startCommand(uint32_t v) {
         g.mbLeft = v & 0x7FF;
         g.decoded = g.mbLeft == 0;
         break;
-    case BDEC: case VDEC: case FDEC: case SETIQ: case SETVQ: break;
+    case VDEC:   // decoding a film's bit stream, which the window's FMV aspect ratio goes by
+        video::noteFilmDecode();
+        break;
+    case BDEC: case FDEC: case SETIQ: case SETVQ: break;
     default:
         PS2_UNIMPL("ipu", "IPU command 0xA-0xF", "unknown IPU command 0x%08x", v);
         g.decoded = true;

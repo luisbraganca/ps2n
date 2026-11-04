@@ -48,6 +48,15 @@ config lists the other executables under `[input] programs`, as in
   mission's views measured, as many in deterministic runs as in real time,
   so they do not come from the game's thread falling behind.
 - Controller input, from the keyboard or a game controller.
+- 16:9, with PCSX2's widescreen patch for this disc: the `Widescreen 16:9`
+  group of `SLES-50539_992B46DC.pnach` (by Arapapa and Silent, in PCSX2's
+  `resources/patches.zip`), named in the boot config's `[pnach]`
+  ([config.md](config.md#pnach-pcsx2s-patch-files)). Its lines change
+  constants in the cameras' code, one word of `ACTION.UK` and four of
+  `DRIVING.ELF`, under conditions that pick the language's executable; the
+  loader and `MOVIE.ELF` get none. The window shows 16:9 under Auto. As in
+  PCSX2, the menus and the HUD stretch with the picture, and the films do too
+  unless FMV Aspect Ratio Override is Standard (4:3).
 
 ### Known problems
 
@@ -66,6 +75,13 @@ config lists the other executables under `[input] programs`, as in
   end of its heaviest stretch measured (see [Speed](#speed)).
 - The second mission has been played into its race; how far it can be
   played has not been tried.
+- With the widescreen patch, the race's camera takes 1.817 for its width
+  over height, where 16:9 is 1.778. The patch writes `0x3FE88E39` over the
+  game's 4/3 (`0x3FAAAAAA`, at `0x0012B7D0`); 16/9 is `0x3FE38E39`, whose
+  lower half the patch has, so one digit looks mistyped. The value goes to
+  the race camera's projection, which should then draw everything about 2%
+  narrower than 16:9 needs (not measured), as in PCSX2, which applies the
+  same file.
 
 ### Speed
 

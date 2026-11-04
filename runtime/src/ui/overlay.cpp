@@ -5,6 +5,7 @@
 #include "input/sdl.h"
 #include "internal.h"
 #include "settings.h"
+#include "video/video.h"
 
 #include "ps2n/util.h"
 
@@ -18,6 +19,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <initializer_list>
+#include <iterator>
 #include <system_error>
 #include <utility>
 
@@ -37,7 +39,7 @@ SDL_Renderer* g_renderer = nullptr;
 ImGuiStyle g_baseStyle;
 float g_scale = 0.0f;
 
-enum class Screen { None, PauseMenu, Settings };
+enum class Screen { None, PauseMenu, Settings, Graphics };
 enum class Page { Global, Port1, Port2, Hotkeys };
 Screen g_screen = Screen::None;
 Page g_page = Page::Port1;
@@ -757,6 +759,50 @@ void drawSettings() {
     ImGui::End();
 }
 
+// The display settings of PCSX2's Graphics page that the window has.
+void drawGraphics() {
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+                                   ImGuiWindowFlags_NoSavedSettings;
+    if (ImGui::Begin("Graphics Settings", nullptr, flags)) {
+        static constexpr const char* kAspect[] = {"Fit to Window / Fullscreen", "Auto Standard (4:3 Interlaced / 3:2 Progressive)",
+                                                  "Standard (4:3)", "Widescreen (16:9)", "Native/Full (10:7)"};
+        static constexpr const char* kFmv[] = {"Off (Default)", "Auto Standard (4:3 Interlaced / 3:2 Progressive)", "Standard (4:3)",
+                                               "Widescreen (16:9)", "Native/Full (10:7)"};
+        static_assert(std::size(kAspect) == size_t(video::AspectRatio::Count));
+        static_assert(std::size(kFmv) == size_t(video::FmvAspectRatio::Count));
+        const float labels = ImGui::GetFontSize() * 13.0f, combo = ImGui::GetFontSize() * 18.0f;
+        ImGui::SeparatorText("Display");
+        if (g_focusMenu) {
+            ImGui::SetKeyboardFocusHere();
+            g_focusMenu = false;
+        }
+        int aspect = static_cast<int>(video::aspectRatio());
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Aspect Ratio:");
+        ImGui::SameLine(labels);
+        ImGui::SetNextItemWidth(combo);
+        if (ImGui::Combo("##aspect", &aspect, kAspect, static_cast<int>(std::size(kAspect))))
+            video::setAspectRatio(video::AspectRatio(aspect));
+        int fmv = static_cast<int>(video::fmvAspectRatio());
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("FMV Aspect Ratio Override:");
+        ImGui::SameLine(labels);
+        ImGui::SetNextItemWidth(combo);
+        if (ImGui::Combo("##fmv", &fmv, kFmv, static_cast<int>(std::size(kFmv))))
+            video::setFmvAspectRatio(video::FmvAspectRatio(fmv));
+        if (g_game && g_game->aspectRatio) {
+            ImGui::Spacing();
+            ImGui::TextDisabled("This game was recompiled with patches for %s, which Auto shows.", g_game->aspectRatio);
+            ImGui::TextDisabled("Standard (4:3) for FMVs keeps the game's films at the shape they were made in.");
+        }
+        ImGui::Spacing();
+        alignRight(ImGui::CalcTextSize("Close").x + ImGui::GetStyle().FramePadding.x * 2.0f);
+        if (ImGui::Button("Close")) g_screen = Screen::PauseMenu;
+    }
+    ImGui::End();
+}
+
 void drawPauseMenu() {
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
@@ -772,6 +818,10 @@ void drawPauseMenu() {
         }
         if (ImGui::Button("Resume Game", size)) g_screen = Screen::None;
         if (ImGui::Button("Controller Settings", size)) g_screen = Screen::Settings;
+        if (ImGui::Button("Graphics Settings", size)) {
+            g_screen = Screen::Graphics;
+            g_focusMenu = true;
+        }
         if (ImGui::Button("Toggle Fullscreen", size)) g_action = Action::ToggleFullscreen;
         if (ImGui::Button("Quit Game", size)) g_action = Action::Quit;
     }
@@ -893,6 +943,7 @@ void frame(const input::HostState& host) {
     ImGui::NewFrame();
     if (g_screen == Screen::PauseMenu) drawPauseMenu();
     else if (g_screen == Screen::Settings) drawSettings();
+    else if (g_screen == Screen::Graphics) drawGraphics();
     drawOsd();
     ImGui::Render();
 }
@@ -904,7 +955,7 @@ bool menuOpen() { return g_screen != Screen::None; }
 void toggleMenu() {
     // The Escape that closed a popup does not also leave the menu.
     if (std::exchange(g_escapeForPopup, false)) return;
-    if (g_screen == Screen::Settings) g_screen = Screen::PauseMenu;
+    if (g_screen == Screen::Settings || g_screen == Screen::Graphics) g_screen = Screen::PauseMenu;
     else if (g_screen == Screen::PauseMenu) g_screen = Screen::None;
     else {
         g_screen = Screen::PauseMenu;

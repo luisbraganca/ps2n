@@ -93,7 +93,7 @@ console:
 | IOP services | `████████░░` 75% | 9 / 12 | FILEIO for SDK 2.2 and later, used by most later games |
 | Discs and memory cards | `█████░░░░░` 50% | 5 / 10 | dual-layer DVDs, drive timing |
 | Controllers and window | `███████░░░` 69% | 9 / 13 | multitap, other devices, speed settings |
-| Widescreen, upscaling | `░░░░░░░░░░` 0% | 0 / 5 | all of it (see the [roadmap](#roadmap)) |
+| Widescreen, upscaling | `████░░░░░░` 40% | 2 / 5 | no-interlacing patches, a GPU renderer, higher internal resolution (see the [roadmap](#roadmap)) |
 
 <details>
 <summary><b>What each bar counts</b></summary>
@@ -212,15 +212,15 @@ console:
 - [ ] Multitap
 - [ ] Other devices: guitars, light guns, USB keyboards and mice
 - [ ] Input profiles and macros
-- [x] A window, fullscreen, the picture at 4:3
+- [x] A window, fullscreen, the picture in its television's shape
 - [x] Deinterlacing: adaptive, weave, bob
 - [x] Pause menu and settings pages
 - [x] Screenshots, frame dumps and on-screen messages
 - [ ] Speed settings: turbo and slow-motion speeds
 
-**Widescreen, upscaling**: 0 of 5
-- [ ] An aspect ratio setting: 4:3, 16:9, stretch
-- [ ] Widescreen patches (PCSX2's pnach files)
+**Widescreen, upscaling**: 2 of 5
+- [x] PCSX2's aspect ratio settings: Stretch, Auto 4:3/3:2, 4:3, 16:9, 10:7, and its FMV override
+- [x] Widescreen patches: PCSX2's pnach files, applied when a game is recompiled
 - [ ] No-interlacing patches
 - [ ] A GPU renderer
 - [ ] Higher internal resolution
@@ -276,15 +276,16 @@ Roughly in order:
    Fire's driving missions, run them recompiled. VU1 already runs alongside
    the EE, on a thread of its own.
 6. **Widescreen and higher resolutions**, the way PCSX2 does them:
-   - **16:9.** PS2 games compute their own projection, so there is no general
-     switch. PCSX2 applies per-game widescreen patches (`.pnach` files) that
-     change each game's field of view, and shows the picture at 16:9. A
-     recompiled game keeps every guest address, so those patches carry over:
-     patches to code become `[[patches]]`, applied at recompile time, and
-     patches to data are written into RAM at start-up or every vsync, as
-     PCSX2 writes them. The window gets PCSX2's aspect ratio setting (4:3,
-     16:9, stretch), and the same path brings PCSX2's no-interlacing patches,
-     for games that draw fields.
+   - **16:9** works: PS2 games compute their own projection, so PCSX2
+     applies per-game widescreen patches (`.pnach` files) that change each
+     game's field of view. A recompiled game keeps every guest address, so
+     they carry over: `[pnach]` applies a file's groups when the game is
+     recompiled, and the window has PCSX2's aspect ratio settings. Agent
+     Under Fire plays in 16:9 with PCSX2's patch. Left: the no-interlacing
+     patches (`gsinterlacemode`), what PCSX2 keeps rewriting while a game
+     runs (memory the executable does not initialise, the increment, copy,
+     pointer and bitwise codes, `dpatch`), and the file for each executable
+     of a game that starts them with `LoadExecPS2`.
    - **Higher internal resolution** needs the GPU renderer: the software
      rasterizer has little room to spare at the original resolution, and its
      work grows with the square of the scale. Upscaling also brings the
@@ -436,6 +437,10 @@ override = { "0x00140000" = "my_draw_hud" }   # your C++ function
 address = 0x00100abc
 value = 0x00000000
 expect = 0x0c040000
+
+[pnach]                               # PCSX2's patch files: their groups go in when the game is recompiled
+files = ["patches/SLES-50539_992B46DC.pnach"]
+groups = ["Widescreen 16:9"]
 ```
 
 Every key is documented in [docs/config.md](docs/config.md).

@@ -7,17 +7,21 @@
 #include "input/input.h"
 #include "internal.h"
 #include "log.h"
+#include "settings.h"
 
 #include "ps2n/util.h"
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <iterator>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifdef PS2N_HAVE_SDL2
@@ -30,6 +34,53 @@
 namespace ps2::video {
 
 namespace {
+
+// ---- The picture's shape ------------------------------------------------------------------------
+
+constexpr const char* kAspectNames[] = {"Stretch", "Auto 4:3/3:2", "4:3", "16:9", "10:7"};
+constexpr const char* kFmvAspectNames[] = {"Off", "Auto 4:3/3:2", "4:3", "16:9", "10:7"};
+static_assert(std::size(kAspectNames) == size_t(AspectRatio::Count));
+static_assert(std::size(kFmvAspectNames) == size_t(FmvAspectRatio::Count));
+
+// A patch's gsaspectratio, N:D with D not 0 as PCSX2 takes it; 0 otherwise.
+double customRatio(const char* text) {
+    if (!text) return 0.0;
+    const std::string_view s(text);
+    const size_t colon = s.find(':');
+    if (colon == std::string_view::npos) return 0.0;
+    const auto n = ps2n::parseInt(s.substr(0, colon)), d = ps2n::parseInt(s.substr(colon + 1));
+    return n && d && *n > 0 && *d > 0 ? static_cast<double>(*n) / static_cast<double>(*d) : 0.0;
+}
+
+// What an aspect ratio setting shows: 0 fills the window. FmvAspectRatio's
+// values, after Off, are AspectRatio's from Auto on. Under Auto, the game's
+// patches have their say, as PCSX2 lets them.
+double ratioOf(AspectRatio r, bool progressive, const char* gameAspect) {
+    switch (r) {
+    case AspectRatio::Stretch: return 0.0;
+    case AspectRatio::Auto:
+        if (const double custom = customRatio(gameAspect); custom > 0.0) return custom;
+        return progressive ? 3.0 / 2.0 : 4.0 / 3.0;
+    case AspectRatio::R4_3: return 4.0 / 3.0;
+    case AspectRatio::R16_9: return 16.0 / 9.0;
+    case AspectRatio::R10_7: return 10.0 / 7.0;
+    case AspectRatio::Count: break;
+    }
+    return 4.0 / 3.0;
+}
+
+// PCSX2's way of telling a film: every seventh VDEC (its bit stream decoding)
+// starts one, if none plays, at the next vsync; it ends at the first vsync
+// 60,000,000 EE cycles (about a fifth of a second) after the last VDEC.
+constexpr uint64_t kFilmIdleCycles = 60000000;
+std::atomic<bool> g_film{false};
+bool g_filmStarting = false;     // guest thread, from here on
+unsigned g_vdecs = 0;
+uint64_t g_lastFilmDecode = 0;
+
+// The settings ([EmuCore/GS]), main thread.
+AspectRatio g_aspect = AspectRatio::Auto;
+FmvAspectRatio g_fmvAspect = FmvAspectRatio::Off;
 
 uint64_t g_frames = 0;
 std::atomic<bool> g_windowOpen{false};     // the main thread shows frames
@@ -93,17 +144,26 @@ void setPaused(bool on) {
     g_pauseChanged.notify_all();
 }
 
-// Whatever the framebuffer's size, the PS2 drew for a 4:3 television: the
-// picture keeps that shape, centred, and the rest of the window is black.
+void loadDisplaySettings() {
+    const settings::Ini& ini = input::settingsFile();
+    const std::string a = ini.getString("EmuCore/GS", "AspectRatio", aspectRatioName(AspectRatio::Auto));
+    if (const auto r = parseAspectRatio(a)) g_aspect = *r;
+    else PS2_WARN("video", "unknown AspectRatio '%s' in the settings file; using Auto 4:3/3:2", a.c_str());
+    const std::string f = ini.getString("EmuCore/GS", "FMVAspectRatioSwitch", fmvAspectRatioName(FmvAspectRatio::Off));
+    if (const auto r = parseFmvAspectRatio(f)) g_fmvAspect = *r;
+    else PS2_WARN("video", "unknown FMVAspectRatioSwitch '%s' in the settings file; using Off", f.c_str());
+}
+
+double currentAspect() { return pictureAspect(g_aspect, g_fmvAspect, g_film, false, g_game ? g_game->aspectRatio : nullptr); }
+
+// Whatever the framebuffer's size, the PS2 drew for a television of the
+// shape the aspect ratio settings say: the picture keeps it, centred, and the
+// rest of the window is black.
 SDL_Rect pictureRect() {
     int w = 0, h = 0;
     SDL_GetRendererOutputSize(g_renderer, &w, &h);
-    int pw = w, ph = w * 3 / 4;
-    if (ph > h) {
-        ph = h;
-        pw = h * 4 / 3;
-    }
-    return {(w - pw) / 2, (h - ph) / 2, pw, ph};
+    const Rect r = fitPicture(w, h, currentAspect());
+    return {r.x, r.y, r.w, r.h};
 }
 
 void render() {
@@ -189,6 +249,10 @@ void hotkey(const input::HotkeyEvent& e) {
         ui::osd(g_turbo ? "Turbo enabled." : "Turbo disabled.");
         applySpeed();
         break;
+    case H::CycleAspectRatio:   // for this run; the settings keep theirs
+        g_aspect = AspectRatio((size_t(g_aspect) + 1) % size_t(AspectRatio::Count));
+        ui::osd(std::string("Aspect ratio set to '") + aspectRatioName(g_aspect) + "'.");
+        break;
     case H::CycleInterlaceMode: {
         const auto next = static_cast<gs::Deinterlace>((static_cast<int>(gs::deinterlace()) + 1) % static_cast<int>(gs::Deinterlace::Count));
         gs::setDeinterlace(next);
@@ -225,12 +289,14 @@ bool openWindow() {
         return false;
     }
     input::sdl::open();
-    // 4:3, three quarters of the screen's height.
+    // The picture's shape (4:3 for Stretch), three quarters of the screen's height.
     SDL_Rect usable{0, 0, 1280, 960};
     SDL_GetDisplayUsableBounds(0, &usable);
     const int h = std::max(480, usable.h * 3 / 4);
+    const double aspect = currentAspect() > 0.0 ? currentAspect() : 4.0 / 3.0;
+    const int w = std::min(std::max(usable.w, 640), static_cast<int>(std::lround(h * aspect)));
     const std::string title = std::string(g_game ? g_game->name : "ps2n") + " (PS2Native)";
-    g_window = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, h * 4 / 3, h, SDL_WINDOW_RESIZABLE);
+    g_window = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, w, h, SDL_WINDOW_RESIZABLE);
     g_renderer = g_window ? SDL_CreateRenderer(g_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC) : nullptr;
     if (!g_renderer) {
         PS2_WARN("video", "cannot create an SDL window (%s); running headless", SDL_GetError());
@@ -245,10 +311,77 @@ bool windowEnabled() { return g_windowOpen; }
 
 } // namespace
 
-void init() { g_frames = 0; }
+const char* aspectRatioName(AspectRatio r) { return r < AspectRatio::Count ? kAspectNames[size_t(r)] : "?"; }
+const char* fmvAspectRatioName(FmvAspectRatio r) { return r < FmvAspectRatio::Count ? kFmvAspectNames[size_t(r)] : "?"; }
+
+std::optional<AspectRatio> parseAspectRatio(std::string_view text) {
+    for (size_t i = 0; i < std::size(kAspectNames); ++i)
+        if (ps2n::toLower(ps2n::trim(text)) == ps2n::toLower(kAspectNames[i])) return AspectRatio(i);
+    return std::nullopt;
+}
+
+std::optional<FmvAspectRatio> parseFmvAspectRatio(std::string_view text) {
+    for (size_t i = 0; i < std::size(kFmvAspectNames); ++i)
+        if (ps2n::toLower(ps2n::trim(text)) == ps2n::toLower(kFmvAspectNames[i])) return FmvAspectRatio(i);
+    return std::nullopt;
+}
+
+double pictureAspect(AspectRatio setting, FmvAspectRatio fmvSetting, bool filmPlaying, bool progressive, const char* gameAspect) {
+    if (filmPlaying && fmvSetting != FmvAspectRatio::Off && fmvSetting < FmvAspectRatio::Count)
+        setting = AspectRatio(size_t(fmvSetting));
+    return ratioOf(setting, progressive, gameAspect);
+}
+
+Rect fitPicture(int w, int h, double aspect) {
+    if (aspect <= 0.0 || w <= 0 || h <= 0) return {0, 0, std::max(w, 0), std::max(h, 0)};
+    int pw = w, ph = static_cast<int>(std::lround(w / aspect));
+    if (ph > h) {
+        ph = h;
+        pw = std::min(w, static_cast<int>(std::lround(h * aspect)));
+    }
+    return {(w - pw) / 2, (h - ph) / 2, pw, ph};
+}
+
+void noteFilmDecode() {
+    g_lastFilmDecode = nowCycles();
+    if (++g_vdecs < 7) return;
+    g_vdecs = 0;
+    if (!g_film.load(std::memory_order_relaxed)) g_filmStarting = true;
+}
+
+bool filmPlaying() { return g_film; }
+
+AspectRatio aspectRatio() { return g_aspect; }
+FmvAspectRatio fmvAspectRatio() { return g_fmvAspect; }
+
+void setAspectRatio(AspectRatio r) {
+    g_aspect = r;
+    input::settingsFile().set("EmuCore/GS", "AspectRatio", aspectRatioName(r));
+    input::save();
+}
+
+void setFmvAspectRatio(FmvAspectRatio r) {
+    g_fmvAspect = r;
+    input::settingsFile().set("EmuCore/GS", "FMVAspectRatioSwitch", fmvAspectRatioName(r));
+    input::save();
+}
+
+void init() {
+    g_frames = 0;
+    g_film = false;
+    g_filmStarting = false;
+    g_vdecs = 0;
+}
 
 Present onVsync() {
     ++g_frames;
+    if (std::exchange(g_filmStarting, false)) {
+        g_film = true;
+        PS2_DEBUG("video", "a film plays (the IPU decodes its bit stream)");
+    } else if (g_film.load(std::memory_order_relaxed) && nowCycles() - g_lastFilmDecode > kFilmIdleCycles) {
+        g_film = false;
+        PS2_DEBUG("video", "the film ended (the IPU has decoded nothing for a while)");
+    }
     pausePoint();
     if (g_windowClosed.exchange(false)) {
         PS2_INFO("video", "window closed");
@@ -279,6 +412,7 @@ void hostLoop(const std::atomic<bool>& guestDone) {
     (void)guestDone;
 #else
     if (!g_opt.window) return;
+    loadDisplaySettings();
     if (!openWindow()) return;
     audio::openDevice();   // sound plays where the picture shows
     g_windowOpen = true;

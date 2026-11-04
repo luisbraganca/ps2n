@@ -5,6 +5,7 @@
 #include "codegen.h"
 #include "config.h"
 #include "function_map.h"
+#include "pnach.h"
 
 #include "ps2n/assembler.h"
 #include "ps2n/elf.h"
@@ -607,6 +608,230 @@ TEST_CASE(vu_code_files) {
     CHECK(fs::exists(cfg.outDir / "recomp_vu.cpp"));
     CHECK(readTextFile(cfg.outDir / "recomp_table.cpp").find("kVuPrograms, kVuProgramCount") != std::string::npos);
     CHECK(readTextFile(cfg.outDir / "CMakeLists.txt").find("recomp_vu.cpp") != std::string::npos);
+}
+
+// ---- PCSX2 patch files ([pnach]) ------------------------------------------------------------
+
+// Code, initialised data and BSS for patches to write to.
+const char* kPnachProgram = R"(
+        .text
+        .globl _start
+_start: lui   $at, 0x3f80
+        ori   $at, $at, 0xaaaa
+        jr    $ra
+        li    $v0, 1
+        .data
+value:  .word 0x11223344
+flag:   .word 0x00000105
+other:  .word 0
+spare:  .word 0
+        .bss
+scratch: .space 16
+)";
+
+TEST_CASE(pnach_reads_groups_and_lines) {
+    const pnach::File f = pnach::parse("gametitle=Test (E) (SLES-00000)\n"
+                                       "comment=always on\n"
+                                       "patch=1,EE,00100008,word,03e00008 // a comment\n"
+                                       "\n"
+                                       "[Widescreen 16:9]\r\n"
+                                       "gsaspectratio=16:9\n"
+                                       "author=someone\n"
+                                       "patch=0,EE,D0100000,extended,01003F80\n"
+                                       "patch = 2 , EE , 10100000 , extended , 00003FAB\n"
+                                       "patch=1,EE,00100010,bytes,010203\n"
+                                       "[Broken]\n"
+                                       "patch=1,EE,00100000,word\n"           // four fields
+                                       "patch=1,GS,00100000,word,0\n"         // no such cpu
+                                       "patch=1,ee,00100000,word,0\n"         // nor that: PCSX2 matches case
+                                       "patch=1,EE,00100000,quad,0\n"         // no such type
+                                       "patch=1,EE,0x00100000,word,0\n"       // PCSX2 takes no 0x
+                                       "nonsense\n"
+                                       "[Unclosed\n"
+                                       "patch=4,EE,00100000,word,0\n"         // read, but never applied
+                                       "patch=1,EE,00100000,bytes,123\n"      // an odd digit counts for nothing
+                                       "Patch=1,EE,00100000,word,0\n"         // not a key PCSX2 knows: ignored
+                                       "dpatch=whatever\n"
+                                       "speed=fast\n",
+                                       "SLES-00000_00000000.pnach");
+    // PCSX2 names a file after the boot executable's words, exclusive-ored.
+    CHECK_EQ(pnach::pcsx2Crc({1, 0, 0, 0, 2, 0, 0, 0, 0xFF}), 3u);
+    CHECK_EQ(f.groups.size(), size_t(3));
+    if (f.groups.size() != 3) return;
+    CHECK(f.groups[0].name.empty());
+    CHECK_EQ(f.groups[0].lines.size(), size_t(1));
+    if (f.groups[0].lines.size() == 1) {
+        CHECK_EQ(f.groups[0].lines[0].data, uint64_t(0x03e00008));
+        CHECK_EQ(f.groups[0].lines[0].lineNo, 3);
+        CHECK_EQ(f.groups[0].lines[0].where(), std::string("SLES-00000_00000000.pnach:3"));
+    }
+    const pnach::Group& ws = f.groups[1];
+    CHECK_EQ(ws.name, std::string("Widescreen 16:9"));
+    CHECK_EQ(ws.aspectRatio, std::string("16:9"));
+    CHECK(ws.malformed.empty());
+    CHECK_EQ(ws.lines.size(), size_t(3));
+    if (ws.lines.size() == 3) {
+        CHECK_EQ(ws.lines[0].place, 0);
+        CHECK_EQ(ws.lines[0].address, 0xD0100000u);
+        CHECK(ws.lines[0].type == pnach::Type::Extended);
+        CHECK_EQ(ws.lines[1].place, 2);
+        CHECK_EQ(ws.lines[1].data, uint64_t(0x3FAB));
+        CHECK(ws.lines[2].bytes == (std::vector<uint8_t>{1, 2, 3}));
+    }
+    const pnach::Group& broken = f.groups[2];
+    CHECK_EQ(broken.malformed.size(), size_t(7));
+    CHECK_EQ(broken.dpatches.size(), size_t(1));
+    CHECK_EQ(broken.lines.size(), size_t(2));
+    if (broken.lines.size() == 2) {
+        CHECK_EQ(broken.lines[0].place, 4);
+        CHECK(broken.lines[1].bytes == std::vector<uint8_t>{0x12});
+    }
+}
+
+TEST_CASE(pnach_applies_writes_and_conditions) {
+    const ElfFile elf = assemble(kPnachProgram);
+    const uint32_t value = elf.symbolValue("value").value(), flag = elf.symbolValue("flag").value();
+    const uint32_t other = elf.symbolValue("other").value(), spare = elf.symbolValue("spare").value();
+    const uint32_t scratch = elf.symbolValue("scratch").value();
+    const fs::path file = writeTemp(
+        "conditions.pnach",
+        strprintf("[Widescreen 16:9]\n"
+                  "gsaspectratio=16:9\n"
+                  "patch=1,EE,D0100000,extended,01003F80\n"   // the lui's immediate is 0x3f80: the next line
+                  "patch=1,EE,10100000,extended,00003FAB\n"
+                  "patch=1,EE,D0100004,extended,01003F80\n"   // the ori's is 0xaaaa: not the next line
+                  "patch=1,EE,10100004,extended,00001111\n"
+                  "patch=1,EE,D0100004,extended,00003F80\n"   // nn 00 skips one line too
+                  "patch=1,EE,10100006,extended,00002222\n"
+                  "patch=1,EE,D%07X,extended,0100000C\n"      // false until the next-but-one line wrote value...
+                  "patch=1,EE,2010000C,extended,24020002\n"   // ...so a later vsync applies this
+                  "patch=1,EE,%08X,word,0000000C\n"
+                  "patch=1,EE,D%07X,extended,01010005\n"      // flag's low byte (z 1) is 5, its halfword not: the next line
+                  "patch=1,EE,0%07X,extended,00000077\n"
+                  "patch=1,EE,%08X,beshort,0102\n"            // flag's upper half: bytes 01 02
+                  "patch=1,EE,E1010077,extended,0%07X\n"      // an E test of the byte just written: the next line
+                  "patch=1,EE,1%07X,extended,000000AB\n"
+                  "patch=1,EE,%08X,word,00000001\n"           // BSS: nothing the ELF initialises
+                  "patch=1,EE,D%07X,extended,01000000\n"      // a condition on BSS, taken as false: it skips
+                  "patch=1,EE,%08X,word,00000063\n"           // not this line, which is not extended,
+                  "patch=1,EE,2%07X,extended,00000064\n"      // but this one
+                  "patch=1,EE,D0100000,extended,01803F80\n"   // test 8: does nothing, skips nothing
+                  "patch=1,EE,2%07X,extended,0000002A\n"
+                  "patch=0,EE,00100008,word,00000000\n"       // once, at the entry point
+                  "[Other]\n"
+                  "patch=1,EE,00100000,word,00000000\n",
+                  value, value, flag, flag, flag + 2, flag, value + 2, scratch, scratch, other, other, spare));
+    const pnach::Patches p = pnach::Patches::load({file}, {"Widescreen 16:9"});
+    CHECK_EQ(p.aspectRatio(), std::string("16:9"));
+    CHECK_EQ(p.describe(), std::string("conditions.pnach [Widescreen 16:9]"));
+    CHECK(p.warnings().empty());
+    const pnach::Result r = p.apply(elf, false);
+    const std::vector<std::pair<uint32_t, uint32_t>> want = {
+        {0x00100000, 0x3c013fab}, {0x0010000C, 0x24020002}, {value, 0x00AB000C}, {flag, 0x02010177}, {other, 0x63}, {spare, 0x2A}};
+    CHECK_EQ(r.skipped, size_t(4));
+    CHECK_EQ(r.unknown, size_t(1));
+    CHECK_EQ(r.outside.size(), size_t(1));
+    if (r.outside.size() == 1) CHECK_EQ(r.outside[0].second, scratch);
+    CHECK_EQ(r.patches.size(), want.size());
+    if (r.patches.size() == want.size()) {
+        for (size_t i = 0; i < want.size(); ++i) {
+            CHECK_EQ(r.patches[i].address, want[i].first);
+            CHECK_EQ(r.patches[i].value, want[i].second);
+        }
+        CHECK(r.patches[0].expect == 0x3c013f80u);
+        CHECK(r.patches[2].expect == 0x11223344u);
+    }
+    // The executable PCSX2 loaded the file for also gets the line for its entry point.
+    const pnach::Result boot = p.apply(elf, true);
+    CHECK_EQ(boot.patches.size(), want.size() + 1);
+    if (boot.patches.size() == want.size() + 1) {
+        CHECK_EQ(boot.patches[1].address, 0x00100008u);
+        CHECK_EQ(boot.patches[1].value, 0u);
+    }
+}
+
+TEST_CASE(pnach_chooses_groups_and_refuses_what_it_cannot_apply) {
+    const ElfFile elf = assemble(kPnachProgram);
+    const fs::path file = writeTemp("groups.pnach", "patch=1,EE,0010000C,word,24020003\n"   // before any group: always
+                                                    "[A]\npatch=1,EE,00100008,word,00000000\n"
+                                                    "[B]\npatch=1,EE,30000000,extended,00100000\n"
+                                                    "[C]\npatch=1,IOP,00100000,word,00000000\n"
+                                                    "[D]\ngsinterlacemode=1\n"
+                                                    "[E]\npatch=1,EE,C0100000,extended,00000000\ngsaspectratio=wide\n"
+                                                    "[F]\ndpatch=0,1,1,0,3c013f80,3c013fab\n"
+                                                    "[A]\npatch=1,EE,00100004,word,00000000\n");
+    const pnach::Patches a = pnach::Patches::load({file}, {"A"});
+    CHECK_EQ(a.apply(elf, false).patches.size(), size_t(2));   // the first [A] only
+    CHECK_EQ(a.warnings().size(), size_t(1));
+    CHECK_EQ(pnach::Patches::load({file}, {}).apply(elf, false).patches.size(), size_t(1));
+    CHECK_THROWS(pnach::Patches::load({file}, {"B"}));
+    CHECK_THROWS(pnach::Patches::load({file}, {"C"}));
+    CHECK_THROWS(pnach::Patches::load({file}, {"F"}));
+    // What PCSX2 ignores, ps2n ignores too, saying so.
+    const pnach::Patches d = pnach::Patches::load({file}, {"D"});
+    CHECK_EQ(d.warnings().size(), size_t(1));
+    const pnach::Patches e = pnach::Patches::load({file}, {"E"});
+    CHECK_EQ(e.warnings().size(), size_t(2));
+    CHECK(e.aspectRatio().empty());
+    CHECK_EQ(e.apply(elf, false).patches.size(), size_t(1));
+    try {
+        pnach::Patches::load({file}, {"G"});
+        ::testing::fail(__FILE__, __LINE__, "expected an error");
+    } catch (const Error& err) {
+        CHECK(std::string(err.what()).find("they have: A, B, C, D, E, F, A") != std::string::npos);
+    }
+}
+
+TEST_CASE(pnach_applies_to_every_executable) {
+    const ElfFile boot = assemble(kPnachProgram);
+    const ElfFile other = assemble(".text\n_start: lui $at, 0x3f80\n  jr $ra\n  nop\n");
+    Config bootCfg = configFor(boot), otherCfg = configFor(other);
+    otherCfg.elf = tempDir() / "OTHER.ELF";
+    bootCfg.patches.push_back({0x0010000C, 0x24020009, 0x24020001});   // one of its own
+    const fs::path file = writeTemp("SLES-00000_DEADBEEF.pnach", "patch=1,EE,D0100000,extended,01003F80\n"
+                                                                 "patch=1,EE,10100000,extended,00003FAB\n"
+                                                                 "patch=1,EE,21F00000,extended,00000001\n");
+    const pnach::Patches p = pnach::Patches::load({file}, {});
+    std::string summary;
+    const auto warnings = pnach::applyToGame(p, {file}, {{&boot, &bootCfg, true}, {&other, &otherCfg, false}}, summary);
+    CHECK_EQ(bootCfg.patches.size(), size_t(2));
+    CHECK_EQ(otherCfg.patches.size(), size_t(1));
+    if (otherCfg.patches.size() == 1) {
+        CHECK_EQ(otherCfg.patches[0].value, 0x3c013fabu);
+        CHECK(otherCfg.patches[0].expect == 0x3c013f80u);
+        CHECK(analyze(other, otherCfg).word(0x00100000) == 0x3c013fabu);
+    }
+    CHECK(summary.find("OTHER.ELF 1 word") != std::string::npos);
+    CHECK_EQ(warnings.size(), size_t(2));   // the file's name, and a write that reaches no executable
+    // A word that [pnach] and [[patches]] both change.
+    Config clash = configFor(other);
+    clash.patches.push_back({0x00100000, 0, 0x3c013f80});
+    CHECK_THROWS(pnach::applyToGame(p, {file}, {{&other, &clash, true}}, summary));
+    // A file named after the boot executable's checksum, as PCSX2 names them.
+    const fs::path named = writeTemp(strprintf("SLES-00000_%08X.pnach", pnach::pcsx2Crc(boot.bytes())), "patch=1,EE,00100008,word,0\n");
+    Config again = configFor(boot);
+    CHECK(pnach::applyToGame(pnach::Patches::load({named}, {}), {named}, {{&boot, &again, true}}, summary).empty());
+}
+
+TEST_CASE(config_pnach) {
+    const Config c = Config::load(writeTemp("pnach.toml", "[input]\nelf = \"boot.elf\"\n[pnach]\nfiles = [\"patches/SLES-00000_00000000.pnach\"]\n"
+                                                          "groups = [\"Widescreen 16:9\"]\n"));
+    CHECK_EQ(c.pnachFiles.size(), size_t(1));
+    if (!c.pnachFiles.empty()) CHECK_EQ(c.pnachFiles[0], (tempDir() / "patches" / "SLES-00000_00000000.pnach").lexically_normal());
+    CHECK(c.pnachGroups == std::vector<std::string>{"Widescreen 16:9"});
+    CHECK_THROWS(Config::load(writeTemp("pnach-nofiles.toml", "[input]\nelf = \"boot.elf\"\n[pnach]\ngroups = [\"x\"]\n")));
+    CHECK_THROWS(Config::load(writeTemp("pnach-key.toml", "[input]\nelf = \"boot.elf\"\n[pnach]\nfiles = [\"a.pnach\"]\nenable = true\n")));
+    // The aspect ratio the patches ask for reaches the boot program's table.
+    const ElfFile elf = assemble(kSwitchProgram);
+    Config cfg = configFor(elf);
+    cfg.outDir = tempDir() / "aspect";
+    cfg.files = 1;
+    cfg.aspectRatio = "16:9";
+    generate(analyze(elf, cfg), cfg, {});
+    CHECK(readTextFile(cfg.outDir / "recomp_table.cpp").find("    \"16:9\",\n};") != std::string::npos);
+    cfg.aspectRatio.clear();
+    generate(analyze(elf, cfg), cfg, {});
+    CHECK(readTextFile(cfg.outDir / "recomp_table.cpp").find("    nullptr,\n};") != std::string::npos);
 }
 
 int main(int argc, char** argv) {

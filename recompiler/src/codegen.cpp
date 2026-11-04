@@ -575,6 +575,7 @@ int writeProgram(const Program& prog, const Config& cfg, const std::filesystem::
     t << "    kPatches, " << (patches.empty() ? "0" : "sizeof(kPatches) / sizeof(kPatches[0])") << ",\n";
     t << "    " << (others.empty() ? "nullptr, 0" : "kPrograms, sizeof(kPrograms) / sizeof(kPrograms[0])") << ",\n";
     t << "    " << (vuPrograms ? "kVuPrograms, kVuProgramCount" : "nullptr, 0") << ",\n";
+    t << "    " << (cfg.aspectRatio.empty() ? "nullptr" : cstring(cfg.aspectRatio)) << ",\n";
     t << "};\n\n} // namespace " << ns << "\n";
     put(dir / "recomp_table.cpp", t.str());
     return files;
