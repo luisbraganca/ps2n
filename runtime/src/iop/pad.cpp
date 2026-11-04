@@ -43,6 +43,7 @@ constexpr int kBusyFrames = 2;   // how long a mode change keeps reqState busy
 constexpr uint8_t kModel = 3;
 constexpr uint16_t kModeTable[2] = {4, 7};                          // digital, DualShock
 constexpr uint8_t kActData[2][4] = {{1, 2, 0, 10}, {1, 1, 1, 20}};  // small and large motor
+constexpr uint32_t kButtonMask = 0x3FFFF;                           // its 18 buttons, all pressure-sensitive ones included
 
 struct Port {
     bool open = false;
@@ -57,6 +58,7 @@ struct Port {
     uint8_t modeOffs = 0, lock = 0;
     uint8_t actAlign[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     uint8_t actDirect[6] = {};
+    uint32_t buttonInfo = 0;   // the pressure-mode request PADMAN last sent the controller
     bool analogHeld = false;   // the Analog button, last frame
 };
 
@@ -169,6 +171,14 @@ void writePort(Port& p, const input::PadState& in) {
         b[113] = p.reqState;
         b[114] = p.task;
         b[115] = p.task;
+        // PADMAN 4 keeps two unaligned words here, which Sony's libpad reads
+        // instead of asking over RPC: the last pressure-mode request
+        // (scePadSetButtonInfo) and the button mask the controller reported
+        // (scePadGetButtonMask, which scePadInfoPressMode checks).
+        if (present) {
+            std::memcpy(b.data() + 117, &p.buttonInfo, 4);
+            std::memcpy(b.data() + 121, &kButtonMask, 4);
+        }
         writeBytes(p.area + (p.frame & 1) * 128, b.data(), 128);
     } else {
         std::vector<uint8_t> b(64, 0);
@@ -253,10 +263,14 @@ public:
             break;
         }
         case CMD_GET_BTNMASK:
-        case OLD_GET_BTNMASK: result(12, 0x3FFFF); break;   // pressure-sensitive buttons
+        case OLD_GET_BTNMASK: result(12, static_cast<int32_t>(kButtonMask)); break;
         case CMD_SET_BTNINFO:
         case OLD_SET_BTNINFO:
-            if (p) startTask(*p, TASK_SET_MAIN_MODE, rd(d, 12) ? ID_PRESSURE : ID_ANALOG);
+            if (p) {
+                const auto info = static_cast<uint32_t>(rd(d, 12));
+                p->buttonInfo = (info << 6) | 0x3F;   // as PADMAN puts it to the controller
+                startTask(*p, TASK_SET_MAIN_MODE, info ? ID_PRESSURE : ID_ANALOG);
+            }
             result(16, p ? 1 : 0);
             break;
         case CMD_SET_ACTALIGN:

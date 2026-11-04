@@ -290,12 +290,13 @@ void call(uint32_t target) {
     interpret();
 }
 
-uint64_t callGuestOnStack(uint32_t address, const uint64_t* args, int argCount, uint32_t stack) {
+uint64_t callGuestOnStack(uint32_t address, const uint64_t* args, int argCount, uint32_t stack, std::optional<uint32_t> gp) {
     static const uint32_t argRegs[8] = {regs::A0, regs::A1, regs::A2, regs::A3, regs::T0, regs::T1, regs::T2, regs::T3};
     const Cpu saved = cpu;
     for (int i = 0; i < argCount && i < 8; ++i) cpu.gpr[argRegs[i]].d[0] = args[i];
     cpu.gpr[regs::RA].d[0] = static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(kTrampHostReturn)));
     if (stack) cpu.gpr[regs::SP].d[0] = stack;
+    if (gp) cpu.gpr[regs::GP].d[0] = static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(*gp)));
     cpu.pc = address;
     ++g_hostCallDepth;
     while (cpu.pc != kTrampHostReturn && !g_exitRequested) dispatch();

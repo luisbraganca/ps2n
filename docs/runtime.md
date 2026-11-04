@@ -147,8 +147,9 @@ That list is the to-do list for a port. The tools for working through it:
   happens in both modes it is a runtime gap; if only in recompiled mode, it is
   a recompiler bug. Functions the config replaced run in both modes.
 - **`--trace-syscalls`**, **`--trace-functions`** and `--log-level debug` or
-  `trace` (SIF, file and DMA activity, thread scheduling) show what the game
-  is doing.
+  `trace` (SIF, file, disc and DMA activity, thread scheduling) show what the
+  game is doing. At `trace`, every disc read appears with its sector, length
+  and destination (`[trace:cdvd]`).
 - **`report.txt`**, next to the generated code, lists unresolved indirect
   jumps and unknown instructions found at recompile time.
 
@@ -220,9 +221,16 @@ until the whole packet has arrived, prints its text, then calls it with
 and sockets for other protocols are refused (reported).
 
 Interrupt handlers run nested on the interrupt stack, as on the real kernel,
-at safepoints (loop back-edges and syscalls). Thread switches happen when a
-thread blocks, when a handler wakes a higher-priority thread, and on
-`RotateThreadReadyQueue`.
+at safepoints (loop back-edges and syscalls). They and alarms run with the
+`$gp` the program had when it registered them, which the kernel keeps, not
+with the interrupted code's. Thread switches happen when a thread blocks, when
+a handler wakes a higher-priority thread, and on `RotateThreadReadyQueue`.
+
+`SetVSyncFlag(flag, csr)` registers one wait: the next vblank writes 1 to
+`flag` and the GS `CSR` to `csr`, and the kernel forgets both addresses.
+libkernel's `VSync2` (behind `sceGsSyncV`) passes two of its locals and
+returns without unregistering them, so writing them again at a later vblank
+would land in another function's stack frame.
 
 ### Several executables
 
@@ -309,7 +317,11 @@ modules are host code:
   which is reported.
 - **SIF**: the wire protocol (SIF0/SIF1 transfers, command packets, RPC bind
   and call, IOP reset), so the game's EE libraries talk to the IOP unmodified,
-  whether the server is host code or an IRX module.
+  whether the server is host code or an IRX module. A bind to a sid nobody
+  serves gets no server, as on the console, so the game retries while a
+  module that is still starting may register it; after five seconds of
+  emulated time a null service answers (reported), so a missing module does
+  not hang the game.
 - **Module releases**: games built with SDK 2.x reboot the IOP with a
   replacement image (`rom0:UDNL cdrom0:\MODULES\IOPRP214.IMG;1`), and their EE
   libraries refuse to use FILEIO and LOADFILE unless these report the image's
@@ -325,11 +337,11 @@ modules are host code:
 | IOP heap (`0x80000003`) | `SifAllocIopHeap`, `SifFreeIopHeap`, `SifLoadIopHeap` |
 | LOADFILE (`0x80000006`) | module loading from a path or an IOP memory buffer, IOP memory peek/poke, search by name, the version query (the module release); stop and unload are refused (not removable). Loading an EE ELF through the IOP is reported. |
 | CDVDFSV (`0x80000592`, `0x80000593`, `0x80000595`, `0x80000596`, `0x80000597`, `0x8000059A`, `0x8000059C`) and the `cdvdman` library | resident from start-up, like on the console. See [Discs](#discs). |
-| PADMAN (`0x80000100`/`0x80000101`, and the original PADMAN's `0x8000010F`/`0x8000011F`) | a DualShock 2 in port 1: digital, analog and pressure-sensitive modes, actuator set-up, the per-frame data area libpad reads. The version query answers the IRX version of the module the game loaded (3.06 when it is not a file), whose major libpad checks. See [Controllers](#controllers). |
+| PADMAN (`0x80000100`/`0x80000101`, and the original PADMAN's `0x8000010F`/`0x8000011F`) | a DualShock 2 in port 1: digital, analog and pressure-sensitive modes, actuator set-up, the per-frame data area libpad reads. That area also holds what PADMAN 4 keeps there: the controller's button mask and the last pressure-mode request (`scePadSetButtonInfo`); Sony's libpad reads the mask there, not over RPC, before it enters pressure mode. The version query answers the IRX version of the module the game loaded (3.06 when it is not a file), whose major libpad checks. See [Controllers](#controllers). |
 | XMCSERV / MCSERV (`0x80000400`) | both protocols. See [Memory cards](#memory-cards). |
 | `libsd` (IOP library) | Sony's library on the SPU2 (see the IOP's SPU2 below): each call reads and writes the registers the library does, after ps2sdk's open libsd. `sceSdInit` leaves every voice keyed off on a silent loop at `0x5000`, as libsd does. Voice transfers move their data at once and finish a little later with the core's DMA interrupt (`0x24`, `0x28`). Block transfers stream PCM through AutoDMA; the interrupt handler arms the next half of a looping buffer, as the library does, and calls the driver's handler. Line 9 means a core's interrupt address was touched: the library turns that core's interrupt off and calls the driver. The reverb presets are libsd's. Not covered: reading the output back (a block transfer from the SPU2 gives silence, reported) and the S/PDIF modes (kept, no effect). |
 | MTAPMAN (`0x80000901`-`905`) | no multitap connected: ports 0-3 open, `GetConnection` reports none, thread priorities in the valid range (9-123) are accepted, and the version query answers the IRX version of the module the game loaded (3.01 when it is not a file), whose major SDK 2.x's libmtap checks |
-| SDRDRV (`0x80000701`) | null service: it binds, answers every call with zeros, and reports it |
+| SDRDRV (`0x80000701`) | null service: it binds, answers every call with zeros, and reports it. A module that registers the sid itself gets the binds from then on (Code: Veronica X's Tamsoft sound driver serves it), as does any module that registers a sid only a null service held. |
 
 #### Sound
 

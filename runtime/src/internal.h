@@ -6,6 +6,7 @@
 #include <csignal>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -81,8 +82,11 @@ bool hasCompiledEntry(uint32_t pc);    // function start or resume point (with -
 void recordMissingEntry(uint32_t pc);
 void writeMissingEntries();
 void requestExit(int code);
-// callGuest() with an explicit stack pointer (0 keeps the current $sp).
-uint64_t callGuestOnStack(uint32_t address, const uint64_t* args, int argCount, uint32_t stack);
+// callGuest() with an explicit stack pointer (0 keeps the current $sp) and,
+// when given, $gp: the kernel runs interrupt handlers and alarms with the $gp
+// they were registered with.
+uint64_t callGuestOnStack(uint32_t address, const uint64_t* args, int argCount, uint32_t stack,
+                          std::optional<uint32_t> gp = std::nullopt);
 
 // runtime.cpp
 // LoadExecPS2: loads the executable at the PS2 path argv[0] to replace the

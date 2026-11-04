@@ -3,8 +3,8 @@ A woke up
 main after waking A
 B slept twice without blocking
 main woke after B
-three vblank signals received
-alarm woke main
+three vblank signals received, handler $gp 0x12340000
+alarm woke main, callback $gp 0x56780000
 C 0
 D 0
 C 1
@@ -17,3 +17,4 @@ E resumed
 E status after exit: 16
 F wait result -425
 timer advanced: 1
+vsync flag after two more vblanks: 0

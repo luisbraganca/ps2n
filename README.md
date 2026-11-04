@@ -52,14 +52,17 @@ L_001001a4:
 
 ## Status
 
-**Early development: no game is playable yet.** The one game tried so far,
-007: Agent Under Fire, is In-game on PCSX2's scale. It runs its menus and its
-first mission, where the sound breaks up. [docs/games.md](docs/games.md) has
+**Early development: no game is playable yet.** Two games have been tried,
+and both are In-game on PCSX2's scale. 007: Agent Under Fire runs its menus
+and its first mission, where the sound breaks up. Resident Evil Code:
+Veronica X runs its menus and movies at full speed and starts a new game,
+where its status screen draws wrongly. [docs/games.md](docs/games.md) has
 what runs, the known problems and the speed, game by game.
 
 The recompiler, the part that translates code, is the furthest along: it
-covers the whole EE instruction set and has recompiled a retail game. Most of
-the work left is in the runtime, which stands in for the rest of the console:
+covers the whole EE instruction set and has recompiled two retail games. Most
+of the work left is in the runtime, which stands in for the rest of the
+console:
 
 - The graphics come from a software renderer. It needs threads of its own,
   drawing alongside the EE, to keep the first game at full speed, and the
@@ -67,14 +70,14 @@ the work left is in the runtime, which stands in for the rest of the console:
   CPU; slower machines have not been tried.
 - The vector units run their micro code recompiled or interpreted, but never
   alongside the EE.
-- The IOP services cover what the first game needed.
+- The IOP services cover what the two games needed.
 - The sound comes from an SPU2 emulated at its registers.
 
 ### By area
 
 | Area | Progress | Count | Biggest gaps |
 |---|---|--:|---|
-| [Games playable](docs/games.md) | `░░░░░░░░░░` 0% | 0 / 1 | Agent Under Fire runs its first mission, with broken-up sound |
+| [Games playable](docs/games.md) | `░░░░░░░░░░` 0% | 0 / 2 | Agent Under Fire runs its first mission, with broken-up sound; Code: Veronica X starts a new game, its status screen drawn wrongly |
 | EE instructions | `██████████` 100% | 359 / 359 | |
 | Recompiler | `█████████░` 89% | 8 / 9 | overlays |
 | EE kernel syscalls | `█████████░` 88% | 127 / 145 | event flags, `ExecPS2`, the TLB, CPU timers |
@@ -238,7 +241,9 @@ loop 3.1 times as fast as the VU interpreter. Whole games are held back by the
 rest of the emulation, the drawing above all. On an Intel i5-14600KF, Agent
 Under Fire runs its movies, its menus and its first mission at full speed, 50
 vblanks a second in real time, except in the heaviest views, where drawing
-falls behind and the game shows fewer than 50 pictures a second.
+falls behind and the game shows fewer than 50 pictures a second. Resident
+Evil Code: Veronica X runs its menus and movies at full speed, 59.8 vblanks a
+second (NTSC); its game proper has not been measured.
 [docs/games.md](docs/games.md#speed) has the measurements and what each change
 bought.
 
@@ -255,7 +260,8 @@ Roughly in order:
    rounds differently, so pictures would change; then a GPU renderer, which
    higher resolutions also need.
 4. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
-   `ExecPS2`, dual-layer discs, code overlays, and a second game to bring up.
+   `ExecPS2`, dual-layer discs, code overlays, and Code: Veronica X past its
+   first moments in the game proper, starting with its status screen.
 5. **Vector units**: run micro programs alongside the EE, with their timing.
    They run recompiled already, and in the first game drawing, not the vector
    units, is what limits the speed.

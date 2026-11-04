@@ -97,6 +97,7 @@ thread_b:
 
         .ent vblank_handler
 vblank_handler:
+        sw      $gp, handler_gp
         lw      $a0, sema_vb
         li      $v1, -0x43              # iSignalSema
         syscall
@@ -106,6 +107,7 @@ vblank_handler:
 
         .ent alarm_callback
 alarm_callback:                         # (alarm id, time, arg = thread to wake)
+        sw      $gp, alarm_gp
         move    $a0, $a2
         li      $v1, -0x34              # iWakeupThread
         syscall
@@ -219,7 +221,8 @@ main:   addiu   $sp, $sp, -32
         jal     printf
         nop
 
-        # 3. a vblank handler signalling a semaphore
+        # 3. a vblank handler signalling a semaphore. It runs with the $gp it
+        #    was registered with, not the one of the code it interrupts.
         jal     new_sema
         move    $a0, $zero
         sw      $v0, sema_vb
@@ -227,8 +230,10 @@ main:   addiu   $sp, $sp, -32
         la      $a1, vblank_handler
         move    $a2, $zero
         move    $a3, $zero
+        lui     $gp, 0x1234
         li      $v1, 0x10               # AddIntcHandler
         syscall
+        move    $gp, $zero
         move    $s0, $v0
         li      $a0, 2
         li      $v1, 0x14               # _EnableIntc
@@ -250,18 +255,22 @@ main:   addiu   $sp, $sp, -32
         li      $v1, 0x11               # RemoveIntcHandler
         syscall
         la      $a0, s_vblank
+        lw      $a1, handler_gp
         jal     printf
         nop
 
-        # 4. an alarm waking us from SleepThread
+        # 4. an alarm waking us from SleepThread, also with its own $gp
         li      $a0, 100                # in horizontal blanks
         la      $a1, alarm_callback
         lw      $a2, main_tid
+        lui     $gp, 0x5678
         li      $v1, 0xfc               # SetAlarm
         syscall
+        move    $gp, $zero
         li      $v1, 0x32               # SleepThread
         syscall
         la      $a0, s_alarm
+        lw      $a1, alarm_gp
         jal     printf
         nop
 
@@ -345,6 +354,34 @@ main:   addiu   $sp, $sp, -32
         jal     printf
         nop
 
+        # 9. SetVSyncFlag: the next vblank sets the flag and stores the GS
+        #    CSR, once. libkernel's VSync2 registers two of its locals and
+        #    returns without unregistering them.
+        la      $a0, vs_flag
+        la      $a1, vs_csr
+        li      $v1, 0x73               # SetVSyncFlag
+        syscall
+1:      lw      $t0, vs_flag
+        beq     $t0, $zero, 1b
+        nop
+        sw      $zero, vs_flag
+        li      $s0, 2                  # two more vblanks, seen in INTC_STAT
+        lui     $t1, 0x1000
+        ori     $t1, $t1, 0xf000
+2:      li      $t2, 4                  # VBLANK_START: write 1 to clear
+        sw      $t2, 0($t1)
+3:      lw      $t3, 0($t1)
+        andi    $t3, $t3, 4
+        beq     $t3, $zero, 3b
+        nop
+        addiu   $s0, $s0, -1
+        bne     $s0, $zero, 2b
+        nop
+        la      $a0, s_vsync_flag
+        lw      $a1, vs_flag
+        jal     printf
+        nop
+
         ld      $s0, 8($sp)
         ld      $ra, 0($sp)
         move    $v0, $zero
@@ -358,8 +395,8 @@ s_a_woke:       .asciz "A woke up\n"
 s_after_wakeup: .asciz "main after waking A\n"
 s_b_slept:      .asciz "B slept twice without blocking\n"
 s_b_done:       .asciz "main woke after B\n"
-s_vblank:       .asciz "three vblank signals received\n"
-s_alarm:        .asciz "alarm woke main\n"
+s_vblank:       .asciz "three vblank signals received, handler $gp 0x%08x\n"
+s_alarm:        .asciz "alarm woke main, callback $gp 0x%08x\n"
 s_rotate:       .asciz "%c %d\n"
 s_rotated:      .asciz "rotation done\n"
 s_e_suspended:  .asciz "E signalled while suspended\n"
@@ -367,6 +404,7 @@ s_e_resumed:    .asciz "E resumed\n"
 s_e_status:     .asciz "E status after exit: %d\n"
 s_f_result:     .asciz "F wait result %d\n"
 s_timer:        .asciz "timer advanced: %d\n"
+s_vsync_flag:   .asciz "vsync flag after two more vblanks: %d\n"
 
         .data
         .align 2
@@ -375,6 +413,11 @@ main_tid:       .word 0
 tid_a:          .word 0
 sema_done:      .word 0
 sema_vb:        .word 0
+handler_gp:     .word 0
+alarm_gp:       .word 0
+vs_flag:        .word 0
+        .align 3
+vs_csr:         .word 0, 0
 sema_rot:       .word 0
 sema_e:         .word 0
 sema_del:       .word 0

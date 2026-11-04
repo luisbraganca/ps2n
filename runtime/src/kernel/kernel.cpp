@@ -63,16 +63,19 @@ struct Sema {
     std::deque<int> waiters;
 };
 
+// Interrupt handlers and alarms run with the $gp they were registered with,
+// whatever the interrupted code had.
 struct Handler {
     int id;
     uint32_t func;
     uint32_t arg;
+    uint32_t gp;
     bool enabled;
 };
 
 struct Alarm {
     bool used = false;
-    uint32_t func = 0, arg = 0;
+    uint32_t func = 0, arg = 0, gp = 0;
     uint16_t time = 0;
     uint64_t event = 0;
 };
@@ -515,7 +518,7 @@ void sysReferSemaStatus() {
 
 // ---- interrupt handlers ------------------------------------------------------------
 int addHandler(std::vector<Handler>& list, uint32_t func, int32_t next, uint32_t argValue) {
-    const Handler h{g_nextHandlerId++, func, argValue, true};
+    const Handler h{g_nextHandlerId++, func, argValue, ru32(GP), true};
     if (next == 0) list.insert(list.begin(), h);
     else list.push_back(h);
     return h.id;
@@ -538,7 +541,7 @@ void runHandlers(const std::vector<Handler>& list, uint32_t cause) {
     for (const Handler& h : copy) {
         if (!h.enabled) continue;
         const uint64_t args[3] = {cause, h.arg, cpu.pc};
-        const auto r = static_cast<int32_t>(callGuestOnStack(h.func, args, 3, kInterruptStackTop));
+        const auto r = static_cast<int32_t>(callGuestOnStack(h.func, args, 3, kInterruptStackTop, h.gp));
         if (g_exitRequested || r < 0) break;
     }
 }
@@ -561,7 +564,7 @@ void alarmFired(uint64_t id) {
     a.used = false;
     const InterruptScope scope;
     const uint64_t args[3] = {id, a.time, a.arg};
-    callGuestOnStack(a.func, args, 3, kInterruptStackTop);
+    callGuestOnStack(a.func, args, 3, kInterruptStackTop, a.gp);
 }
 
 void sysSetAlarm() {
@@ -572,6 +575,7 @@ void sysSetAlarm() {
         a.time = static_cast<uint16_t>(arg(0));
         a.func = arg(1);
         a.arg = arg(2);
+        a.gp = ru32(GP);
         a.event = scheduleEvent(nowCycles() + static_cast<uint64_t>(a.time) * hw::hsyncCycles(), alarmFired, static_cast<uint64_t>(i));
         return ret(i);
     }
@@ -1006,10 +1010,15 @@ void init(uint32_t entry, std::vector<std::string> argv) {
 
 bool hasRunningThread() { return g_current >= 0; }
 
+// SetVSyncFlag registers one wait: the next vblank sets the flag and stores
+// the GS CSR, and the kernel forgets both addresses. libkernel's VSync2
+// registers two of its locals and returns without unregistering them, so a
+// later write would land in whatever stack frame took their place.
 void onVblankStart() {
     if (g_vsyncFlagAddr) {
         write32(g_vsyncFlagAddr, 1);
         if (g_vsyncCsrAddr) write64(g_vsyncCsrAddr, gs::csr());
+        g_vsyncFlagAddr = g_vsyncCsrAddr = 0;
     }
 }
 int currentThread() { return g_current; }

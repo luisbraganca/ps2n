@@ -17,6 +17,7 @@ Playable or Perfect.
 | Game | Region | Serial | Stage | Last tested |
 |---|---|---|---|---|
 | [007: Agent Under Fire](#007-agent-under-fire) | Europe | SLES-50539 | In-game | 2026-11-03 |
+| [Resident Evil Code: Veronica X](#resident-evil-code-veronica-x) | USA | SLUS-20184 | In-game | 2026-11-04 |
 
 To bring up another game, start with the README's
 [Porting a game](../README.md#porting-a-game). Then give the game a section
@@ -184,3 +185,73 @@ In the order the changes were made:
   and in real time the extra charge held it to 29 to 32 vblanks a second in
   its heaviest stretch. Charging only the back-edges that ran, the same
   stretch runs at 38 to 46. The sound there still breaks up about as often.
+
+## Resident Evil Code: Veronica X
+
+The USA release, an NTSC game: it needs no `--region`. It is one executable,
+`SLUS_201.84`, built with Metrowerks CodeWarrior and with its symbols, so its
+config (`cvx.toml`) names little more than the ELF. Code and data share the
+executable's one section, which the recompiler splits at the first data
+object ([config.md](config.md#where-the-code-is)). The game reboots the IOP
+with `IOPRP213.IMG`, and Sony's CSL sound modules (`modhsyn`, `modmidi`,
+`modmsin`) and Tamsoft's sound driver (`TSNDDRV.IRX`) run on the IOP
+interpreter. PCSX2 rates this release Perfect, with no game fixes.
+
+### What runs
+
+- The executable runs recompiled; no EE code has needed the interpreter. Its
+  VU micro code runs on the VU interpreter: it has not been recorded for the
+  VU recompiler.
+- The memory card check, the content warning, CRI's ADX logo, the Capcom
+  logo, the opening movie, the title screen and its menu, the load screen
+  (with no save data), and a new game: the prologue, the long opening movie,
+  and the first moments in the game proper, where the status screen opens on
+  the Playing Manual.
+- Sound and music in the menus and the movies.
+- Controller input.
+
+### What it took
+
+- The recompiler splits a section that holds both code and data where the
+  symbols say the data begins. Before, its 400 KB of data were translated
+  as code, with 11,517 unknown instructions and 924 unresolved indirect
+  jumps; 101 remain, calls through tables of functions, which the dispatcher
+  handles.
+- PADMAN 4 keeps the controller's button mask in libpad's data area, where
+  Sony's libpad reads it before it enters pressure mode. Without it the
+  game's pad set-up never finished, and START did nothing.
+- A module's own RPC server takes the binds from the runtime's stand-in for
+  the same sid: the Tamsoft driver serves SDRDRV's.
+- `SetVSyncFlag` writes its flag once. libkernel's `VSync2` registers two of
+  its locals, and writing them at every vblank corrupted a saved register in
+  whatever stack frame took their place: the title screen loaded its data
+  ten times over, then exited with "This texture is not adequate size!!".
+  Interrupt handlers and alarms also run with the `$gp` they were registered
+  with, as on the console.
+- In real time, a short wait yields instead of sleeping for a timer tick, and
+  a bind to a sid nobody serves waits five seconds, not half a second, for a
+  module to register it. Before, the sound driver's upload of its samples
+  took a tick per kilobyte, the game's bind to the driver gave up, and the
+  game hung at start-up.
+
+### Known problems
+
+- The status screen draws wrongly: the 3D view of the file in its left
+  window is garbled, and the caption under it shows hollow letters. Not
+  investigated yet.
+- Nothing past the first moments in the game proper has been tried: walking
+  around, fights and saves have not.
+- The game's own code turns a centred left stick into UP (its test for an
+  upward push compares the wrong way round), so it holds UP throughout, as it
+  would on a console. Menus read new presses and work; what it does in play
+  has not been seen.
+
+### Speed
+
+Measured on the same Intel i5-14600KF. In real time the game runs at full
+speed, 59.8 vblanks a second (NTSC is 59.94), through the first 7,200 vblanks
+of a headless scripted run: start-up, the logos, the movies, the title
+screen and its menu, and the start of a new game. The game proper has not
+been measured in real time. A deterministic run (`--virtual-clock`) takes
+about three minutes from start-up to the first moments in the game proper,
+21,000 vblanks.

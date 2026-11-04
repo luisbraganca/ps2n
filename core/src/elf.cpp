@@ -131,16 +131,46 @@ void ElfFile::parseAll() {
         }
     }
 
-    // Executable ranges: section headers are precise; fall back to segments.
-    for (const auto& s : sections)
-        if (s.alloc() && s.executable() && !s.vuMicrocode() && s.size && !s.nobits())
-            codeRanges_.push_back({s.addr, s.addr + s.size, s.name});
+    // Code and data ranges: section headers are precise; fall back to segments.
+    for (const auto& s : sections) {
+        if (!s.alloc() || s.nobits() || s.size == 0) continue;
+        if (s.executable() && !s.vuMicrocode()) {
+            const uint32_t end = s.writable() ? codeEnd(s) : s.addr + s.size;
+            codeRanges_.push_back({s.addr, end, s.name});
+            if (end != s.addr + s.size) dataRanges_.push_back({end, s.addr + s.size, s.name});
+        } else {
+            dataRanges_.push_back({s.addr, s.addr + s.size, s.name});
+        }
+    }
     if (codeRanges_.empty()) {
         for (const auto& s : segments)
             if (s.type == elf::PT_LOAD && s.executable() && s.filesz)
                 codeRanges_.push_back({s.vaddr, s.vaddr + s.filesz, "segment@" + hex32(s.vaddr)});
     }
-    std::sort(codeRanges_.begin(), codeRanges_.end(), [](const AddrRange& a, const AddrRange& b) { return a.start < b.start; });
+    if (dataRanges_.empty()) {
+        for (const auto& s : segments)
+            if (s.type == elf::PT_LOAD && !s.executable() && s.filesz)
+                dataRanges_.push_back({s.vaddr, s.vaddr + s.filesz, "segment@" + hex32(s.vaddr)});
+    }
+    const auto byStart = [](const AddrRange& a, const AddrRange& b) { return a.start < b.start; };
+    std::sort(codeRanges_.begin(), codeRanges_.end(), byStart);
+}
+
+uint32_t ElfFile::codeEnd(const ElfSection& s) const {
+    const uint32_t end = s.addr + s.size;
+    uint32_t lastFunctionEnd = 0;
+    uint32_t firstObject = end;
+    bool functions = false;
+    for (const ElfSymbol& sym : symbols) {
+        if (!s.contains(sym.value)) continue;
+        if (sym.type == elf::STT_FUNC) {
+            functions = true;
+            lastFunctionEnd = std::max(lastFunctionEnd, sym.value + std::max<uint32_t>(sym.size, 4));
+        } else if (sym.type == elf::STT_OBJECT) {
+            firstObject = std::min(firstObject, sym.value);
+        }
+    }
+    return functions && lastFunctionEnd <= firstObject ? firstObject : end;
 }
 
 const ElfSegment* ElfFile::segmentFor(uint32_t vaddr) const {
@@ -186,21 +216,7 @@ std::optional<std::string> ElfFile::readCString(uint32_t vaddr, size_t maxLen) c
 
 std::vector<AddrRange> ElfFile::codeRanges() const { return codeRanges_; }
 
-std::vector<AddrRange> ElfFile::dataRanges() const {
-    std::vector<AddrRange> out;
-    bool fromSections = false;
-    for (const auto& s : sections) {
-        if (!s.alloc() || (s.executable() && !s.vuMicrocode()) || s.nobits() || s.size == 0) continue;
-        out.push_back({s.addr, s.addr + s.size, s.name});
-        fromSections = true;
-    }
-    if (!fromSections) {
-        for (const auto& s : segments)
-            if (s.type == elf::PT_LOAD && !s.executable() && s.filesz)
-                out.push_back({s.vaddr, s.vaddr + s.filesz, "segment@" + hex32(s.vaddr)});
-    }
-    return out;
-}
+std::vector<AddrRange> ElfFile::dataRanges() const { return dataRanges_; }
 
 bool ElfFile::isCode(uint32_t vaddr) const {
     for (const auto& r : codeRanges_)

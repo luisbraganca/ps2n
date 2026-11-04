@@ -3285,6 +3285,21 @@ TEST_CASE(iop_power_off_multitap_and_pad_services) {
     vblank({"F10"});
     CHECK_EQ(mode(), 0x73);              // locked: the button does nothing
 
+    // Sony's libpad reads the button mask from the data area, where PADMAN 4
+    // keeps it, unaligned, after the last pressure-mode request.
+    auto areaWord = [&](uint32_t offset) {
+        const uint32_t newer = read32(area + 88) > read32(area + 128 + 88) ? area : area + 128;
+        uint32_t w = 0;
+        readBytes(newer + offset, &w, 4);
+        return w;
+    };
+    CHECK_EQ(areaWord(121), 0x3FFFFu);
+    CHECK_EQ(areaWord(117), 0u);
+    padCommand(0x0A, {0xFF, 0x0F});      // SetButtonInfo(0xFFF): scePadEnterPressMode
+    vblank({});
+    CHECK_EQ(areaWord(117), 0x3FFFFu);   // (0xFFF << 6) | 0x3F
+    CHECK_EQ(areaWord(121), 0x3FFFFu);
+
     // Vibration: actuator 0 drives the small motor (on/off), 1 the large one.
     padCommand(0x08, {0, 1, 0xFF, 0xFF, 0xFF, 0xFF});
     padCommand(0x07, {1, 200, 0, 0, 0, 0});
@@ -3302,6 +3317,43 @@ TEST_CASE(iop_power_off_multitap_and_pad_services) {
     CHECK(rumble.size() == 1 && rumble[0].large == 0.0f && rumble[0].small == 0.0f);
     cfg = saved;
     input::update({}, true, true);
+
+    // libsd brings a stand-in for SDRDRV. A sound driver that serves the sid
+    // itself (Code: Veronica X's does) gets the binds once it registers.
+    writeIrx("LIBSD.IRX", "sound_device_library", 0x0104);
+    CHECK(loadModule("host0:LIBSD.IRX") > 0);
+    uint32_t standIn = 0, standInBuf = 0;
+    bind(0x80000701u, standIn, standInBuf);
+    CHECK(standIn != 0);
+    const uint32_t qd = iop::kernel::allocMemory(0x40), ownSd = iop::kernel::allocMemory(0x80), ownBuf = iop::kernel::allocMemory(0x40);
+    iop::mem::fill(qd, 0, 0x40);
+    iop::mem::fill(ownSd, 0, 0x80);
+    iop::mem::write32(ownSd, 0x80000701u);   // sceSifRegisterRpc's server data: the sid,
+    iop::mem::write32(ownSd + 8, ownBuf);    // the receive buffer,
+    iop::mem::write32(qd + 8, ownSd);        // first in its queue
+    iop::addRpcQueue(qd);
+    uint32_t bound = 0, boundBuf = 0;
+    bind(0x80000701u, bound, boundBuf);
+    CHECK_EQ(bound, ownSd);
+    CHECK_EQ(boundBuf, ownBuf);
+    // A service the runtime implements keeps its sid.
+    iop::mem::write32(ownSd, 0x80000100u);
+    bind(0x80000100u, bound, boundBuf);
+    CHECK_EQ(bound, padSd);
+    iop::removeRpcQueue(qd);
+
+    // Binds to a sid nobody serves wait for a module that may still be
+    // starting, then, after five seconds of emulated time, get a null service.
+    clockInit(true, false);   // frozen: time moves with clockAdvance alone
+    bind(0x0BADF00Du, bound, boundBuf);
+    CHECK_EQ(bound, 0u);
+    clockAdvance(4 * kEeClockHz);
+    bind(0x0BADF00Du, bound, boundBuf);
+    CHECK_EQ(bound, 0u);                     // four seconds on: still waiting
+    clockAdvance(2 * kEeClockHz);
+    bind(0x0BADF00Du, bound, boundBuf);
+    CHECK(bound != 0);                       // six: a null service answers
+    clockInit(false, false);
     fs::remove_all(dir);
 }
 
@@ -4386,6 +4438,20 @@ TEST_CASE(ee_work_keeps_to_the_clock_in_real_time) {
     const uint64_t v1 = nowCycles();
     cutShort(1);
     CHECK(nowCycles() - v1 >= 2048u * 8);   // a whole slice, however short
+    clockInit(false, false);
+}
+
+// While the EE idles, events can come due microseconds apart (a sound driver
+// uploading its samples in 1 KB transfers). A timed wait lasts a whole timer
+// tick, 15.6 ms on Windows, so a short wait yields until its time instead.
+TEST_CASE(clock_short_waits_last_their_time_not_a_timer_tick) {
+    clockInit(false, false);
+    constexpr uint64_t kUs = kEeClockHz / 1000000;
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < 50; ++i) clockWaitUntil(nowCycles() + 100 * kUs);
+    const auto took = std::chrono::steady_clock::now() - start;
+    CHECK(took >= std::chrono::milliseconds(4));     // 50 waits of 0.1 ms (an earlier wake-up may end the first)
+    CHECK(took < std::chrono::milliseconds(100));    // a tick each would be 780 ms
     clockInit(false, false);
 }
 

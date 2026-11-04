@@ -55,6 +55,7 @@ struct ElfSection {
     std::string name;
     uint32_t type = 0, flags = 0, addr = 0, offset = 0, size = 0, link = 0, info = 0, align = 0, entsize = 0;
     bool alloc() const { return flags & elf::SHF_ALLOC; }
+    bool writable() const { return flags & elf::SHF_WRITE; }
     bool executable() const { return flags & elf::SHF_EXECINSTR; }
     bool nobits() const { return type == elf::SHT_NOBITS; }
     bool contains(uint32_t a) const { return a >= addr && a - addr < size; }
@@ -118,9 +119,13 @@ public:
     bool isMapped(uint32_t vaddr) const;
 
     // Executable address ranges, from section headers when present (more
-    // precise), else from PF_X segments.
+    // precise), else from PF_X segments. A section that is writable as well
+    // holds data after its code when the linker merged the two (Metrowerks
+    // CodeWarrior's "main"): if every function symbol in it lies below every
+    // object symbol, its code ends at the first object.
     std::vector<AddrRange> codeRanges() const;
-    // Allocated, non-executable ranges that hold initialised data.
+    // Allocated ranges that hold initialised data: the non-executable
+    // sections, and the data after the code of a merged section.
     std::vector<AddrRange> dataRanges() const;
     bool isCode(uint32_t vaddr) const;
 
@@ -136,7 +141,9 @@ private:
     std::string name_;
     std::vector<uint8_t> bytes_;
     std::vector<AddrRange> codeRanges_;
+    std::vector<AddrRange> dataRanges_;
     void parseAll();
+    uint32_t codeEnd(const ElfSection& s) const;
     const ElfSegment* segmentFor(uint32_t vaddr) const;
 };
 

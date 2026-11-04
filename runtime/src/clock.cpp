@@ -91,9 +91,23 @@ void clockWaitUntil(uint64_t target) {
     } else if (g_noThrottle) {
         g_skipped += target - now;
     } else {
-        const auto ns = static_cast<int64_t>(static_cast<double>(target - now) * (1e9 / static_cast<double>(kEeClockHz)));
+        // A timed wait lasts a whole timer tick at least (15.6 ms on Windows,
+        // unless the process asks for finer timers), so a wait shorter than
+        // that yields instead. While the EE idles, the IOP's events come due
+        // microseconds apart: a sound driver uploading its samples in 1 KB
+        // transfers would otherwise wait a tick for each.
+        constexpr uint64_t kShortWait = kEeClockHz / 500;   // 2 ms
         std::unique_lock<std::mutex> lock(g_waitMutex);
-        g_waitEnded.wait_for(lock, std::chrono::nanoseconds(ns), [] { return g_wake; });
+        if (target - now < kShortWait) {
+            while (!g_wake && nowCycles() < target) {
+                lock.unlock();
+                std::this_thread::yield();
+                lock.lock();
+            }
+        } else {
+            const auto ns = static_cast<int64_t>(static_cast<double>(target - now) * (1e9 / static_cast<double>(kEeClockHz)));
+            g_waitEnded.wait_for(lock, std::chrono::nanoseconds(ns), [] { return g_wake; });
+        }
         g_wake = false;
     }
 }

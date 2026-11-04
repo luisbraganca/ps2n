@@ -131,6 +131,18 @@ start = 0x00123400
 size = 0x1F0              # or: end = 0x001235F0 (exclusive); both optional
 ```
 
+### Where the code is
+
+The code is what the ELF's executable sections hold, or its executable
+segments when it has no section headers. Metrowerks CodeWarrior links code
+and data into one writable, executable section (`main`), so its headers do
+not say where the code ends. The symbols do: when every function symbol in
+such a section lies below every object symbol, the code ends at the first
+object, and the rest is data, scanned for code pointers like any other data.
+Without symbols, or with objects among the functions, the whole section is
+treated as code: data in it shows up in `report.txt` as unknown instructions
+and functions that run off the end of the code.
+
 ### How starts and boundaries are decided
 
 Function starts come from several sources, strongest first: config, function

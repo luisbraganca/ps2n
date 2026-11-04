@@ -247,6 +247,15 @@ Fire's driving missions held the game to about 30 vblanks a second. The
 virtual clock still advances by a whole slice at every safepoint, so
 deterministic runs keep their timing.
 
+When every EE thread waits, the guest thread waits for the next event
+(`clockWaitUntil`). A timed wait on the host lasts a whole timer tick at
+least, 15.6 ms on Windows by default, so a wait shorter than 2 ms yields
+until its time instead. While the EE idles, events can come microseconds
+apart: Code: Veronica X's sound driver uploads its samples to sound memory in
+1 KB transfers, each done 34 µs after it starts, while the game's EE thread
+sleeps between attempts to bind the driver's RPC server. A tick per transfer
+stretched the upload to seconds, and the game hung at start-up in real time.
+
 ### The GS thread
 
 On the console the GS draws while the EE runs on. Drawing inside the DMA

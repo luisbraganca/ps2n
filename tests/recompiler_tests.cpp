@@ -90,6 +90,101 @@ c2:     jr    $ra
 table:  .word c0, c1, c2
 )";
 
+// An executable laid out as Metrowerks CodeWarrior links one: code and data in
+// one section, "main", with symbols that say where the code ends.
+struct TestSymbol {
+    const char* name;
+    uint32_t value, size;
+    uint8_t type, bind;
+};
+
+const std::vector<TestSymbol> kMergedSymbols = {
+    {"_start", 0x00100000, 0x18, elf::STT_FUNC, elf::STB_GLOBAL},
+    {"__data_start", 0x00100020, 0, elf::STT_NOTYPE, elf::STB_GLOBAL},
+    {"table", 0x00100020, 8, elf::STT_OBJECT, elf::STB_GLOBAL},
+};
+constexpr uint32_t kRwx = elf::SHF_ALLOC | elf::SHF_WRITE | elf::SHF_EXECINSTR;
+
+std::vector<uint8_t> mergedElf(uint32_t sectionFlags, const std::vector<TestSymbol>& symbols) {
+    const std::vector<uint32_t> image = {
+        0x3c020010u,   // _start: lui  $v0, 0x0010
+        0x8c420020u,   //         lw   $v0, 0x20($v0)      table[0]
+        0x00400008u,   //         jr   $v0
+        0x00000000u,   //         nop
+        0x03e00008u,   // back:   jr   $ra                 only table[0] leads here
+        0x24020007u,   //         li   $v0, 7
+        0, 0,          //         padding
+        0x00100010u,   // table:  .word back
+        0x24020001u,   //         .word 0x24020001         (li $v0, 1, were it code)
+    };
+    std::string strtab(1, '\0');
+    std::vector<uint8_t> symtab(16, 0);   // the null symbol
+    for (const TestSymbol& s : symbols) {
+        uint8_t e[16] = {};
+        const auto nameOff = static_cast<uint32_t>(strtab.size());
+        strtab += s.name;
+        strtab.push_back('\0');
+        std::memcpy(e, &nameOff, 4);
+        std::memcpy(e + 4, &s.value, 4);
+        std::memcpy(e + 8, &s.size, 4);
+        e[12] = static_cast<uint8_t>((s.bind << 4) | s.type);
+        e[14] = 1;   // in main
+        symtab.insert(symtab.end(), e, e + 16);
+    }
+    const std::string shstr("\0main\0.symtab\0.strtab\0.shstrtab\0", 32);
+    const size_t imageOff = 0x100, imageSize = image.size() * 4;
+    const size_t symOff = imageOff + imageSize, strOff = symOff + symtab.size(), shstrOff = strOff + strtab.size();
+    const size_t shoff = (shstrOff + shstr.size() + 3) & ~size_t(3);
+    std::vector<uint8_t> b(shoff + 40 * 5, 0);
+    auto put16 = [&](size_t off, uint16_t v) { std::memcpy(b.data() + off, &v, 2); };
+    auto put32 = [&](size_t off, size_t v) {
+        const auto w = static_cast<uint32_t>(v);
+        std::memcpy(b.data() + off, &w, 4);
+    };
+    const uint8_t ident[16] = {0x7F, 'E', 'L', 'F', 1, 1, 1};
+    std::memcpy(b.data(), ident, 16);
+    put16(16, elf::ET_EXEC);
+    put16(18, elf::EM_MIPS);
+    put32(20, 1);
+    put32(24, 0x00100000);   // entry
+    put32(28, 52);           // program headers
+    put32(32, shoff);
+    put16(40, 52);
+    put16(42, 32);
+    put16(44, 1);
+    put16(46, 40);
+    put16(48, 5);
+    put16(50, 4);            // .shstrtab
+    put32(52, elf::PT_LOAD);
+    put32(56, imageOff);
+    put32(60, 0x00100000);
+    put32(64, 0x00100000);
+    put32(68, imageSize);
+    put32(72, imageSize);
+    put32(76, elf::PF_R | elf::PF_W | elf::PF_X);
+    std::memcpy(b.data() + imageOff, image.data(), imageSize);
+    std::memcpy(b.data() + symOff, symtab.data(), symtab.size());
+    std::memcpy(b.data() + strOff, strtab.data(), strtab.size());
+    std::memcpy(b.data() + shstrOff, shstr.data(), shstr.size());
+    auto sh = [&](size_t i, size_t name, uint32_t type, uint32_t flags, size_t addr, size_t off, size_t size, size_t link,
+                  size_t entsize) {
+        const size_t h = shoff + 40 * i;
+        put32(h, name);
+        put32(h + 4, type);
+        put32(h + 8, flags);
+        put32(h + 12, addr);
+        put32(h + 16, off);
+        put32(h + 20, size);
+        put32(h + 24, link);
+        put32(h + 36, entsize);
+    };
+    sh(1, 1, elf::SHT_PROGBITS, sectionFlags, 0x00100000, imageOff, imageSize, 0, 0);
+    sh(2, 6, elf::SHT_SYMTAB, 0, 0, symOff, symtab.size(), 3, 16);
+    sh(3, 14, elf::SHT_STRTAB, 0, 0, strOff, strtab.size(), 0, 0);
+    sh(4, 22, elf::SHT_STRTAB, 0, 0, shstrOff, shstr.size(), 0, 0);
+    return b;
+}
+
 } // namespace
 
 TEST_CASE(config_full) {
@@ -284,6 +379,46 @@ callback:
     CHECK(p.functionAt(0x00100020) != nullptr);   // helper (JAL target)
     CHECK(p.functionAt(0x00100030) != nullptr);   // callback (lui/addiu pointer)
     CHECK(p.sourceCounts.count(Source::Jal));
+}
+
+// Code and data in one writable, executable section: the code ends at the
+// first object, when every function lies below every object.
+TEST_CASE(elf_splits_merged_code_and_data) {
+    const ElfFile elf = ElfFile::parse(mergedElf(kRwx, kMergedSymbols), "merged.elf");
+    const auto code = elf.codeRanges();
+    const auto data = elf.dataRanges();
+    CHECK_EQ(code.size(), size_t(1));
+    CHECK_EQ(data.size(), size_t(1));
+    if (code.size() == 1 && data.size() == 1) {
+        CHECK_EQ(code[0].start, 0x00100000u);
+        CHECK_EQ(code[0].end, 0x00100020u);
+        CHECK_EQ(data[0].start, 0x00100020u);
+        CHECK_EQ(data[0].end, 0x00100028u);
+    }
+    // An object among the functions: the boundary is unknown, so it all stays code.
+    auto interleaved = kMergedSymbols;
+    interleaved.push_back({"pool", 0x00100008, 4, elf::STT_OBJECT, elf::STB_LOCAL});
+    const ElfFile mixed = ElfFile::parse(mergedElf(kRwx, interleaved), "mixed.elf");
+    CHECK(mixed.isCode(0x00100024));
+    CHECK(mixed.dataRanges().empty());
+    // A read-only code section is code, as its header says.
+    const ElfFile readOnly = ElfFile::parse(mergedElf(elf::SHF_ALLOC | elf::SHF_EXECINSTR, kMergedSymbols), "ro.elf");
+    CHECK(readOnly.isCode(0x00100024));
+    CHECK(readOnly.dataRanges().empty());
+}
+
+// The analysis makes no function of the data, and finds the code addresses it holds.
+TEST_CASE(analysis_merged_code_and_data) {
+    const ElfFile elf = ElfFile::parse(mergedElf(kRwx, kMergedSymbols), "merged.elf");
+    const Program p = analyze(elf, configFor(elf));
+    CHECK(p.functionContaining(0x00100020) == nullptr);   // __data_start is a label, not a function
+    CHECK_EQ(p.functions.size(), size_t(1));
+    const Function* start = byName(p, "_start");
+    CHECK(start != nullptr);
+    if (!start) return;
+    CHECK_EQ(start->end, 0x00100018u);
+    CHECK(start->resume.count(0x00100010));   // table[0]: where the jr can go
+    CHECK(start->switchCandidates.count(0x00100010));
 }
 
 TEST_CASE(analysis_back_edges_and_preemption) {

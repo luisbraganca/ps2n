@@ -52,6 +52,11 @@ struct CommandHandler {
 std::map<uint32_t, CommandHandler> g_cmdHandlers;   // module code's SIF command handlers, by cid
 std::vector<uint32_t> g_rpcQueues;                 // SifRpcDataQueue_t of module servers, in registration order
 std::map<uint32_t, uint64_t> g_unserved;           // sid -> time of the first bind nobody answered
+// How long binds to a sid nobody serves wait before a null service answers.
+// On the console they wait for good; a module that is still starting
+// registers its sid late (Code: Veronica X's sound driver, over half a second
+// into a real-time run), so the wait is long enough not to beat it.
+constexpr uint64_t kUnservedBindWait = 5 * kEeClockHz;
 std::array<uint32_t, 32> g_iopSregs{};
 
 uint32_t g_mainAddr = 0, g_msflag = 0, g_smflag = 0;
@@ -145,18 +150,22 @@ void handleBind(const uint8_t* pkt) {
     const uint32_t recId = rd32(pkt + 16), pktAddr = rd32(pkt + 20), rpcId = rd32(pkt + 24);
     const uint32_t cd = rd32(pkt + 28), sid = rd32(pkt + 32);
     uint32_t sd = 0, buf = 0;
-    if (auto it = g_servers.find(sid); it != g_servers.end()) {
-        sd = it->second.sd;
-        buf = it->second.buf;
-    } else if (const uint32_t g = guestServerBySid(sid)) {
-        sd = g;
-        buf = mem::read32(g + 8);
+    const auto host = g_servers.find(sid);
+    const uint32_t guest = guestServerBySid(sid);
+    // A module's own server wins over a stand-in: libsd brings one for
+    // SDRDRV, which a game's sound driver may serve itself.
+    if (host != g_servers.end() && !(guest && host->second.impl->placeholder())) {
+        sd = host->second.sd;
+        buf = host->second.buf;
+    } else if (guest) {
+        sd = guest;
+        buf = mem::read32(guest + 8);
     } else {
         // Nobody serves this sid yet. The EE's bind loop retries, which gives a
         // module that is starting time to register; after a while a null
         // service answers, so a missing module does not hang the game.
         const auto [since, first] = g_unserved.try_emplace(sid, nowCycles());
-        if (nowCycles() - since->second > kEeClockHz / 2) {
+        if (nowCycles() - since->second > kUnservedBindWait) {
             PS2_UNIMPL("iop", "RPC bind to unknown sid",
                        "RPC bind to sid 0x%08x: no module serves it; answering with a null service", sid);
             registerServer(sid, makeNullServer("unknown", sid));

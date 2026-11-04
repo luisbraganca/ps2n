@@ -94,6 +94,9 @@ public:
     // `data` is the send buffer, already in IOP memory.
     virtual void call(uint32_t fno, const uint8_t* data, uint32_t size, uint32_t recvSize, Reply reply) = 0;
     virtual uint32_t bufferSize() const { return 0x2000; }
+    // A stand-in that answers zeros for a module nobody implemented. A bind
+    // goes to a module's own server for the sid instead, once one registers.
+    virtual bool placeholder() const { return false; }
     const std::string& name() const { return name_; }
 
 private:

@@ -256,6 +256,7 @@ public:
         PS2_UNIMPL("iop", key, "%s: send %u bytes, expects %u back; returning zeros", key, size, recvSize);
         reply(std::vector<uint8_t>(recvSize, 0));
     }
+    bool placeholder() const override { return true; }
 
 private:
     uint32_t sid_;

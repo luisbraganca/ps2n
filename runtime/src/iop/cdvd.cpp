@@ -189,6 +189,8 @@ uint32_t readToEe(uint32_t lbn, uint32_t sectors, uint32_t dest, uint32_t size, 
 int32_t eeRead(const uint8_t* d, bool cdda) {
     const uint32_t mode = u32(d, 12);
     const uint32_t size = cdda ? ((mode >> 16) & 0xFF) == 1 ? 2368u : 2352u : sectorSize(mode);
+    PS2_TRACE("cdvd", "%s: lbn %u, %u sectors of %u bytes to 0x%08x", cdda ? "sceCdReadCDDA" : "sceCdRead", u32(d, 0), u32(d, 4),
+              size, u32(d, 8));
     const uint32_t n = readToEe(u32(d, 0), u32(d, 4), u32(d, 8), size, cdda);
     if (u32(d, 16)) fillBytes(u32(d, 16), 0, 144);
     if (u32(d, 20)) write32(u32(d, 20), n);
@@ -199,6 +201,7 @@ int32_t eeRead(const uint8_t* d, bool cdda) {
 int32_t eeReadIopMem(const uint8_t* d) {
     std::vector<uint8_t> data;
     const uint32_t sectors = u32(d, 4);
+    PS2_TRACE("cdvd", "sceCdReadIOPMem: lbn %u, %u sectors to IOP 0x%08x", u32(d, 0), sectors, u32(d, 8));
     const uint32_t got = readSectors(u32(d, 0), sectors, sectorSize(u32(d, 12)), data);
     mem::writeBlock(u32(d, 8), data.data(), static_cast<uint32_t>(data.size()));
     g.error = got == sectors ? kErrNone : kErrRead;
@@ -214,6 +217,7 @@ int32_t eeReadChain(const uint8_t* d) {
     for (int i = 0; i < 64; ++i) {
         const uint32_t lbn = u32(d, 12u * i), sectors = u32(d, 12u * i + 4), buf = u32(d, 12u * i + 8);
         if (lbn == 0xFFFFFFFFu || sectors == 0xFFFFFFFFu || buf == 0xFFFFFFFFu) break;
+        PS2_TRACE("cdvd", "sceCdReadChain: lbn %u, %u sectors to %s 0x%08x", lbn, sectors, buf & 1 ? "IOP" : "EE", buf & ~1u);
         std::vector<uint8_t> data;
         const uint32_t got = readSectors(lbn, sectors, size, data);
         if (buf & 1) mem::writeBlock(buf & ~1u, data.data(), static_cast<uint32_t>(data.size()));
@@ -232,6 +236,7 @@ int32_t eeReadChain(const uint8_t* d) {
 // result word: for reads, sectors copied in the low half and an error code in
 // the high half.
 int32_t streamCommand(uint32_t cmd, uint32_t arg1, uint32_t arg2, uint32_t buffer, bool eeBuffer) {
+    PS2_TRACE("cdvd", "stream command %u (%u, %u, %s 0x%08x) at lbn %u", cmd, arg1, arg2, eeBuffer ? "EE" : "IOP", buffer, g.streamLsn);
     switch (cmd) {
     case 5:   // init: ring size in sectors, banks, IOP buffer
         g.streamBufMax = arg1;
@@ -436,6 +441,7 @@ void startRead(bool cdda) {
     g.readBuf = arg(2);
     g.readCdda = cdda;
     g.readSize = cdda ? ((mode >> 16) & 0xFF) == 1 ? 2368u : 2352u : sectorSize(mode);
+    PS2_TRACE("cdvd", "IOP %s: lbn %u, %u sectors to 0x%08x", cdda ? "sceCdReadCDDA" : "sceCdRead", g.readLsn, g.readSectors, g.readBuf);
     ret(startCommand(cdda ? kFuncCdda : kFuncRead, static_cast<uint64_t>(g.readSectors) * g.readSize / 16) ? 1 : 0);
 }
 
