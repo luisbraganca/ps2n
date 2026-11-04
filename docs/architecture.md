@@ -398,6 +398,25 @@ guest code, it is off where runs must repeat (`--virtual-clock`, the tests)
 or stop where a gap is (`--strict`), and with `--gs-threads 1`. Given the
 same GIF data, each vsync's picture is the same either way.
 
+### The CLUT buffer
+
+The console draws a CLUT texture from its CLUT buffer, 32 slots of 16
+halfwords that a `TEX0` or `TEX2` write loads from local memory as `CLD`
+says. The rasterizer reads the CLUT from local memory when it draws a pixel
+instead, which gives the same entries only while the buffer holds what that
+memory holds. The buffer is not modelled, but where each slot was loaded
+from is, so that a draw is reported where it would differ (`checkClut` in
+`runtime/src/hw/gs.cpp`). Copying the entries at each load would read
+memory that the draw threads may still be drawing into; a slot's origin is
+known without reading anything. A slot holds the low or the high halves of
+the 16 words of one column of local memory (64 bytes): a 32-bit CLUT's 8x2
+entries fill two slots, and a 16-bit CLUT's 16 entries over the same words
+are the same halves. A load tags the slots it fills, a transfer that changes
+a tagged half leaves its slot out of date, and a draw compares the slots it
+reads with the tags of the memory the rasterizer reads; the result is kept
+until the texture's CLUT fields or the slots change. Memory that primitives
+draw into after a load is not checked.
+
 ### The interpreter
 
 `runtime/src/interpreter.cpp` executes guest code directly from memory with

@@ -220,10 +220,6 @@ PS2_ALWAYS_INLINE void writeUnit(uint32_t psm, uint32_t n, uint32_t v) {
     default: return;
     }
 }
-void writeRaw(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t v) {
-    writeUnit(psm, pixelUnit(bp, bw, psm, x, y), v);
-}
-
 uint32_t bitsPerPixel(uint32_t psm) {
     switch (psm) {
     case PSMCT32: case PSMZ32: return 32;
@@ -359,7 +355,173 @@ int g_queueCount = 0;
 bool drawingQueued();
 void finishDrawing();
 
+// ---- the CLUT buffer ------------------------------------------------------------
+// The console draws a CLUT texture through its CLUT buffer: 32 slots of 16
+// halfwords, which a TEX0 or TEX2 write loads from local memory as CLD says.
+// The rasterizer reads the CLUT from local memory when it draws instead. The
+// buffer is not modelled, but where each slot was loaded from is, so that a
+// draw whose entries the buffer would give from elsewhere is reported. A slot
+// holds the low or the high halves of the 16 words of one column (64 bytes)
+// of local memory: 16 entries of a 16-bit CLUT, or one half of 16 entries of
+// a 32-bit one (the low halves in a slot, the high ones 16 slots on). A
+// transfer that changes those halves after the load leaves the slot out of
+// date; memory that primitives draw into is not checked.
+constexpr uint32_t kClutNone = 0, kClutStale = 1, kClutCsm2 = 2;
+constexpr uint32_t kClutColumn = 3;   // a column's tag: kClutColumn + (column << 1 | high halves)
+constexpr uint64_t kClutFields = 0x3Full << 20 | 0xFFFFFFull << 37;   // TEX0's PSM, CBP, CPSM, CSM and CSA
+struct ClutBuffer {
+    std::array<uint32_t, 32> slot{};       // tags; kClutNone until loaded
+    uint32_t cbp0 = 0, cbp1 = 0;           // CLD's CBP0 and CBP1
+    std::array<uint8_t, 65536> columns{};  // how many slots each column of local memory filled
+    uint64_t version = 0;                  // counts the slots' changes
+    uint64_t loadedFields = ~uint64_t(0), loadedVersion = 0;   // the last load's CLUT fields, and the version it left
+    // The last draw checked: its CLUT fields and the version then, whether
+    // the slots it read held its entries, and what the first that did not held.
+    uint64_t checkedFields = ~uint64_t(0), checkedVersion = 0;
+    bool checkedSame = true;
+    uint32_t checkedHeld = kClutNone;
+};
+ClutBuffer g_clut;
+
+void resetClut() {
+    g_clut.slot.fill(kClutNone);
+    g_clut.cbp0 = g_clut.cbp1 = 0;
+    g_clut.columns.fill(0);
+    g_clut.loadedFields = g_clut.checkedFields = ~uint64_t(0);
+}
+void setClutSlot(uint32_t slot, uint32_t tag) {
+    uint32_t& s = g_clut.slot[slot & 31];
+    if (s == tag) return;
+    if (s >= kClutColumn) --g_clut.columns[(s - kClutColumn) >> 1];
+    if (tag >= kClutColumn) ++g_clut.columns[(tag - kClutColumn) >> 1];
+    s = tag;
+    ++g_clut.version;
+}
+bool clutFormat(uint32_t psm) { return psm == PSMT8 || psm == PSMT8H || psm == PSMT4 || psm == PSMT4HL || psm == PSMT4HH; }
+// Entries 16g to 16g + 15 of a CLUT at block cbp, 16 entries wide in CSM1's
+// order, are its 8x2 pixels at (8 (g & 1), 2 (g >> 1)): a column of 32-bit
+// pixels, or half of a column of 16-bit ones, whose entries are the low
+// (even x) or high halves of the same words. Their slot's tag:
+uint32_t clutTag32(uint32_t cbp, uint32_t g, uint32_t high) {
+    const uint32_t word = addr32(cbp, 1, 8 * (g & 1), 2 * (g >> 1), false);
+    return kClutColumn + ((word >> 4) << 1 | high);
+}
+uint32_t clutTag16(uint32_t cbp, uint32_t g, bool s) {
+    const uint32_t half = addr16(cbp, 1, 8 * (g & 1), 2 * (g >> 1), s, false);
+    return kClutColumn + ((half >> 5) << 1 | (half & 1));
+}
+
+// A TEX0 or TEX2 write (`tex0` as it leaves TEX0): loads the buffer as CLD
+// says, as PCSX2 found the console does. Only a CLUT format loads, or
+// updates CBP0 and CBP1; CLD 0 loads nothing, and nor do the reserved 6 and 7.
+// 32-bit entries take CSA's low 4 bits.
+void loadClut(uint64_t tex0) {
+    const auto psm = static_cast<uint32_t>(field(tex0, 20, 6));
+    if (!clutFormat(psm)) return;
+    const auto cbp = static_cast<uint32_t>(field(tex0, 37, 14));
+    switch (field(tex0, 61, 3)) {
+    case 1: break;
+    case 2: g_clut.cbp0 = cbp; break;
+    case 3: g_clut.cbp1 = cbp; break;
+    case 4:
+        if (g_clut.cbp0 == cbp) return;
+        g_clut.cbp0 = cbp;
+        break;
+    case 5:
+        if (g_clut.cbp1 == cbp) return;
+        g_clut.cbp1 = cbp;
+        break;
+    default: return;
+    }
+    if ((tex0 & kClutFields) == g_clut.loadedFields && g_clut.version == g_clut.loadedVersion) return;   // the same again
+    const auto cpsm = static_cast<uint32_t>(field(tex0, 51, 4)), csa = static_cast<uint32_t>(field(tex0, 56, 5));
+    const bool csm2 = field(tex0, 55, 1) != 0, eight = psm == PSMT8 || psm == PSMT8H;
+    for (uint32_t g = 0; g < (eight ? 16u : 1u); ++g) {
+        if (cpsm == PSMCT32 || cpsm == PSMCT24) {
+            const uint32_t slot = ((csa & 15) + g) & 15;
+            setClutSlot(slot, csm2 ? kClutCsm2 : clutTag32(cbp, g, 0));
+            setClutSlot(slot + 16, csm2 ? kClutCsm2 : clutTag32(cbp, g, 1));
+        } else {
+            setClutSlot(csa + g, csm2 ? kClutCsm2 : clutTag16(cbp, g, cpsm == PSMCT16S));
+        }
+    }
+    g_clut.loadedFields = tex0 & kClutFields;
+    g_clut.loadedVersion = g_clut.version;
+}
+
+// A draw of a texture with TEX0 `tex0`: reported when it is in a CLUT format
+// and the buffer would give it other entries than the rasterizer reads from
+// local memory, or when it is in CSM2's layout, which is read as CSM1's. The
+// rasterizer reads an 8-bit texel's entries whatever CSA says, and a 4-bit
+// texel's 16 entries CSA's low 4 bits in (ClutOffsets: CSM1 has 256 places).
+void checkClut(uint64_t tex0) {
+    const auto psm = static_cast<uint32_t>(field(tex0, 20, 6));
+    if (!clutFormat(psm)) return;
+    const auto cbp = static_cast<uint32_t>(field(tex0, 37, 14)), cpsm = static_cast<uint32_t>(field(tex0, 51, 4));
+    const auto csa = static_cast<uint32_t>(field(tex0, 56, 5));
+    if (field(tex0, 55, 1)) {
+        PS2_UNIMPL("gs", "CLUT CSM2", "CLUT storage mode CSM2 is not implemented: the CLUT at CBP 0x%x is read in CSM1's order (TEX0 0x%llx)",
+                   cbp, static_cast<unsigned long long>(tex0));
+        return;
+    }
+    ClutBuffer& b = g_clut;
+    if ((tex0 & kClutFields) != b.checkedFields || b.version != b.checkedVersion) {   // else as last time
+        const bool eight = psm == PSMT8 || psm == PSMT8H;
+        uint32_t held = kClutNone;   // what the first slot that differs holds
+        bool same = true;
+        for (uint32_t g = 0; same && g < (eight ? 16u : 1u); ++g) {
+            const uint32_t group = eight ? g : csa & 15;   // the entries the rasterizer reads
+            if (cpsm == PSMCT32 || cpsm == PSMCT24) {
+                const uint32_t slot = ((csa & 15) + g) & 15;
+                for (uint32_t high = 0; same && high < 2; ++high) {
+                    held = b.slot[slot + 16 * high];
+                    same = held == clutTag32(cbp, group, high);
+                }
+            } else {
+                held = b.slot[(csa + g) & 31];
+                same = held == clutTag16(cbp, group, cpsm == PSMCT16S);
+            }
+        }
+        b.checkedFields = tex0 & kClutFields;
+        b.checkedVersion = b.version;
+        b.checkedSame = same;
+        b.checkedHeld = held;
+    }
+    if (b.checkedSame) return;
+    const uint32_t held = b.checkedHeld;
+    if (held == kClutCsm2) {
+        PS2_UNIMPL("gs", "CLUT CSM2", "CLUT storage mode CSM2 is not implemented: the CLUT buffer was loaded in CSM2's layout, read here "
+                   "in CSM1's from CBP 0x%x (TEX0 0x%llx)", cbp, static_cast<unsigned long long>(tex0));
+        return;
+    }
+    PS2_UNIMPL("gs", "CLUT buffer", "the CLUT buffer is not modelled: the CLUT is read from local memory at CBP 0x%x (TEX0 0x%llx), "
+               "where the console's buffer holds entries %s", cbp, static_cast<unsigned long long>(tex0),
+               held == kClutNone ? "it never loaded" : held == kClutStale ? "a transfer has changed since they were loaded" :
+                                                        "loaded from other memory");
+}
+
 // ---- image transfer -------------------------------------------------------------
+// A transfer's write of unit n in format psm, which leaves out of date the
+// slots of the CLUT buffer loaded from halves of the word that it changes.
+void transferWrite(uint32_t psm, uint32_t n, uint32_t v) {
+    uint32_t word = n;   // the 32-bit layouts
+    switch (psm) {
+    case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S: word = n >> 1; break;
+    case PSMT8: word = n >> 2; break;
+    case PSMT4: word = n >> 3; break;
+    default: break;
+    }
+    if (!g_clut.columns[word >> 4]) return writeUnit(psm, n, v);
+    const uint32_t before = g_vram[word];
+    writeUnit(psm, n, v);
+    const uint32_t changed = before ^ g_vram[word];
+    for (uint32_t slot = 0; changed && slot < 32; ++slot) {
+        const uint32_t tag = g_clut.slot[slot];
+        if (tag >= kClutColumn && (tag - kClutColumn) >> 1 == word >> 4 && (changed >> (16 * ((tag - kClutColumn) & 1)) & 0xFFFF))
+            setClutSlot(slot, kClutStale);
+    }
+}
+
 struct Transfer {
     bool active = false;
     uint32_t dbp = 0, dbw = 0, dpsm = 0;
@@ -372,7 +534,7 @@ struct Transfer {
 void writeTransferPixel(uint32_t v) {
     Transfer& t = g_xfer;
     if (!t.active) return;
-    writeRaw(t.dbp, t.dbw, t.dpsm, (t.dsax + t.x) & 2047, (t.dsay + t.y) & 2047, v);
+    transferWrite(t.dpsm, pixelUnit(t.dbp, t.dbw, t.dpsm, (t.dsax + t.x) & 2047, (t.dsay + t.y) & 2047), v);
     if (++t.x >= t.rrw) {
         t.x = 0;
         if (++t.y >= t.rrh) t.active = false;
@@ -426,7 +588,7 @@ void startTransfer(uint32_t dir) {
         const auto w = static_cast<uint32_t>(field(reg, 0, 12)), h = static_cast<uint32_t>(field(reg, 32, 12));
         for (uint32_t y = 0; y < h; ++y)
             for (uint32_t x = 0; x < w; ++x)
-                writeRaw(dbp, dbw, dpsm, dsax + x, dsay + y, readRaw(sbp, sbw, spsm, ssax + x, ssay + y));
+                transferWrite(dpsm, pixelUnit(dbp, dbw, dpsm, dsax + x, dsay + y), readRaw(sbp, sbw, spsm, ssax + x, ssay + y));
     } else if (dir == 1) {
         PS2_UNIMPL("gs", "local->host transfer", "GS local->host image transfer (readback) is not implemented");
     }
@@ -759,6 +921,29 @@ uint32_t zMax(uint32_t zpsm) {
     }
 }
 
+// What a drawing state asks for that the rasterizer leaves out, reported
+// where it would change the picture, as PCSX2 draws it: the destination alpha
+// test on any frame (on a 24-bit one the console draws nothing), dithering
+// into a 16-bit frame, anti-aliased lines and triangles, a scan mask, and a
+// CLUT that the CLUT buffer would give differently.
+void reportGaps(const Draw& d) {
+    const Env& e = d.e;
+    if (field(e.test, 14, 1))
+        PS2_UNIMPL("gs", "destination alpha test", "the destination alpha test (TEST's DATE) is not implemented: pixels are drawn "
+                   "whatever the frame's alpha, and into a 24-bit frame, where the console draws none (TEST 0x%llx, FRAME PSM 0x%x)",
+                   static_cast<unsigned long long>(e.test), e.fpsm);
+    if (d.fb16 && field(g_regs[DTHE], 0, 1))
+        PS2_UNIMPL("gs", "dithering", "dithering (DTHE) is not implemented: a 16-bit frame is drawn without DIMX's offsets");
+    const auto type = field(e.prim, 0, 3);
+    if (field(e.prim, 7, 1) && type >= 1 && type <= 5)
+        PS2_UNIMPL("gs", "anti-aliasing", "anti-aliasing (PRIM's AA1) is not implemented: lines and triangles are drawn without "
+                   "their edges' coverage");
+    if (const auto msk = field(g_regs[SCANMSK], 0, 2); msk >= 2)
+        PS2_UNIMPL("gs", "scan mask", "SCANMSK %u is not implemented: lines with %s Y are drawn too", static_cast<unsigned>(msk),
+                   msk == 2 ? "even" : "odd");
+    if (d.tex) checkClut(e.tex0);
+}
+
 const Draw& currentDraw() {
     if (!g_drawDirty) return g_draw;
     g_drawDirty = false;
@@ -882,6 +1067,7 @@ const Draw& currentDraw() {
     d.fbmsk16 = pack16(e.fbmsk);
     d.frame = bufferOf(e.fbp, e.fbw, e.fpsm);
     d.depth = bufferOf(e.zbp, e.fbw, e.zpsm);   // the frame's width
+    reportGaps(d);
     return d;
 }
 
@@ -1616,12 +1802,14 @@ void writeReg(uint32_t reg, uint64_t v) {
     case TEX0_1:
     case TEX0_2:
         if (field(g_regs[TEX1_1 + (reg - TEX0_1)], 9, 1)) placeMipLevels(static_cast<int>(reg - TEX0_1), v);   // MTBA
+        loadClut(v);
         break;
     case TEX2_1:
     case TEX2_2: {   // replaces the CLUT/PSM fields of TEX0
         const uint64_t keep = 0x3FFFFull | (0xFull << 26) | (0xFull << 30) | (0x7ull << 34);   // TBP0 TBW TW TH TCC TFX
         uint64_t& t0 = g_regs[TEX0_1 + (reg - TEX2_1)];
         t0 = (t0 & keep) | (v & ~keep);
+        loadClut(t0);
         break;
     }
     case TRXDIR:
@@ -1983,6 +2171,7 @@ void init() {
     g_drawDirty = true;
     g_queueCount = 0;
     resetPaths();
+    resetClut();
     g_regs[PRMODECONT] = 1;
 }
 

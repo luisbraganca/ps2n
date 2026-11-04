@@ -2860,6 +2860,200 @@ TEST_CASE(gs_blending_takes_what_alpha_picks) {
 
 namespace {
 
+// The reports of `key` since the last look (a look counts once more, as a fallback).
+struct Reports {
+    std::string key;
+    uint64_t seen;
+    explicit Reports(std::string k) : key(std::move(k)), seen(noteIssue(key, false)) {}
+    uint64_t operator()() {
+        const uint64_t now = noteIssue(key, false);
+        const uint64_t made = now - seen - 1;
+        seen = now;
+        return made;
+    }
+};
+
+} // namespace
+
+TEST_CASE(gs_reports_the_drawing_it_leaves_out) {
+    // Reported once for each drawing state that would use it: the destination
+    // alpha test, on any frame (a 24-bit one draws nothing on the console);
+    // dithering, into a 16-bit frame; anti-aliasing, of lines and triangles,
+    // by the AA1 that PRMODE gives too; and scan masks 2 and 3.
+    gs::init();
+    Reports date("destination alpha test"), dither("dithering"), aa("anti-aliasing"), scan("scan mask");
+    gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
+    // Three vertices of a PRIM: one drawing state, decoded at the first.
+    auto shape = [](uint64_t prim) {
+        gsWrite({{0x00, prim}, {0x01, 0x80808080u}, {0x05, xyz(0, 0, 0)}, {0x05, xyz(16, 0, 0)}, {0x05, xyz(0, 16, 0)}});
+    };
+    auto none = [&] { return date() + dither() + aa() + scan() == 0; };
+    shape(6);
+    CHECK(none());
+    gsWrite({{0x47, 1ull << 14}});                         // TEST_1: DATE
+    shape(6);
+    CHECK_EQ(date(), 1u);
+    gsWrite({{0x4C, 1ull << 16 | 1ull << 24}});           // PSMCT24
+    shape(6);
+    CHECK_EQ(date(), 1u);
+    gsWrite({{0x47, 0}, {0x4C, 1ull << 16}, {0x45, 1}});  // DTHE into PSMCT32
+    shape(6);
+    CHECK(none());
+    for (const uint64_t psm : {0x02ull, 0x0Aull}) {        // PSMCT16, PSMCT16S
+        gsWrite({{0x4C, 1ull << 16 | psm << 24}});
+        shape(6);
+        CHECK_EQ(dither(), 1u);
+    }
+    gsWrite({{0x45, 0}});
+    shape(6);
+    CHECK(none());
+    gsWrite({{0x4C, 1ull << 16}});
+    for (uint64_t type = 0; type < 7; ++type) {            // AA1
+        shape(type | 1 << 7);
+        CHECK_EQ(aa(), type >= 1 && type <= 5 ? 1u : 0u);
+    }
+    gsWrite({{0x1A, 0}, {0x1B, 1 << 7}});                  // PRMODECONT 0: PRMODE's AA1
+    shape(3);
+    CHECK_EQ(aa(), 1u);
+    gsWrite({{0x1B, 0}});
+    shape(3 | 1 << 7);                                     // not PRIM's
+    CHECK_EQ(aa(), 0u);
+    gsWrite({{0x1A, 1}});
+    for (uint64_t msk = 0; msk < 4; ++msk) {
+        gsWrite({{0x22, msk}});                            // SCANMSK
+        shape(6);
+        CHECK_EQ(scan(), msk >= 2 ? 1u : 0u);
+    }
+    gsWrite({{0x22, 0}, {0x47, 1ull << 14}});              // one state, two triangles: one report
+    shape(3);
+    gsWrite({{0x05, xyz(16, 16, 0)}, {0x05, xyz(32, 0, 0)}, {0x05, xyz(0, 32, 0)}});
+    CHECK_EQ(date(), 1u);
+    gsWrite({{0x47, 0}});
+    CHECK(none());
+}
+
+TEST_CASE(gs_reports_draws_the_clut_buffer_would_change) {
+    // The console draws a CLUT texture from its CLUT buffer, which a TEX0 or
+    // TEX2 write loads as CLD says; the rasterizer reads local memory as it
+    // is. A draw is reported when the buffer would give it entries from other
+    // memory: loaded from another CLUT or at another CSA, never loaded, or
+    // loaded before a transfer changed them; and when CSM2 is involved.
+    gs::init();
+    Reports clut("CLUT buffer"), csm2("CLUT CSM2");
+    auto setUp = [] { gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}}); };
+    setUp();
+    constexpr uint64_t kA = 0x3000, kB = 0x3100;           // two CLUTs' blocks
+    constexpr uint64_t kT8 = 0x13, kT4 = 0x14, kCt16 = 0x02, kCt16s = 0x0A;
+    std::vector<uint32_t> imageA = pseudoRandom(256, 11);
+    gsUpload(kA, 1, 0x00, 16, 16, imageA);
+    gsUpload(kB, 1, 0x00, 16, 16, pseudoRandom(256, 12));
+    // TEX0 for a 16x16 texture at block 0x1000 with a CLUT at block cbp.
+    auto tex0 = [](uint64_t psm, uint64_t cbp, uint64_t cpsm, uint64_t csa, uint64_t cld, uint64_t csm = 0) {
+        return 0x1000 | 1ull << 14 | psm << 20 | 4ull << 26 | 4ull << 30 | cbp << 37 | cpsm << 51 | csm << 55 | csa << 56 | cld << 61;
+    };
+    // Writes `reg` (TEX0_1 unless said), then draws a textured sprite in
+    // context 1: the reports that made.
+    auto draw = [&](uint64_t t, uint32_t reg = 0x06) {
+        gsWrite({{reg, t}, {0x00, 6 | 1 << 4 | 1 << 8}, {0x03, 0}, {0x05, xyz(0, 0, 0)}, {0x03, 256 | 256ull << 16}, {0x05, xyz(16, 16, 0)}});
+        return clut();
+    };
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 0)), 1u);   // never loaded
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 1)), 0u);   // loads A
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 0)), 0u);
+    CHECK_EQ(draw(tex0(kT8, kB, 0, 0, 0)), 1u);   // reads B
+    // An 8-bit texel's entries start CSA's slot in: CSA's low 4 bits for 32-bit ones.
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 5, 0)), 1u);
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 5, 1)), 0u);
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 21, 0)), 0u);
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 1)), 0u);
+    // A 4-bit texel reads the 16 entries in CSA's slot, which the rasterizer
+    // reads 16 CSA steps into the CLUT: as an 8-bit load leaves them, not as
+    // a 4-bit one, which puts the first 16 there.
+    CHECK_EQ(draw(tex0(kT4, kA, 0, 3, 0)), 0u);
+    CHECK_EQ(draw(tex0(kT4, kA, 0, 3, 1)), 1u);
+    CHECK_EQ(draw(tex0(kT4, kA, 0, 0, 1)), 0u);
+    // CLD 2 to 5 keep CBP0 and CBP1, and 4 and 5 load only another CBP; 6
+    // and 7 load nothing, nor does TEX0 for a colour format, which keeps CBP0.
+    CHECK_EQ(draw(tex0(kT8, kB, 0, 0, 2)), 0u);   // CBP0 = B
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 1)), 0u);
+    CHECK_EQ(draw(tex0(kT8, kB, 0, 0, 4)), 1u);
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 4)), 0u);   // CBP0 = A
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 4)), 0u);
+    CHECK_EQ(draw(tex0(kT8, kB, 0, 0, 3)), 0u);   // CBP1 = B
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 1)), 0u);
+    CHECK_EQ(draw(tex0(kT8, kB, 0, 0, 5)), 1u);
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 5)), 0u);   // CBP1 = A
+    CHECK_EQ(draw(tex0(kT8, kB, 0, 0, 6)), 1u);
+    CHECK_EQ(draw(tex0(kT8, kB, 0, 0, 7)), 1u);
+    CHECK_EQ(draw(tex0(0x00, kB, 0, 0, 2)), 0u);  // PSMCT32
+    CHECK_EQ(draw(tex0(kT8, kB, 0, 0, 4)), 0u);   // CBP0 is still A
+    // TEX2 loads for TEX0's texture, and TEX0_2 loads the same buffer.
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 1), 0x16), 0u);
+    CHECK_EQ(draw(tex0(kT8, kB, 0, 0, 0), 0x16), 1u);
+    gsWrite({{0x07, tex0(kT8, kB, 0, 0, 1)}});
+    CHECK_EQ(draw(tex0(kT8, kB, 0, 0, 0)), 0u);
+    // 16-bit entries take all of CSA's bits, but the rasterizer reads a 4-bit
+    // texel's 16 entries only its low 4 bits' steps in.
+    CHECK_EQ(draw(tex0(kT8, kA, kCt16, 0, 1)), 0u);
+    CHECK_EQ(draw(tex0(kT4, kA, kCt16, 5, 0)), 0u);
+    CHECK_EQ(draw(tex0(kT8, kA, kCt16, 16, 0)), 1u);
+    CHECK_EQ(draw(tex0(kT8, kA, kCt16s, 16, 1)), 0u);
+    CHECK_EQ(draw(tex0(kT4, kA, kCt16, 21, 0)), 0u);
+    CHECK_EQ(draw(tex0(kT4, kA, kCt16, 21, 1)), 1u);
+    CHECK_EQ(draw(tex0(kT4, kA, kCt16, 1, 1)), 1u);   // the other halves of the words read
+    // A 32-bit load fills a slot with the low halves of a column's words and
+    // another with their high halves; 16-bit entries over those words are
+    // the low halves.
+    CHECK_EQ(draw(tex0(kT4, kA, 0, 0, 1)), 0u);
+    CHECK_EQ(draw(tex0(kT4, kA, kCt16, 0, 0)), 0u);
+    // Transfers: the same words again or other memory change nothing; new
+    // high bytes (PSMT8H) leave the high halves' slot out of date, new low
+    // halves (PSMCT16) the low halves' one, until a load.
+    gsUpload(kA, 1, 0x00, 16, 16, imageA);
+    gsUpload(kB, 1, 0x00, 16, 16, pseudoRandom(256, 13));
+    CHECK_EQ(draw(tex0(kT4, kA, 0, 0, 0)), 0u);
+    gsUpload(kA, 1, 0x1B, 8, 2, pseudoRandom(4, 14));
+    CHECK_EQ(draw(tex0(kT4, kA, kCt16, 0, 0)), 0u);
+    CHECK_EQ(draw(tex0(kT4, kA, 0, 0, 0)), 1u);
+    CHECK_EQ(draw(tex0(kT4, kA, 0, 0, 1)), 0u);
+    gsUpload(kA, 1, kCt16, 8, 2, pseudoRandom(8, 15));
+    CHECK_EQ(draw(tex0(kT4, kA, kCt16, 0, 0)), 1u);
+    // After an 8-bit load, one word changed: at (8, 4), entries 80-95's
+    // column, which a 4-bit texel reads alone at CSA 5; then the high half of
+    // the word at (0, 4), which with 16-bit entries is entries 80-95 too.
+    gsUpload(kA, 1, 0x00, 16, 16, imageA);
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 1)), 0u);
+    imageA[4 * 16 + 8] ^= 1;
+    gsUpload(kA, 1, 0x00, 16, 16, imageA);
+    CHECK_EQ(draw(tex0(kT4, kA, 0, 4, 0)), 0u);
+    CHECK_EQ(draw(tex0(kT4, kA, 0, 5, 0)), 1u);
+    CHECK_EQ(draw(tex0(kT8, kA, kCt16, 0, 1)), 0u);
+    imageA[4 * 16] ^= 0x10000;
+    gsUpload(kA, 1, 0x00, 16, 16, imageA);
+    CHECK_EQ(draw(tex0(kT4, kA, kCt16, 4, 0)), 0u);
+    CHECK_EQ(draw(tex0(kT4, kA, kCt16, 5, 0)), 1u);
+    // A copy within local memory.
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 1)), 0u);
+    gsWrite({{0x50, kB | 1ull << 16 | kA << 32 | 1ull << 48}, {0x51, 0}, {0x52, 16 | 16ull << 32}, {0x53, 2}});   // B to A
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 0)), 1u);
+    // CSM2: drawn, or loaded and then drawn as CSM1.
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 1)), 0u);
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 0, 1)), 0u);
+    CHECK_EQ(csm2(), 1u);
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 1, 1)), 0u);
+    CHECK_EQ(csm2(), 1u);
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 0)), 0u);
+    CHECK_EQ(csm2(), 1u);
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 1)), 0u);
+    CHECK_EQ(csm2(), 0u);
+    // Start-up (gs::init) empties the buffer.
+    gs::init();
+    setUp();
+    CHECK_EQ(draw(tex0(kT8, kA, 0, 0, 0)), 1u);
+}
+
+namespace {
+
 // An MPEG bitstream written code by code ("0101 1", spaces ignored).
 struct Bits {
     std::vector<uint8_t> bytes;

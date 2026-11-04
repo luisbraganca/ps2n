@@ -287,14 +287,23 @@ enters the code (function pointers, a resumed thread).
 
 Not covered yet:
 
-- **GS**: local-to-host transfers and depth formats as textures (both
-  reported); dithering, anti-aliasing and the destination alpha test (not
-  reported); the CLUT buffer: a texel reads its CLUT entry from GS memory at
-  `CBP` when the pixel is drawn, whatever `CLD` says, so a 4-bit texel's
-  `CSA` offsets into that memory rather than into the buffer, and `CSM2` is
-  drawn as `CSM1` (not reported); and the GS's own precision in texture
-  filtering (sixteenths of a texel and of a level here, rounded down; no
-  public source gives the hardware's).
+- **GS**, each reported when a game uses it: local-to-host transfers; depth
+  formats as textures; the destination alpha test (`TEST`'s `DATE`), on any
+  frame (on a 24-bit one the console draws nothing); dithering (`DTHE`) into
+  a 16-bit frame; anti-aliasing (`AA1`, from `PRIM` or `PRMODE`) of lines
+  and triangles; scan masks (`SCANMSK` 2 and 3); `CSM2`, drawn as `CSM1`;
+  and the CLUT buffer. A texel reads its CLUT entry from GS memory at `CBP`
+  when the pixel is drawn, whatever `CLD` says, so a 4-bit texel's `CSA`
+  picks entries in that memory rather than in the buffer. The runtime keeps
+  where the console's buffer would have loaded each of its 32 slots from,
+  under `CLD`'s conditions (`CBP0` and `CBP1` too, `TEX2` as well as `TEX0`),
+  and reports a draw whose slots would hold other entries: loaded from
+  another CLUT or at another `CSA`, never loaded, or loaded before a
+  transfer changed them. A CLUT that primitives draw into after its load is
+  not checked ([architecture.md](architecture.md#the-clut-buffer)). Not
+  reported: the GS's own precision in texture filtering (sixteenths of a
+  texel and of a level here, rounded down; no public source gives the
+  hardware's).
 - **DMA and the VIFs**: scratchpad-to-RAM DMA in chain mode, VIF1
   GS-to-memory transfers, the VIFs' ForceBreak and STOP, and their FIFOs'
   depth (on the console a channel keeps filling the FIFO of a stalled VIF;

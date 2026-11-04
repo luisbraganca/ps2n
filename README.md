@@ -85,7 +85,7 @@ console:
 | Recompiler | `█████████░` 89% | 8 / 9 | overlays |
 | EE kernel syscalls | `█████████░` 88% | 127 / 145 | event flags, `ExecPS2`, the TLB, CPU timers |
 | DMA, interrupts, timers | `█████░░░░░` 50% | 4 / 8 | MFIFO, stall control, transfer timing |
-| Graphics (GS) | `███████░░░` 71% | 15 / 21 | the CLUT buffer, reading back to the EE |
+| Graphics (GS) | `███████░░░` 68% | 15 / 22 | the CLUT buffer, reading back to the EE |
 | Vector units | `█████████░` 88% | 7 / 8 | their timing |
 | Movies (IPU) | `████████░░` 83% | 5 / 6 | timing |
 | Sound (SPU2) | `███████░░░` 71% | 10 / 14 | the IOP's DMA channels for drivers without libsd, an audio settings page |
@@ -119,7 +119,7 @@ console:
 - [ ] Stall control and interleaved transfers
 - [ ] Transfer timing: a transfer ends the moment it starts
 
-**Graphics (GS)**: 15 of 21
+**Graphics (GS)**: 15 of 22
 - [x] Display: both circuits, their merging, interlaced frames and fields
 - [x] GIF: paths 1-3, PACKED, REGLIST and IMAGE, PATH3 masking
 - [x] Drawing alongside the EE, on the GS's own thread (real-time runs)
@@ -133,6 +133,7 @@ console:
 - [x] Depth test
 - [x] Alpha blending, with PABE, FBA and colour clamping
 - [x] Scissoring and frame-buffer masks
+- [ ] Scan masks: drawing only the even or the odd lines (`SCANMSK`)
 - [x] Transfers into GS memory and within it
 - [ ] The CLUT buffer: CLD load conditions and the CSM2 layout
 - [x] Bilinear filtering
@@ -553,7 +554,9 @@ ctest --test-dir build --output-on-failure
     circuits, deinterlacing, drawing on threads matching one thread byte for
     byte, triangle coverage by the top-left rule, values a triangle's
     vertices share kept exact, every texture format and CLUT layout,
-    blending's choices, the alpha test's fail modes and the masks;
+    blending's choices, the alpha test's fail modes and the masks; the
+    drawing it reports as left out, the CLUT buffer's loads followed for
+    that;
   - VU1 on a thread of its own: the pictures the guest thread draws, PATH1
     in its place among the paths, the EE waiting wherever it looks at VU1,
     `TOP` and `ITOP` latched at each start, rings that wrap;
