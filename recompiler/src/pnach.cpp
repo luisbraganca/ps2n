@@ -311,15 +311,18 @@ uint32_t ramAddress(uint32_t a) { return a >= 0x20000000u && a < 0x40000000u ? a
 void runPass(const std::vector<std::vector<Line>>& groups, bool vsync, Memory& mem, Result& r, bool count) {
     for (const std::vector<Line>& group : groups) {
         uint32_t skip = 0;              // extended lines a false condition skips
+        uint32_t held = 0;              // extended lines a condition that held covers
         const Line* pending = nullptr;  // the first line of a two-line code
+        bool pendingGuarded = false;    // ...and whether one covered it
         for (const Line& l : group) {
             const bool now = vsync ? (l.place == 1 || l.place == 2) : (l.place == 0 || l.place == 2 || l.place == 3);
             if (!now) continue;
+            bool guarded = false;   // under a condition that held
             auto put = [&](uint32_t addr, const std::vector<uint8_t>& bytes) {
                 const bool ok = mem.write(ramAddress(addr), bytes);
                 if (!count) return;
                 if (ok) r.wrote.push_back(l.where());
-                else r.outside.emplace_back(l.where(), addr);
+                else r.outside.push_back({l.where(), addr, bytes, vsync, guarded});
             };
             switch (l.type) {
             case Type::Byte: put(l.address, littleEndian(l.data, 1)); continue;
@@ -339,7 +342,10 @@ void runPass(const std::vector<std::vector<Line>>& groups, bool vsync, Memory& m
                 if (count) ++r.skipped;
                 continue;
             }
+            guarded = held > 0;
+            if (held) --held;
             if (pending) {   // 4aaaaaaa nnnnssss, vvvvvvvv iiiiiiii: n words, s words apart, the value growing by i
+                guarded = guarded || pendingGuarded;
                 const uint32_t base = pending->address & 0x0FFFFFFF;
                 const auto n = static_cast<uint32_t>(pending->data >> 16) & 0xFFFF, step = static_cast<uint32_t>(pending->data) & 0xFFFF;
                 uint32_t value = l.address;
@@ -354,6 +360,7 @@ void runPass(const std::vector<std::vector<Line>>& groups, bool vsync, Memory& m
             }
             if (code == 4) {
                 pending = &l;
+                pendingGuarded = guarded;
                 continue;
             }
             if (code != 0xD && code != 0xE) continue;   // does nothing
@@ -394,7 +401,8 @@ void runPass(const std::vector<std::vector<Line>>& groups, bool vsync, Memory& m
                 default: pass = (m | v) != 0; break;
                 }
             }
-            if (!pass) skip = lines ? lines : 1;
+            if (pass) held = lines ? lines : 1;
+            else skip = lines ? lines : 1;
         }
     }
 }
@@ -435,7 +443,8 @@ std::vector<std::string> applyToGame(const Patches& patches, const std::vector<s
         }
     }
     std::set<std::string> wrote;
-    std::vector<std::pair<std::string, uint32_t>> missed;
+    std::vector<Outside> missed, bootMissed;
+    Config* bootCfg = nullptr;
     summary = patches.describe() + ":";
     for (size_t i = 0; i < programs.size(); ++i) {
         const Program& p = programs[i];
@@ -449,17 +458,49 @@ std::vector<std::string> applyToGame(const Patches& patches, const std::vector<s
         }
         wrote.insert(r.wrote.begin(), r.wrote.end());
         missed.insert(missed.end(), r.outside.begin(), r.outside.end());
+        if (p.boot) {
+            bootCfg = p.cfg;
+            bootMissed = r.outside;
+        }
         summary += strprintf("%s %s %zu word%s", i ? "," : "", p.cfg->elf.filename().string().c_str(), r.patches.size(),
                              r.patches.size() == 1 ? "" : "s");
         if (r.unknown)
             summary += strprintf(" (%zu condition%s on memory it does not initialise)", r.unknown, r.unknown == 1 ? "" : "s");
     }
-    std::set<std::string> warned;
-    for (const auto& [where, addr] : missed)
-        if (!wrote.count(where) && warned.insert(where).second)
-            warnings.push_back(strprintf("%s writes to 0x%08x, which no executable of the game initialises: not applied "
-                                         "(ps2n applies patches when it recompiles)",
-                                         where.c_str(), addr));
+    // A line that wrote to no executable writes memory the game fills at run
+    // time (BSS, the heap): the runtime writes it while the boot executable
+    // runs, as PCSX2 does while the file is loaded for it. A write made under
+    // a condition is left out: the condition held for one executable's image,
+    // and only a test at run time, which the runtime does not make, would say
+    // when it holds.
+    std::set<std::string> applied, warned;
+    std::vector<std::pair<std::string, MemoryPatch>> runtime;   // each line's write, the passes merged
+    for (const Outside& o : bootMissed) {
+        if (wrote.count(o.where) || o.guarded) continue;
+        applied.insert(o.where);
+        for (size_t at = 0; at < o.bytes.size(); at += 8) {
+            MemoryPatch m;
+            m.address = o.address + static_cast<uint32_t>(at);
+            m.size = static_cast<uint32_t>(std::min<size_t>(8, o.bytes.size() - at));
+            for (uint32_t k = 0; k < m.size; ++k) m.value |= uint64_t(o.bytes[at + k]) << (8 * k);
+            auto same = std::find_if(runtime.begin(), runtime.end(), [&](const auto& e) {
+                return e.first == o.where && e.second.address == m.address && e.second.size == m.size && e.second.value == m.value;
+            });
+            if (same == runtime.end()) same = runtime.emplace(runtime.end(), o.where, m);
+            (o.vsync ? same->second.everyVsync : same->second.atEntry) = true;
+        }
+    }
+    if (bootCfg)
+        for (const auto& [where, m] : runtime) bootCfg->memoryPatches.push_back(m);
+    if (!runtime.empty())
+        summary += strprintf(", %zu write%s to memory the game fills at run time, made by the runtime", runtime.size(),
+                             runtime.size() == 1 ? "" : "s");
+    for (const Outside& o : missed)
+        if (!wrote.count(o.where) && !applied.count(o.where) && warned.insert(o.where).second)
+            warnings.push_back(strprintf("%s writes to 0x%08x, which no executable of the game initialises, %s: not applied",
+                                         o.where.c_str(), o.address,
+                                         o.guarded ? "under a condition (the runtime makes no tests)"
+                                                   : "in another executable than the boot one (the runtime writes only while that runs)"));
     return warnings;
 }
 

@@ -202,6 +202,8 @@ void invalidateCompiledCode() {
     clearCache();
 }
 
+bool bootProgramRunning() { return !g_programs.empty() && g_running == &g_programs[0]; }
+
 const FunctionInfo* findFunction(uint32_t pc) { return functionIn(*g_running, pc); }
 
 bool hasCompiledEntry(uint32_t pc) { return compiledEntry(pc) != nullptr; }

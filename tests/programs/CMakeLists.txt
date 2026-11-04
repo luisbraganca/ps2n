@@ -38,8 +38,9 @@ ps2n_program_test(kernel)
 ps2n_program_test(deci2)
 # Skip, stub, override and patch; --max-vsyncs turns an ignored skip into a failure instead of a hang.
 ps2n_program_test(bindings SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/bindings_override.cpp" RUN_ARGS --max-vsyncs 100)
-# A PCSX2 patch file's group ([pnach]): an immediate under a condition, an instruction and a data word.
-ps2n_program_test(pnach DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/pnach.pnach")
+# A PCSX2 patch file's group ([pnach]): an immediate under a condition, an instruction and a data word, and
+# BSS words the runtime writes; --max-vsyncs turns a missing vsync write into a failure instead of a hang.
+ps2n_program_test(pnach DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/pnach.pnach" RUN_ARGS --max-vsyncs 100)
 
 # LoadExecPS2: a boot program starts a second recompiled program, which starts
 # a third one that was not recompiled (interpreted), which starts the boot

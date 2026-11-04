@@ -305,11 +305,21 @@ alone: PCSX2 keeps the boot executable's file while a game loads its other
 executables by itself, as Agent Under Fire does. A group's `gsaspectratio`
 (any `N:D`) goes with the boot program to the runtime, whose window shows
 that shape under Auto ([runtime.md](runtime.md#running-a-recompiled-game)).
+
+A line that writes to memory no executable of the game initialises (BSS, the
+heap) cannot be applied to an image: the game fills that memory at run time.
+Such writes go with the boot program to the runtime, which makes them as
+PCSX2 does while the boot executable runs: the entry-point ones when it loads
+the executable, the others at the start of every vblank, before the game
+hears of it. Code: Veronica X's widescreen patch is all of this kind (its
+camera matrix and its films' display size).
+
 The recompile prints what each executable got:
 
 ```
 pnach: SLES-50539_992B46DC.pnach [Widescreen 16:9]: SLES_505.39 0 words (6 conditions on memory it does not initialise), MOVIE.ELF 0 words (6 conditions on memory it does not initialise), ACTION.UK 1 word, DRIVING.ELF 4 words
   the patches ask for a 16:9 picture (gsaspectratio)
+pnach: SLUS-20184_24036809.pnach [Widescreen 16:9]: SLUS_201.84 0 words, 3 writes to memory the game fills at run time, made by the runtime
 ```
 
 What is read as PCSX2 reads it: `patch=place,cpu,address,type,data` with
@@ -326,9 +336,12 @@ has them:
 - the increment, copy, pointer and bitwise codes (`3`, `5`, `6`, `7`), which
   act on values the game keeps changing;
 - `dpatch` (a patch placed by matching code) and patches to the IOP;
-- writes to memory the executable does not initialise (BSS, the heap), which
-  PCSX2 keeps rewriting while the game runs: a warning, as the recompile
-  cannot know what is there. A condition on such memory counts as false;
+- conditions on memory no executable initialises: PCSX2 tests them every
+  vsync, while ps2n counts them as false when it recompiles and the runtime
+  makes no tests. A write to such memory under a condition that held for an
+  image is not applied either, with a warning, nor is one that only another
+  executable than the boot one makes (the runtime writes while the boot
+  executable runs);
 - a game that starts its executables with `LoadExecPS2`, for which PCSX2
   switches to the file named for each: `[pnach]` is read from the boot
   program's config only.

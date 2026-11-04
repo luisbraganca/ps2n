@@ -156,6 +156,7 @@ void vblankStart(uint64_t) {
         g_lastThreads = threads;
     }
     ++g_vsyncs;
+    if (g_game) applyMemoryPatches(*g_game, true);   // before the game hears of the vblank, as PCSX2 writes them
     gs::onVblankStart();
     raiseIntc(INTC_VBLANK_START);
     kernel::onVblankStart();

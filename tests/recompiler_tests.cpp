@@ -731,7 +731,12 @@ TEST_CASE(pnach_applies_writes_and_conditions) {
     CHECK_EQ(r.skipped, size_t(4));
     CHECK_EQ(r.unknown, size_t(1));
     CHECK_EQ(r.outside.size(), size_t(1));
-    if (r.outside.size() == 1) CHECK_EQ(r.outside[0].second, scratch);
+    if (r.outside.size() == 1) {
+        CHECK_EQ(r.outside[0].address, scratch);
+        CHECK(r.outside[0].bytes == (std::vector<uint8_t>{1, 0, 0, 0}));
+        CHECK(r.outside[0].vsync);
+        CHECK(!r.outside[0].guarded);
+    }
     CHECK_EQ(r.patches.size(), want.size());
     if (r.patches.size() == want.size()) {
         for (size_t i = 0; i < want.size(); ++i) {
@@ -790,7 +795,10 @@ TEST_CASE(pnach_applies_to_every_executable) {
     bootCfg.patches.push_back({0x0010000C, 0x24020009, 0x24020001});   // one of its own
     const fs::path file = writeTemp("SLES-00000_DEADBEEF.pnach", "patch=1,EE,D0100000,extended,01003F80\n"
                                                                  "patch=1,EE,10100000,extended,00003FAB\n"
-                                                                 "patch=1,EE,21F00000,extended,00000001\n");
+                                                                 "patch=1,EE,21F00000,extended,00000001\n"
+                                                                 "patch=1,EE,D0100004,extended,0100AAAA\n"   // the ori's immediate: holds
+                                                                 "patch=1,EE,21F00010,extended,00000002\n"
+                                                                 "patch=2,EE,01F00020,bytes,0102030405060708090A\n");
     const pnach::Patches p = pnach::Patches::load({file}, {});
     std::string summary;
     const auto warnings = pnach::applyToGame(p, {file}, {{&boot, &bootCfg, true}, {&other, &otherCfg, false}}, summary);
@@ -802,7 +810,26 @@ TEST_CASE(pnach_applies_to_every_executable) {
         CHECK(analyze(other, otherCfg).word(0x00100000) == 0x3c013fabu);
     }
     CHECK(summary.find("OTHER.ELF 1 word") != std::string::npos);
-    CHECK_EQ(warnings.size(), size_t(2));   // the file's name, and a write that reaches no executable
+    CHECK_EQ(warnings.size(), size_t(2));   // the file's name, and the write under a condition to memory no executable initialises
+    // The others write to memory the game fills at run time: the runtime makes them.
+    const std::vector<MemoryPatch>& m = bootCfg.memoryPatches;
+    CHECK(otherCfg.memoryPatches.empty());
+    CHECK_EQ(m.size(), size_t(3));
+    if (m.size() == 3) {
+        CHECK_EQ(m[0].address, 0x01F00020u);   // the entry point's pass comes first
+        CHECK_EQ(m[0].value, 0x0807060504030201ull);
+        CHECK_EQ(m[0].size, 8u);
+        CHECK(m[0].atEntry && m[0].everyVsync);
+        CHECK_EQ(m[1].address, 0x01F00028u);
+        CHECK_EQ(m[1].value, uint64_t(0x0A09));
+        CHECK_EQ(m[1].size, 2u);
+        CHECK(m[1].atEntry && m[1].everyVsync);
+        CHECK_EQ(m[2].address, 0x01F00000u);
+        CHECK_EQ(m[2].value, uint64_t(1));
+        CHECK_EQ(m[2].size, 4u);
+        CHECK(!m[2].atEntry && m[2].everyVsync);
+    }
+    CHECK(summary.find("3 writes to memory the game fills at run time") != std::string::npos);
     // A word that [pnach] and [[patches]] both change.
     Config clash = configFor(other);
     clash.patches.push_back({0x00100000, 0, 0x3c013f80});
@@ -828,10 +855,13 @@ TEST_CASE(config_pnach) {
     cfg.files = 1;
     cfg.aspectRatio = "16:9";
     generate(analyze(elf, cfg), cfg, {});
-    CHECK(readTextFile(cfg.outDir / "recomp_table.cpp").find("    \"16:9\",\n};") != std::string::npos);
+    CHECK(readTextFile(cfg.outDir / "recomp_table.cpp").find("    \"16:9\",\n    nullptr, 0,\n};") != std::string::npos);
     cfg.aspectRatio.clear();
+    cfg.memoryPatches.push_back({0x01E80004, 0xAABB, 2, false, true});   // and the runtime's writes
     generate(analyze(elf, cfg), cfg, {});
-    CHECK(readTextFile(cfg.outDir / "recomp_table.cpp").find("    nullptr,\n};") != std::string::npos);
+    const std::string table = readTextFile(cfg.outDir / "recomp_table.cpp");
+    CHECK(table.find("    nullptr,\n    kMemoryPatches, sizeof(kMemoryPatches) / sizeof(kMemoryPatches[0]),\n};") != std::string::npos);
+    CHECK(table.find("    {0x01e80004u, 0xaabbull, 2, false, true},\n") != std::string::npos);
 }
 
 int main(int argc, char** argv) {

@@ -28,6 +28,16 @@ struct Patch {
     std::optional<uint32_t> expect;
 };
 
+// A write the runtime makes to guest memory ([pnach] lines on memory the
+// game fills at run time): `size` bytes of `value`, little-endian.
+struct MemoryPatch {
+    uint32_t address = 0;
+    uint64_t value = 0;
+    uint32_t size = 0;           // 1 to 8
+    bool atEntry = false;        // once, when the boot executable is loaded
+    bool everyVsync = false;     // at the start of every vblank
+};
+
 struct Config {
     std::filesystem::path configDir;   // relative paths resolve against this
 
@@ -80,6 +90,9 @@ struct Config {
     // The aspect ratio the applied groups ask for (gsaspectratio), passed to
     // the runtime with the boot program; empty if none does.
     std::string aspectRatio;
+    // The applied lines that write to memory no executable of the game
+    // initialises, passed to the runtime with the boot program, in order.
+    std::vector<MemoryPatch> memoryPatches;
 
     static Config load(const std::filesystem::path& file);
     // A config for an ELF without a TOML file (analyze, quick runs).

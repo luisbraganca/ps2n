@@ -220,7 +220,7 @@ console:
 
 **Widescreen, upscaling**: 2 of 5
 - [x] PCSX2's aspect ratio settings: Stretch, Auto 4:3/3:2, 4:3, 16:9, 10:7, and its FMV override
-- [x] Widescreen patches: PCSX2's pnach files, applied when a game is recompiled
+- [x] Widescreen patches: PCSX2's pnach files, applied when a game is recompiled, and their writes to memory a game fills at run time every vsync
 - [ ] No-interlacing patches
 - [ ] A GPU renderer
 - [ ] Higher internal resolution
@@ -280,12 +280,14 @@ Roughly in order:
      applies per-game widescreen patches (`.pnach` files) that change each
      game's field of view. A recompiled game keeps every guest address, so
      they carry over: `[pnach]` applies a file's groups when the game is
-     recompiled, and the window has PCSX2's aspect ratio settings. Agent
-     Under Fire plays in 16:9 with PCSX2's patch. Left: the no-interlacing
-     patches (`gsinterlacemode`), what PCSX2 keeps rewriting while a game
-     runs (memory the executable does not initialise, the increment, copy,
-     pointer and bitwise codes, `dpatch`), and the file for each executable
-     of a game that starts them with `LoadExecPS2`.
+     recompiled, the runtime makes their writes to memory the game fills at
+     run time every vsync, and the window has PCSX2's aspect ratio
+     settings. Agent Under Fire and Code: Veronica X play in 16:9 with
+     PCSX2's patches. Left: the no-interlacing patches (`gsinterlacemode`),
+     what PCSX2 tests or changes while a game runs (conditions on memory the
+     executable does not initialise, the increment, copy, pointer and
+     bitwise codes, `dpatch`), and the file for each executable of a game
+     that starts them with `LoadExecPS2`.
    - **Higher internal resolution** needs the GPU renderer: the software
      rasterizer has little room to spare at the original resolution, and its
      work grows with the square of the scale. Upscaling also brings the

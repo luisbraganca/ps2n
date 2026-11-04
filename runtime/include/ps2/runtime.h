@@ -31,6 +31,16 @@ struct PatchInfo {
     uint32_t value;
 };
 
+// A write to guest memory the runtime makes for the game's [pnach] patches,
+// on memory the game fills at run time: `size` bytes of `value`, little-endian.
+struct MemoryPatchInfo {
+    uint32_t address;
+    uint64_t value;
+    uint32_t size;      // 1 to 8
+    bool atEntry;       // once, when the boot executable is loaded
+    bool everyVsync;    // at the start of every vblank, while the boot executable runs
+};
+
 struct GameInfo {
     const char* name;                  // executable name, used in logs
     const char* defaultElf;            // ELF the code was recompiled from (data is loaded from it at startup)
@@ -54,6 +64,10 @@ struct GameInfo {
     // The aspect ratio the game's patches ask for ([pnach], gsaspectratio):
     // "16:9", "4:3", ... or nullptr. Only the boot program's table has it.
     const char* aspectRatio;
+    // The [pnach] lines that write to memory no executable of the game
+    // initialises (BSS, the heap). Only the boot program's table lists them.
+    const MemoryPatchInfo* memoryPatches;
+    size_t memoryPatchCount;
 };
 
 // Loads the ELF, sets up the emulated kernel, hardware and IOP, runs the game.

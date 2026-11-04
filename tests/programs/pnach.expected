@@ -3,3 +3,5 @@ pnach: choice returned 5
 pnach: kept returned 7
 pnach: number is 200
 pnach: instruction word 0x3c023fab
+pnach: entry word is 85
+pnach: fov 0x3f400000 after a vsync

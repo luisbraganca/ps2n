@@ -4,6 +4,10 @@
 # holds, an instruction word and a data word. A condition that fails and a
 # group that is not chosen leave theirs alone. The interpreted run sees the
 # same words, which are written to RAM too.
+#
+# Two lines write to BSS, which the game fills at run time: the runtime writes
+# one when it loads the program and the other at every vsync, over the 1.0
+# the program stores there (as Code: Veronica X's field of view).
         .set noreorder
         .text
 
@@ -88,6 +92,22 @@ main:   addiu   $sp, $sp, -16
         jal     print
         nop
 
+        la      $t0, entry_word        # written when the program was loaded
+        lw      $a1, 0($t0)
+        la      $a0, s_entry
+        jal     print
+        nop
+
+        la      $t0, fov
+        lui     $t1, 0x3f80
+        sw      $t1, 0($t0)            # the program's 1.0...
+1:      lw      $a1, 0($t0)
+        beq     $a1, $t1, 1b           # ...until a vsync's write
+        nop
+        la      $a0, s_fov
+        jal     print
+        nop
+
         ld      $ra, 0($sp)
         move    $v0, $zero
         jr      $ra
@@ -100,6 +120,12 @@ s_choice:       .asciz "pnach: choice returned %d\n"
 s_kept:         .asciz "pnach: kept returned %d\n"
 s_number:       .asciz "pnach: number is %d\n"
 s_word:         .asciz "pnach: instruction word 0x%08x\n"
+s_entry:        .asciz "pnach: entry word is %d\n"
+s_fov:          .asciz "pnach: fov 0x%08x after a vsync\n"
 
         .data
 number:         .word 100               # the patch makes it 200
+
+        .bss
+entry_word:     .space 4                # the runtime writes 85 here when it loads the program
+fov:            .space 4                # and 0.75 here every vsync

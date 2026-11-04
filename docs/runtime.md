@@ -76,9 +76,12 @@ The shape comes from PCSX2's settings, kept in the settings file's
 
 A game patched for 16:9 draws a wider view into as many pixels as before,
 which the window stretches to 16:9: the picture is wider, not sharper, and
-drawing it costs the same. Cycle Aspect Ratio (F6) goes through `AspectRatio`'s
-values for the run without saving them. The window opens in the shape the
-settings give. Not covered: the 3:2 of Auto for a progressive (480p)
+drawing it costs the same. Patches that write to memory the game fills at
+run time (Code: Veronica X's) are written by the runtime: once when it loads
+the boot executable, or at the start of every vblank while that executable
+runs, before the game hears of the vblank. Cycle Aspect Ratio (F6) goes
+through `AspectRatio`'s values for the run without saving them. The window
+opens in the shape the settings give. Not covered: the 3:2 of Auto for a progressive (480p)
 picture, which the runtime does not show (Auto is 4:3), and PCSX2's other
 display settings (crop, vertical stretch, integer scaling, the picture's
 alignment and offsets).

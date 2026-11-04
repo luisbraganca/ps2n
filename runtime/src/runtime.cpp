@@ -334,6 +334,15 @@ void runGuestThread(void (*fn)()) {
 
 } // namespace
 
+void applyMemoryPatches(const GameInfo& game, bool vsync) {
+    if (!game.memoryPatches || (vsync && !bootProgramRunning())) return;
+    for (size_t i = 0; i < game.memoryPatchCount; ++i) {
+        const MemoryPatchInfo& m = game.memoryPatches[i];
+        if (!(vsync ? m.everyVsync : m.atEntry)) continue;
+        for (uint32_t k = 0; k < m.size && k < 8; ++k) write8(m.address + k, static_cast<uint8_t>(m.value >> (8 * k)));
+    }
+}
+
 bool requestExec(std::vector<std::string> argv) {
     const std::string path = argv[0];
     std::vector<uint8_t> bytes;
@@ -388,6 +397,7 @@ void startPendingProgram() {
     hw::resetInterrupts();
     iop::reboot();
     loadImage(next.image, next.program);
+    if (next.program == g_game) applyMemoryPatches(*g_game, false);
     cpu = Cpu{};
     initCop0();
     programLoaded(next.program, next.name);
@@ -406,6 +416,9 @@ int run(int argc, char** argv, const GameInfo& game) {
 
     clockInit(g_opt.virtualClock, g_opt.noThrottle);
     if (!loadElf(game)) return 1;
+    applyMemoryPatches(game, false);
+    if (game.memoryPatches)
+        PS2_INFO("runtime", "%zu write(s) to memory from the config's [pnach], made at the entry point or every vsync", game.memoryPatchCount);
     initCop0();
     hw::init();
     gs::init();

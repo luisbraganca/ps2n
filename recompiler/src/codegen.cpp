@@ -550,6 +550,13 @@ int writeProgram(const Program& prog, const Config& cfg, const std::filesystem::
     if (patches.empty()) t << "    {0, 0},   // (none)\n";
     for (const auto& [addr, value] : patches) t << "    {" << hex(addr) << ", " << hex(value) << "},\n";
     t << "};\n\n";
+    if (!cfg.memoryPatches.empty()) {
+        t << "const ps2::MemoryPatchInfo kMemoryPatches[] = {\n";
+        for (const MemoryPatch& m : cfg.memoryPatches)
+            t << "    {" << hex(m.address) << ", " << strprintf("0x%llxull", static_cast<unsigned long long>(m.value)) << ", " << m.size
+              << ", " << (m.atEntry ? "true" : "false") << ", " << (m.everyVsync ? "true" : "false") << "},\n";
+        t << "};\n\n";
+    }
     std::vector<uint32_t> resume;
     for (const auto& f : prog.functions) resume.insert(resume.end(), f.resume.begin(), f.resume.end());
     std::sort(resume.begin(), resume.end());
@@ -576,6 +583,7 @@ int writeProgram(const Program& prog, const Config& cfg, const std::filesystem::
     t << "    " << (others.empty() ? "nullptr, 0" : "kPrograms, sizeof(kPrograms) / sizeof(kPrograms[0])") << ",\n";
     t << "    " << (vuPrograms ? "kVuPrograms, kVuProgramCount" : "nullptr, 0") << ",\n";
     t << "    " << (cfg.aspectRatio.empty() ? "nullptr" : cstring(cfg.aspectRatio)) << ",\n";
+    t << "    " << (cfg.memoryPatches.empty() ? "nullptr, 0" : "kMemoryPatches, sizeof(kMemoryPatches) / sizeof(kMemoryPatches[0])") << ",\n";
     t << "};\n\n} // namespace " << ns << "\n";
     put(dir / "recomp_table.cpp", t.str());
     return files;

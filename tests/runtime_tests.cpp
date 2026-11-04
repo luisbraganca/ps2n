@@ -4224,10 +4224,10 @@ TEST_CASE(dispatch_checks_programs_against_ram) {
                                         {0x00200008u, 0x00200010u, &noop, "x_b", false, checksumOf(kX + 2, 2)}};
     static const FunctionInfo yFns[] = {{0x00200000u, 0x00200008u, &noop, "y_a", false, checksumOf(kY, 2)},
                                         {0x00200008u, 0x00200010u, &noop, "y_b", false, checksumOf(kY + 2, 2)}};
-    static const GameInfo x = {"x", "X.ELF", 0, 0x00200000u, xFns, 2, nullptr, 0, "test", nullptr, 0, nullptr, 0, nullptr, 0, nullptr};
-    static const GameInfo y = {"y", "Y.ELF", 0, 0x00200000u, yFns, 2, nullptr, 0, "test", nullptr, 0, nullptr, 0, nullptr, 0, nullptr};
+    static const GameInfo x = {"x", "X.ELF", 0, 0x00200000u, xFns, 2, nullptr, 0, "test", nullptr, 0, nullptr, 0, nullptr, 0, nullptr, nullptr, 0};
+    static const GameInfo y = {"y", "Y.ELF", 0, 0x00200000u, yFns, 2, nullptr, 0, "test", nullptr, 0, nullptr, 0, nullptr, 0, nullptr, nullptr, 0};
     static const GameInfo* const others[] = {&x, &y};
-    static const GameInfo boot = {"boot", "BOOT.ELF", 0, 0x00100000u, bootFns, 1, nullptr, 0, "test", nullptr, 0, others, 2, nullptr, 0, nullptr};
+    static const GameInfo boot = {"boot", "BOOT.ELF", 0, 0x00100000u, bootFns, 1, nullptr, 0, "test", nullptr, 0, others, 2, nullptr, 0, nullptr, nullptr, 0};
     initDispatch(boot);
     CHECK(hasCompiledEntry(0x00100000u));                // loaded by the runtime: no check needed
 
@@ -4253,6 +4253,58 @@ TEST_CASE(dispatch_checks_programs_against_ram) {
     CHECK(hasCompiledEntry(0x00200000u));                // the first is still Y's
     CHECK(!hasCompiledEntry(0x00200008u));               // the second runs on the interpreter
     CHECK(hasCompiledEntry(0x00100000u));                // no checksum: always trusted
+}
+
+TEST_CASE(memory_patches_apply_at_entry_and_every_vsync_of_the_boot_program) {
+    // [pnach] writes to memory the game fills at run time: once at the entry
+    // point, every vsync, or both; only the bytes each covers.
+    constexpr uint32_t kBase = 0x01E80000u;
+    static const MemoryPatchInfo patches[] = {
+        {kBase + 0x00, 0x11223344u, 4, true, false},
+        {kBase + 0x11, 0xAABBu, 2, false, true},                    // not word-aligned
+        {kBase + 0x20, 0x0102030405060708ull, 8, true, true},
+        {kBase + 0x33, 0x77u, 1, false, true},
+    };
+    static const FunctionInfo fns[] = {{0x00100000u, 0x00100008u, &noop, "boot_main", false, 0}};
+    static const FunctionInfo otherFns[] = {{0x00300000u, 0x00300008u, &noop, "other_main", false, 0}};
+    static const GameInfo other = {"other", "OTHER.ELF", 0, 0x00300000u, otherFns, 1, nullptr, 0, "test", nullptr, 0,
+                                   nullptr, 0, nullptr, 0, nullptr, nullptr, 0};
+    static const GameInfo* const others[] = {&other};
+    static const GameInfo boot = {"boot", "BOOT.ELF", 0, 0x00100000u, fns, 1, nullptr, 0, "test", nullptr, 0,
+                                  others, 1, nullptr, 0, nullptr, patches, 4};
+    const GameInfo* const before = g_game;
+    auto fill = [] { std::memset(ram + kBase, 0xEE, 0x40); };
+    auto word = [](uint32_t a) { return read32(kBase + a); };
+    initDispatch(boot);
+
+    fill();
+    applyMemoryPatches(boot, false);
+    CHECK_EQ(word(0x00), 0x11223344u);
+    CHECK_EQ(word(0x10), 0xEEEEEEEEu);
+    CHECK_EQ(word(0x20), 0x05060708u);
+    CHECK_EQ(word(0x24), 0x01020304u);
+    CHECK_EQ(word(0x30), 0xEEEEEEEEu);
+
+    fill();
+    applyMemoryPatches(boot, true);
+    CHECK_EQ(word(0x00), 0xEEEEEEEEu);
+    CHECK_EQ(word(0x10), 0xEEAABBEEu);
+    CHECK_EQ(word(0x14), 0xEEEEEEEEu);
+    CHECK_EQ(word(0x24), 0x01020304u);
+    CHECK_EQ(word(0x30), 0x77EEEEEEu);
+
+    // Another executable runs: PCSX2 would load its own patch file.
+    programLoaded(&other, "OTHER.ELF");
+    fill();
+    applyMemoryPatches(boot, true);
+    CHECK_EQ(word(0x10), 0xEEEEEEEEu);
+    CHECK_EQ(word(0x20), 0xEEEEEEEEu);
+    programLoaded(&boot, "BOOT.ELF");
+    applyMemoryPatches(boot, true);
+    CHECK_EQ(word(0x20), 0x05060708u);
+
+    std::memset(ram + kBase, 0, 0x40);
+    if (before) initDispatch(*before);   // later vblanks must not write here
 }
 
 TEST_CASE(strict_mode_stops_at_gaps_not_fallbacks) {

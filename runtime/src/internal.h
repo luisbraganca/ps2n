@@ -77,6 +77,7 @@ void programLoaded(const GameInfo* program, const std::string& name);
 // The game invalidated the instruction cache, as it does after loading code
 // itself: recompiled code is checked against RAM before it runs again.
 void invalidateCompiledCode();
+bool bootProgramRunning();             // the boot executable, not one LoadExecPS2 or the game loaded
 void dispatch();                       // run guest code at cpu.pc once
 const FunctionInfo* findFunction(uint32_t pc);
 bool hasCompiledEntry(uint32_t pc);    // function start or resume point (with --interpret: a replaced function)
@@ -95,6 +96,10 @@ uint64_t callGuestOnStack(uint32_t address, const uint64_t* args, int argCount, 
 // has unwound (cpu.pc is kTrampExec). False if it cannot be loaded.
 bool requestExec(std::vector<std::string> argv);
 void startPendingProgram();
+// The game's [pnach] writes to memory it fills at run time (GameInfo::
+// memoryPatches), as PCSX2 makes them: those for the entry point when the boot
+// executable is loaded, the others at the start of every vblank while it runs.
+void applyMemoryPatches(const GameInfo& game, bool vsync);
 
 // interpreter.cpp
 void interpret();                      // from cpu.pc until compiled code takes over

@@ -50,13 +50,23 @@ struct File {
 File parse(std::string_view text, const std::filesystem::path& path);
 File load(const std::filesystem::path& path);
 
+// A line's write to memory the executable does not initialise (BSS, the
+// heap): the game fills it at run time, so only the runtime can apply it.
+struct Outside {
+    std::string where;             // Line::where()
+    uint32_t address = 0;
+    std::vector<uint8_t> bytes;    // what it writes there, in address order
+    bool vsync = false;            // made by the vsync pass, not the entry point's
+    bool guarded = false;          // under a condition that held: it holds for this executable only
+};
+
 // What applying the chosen lines did to one executable.
 struct Result {
     std::vector<Patch> patches;    // the words they change, each with the ELF's word as expect
     size_t skipped = 0;            // extended lines a false condition skipped
     size_t unknown = 0;            // conditions on memory the ELF does not initialise (taken as false)
-    std::vector<std::string> wrote;                          // Line::where() of each line that wrote
-    std::vector<std::pair<std::string, uint32_t>> outside;   // a write to memory the ELF does not initialise
+    std::vector<std::string> wrote;   // Line::where() of each line that wrote
+    std::vector<Outside> outside;     // writes to memory the ELF does not initialise, in order
 };
 
 // The lines a config chooses: every file's lines before its first group, and
@@ -98,8 +108,11 @@ struct Program {
 
 // Applies the patches to every executable of the game, adding what they
 // change to each config's patches. Throws Error where a word is patched by
-// both. Returns the warnings: a file named for another executable than the
-// boot one, and lines that wrote to no executable's initialised memory.
+// both. A line that writes to no executable's initialised memory goes to the
+// boot config's memoryPatches, which the runtime writes as PCSX2 does: at the
+// entry point and every vsync. Returns the warnings: a file named for another
+// executable than the boot one, and such lines it cannot hand to the runtime
+// (under a condition, or written by another executable's pass only).
 std::vector<std::string> applyToGame(const Patches& patches, const std::vector<std::filesystem::path>& files,
                                      const std::vector<Program>& programs, std::string& summary);
 

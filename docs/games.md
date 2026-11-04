@@ -241,6 +241,18 @@ interpreter. PCSX2 rates this release Perfect, with no game fixes.
   artifacts they had.
 - Sound and music in the menus and the movies.
 - Controller input.
+- 16:9, with PCSX2's widescreen patch for this disc: the `Widescreen 16:9`
+  group of `SLUS-20184_24036809.pnach` (by Gabominated, ported from
+  ElHecht's patch for the European release, in PCSX2's
+  `resources/patches.zip`), named in the boot config's `[pnach]`
+  ([config.md](config.md#pnach-pcsx2s-patch-files)). Its three words are in
+  BSS, which the game fills at run time, so the runtime writes them at
+  every vblank: the camera matrix's horizontal scale (`crmat`, 1.0 becomes
+  0.75), and the films' display size (`mdSize`: 640 by 320 at line 64
+  becomes 640 by 426 at line 12, which the 16:9 window stretches back to
+  the film's shape). The window shows 16:9 under Auto. The status screen
+  and the other menus are drawn for 4:3 and come out stretched, as in
+  PCSX2.
 
 ### What it took
 
