@@ -60,8 +60,6 @@ config lists the other executables under `[input] programs`, as in
 
 ### Known problems
 
-- In the first mission's heaviest views drawing falls behind, and the game
-  shows fewer than 50 pictures a second (see [Speed](#speed)).
 - The driving missions read GS memory back through VIF1 about once a frame
   (reported as `VIF1 to-memory transfer`), which the runtime does not do yet:
   an 8x8 block of the depth buffer (`PSMZ32`) at a point that drifts with the
@@ -71,8 +69,11 @@ config lists the other executables under `[input] programs`, as in
   VU1's own thread). It uploads its programs in many combinations, over 5,000
   distinct micro memories in the mission's first two minutes, and they have
   not been recorded for the VU recompiler.
-- In real time the second mission's race slows to 46 vblanks a second at the
-  end of its heaviest stretch measured (see [Speed](#speed)).
+- That interpreted micro code keeps VU1's thread busy about two thirds of
+  the time in the second mission's race. With other work on the machine it
+  can fall behind: a play test, while another game ran beside it, slowed to
+  28 to 34 vblanks a second late in the mission, VU1's thread busy all the
+  time and the GS waiting for its drawing (see [Speed](#speed)).
 - The second mission has been played into its race; how far it can be
   played has not been tried.
 - With the widescreen patch, the race's camera takes 1.817 for its width
@@ -93,21 +94,19 @@ clock, as in play. Deterministic runs (`--virtual-clock`) draw the same frames
 on every run, so they show whether a change kept every frame as it was.
 
 The movies, the copyright and title screens and the menus run at full speed,
-50 vblanks a second in real time. The first mission does too, but drawing
-falls behind in its heaviest views. Facing the lobby of the mission's first
-building, the heaviest view measured, the game shows 39 pictures a second at
-50 vblanks a second, with its VU1 micro code recompiled. With the micro code
-interpreted, the game itself slows to 46 vblanks a second there, and drawing
-keeps up. A lighter view in the building shows 50 pictures a second, and the
-helicopter cutscene that opens the mission 49. Measured again on November 4,
-the heaviest view showed 27 pictures a second, at 50 vblanks a second, with
-VU1 on its own thread or not; why it is down from 39 has not been looked
-into.
+50 vblanks a second in real time, and so does the first mission. Facing the
+lobby of the mission's first building, the heaviest view measured, and on
+the mission's later map, the game shows a new picture every vblank, 49.9 a
+second, with VU1 on its own thread or not (measured on November 4 with
+nothing else running). An earlier count of 27 pictures a second in that view
+came from a run with another game running on the same machine, and the 39
+of November 1 was not measured again.
 
-The second mission's race runs at 49.4 vblanks a second in real time over
+The second mission's race runs at 49.9 vblanks a second in real time over
 its heaviest stretch measured (vblanks 6,800 to 9,000 of a scripted run that
-starts it in place of the first mission): 50 for most of it, 46 at its end.
-VU1 runs the mission's micro code on its own thread, on the interpreter.
+starts it in place of the first mission), with nothing else running. VU1
+runs the mission's micro code on its own thread, on the interpreter, busy
+638 ms a second on average there and 806 at most.
 
 #### What each change bought
 
@@ -201,16 +200,18 @@ In the order the changes were made:
   stretch runs at 38 to 46. The sound there still breaks up about as often.
 - **VU1 on a thread of its own.** In real time VU1 runs its micro programs on
   a host thread of its own, the game's thread only queuing them. Measured on
-  one build, with and without `--no-vu1-thread`: the second mission's race
-  runs at 49.4 vblanks a second instead of 39.2 over vblanks 6,800 to 9,000,
-  and its sound breaks 0.9 times a second instead of 38 (the repeated blocks
-  that made voices sound robotic). Facing the lobby of the first building
-  the sound breaks 9.9 times a second instead of 29.9 in the lighter view,
-  and 10.5 instead of 55.6 in the heaviest, as many as deterministic runs of
-  the same views count; vblanks stay at 50, and pictures are the same either
-  way (50 and 27 a second). The first mission's opening is unchanged: 49.9
-  vblanks a second, and 9.0 breaks a second instead of 9.2. Deterministic
-  runs draw the same frames as before.
+  one build, with and without `--no-vu1-thread`, with nothing else running:
+  the second mission's race runs at 49.9 vblanks a second instead of 40.1
+  over vblanks 6,800 to 9,000, and its sound breaks 0.5 times a second
+  instead of 43.5 (the repeated blocks that made voices sound robotic). The
+  first mission was at full speed already and stays there: facing the lobby
+  of the first building and on its later map, a new picture every vblank,
+  and the sound breaks 10.3 to 10.7 times a second either way, as many as
+  deterministic runs of the same views count. Deterministic runs draw the
+  same frames as before. The lobby's figures first published for this change
+  (its breaks falling from 29.9 and 55.6 a second, 27 pictures a second in
+  its heaviest view) came from runs with another game running on the same
+  machine.
 
 ## Resident Evil Code: Veronica X
 

@@ -283,10 +283,10 @@ On the console VU1 runs its micro programs while the EE runs on. Running a
 program inside the DMA transfer that starts it made the guest thread do both:
 in Agent Under Fire's second mission, whose VU1 code runs on the
 interpreter, the programs took over 40% of the guest thread's time, and the
-race ran at 39 vblanks a second, its sound breaking 38 times a second. So in
+race ran at 40 vblanks a second, its sound breaking 43 times a second. So in
 real-time runs VU1 has a host thread of its own too, as PCSX2's MTVU does
-(`runtime/src/vu_thread.cpp`), and the race runs at 49 vblanks a second, its
-sound breaking about once a second.
+(`runtime/src/vu_thread.cpp`), and the race runs at 49.9 vblanks a second, its
+sound breaking once every two seconds.
 
 The guest thread queues what acts on VU1 in a 16 MB ring, in its own order:
 what VIF1 writes to VU1's data memory (`UNPACK`, worked out on the guest
@@ -570,5 +570,5 @@ vsyncs behind: vblanks come at 42 a second instead of 46. Those programs ran
 inside the DMA transfer that starts them, on the guest thread, and drawing
 was the limit. The second mission's VU1 code is not recompiled (it uploads
 its programs in many combinations); there, running the programs on VU1's own
-thread brought the race from 39 to 49 vblanks a second ([The VU1
+thread brought the race from 40 to 49.9 vblanks a second ([The VU1
 thread](#the-vu1-thread)).

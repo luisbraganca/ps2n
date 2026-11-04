@@ -67,9 +67,9 @@ of the work left is in the runtime, which stands in for the rest of the
 console:
 
 - The graphics come from a software renderer. It needs threads of its own,
-  drawing alongside the EE, to keep the first game at full speed, and the
-  heaviest views still fall behind. That was measured on one 14-core desktop
-  CPU; slower machines have not been tried.
+  drawing alongside the EE, to keep the first game at full speed, which it
+  does in the heaviest views measured. That was on one 14-core desktop CPU
+  with nothing else running; slower machines have not been tried.
 - The vector units run their micro code recompiled or interpreted. In
   real-time runs VU1 runs alongside the EE, on a thread of its own, but a
   program still takes no emulated time.
@@ -245,12 +245,11 @@ well above the EE's 294.9 MHz, and recompiled VU1 micro code runs a transform
 loop 3.1 times as fast as the VU interpreter. Whole games are held back by the
 rest of the emulation, the drawing above all. On an Intel i5-14600KF, Agent
 Under Fire runs its movies, its menus and its first mission at full speed, 50
-vblanks a second in real time, except in the heaviest views, where drawing
-falls behind and the game shows fewer than 50 pictures a second; its second
-mission's race runs at 49, with VU1 running the mission's micro code on a
-thread of its own. Resident Evil Code: Veronica X runs its menus and movies
-at full speed, 59.8 vblanks a second (NTSC); its game proper has not been
-measured.
+vblanks a second in real time, a new picture every vblank in its heaviest
+views measured, and its second mission's race at 49.9, with VU1 running the
+mission's micro code on a thread of its own. Resident Evil Code: Veronica X
+runs its menus and movies at full speed, 59.8 vblanks a second (NTSC); its
+game proper has not been measured.
 [docs/games.md](docs/games.md#speed) has the measurements and what each change
 bought.
 
@@ -263,10 +262,10 @@ Roughly in order:
    reaches next.
 2. **Sound**: PCSX2's audio settings page, and the IOP's DMA channels 4 and
    7 for drivers that program the SPU2 themselves.
-3. **Graphics speed**: the heaviest views of the first mission still show
-   fewer than 50 pictures a second. Stepped interpolation would be faster but
-   rounds differently, so pictures would change; then a GPU renderer, which
-   higher resolutions also need.
+3. **Graphics speed**: the first mission keeps up on a 14-core desktop CPU
+   with nothing else running, but has little to spare for slower machines.
+   Stepped interpolation would be faster but rounds differently, so pictures
+   would change; then a GPU renderer, which higher resolutions also need.
 4. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
    `ExecPS2`, dual-layer discs, code overlays, and Code: Veronica X past its
    first areas.
