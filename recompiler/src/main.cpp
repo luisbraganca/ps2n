@@ -338,6 +338,8 @@ int cmdVu(int argc, char** argv) {
     writeFileIfChanged(a.get("-o"), generateVuCode(images, a.get("--namespace", "ps2game"), &stats));
     std::printf("%zu image(s), %zu program entr%s, %zu blocks, %zu pairs, %zu hand-overs to the interpreter\n", stats.images, stats.entries,
                 stats.entries == 1 ? "y" : "ies", stats.blocks, stats.pairs, stats.handovers);
+    if (stats.repeats)
+        std::printf("%zu entr%s left out: another image has their programs\n", stats.repeats, stats.repeats == 1 ? "y" : "ies");
     return 0;
 }
 

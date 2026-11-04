@@ -161,18 +161,27 @@ size runs to the next start.
 | `code_files` | array of paths | `[]` | Files of VU micro code, in the format the runtime writes to `ps2n_missing.vu.toml`. `ps2n recompile` turns them into `recomp_vu.cpp`, for every executable of the game (only the boot program's config is read). |
 
 Games upload micro code at run time, so it comes from a run. Every program
-the VU interpreter runs is recorded, and at exit the runtime writes
-`ps2n_missing.vu.toml` next to the `--missing-out` file. Each `[[image]]` in
-it is what a unit's micro memory held when programs started, with `entries`
-(where they started) and `targets` (where recompiled code had to hand a
-program over to the interpreter). Keep a copy of the file, list it here, and
-recompile. After the next run, merge what the new file adds: images with the
-same contents are one image, with all their entries and targets.
+the VU interpreter runs is recorded, once however often and wherever it ran,
+and at exit the runtime writes `ps2n_missing.vu.toml` next to the
+`--missing-out` file. Each `[[image]]` in it is what a unit's micro memory
+held when programs were first seen, with `entries` (where they started) and
+`targets` (where recompiled code had to hand a program over to the
+interpreter, as addresses in that image). Keep a copy of the file, list it
+here, and recompile. After the next run, merge what the new file adds: images
+with the same contents are one image, with all their entries and targets, and
+a program two images hold is compiled once.
 
-A recompiled program runs when micro memory holds the words it was compiled
-from; each block checks its own words once after every change to micro
-memory. It runs to its end, or hands the program over to the interpreter, with
-the pipeline as it stands, in these cases:
+A program is told by its code, not its address: the pairs it reaches from its
+start (its branches are relative, its calls come back to the pairs after
+them) and where they sit from the start. Games often upload a program
+wherever micro memory has room (in a play session, Agent Under Fire's
+driving mission put its 23 VU1 programs at 400 addresses), so a recompiled
+program runs wherever micro memory holds the words it was compiled from: the
+runtime finds it by its first pairs, and it adds where it sits to every
+address it reads or writes (TPC, the links of BAL and JALR, JR's returns).
+Each block checks its own words where it runs, once after every change to
+micro memory. It runs to its end, or hands the program over to the
+interpreter, with the pipeline as it stands, in these cases:
 - a branch or E bit in a delay slot;
 - a JR or JALR to an address it was not told about (the image's `targets`);
 - micro memory that no longer holds its code.

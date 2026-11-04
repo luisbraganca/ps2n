@@ -20,6 +20,7 @@
 #include "internal.h"
 #include "log.h"
 #include "ps2/vu_micro.h"
+#include "ps2n/vu_program.h"
 
 #include <cstdio>
 #include <cstring>
@@ -140,26 +141,43 @@ bool step(Unit& u, Decoded* code) {
 }
 
 // ---- recompiled programs -----------------------------------------------------------------------
-// The game's table, by unit and entry; with several images compiled at one
-// entry, each checks whether micro memory holds its code.
-std::unordered_map<uint32_t, std::vector<ProgramFn>> g_compiled[2];
+// Micro memory's pairs as ps2n/vu_program.h reads them.
+struct MicroWords {
+    const Unit& u;
+    uint64_t operator()(uint32_t pc) const {
+        uint64_t w;
+        std::memcpy(&w, u.micro + (pc & u.microMask & ~7u), 8);
+        return w;
+    }
+};
+
+// The game's table, by unit and the key of a program's first pairs
+// (ps2n::vu::entryKey): a program runs compiled wherever micro memory holds
+// it. Programs whose keys match each check whether micro memory holds their code.
+struct Compiled {
+    ProgramFn fn;
+    uint32_t entry;   // where it was compiled from
+};
+std::unordered_map<uint64_t, std::vector<Compiled>> g_compiled[2];
 bool g_useCompiled = true;
 
-// The micro code the interpreter ran, for the next recompile: each distinct
-// micro memory, by a hash of its words, and the entries programs started at.
+// The micro code the interpreter ran, for the next recompile: each program
+// once (ps2n::vu::programKey), wherever it sat, with the micro memory it was
+// first seen in, where it started there, and where compiled code handed it
+// over, as addresses in that micro memory.
 struct Recorded {
     int unit = 0;
     std::vector<uint8_t> micro;
-    std::set<uint32_t> entries;
-    std::set<uint32_t> targets;   // where compiled code handed a program over (a JR or JALR it did not expect)
+    uint32_t entry = 0;
+    std::set<uint32_t> targets;   // where compiled code handed it over (a JR or JALR it did not expect)
 };
 bool g_recording = false;
-std::map<uint64_t, Recorded> g_recorded;   // VU0's images on the guest thread, VU1's on the VU1 thread
-std::mutex g_recordedMutex;                // for the map; an image is only ever touched by its unit's thread
+std::map<uint64_t, Recorded> g_recorded;   // VU0's on the guest thread, VU1's on the VU1 thread
+std::mutex g_recordedMutex;                // for the map; a record is only ever touched by its unit's thread
 struct {
     uint64_t generation = ~uint64_t(0);
-    Recorded* image = nullptr;
     uint32_t lastEntry = ~0u, lastTarget = ~0u;
+    uint64_t key = 0;   // the program at lastEntry
 } g_recordedNow[2];
 
 uint64_t hashMicro(const uint8_t* micro, size_t bytes) {
@@ -173,38 +191,25 @@ uint64_t hashMicro(const uint8_t* micro, size_t bytes) {
     return h;
 }
 
-// The record of what micro memory holds now (kept until it changes).
-Recorded& recordedImage(const Unit& u) {
-    auto& now = g_recordedNow[u.index];
-    const uint64_t generation = g_microGeneration[u.index];
-    if (now.generation != generation || !now.image) {
-        const size_t bytes = u.microMask + 1;
-        now.generation = generation;
-        const uint64_t key = hashMicro(u.micro, bytes) ^ static_cast<uint64_t>(u.index);
-        std::lock_guard<std::mutex> lock(g_recordedMutex);
-        Recorded& r = g_recorded[key];
-        if (r.micro.empty()) {
-            r.unit = u.index;
-            r.micro.assign(u.micro, u.micro + bytes);
-        }
-        now.image = &r;
-        now.lastEntry = now.lastTarget = ~0u;
-    }
-    return *now.image;
-}
-
 // A program the interpreter ran from `entry` (all of it, or after compiled
 // code handed it over at `target`: ~0 for none).
 void record(const Unit& u, uint32_t entry, uint32_t target) {
     if (!g_recording) return;
     auto& now = g_recordedNow[u.index];
-    const bool same = now.generation == g_microGeneration[u.index] && now.image;
-    if (same && now.lastEntry == entry && now.lastTarget == target) return;
-    Recorded& r = recordedImage(u);
-    r.entries.insert(entry);
-    if (target != ~0u) r.targets.insert(target);
+    const uint64_t generation = g_microGeneration[u.index];
+    if (now.generation == generation && now.lastEntry == entry && now.lastTarget == target) return;
+    if (now.generation != generation || now.lastEntry != entry) now.key = ps2n::vu::programKey(MicroWords{u}, entry, u.microMask, u.index);
+    now.generation = generation;
     now.lastEntry = entry;
     now.lastTarget = target;
+    std::lock_guard<std::mutex> lock(g_recordedMutex);
+    Recorded& r = g_recorded[now.key];
+    if (r.micro.empty()) {
+        r.unit = u.index;
+        r.micro.assign(u.micro, u.micro + u.microMask + 1);
+        r.entry = entry;
+    }
+    if (target != ~0u) r.targets.insert((target - entry + r.entry) & u.microMask & ~7u);
 }
 
 // Runs a program from TPC: recompiled code for it if there is any that micro
@@ -229,11 +234,11 @@ void run(Unit& u, uint32_t startByte) {
     u.steps = 0;
     const uint32_t start = u.vi[TPC] & ~7u;
     uint32_t compiled = kNotRun;
-    if (g_useCompiled) {
+    if (g_useCompiled && !g_compiled[u.index].empty()) {
         const auto& table = g_compiled[u.index];
-        if (const auto it = table.find(start); it != table.end())
-            for (const ProgramFn fn : it->second)
-                if ((compiled = fn(u, start)) != kNotRun) break;
+        if (const auto it = table.find(ps2n::vu::entryKey(MicroWords{u}, start, u.microMask, u.index)); it != table.end())
+            for (const Compiled& c : it->second)
+                if ((compiled = c.fn(u, c.entry, (start - c.entry) & u.microMask)) != kNotRun) break;
     }
     if (compiled == kEnded) {
         PS2_TRACE("vu", "VU%d program at 0x%04x ran %llu instructions, recompiled", u.index, start, static_cast<unsigned long long>(u.steps));
@@ -274,7 +279,8 @@ bool microMatches(const Unit& u, uint32_t pc, const uint64_t* words, uint32_t pa
 void registerPrograms(const CompiledProgram* programs, size_t count) {
     sync();
     for (auto& table : g_compiled) table.clear();
-    for (size_t i = 0; i < count; ++i) g_compiled[programs[i].unit & 1][programs[i].entry].push_back(programs[i].fn);
+    for (size_t i = 0; i < count; ++i)
+        if (programs[i].fn) g_compiled[programs[i].unit & 1][programs[i].key].push_back({programs[i].fn, programs[i].entry});
 }
 
 void useCompiledPrograms(bool on) {
@@ -293,11 +299,23 @@ void writeRecordedPrograms(const std::filesystem::path& file) {
     if (g_recorded.empty() || file.empty()) return;
     std::ofstream out(file);
     if (!out) return;
-    out << "# VU micro code ps2n interpreted during the last run: what each unit's micro\n"
-        << "# memory held when programs started, and where they started. List this file\n"
-        << "# in [vu] code_files of the game's config (or merge its images into a file\n"
-        << "# listed there) and recompile, and those programs run compiled.\n";
-    size_t entries = 0;
+    out << "# VU micro code ps2n interpreted during the last run: each program once,\n"
+        << "# with what micro memory held when it was first seen and where it started\n"
+        << "# there. List this file in [vu] code_files of the game's config (or merge\n"
+        << "# its images into a file listed there) and recompile, and those programs\n"
+        << "# run compiled, wherever the game puts them.\n";
+    // Programs seen in the same micro memory go in one image.
+    struct Image {
+        const Recorded* first;
+        std::set<uint32_t> entries, targets;
+    };
+    std::map<uint64_t, Image> images;
+    for (const auto& [key, r] : g_recorded) {
+        Image& im = images.try_emplace(hashMicro(r.micro.data(), r.micro.size()) ^ static_cast<uint64_t>(r.unit), Image{&r, {}, {}})
+                        .first->second;
+        im.entries.insert(r.entry);
+        im.targets.insert(r.targets.begin(), r.targets.end());
+    }
     char buf[96];
     auto list = [&](const std::set<uint32_t>& addresses) {
         bool first = true;
@@ -307,20 +325,20 @@ void writeRecordedPrograms(const std::filesystem::path& file) {
             first = false;
         }
     };
-    for (const auto& [hash, r] : g_recorded) {
-        out << "\n[[image]]\nunit = " << r.unit << "\nentries = [";
-        list(r.entries);
+    for (const auto& [hash, im] : images) {
+        out << "\n[[image]]\nunit = " << im.first->unit << "\nentries = [";
+        list(im.entries);
         out << "]\n";
-        if (!r.targets.empty()) {
+        if (!im.targets.empty()) {
             out << "# where recompiled code handed programs over (jumps through a register it did not expect)\ntargets = [";
-            list(r.targets);
+            list(im.targets);
             out << "]\n";
         }
-        entries += r.entries.size();
         out << "# pairs (lower word | upper word << 32) from each address; lines of zeros left out\ncode = \"\"\"\n";
-        for (size_t at = 0; at < r.micro.size(); at += 32) {
+        const std::vector<uint8_t>& micro = im.first->micro;
+        for (size_t at = 0; at < micro.size(); at += 32) {
             uint64_t w[4];
-            std::memcpy(w, r.micro.data() + at, 32);
+            std::memcpy(w, micro.data() + at, 32);
             if (!(w[0] | w[1] | w[2] | w[3])) continue;
             std::snprintf(buf, sizeof buf, "%04zx %016llx %016llx %016llx %016llx\n", at, static_cast<unsigned long long>(w[0]),
                           static_cast<unsigned long long>(w[1]), static_cast<unsigned long long>(w[2]), static_cast<unsigned long long>(w[3]));
@@ -328,8 +346,8 @@ void writeRecordedPrograms(const std::filesystem::path& file) {
         }
         out << "\"\"\"\n";
     }
-    PS2_INFO("vu", "%zu interpreted micro program entr%s in %zu image(s) written to %s", entries, entries == 1 ? "y" : "ies",
-             g_recorded.size(), file.string().c_str());
+    PS2_INFO("vu", "%zu interpreted micro program%s in %zu image(s) written to %s", g_recorded.size(), g_recorded.size() == 1 ? "" : "s",
+             images.size(), file.string().c_str());
 }
 
 Unit& unit(int index) { return g_unit[index & 1]; }

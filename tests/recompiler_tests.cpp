@@ -6,10 +6,12 @@
 #include "config.h"
 #include "function_map.h"
 #include "pnach.h"
+#include "vu_codegen.h"
 
 #include "ps2n/assembler.h"
 #include "ps2n/elf.h"
 #include "ps2n/util.h"
+#include "ps2n/vu_program.h"
 
 #include <chrono>
 #include <cstring>
@@ -557,6 +559,34 @@ TEST_CASE(codegen_writes_other_programs) {
     CHECK(readTextFile(cfg.outDir / "MAIN_ELF" / "recomp_table.cpp").find("\"MAIN.ELF\"") != std::string::npos);
     CHECK(readTextFile(cfg.outDir / "recomp_table.cpp").find("&::ps2game_MAIN_ELF::kGameInfo") != std::string::npos);
     CHECK(readTextFile(cfg.outDir / "CMakeLists.txt").find("MAIN_ELF/recomp_table.cpp") != std::string::npos);
+}
+
+// One program recorded in two micro memories, at two addresses (games put a
+// program wherever there is room): compiled once, found by its first pairs,
+// and run where it sits.
+TEST_CASE(vu_programs_compile_once_wherever_they_were_recorded) {
+    const uint64_t program[] = {0x400002ff8000033cull, 0x000002ff8000033cull};   // NOP with E, NOP (lower | upper << 32)
+    VuImage a, b;
+    a.micro.assign(16384, 0);
+    b.micro.assign(16384, 0);
+    std::memcpy(a.micro.data() + 0x100, program, sizeof program);
+    std::memcpy(b.micro.data() + 0x2000, program, sizeof program);
+    b.micro[0x3000] = 1;   // other code
+    a.entries = {0x100};
+    b.entries = {0x2000};
+    VuCodegenStats stats;
+    const std::string cpp = generateVuCode({a, b}, "ns", &stats);
+    CHECK_EQ(stats.images, size_t(1));
+    CHECK_EQ(stats.entries, size_t(1));
+    CHECK_EQ(stats.repeats, size_t(1));
+    CHECK(cpp.find("u + base) & 0x3fffu)") != std::string::npos);
+    const auto words = [&a](uint32_t pc) {
+        uint64_t w;
+        std::memcpy(&w, a.micro.data() + (pc & 0x3FF8), 8);
+        return w;
+    };
+    CHECK(cpp.find("    {1, 0x0100u, &vu1_") != std::string::npos || cpp.find("    {1, 0x2000u, &vu1_") != std::string::npos);   // one of the two
+    CHECK(cpp.find(strprintf("0x%016llxu},", static_cast<unsigned long long>(vu::entryKey(words, 0x100, 0x3FFF, 1)))) != std::string::npos);
 }
 
 TEST_CASE(vu_code_files) {

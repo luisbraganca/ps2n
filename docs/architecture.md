@@ -535,9 +535,18 @@ results are in flight, so they wait in a ring, and a table of the cycle at
 which each VF component's latest write lands makes a stall check a lookup.
 
 Micro programs are recompiled from what the runtime saw: the interpreter
-records each distinct micro memory it ran programs from, with where they
-started, in `ps2n_missing.vu.toml`, and `[vu] code_files` hands that to
-`ps2n recompile` (`recompiler/src/vu_codegen.cpp`). The generator walks each
+records each program it ran, once, with the micro memory it was first seen
+in and where it started there, in `ps2n_missing.vu.toml`, and `[vu]
+code_files` hands that to `ps2n recompile` (`recompiler/src/vu_codegen.cpp`).
+A program is its code, not its address. Games upload a program wherever
+micro memory has room, and its branches are relative, so its words are the
+same wherever it sits: what it is comes from the pairs it reaches from its
+start and where they sit from the start (`ps2n/vu_program.h`, shared by the
+recorder and the generator). The runtime finds a compiled program by its
+first pairs, up to its first branch or E bit, and runs it wherever it sits:
+the generated code adds that place to every address it reads or writes (TPC,
+the links of BAL and JALR, the returns JR compares), and each block's check of
+its words remembers where it last checked them. The generator walks each
 program through the same `stepPair`, with hooks that write C++ instead of
 computing: the operations are the interpreter's own, chosen at compile time
 from the instruction words (`upperFn` and `lowerFn` are constexpr), and the
@@ -553,8 +562,8 @@ recorded where recompiled code had to hand a program over. Anything else
 hands the program to the interpreter with the pipeline written back as it
 would be: a branch or E bit in a delay slot, too many states at one address,
 a jump to an address nothing recorded, micro memory that changed. Tests run
-random programs both ways and compare every register, data memory and the
-cycle count.
+random programs both ways, also moved round micro memory, and compare every
+register, data memory and the cycle count.
 
 On a VU1 transform loop the recompiled code runs 3.1 times as fast as the
 interpreter. Agent Under Fire uploads its VU1 code once: recorded and
@@ -568,7 +577,9 @@ mission the recompiled programs raise the pictures from 38 to 40 a second,
 and the guest then waits longer for the GS thread, which may only be two
 vsyncs behind: vblanks come at 42 a second instead of 46. Those programs ran
 inside the DMA transfer that starts them, on the guest thread, and drawing
-was the limit. The second mission's VU1 code is not recompiled (it uploads
-its programs in many combinations); there, running the programs on VU1's own
-thread brought the race from 40 to 49.9 vblanks a second ([The VU1
-thread](#the-vu1-thread)).
+was the limit. The second mission puts each of its VU1 programs wherever
+micro memory has room: a play session saw 23 programs at 400 places, in
+7,953 different micro memories. Running the programs on VU1's own thread
+brought its race from 40 to 49.9 vblanks a second ([The VU1
+thread](#the-vu1-thread)), and recompiled, wherever they sit, they keep that
+thread busy 288 ms a second instead of 622, with the same frames.

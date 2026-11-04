@@ -3,7 +3,9 @@
 // A game uploads micro code to a vector unit at run time; the runtime records
 // the micro memory it saw and where programs started in it (VuImage), and
 // this turns each image into one C++ function the runtime runs instead of
-// interpreting, as long as micro memory holds the same words.
+// interpreting, wherever micro memory holds a program's words: games upload
+// a program wherever there is room, and the generated code adds where it
+// sits to every address it reads or writes (ps2/vu_recomp.h).
 //
 // The generated code keeps the interpreter's pipeline exactly, but works its
 // timing out here: it walks each program with the same timing the
@@ -36,10 +38,13 @@ struct VuImage {
 
 struct VuCodegenStats {
     size_t images = 0, entries = 0, blocks = 0, pairs = 0, handovers = 0;
+    size_t repeats = 0;   // entries of programs another image already has
 };
 
 // C++ for the images: a function per image, entered at any of its entries,
-// and the table `kVuPrograms` (with `kVuProgramCount`) in namespace `ns`.
+// and the table `kVuPrograms` (with `kVuProgramCount`) in namespace `ns`,
+// whose rows carry each entry's key (ps2n::vu::entryKey). A program two
+// images hold (ps2n::vu::programKey) is compiled once.
 std::string generateVuCode(const std::vector<VuImage>& images, const std::string& ns, VuCodegenStats* stats = nullptr);
 
 // The images of a VU code file, as the runtime writes it (ps2n_missing.vu.toml):

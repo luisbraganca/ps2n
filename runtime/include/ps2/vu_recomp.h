@@ -3,6 +3,8 @@
 // where the program started; it runs pairs through the same operations as the
 // interpreter (ps2/vu_micro.h) with the pipeline's timing worked out ahead,
 // and returns when the program ends, or hands it back to the interpreter.
+// It runs wherever micro memory holds its code: games upload a program at
+// different addresses, and its branches are relative.
 #pragma once
 
 #include "ps2/vu_micro.h"
@@ -18,14 +20,18 @@ constexpr uint32_t kNotRun = 0xFFFFFFFEu;   // nothing ran: micro memory does no
 // tests that run random programs set fewer.
 extern uint64_t g_stepLimit;
 
-// Runs the program at `entry`. Returns kEnded, kNotRun, or the address the
-// interpreter goes on from, with the pipeline written back to the unit.
-using ProgramFn = uint32_t (*)(Unit& u, uint32_t entry);
+// Runs the program compiled at `entry` from `entry + base` (bytes, within
+// micro memory): every address it reads or writes, TPC and links included,
+// is its compiled address plus `base`. Returns kEnded, kNotRun, or the
+// address the interpreter goes on from, with the pipeline written back to
+// the unit.
+using ProgramFn = uint32_t (*)(Unit& u, uint32_t entry, uint32_t base);
 
 struct CompiledProgram {
     int unit;
-    uint32_t entry;
+    uint32_t entry;   // where it was compiled from
     ProgramFn fn;
+    uint64_t key;     // ps2n::vu::entryKey of its first pairs, which the runtime finds it by
 };
 
 // Counts changes to each unit's micro memory (VIF MPG, EE stores): compiled

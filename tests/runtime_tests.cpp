@@ -29,6 +29,7 @@
 
 #include "ps2n/elf.h"
 #include "ps2n/util.h"
+#include "ps2n/vu_program.h"
 
 #include <algorithm>
 #include <array>
@@ -723,14 +724,23 @@ TEST_CASE(vu0_window_reaches_vu1_registers) {
 // recompiled code handed one over.
 namespace {
 int g_compiledRuns = 0;
-uint32_t endsAtOnce(ps2::vu::Unit& u, uint32_t entry) {   // as the two pairs at `entry` leave the unit
+uint32_t endsAtOnce(ps2::vu::Unit& u, uint32_t entry, uint32_t base) {   // as the two pairs at `entry` leave the unit
     ++g_compiledRuns;
-    u.vi[ps2::vu::TPC] = entry + 16;
+    u.vi[ps2::vu::TPC] = (entry + base + 16) & u.microMask;
     return ps2::vu::kEnded;
 }
-uint32_t handsOverAtEntry(ps2::vu::Unit& u, uint32_t entry) {
-    u.vi[ps2::vu::TPC] = entry;
-    return entry;
+uint32_t handsOverAtEntry(ps2::vu::Unit& u, uint32_t entry, uint32_t base) {
+    u.vi[ps2::vu::TPC] = (entry + base) & u.microMask;
+    return u.vi[ps2::vu::TPC];
+}
+uint64_t vu1EntryKey(uint32_t entry) {   // what the runtime finds a program at `entry` by
+    return ps2n::vu::entryKey(
+        [](uint32_t pc) {
+            uint64_t w;
+            std::memcpy(&w, vu1Micro + (pc & 0x3FF8), 8);
+            return w;
+        },
+        entry, 0x3FFF, 1);
 }
 } // namespace
 
@@ -752,30 +762,42 @@ TEST_CASE(vu_recompiled_programs_check_micro_memory_and_are_recorded) {
     ps2::vif::transfer(1, reinterpret_cast<const uint64_t*>(mpg), 1);
     CHECK(ps2::vu::g_microGeneration[1] > generation);
 
-    // A registered program runs from its entry, and not with --interpret.
+    // A registered program runs from its entry, and not with --interpret; and
+    // wherever micro memory holds its code, found by its first pairs.
     const uint32_t program[][2] = {{lowerNop, upperNop | ebit}, {lowerNop, upperNop}};   // lower, upper
     std::memcpy(vu1Micro + 0x40, program, sizeof program);
-    const ps2::vu::CompiledProgram ends[] = {{1, 0x40u, &endsAtOnce}};
+    const ps2::vu::CompiledProgram ends[] = {{1, 0x40u, &endsAtOnce, vu1EntryKey(0x40)}};
     ps2::vu::registerPrograms(ends, 1);
     g_compiledRuns = 0;
     vu1Start(0x40);
     CHECK_EQ(g_compiledRuns, 1);
     CHECK_EQ(ps2::vu::vu1Reg(VU_TPC), 0x50u);
+    std::memcpy(vu1Micro + 0x1000, program, sizeof program);
+    vu1Start(0x1000);
+    CHECK_EQ(g_compiledRuns, 2);
+    CHECK_EQ(ps2::vu::vu1Reg(VU_TPC), 0x1010u);
+    const uint32_t other[][2] = {{lowerNop, upperNop}, {lowerNop, upperNop | ebit}, {lowerNop, upperNop}};
+    std::memcpy(vu1Micro + 0x2000, other, sizeof other);
+    vu1Start(0x2000);   // other code: interpreted
+    CHECK_EQ(g_compiledRuns, 2);
+    CHECK_EQ(ps2::vu::vu1Reg(VU_TPC), 0x2018u);
     ps2::vu::useCompiledPrograms(false);
     vu1Reset();
     vu1Start(0x40);
-    CHECK_EQ(g_compiledRuns, 1);
+    CHECK_EQ(g_compiledRuns, 2);
     CHECK_EQ(ps2::vu::vu1Reg(VU_TPC), 0x50u);
     ps2::vu::useCompiledPrograms(true);
 
-    // Recorded: a program the interpreter ran, and one recompiled code handed over.
+    // Recorded: a program the interpreter ran, once wherever it ran, and one
+    // recompiled code handed over.
     ps2::vu::registerPrograms(nullptr, 0);
     ps2::vu::recordPrograms(true);
     vu1Start(0x40);
-    const ps2::vu::CompiledProgram handsOver[] = {{1, 0x40u, &handsOverAtEntry}};
+    vu1Start(0x1000);
+    const ps2::vu::CompiledProgram handsOver[] = {{1, 0x40u, &handsOverAtEntry, vu1EntryKey(0x40)}};
     ps2::vu::registerPrograms(handsOver, 1);
-    vu1Start(0x40);
-    CHECK_EQ(ps2::vu::vu1Reg(VU_TPC), 0x50u);   // the interpreter went on from there
+    vu1Start(0x1000);
+    CHECK_EQ(ps2::vu::vu1Reg(VU_TPC), 0x1010u);   // the interpreter went on from there
     ps2::vu::recordPrograms(false);
     ps2::vu::registerPrograms(nullptr, 0);
     const auto file = std::filesystem::temp_directory_path() / "ps2n_vu_recorded.toml";
@@ -785,10 +807,13 @@ TEST_CASE(vu_recompiled_programs_check_micro_memory_and_are_recorded) {
     in.close();
     std::filesystem::remove(file);
     CHECK(text.find("[[image]]\nunit = 1\nentries = [0x0040]\n") != std::string::npos);
-    CHECK(text.find("targets = [0x0040]\n") != std::string::npos);
+    CHECK(text.find("targets = [0x0040]\n") != std::string::npos);   // where it was handed over, at 0x1000
+    CHECK(text.find("0x1000") == std::string::npos);
     CHECK(text.find("\n0040 400002ff8000033c 000002ff8000033c ") != std::string::npos);
     CHECK(text.find("\n0000 0000000000000000 0000000000000000 000002ff8000033c ") != std::string::npos);   // the MPG's pair
 
+    std::memset(vu1Micro + 0x1000, 0, sizeof program);
+    std::memset(vu1Micro + 0x2000, 0, sizeof other);
     std::memset(vu1Micro, 0, 0x60);
     std::memset(vu0Micro, 0, 0x20);
     std::memset(vu1Mem + 0x10, 0, 16);

@@ -35,7 +35,8 @@ config lists the other executables under `[input] programs`, as in
 ### What runs
 
 - The loader, the movie player, `ACTION.UK` and `DRIVING.ELF` run
-  recompiled, and so does the VU1 micro code `ACTION.UK` uploads.
+  recompiled, and so does the VU1 micro code both upload (the driving
+  mission's as far as a play session recorded it).
 - The language selection, the intro movies, the copyright and title screens,
   the menus, and the first mission, Trouble in Paradise, played to its end.
 - The second mission, a driving mission (`mis02a`) that `DRIVING.ELF` runs:
@@ -65,15 +66,17 @@ config lists the other executables under `[input] programs`, as in
   an 8x8 block of the depth buffer (`PSMZ32`) at a point that drifts with the
   view, most likely to tell whether the sun is hidden before its glare is
   drawn. What the glare does without it has not been checked.
-- `DRIVING.ELF`'s VU1 micro code runs on the interpreter (in real time on
-  VU1's own thread). It uploads its programs in many combinations, over 5,000
-  distinct micro memories in the mission's first two minutes, and they have
-  not been recorded for the VU recompiler.
-- That interpreted micro code keeps VU1's thread busy about two thirds of
-  the time in the second mission's race. With other work on the machine it
-  can fall behind: a play test, while another game ran beside it, slowed to
-  28 to 34 vblanks a second late in the mission, VU1's thread busy all the
-  time and the GS waiting for its drawing (see [Speed](#speed)).
+- `DRIVING.ELF`'s VU1 programs run recompiled only as far as a play session
+  recorded them: 23 programs, from the start of the second mission into its
+  race. The mission uploads each wherever micro memory has room (400 places
+  for those 23); a program no session recorded yet runs on the interpreter,
+  and lands in `ps2n_missing.vu.toml` for the next recompile.
+- Before its VU1 programs were recompiled, the race kept VU1's thread busy
+  about two thirds of the time, and with other work on the machine it fell
+  behind: a play test, while another game ran beside it, slowed to 28 to 34
+  vblanks a second late in the mission, VU1's thread busy all the time and
+  the GS waiting for its drawing (see [Speed](#speed)). Recompiled, the thread
+  is busy under a third of the time.
 - The second mission has been played into its race; how far it can be
   played has not been tried.
 - With the widescreen patch, the race's camera takes 1.817 for its width
@@ -105,8 +108,9 @@ of November 1 was not measured again.
 The second mission's race runs at 49.9 vblanks a second in real time over
 its heaviest stretch measured (vblanks 6,800 to 9,000 of a scripted run that
 starts it in place of the first mission), with nothing else running. VU1
-runs the mission's micro code on its own thread, on the interpreter, busy
-638 ms a second on average there and 806 at most.
+runs the mission's micro code on its own thread, recompiled, busy 288 ms a
+second on average there and 379 at most; 292 and 381 with the widescreen
+patch.
 
 #### What each change bought
 
@@ -212,6 +216,18 @@ In the order the changes were made:
   (its breaks falling from 29.9 and 55.6 a second, 27 pictures a second in
   its heaviest view) came from runs with another game running on the same
   machine.
+- **The race's VU1 programs recompiled, wherever they sit.** The driving
+  mission uploads each VU1 program wherever micro memory has room: a play
+  session saw 23 programs at 400 places, in 7,953 different micro memories,
+  so no recorded micro memory matched again and the programs stayed
+  interpreted. Recompiled programs now run wherever micro memory holds them,
+  and that session's recording, one image a program, covers the race. Over
+  vblanks 6,800 to 9,000 of the scripted race, VU1's thread is busy 288 ms a
+  second on average instead of 622, and 379 at most instead of 794, with the
+  race at full speed either way on an idle machine (49.8 and 49.9 vblanks a
+  second); with the widescreen patch, 292 ms. A deterministic run of the
+  race draws the same frames as with the programs interpreted (180 of 180
+  compared).
 
 ## Resident Evil Code: Veronica X
 

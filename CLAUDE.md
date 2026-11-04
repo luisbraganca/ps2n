@@ -51,6 +51,7 @@ Configured trees (Ninja, git-ignored). Reuse them:
 core/include/ps2n/r5900_ops.inc  the one instruction table: decoder, disassembler, assembler
 core/include/ps2n/r5900_sem.inc  instruction -> runtime op, read by codegen and the interpreter
 core/include/ps2n/vu_micro.h     VU micro pairs: decoding and the pipeline's timing, for vu.cpp and vu_codegen.cpp
+core/include/ps2n/vu_program.h   which program a start address holds, wherever it sits (keys for lookup and recording)
 recompiler/src/                  analysis.cpp (function discovery), codegen.cpp, config.cpp, main.cpp (CLI),
                                  vu_codegen.cpp (recorded VU micro code to C++), pnach.cpp (PCSX2 patch files)
 runtime/include/ps2/ops_*.h      instruction semantics, shared by generated code and the interpreter

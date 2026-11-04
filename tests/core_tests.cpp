@@ -6,9 +6,12 @@
 #include "ps2n/irx.h"
 #include "ps2n/r5900.h"
 #include "ps2n/util.h"
+#include "ps2n/vu_program.h"
 
 #include <cstring>
 #include <random>
+#include <utility>
+#include <vector>
 
 using namespace ps2n;
 using namespace ps2n::r5900;
@@ -295,6 +298,65 @@ TEST_CASE(util_parse_int) {
     CHECK(!parseInt("0xZZ").has_value());
     CHECK(!parseInt("").has_value());
     CHECK_EQ(crc32(reinterpret_cast<const uint8_t*>("123456789"), 9), 0xCBF43926u);
+}
+
+// A VU program is told by its code wherever it sits: the pairs it reaches
+// (branches, a call and the pair it returns to, up to its E bit's delay slot)
+// and where they sit from its start; its first pairs find it.
+TEST_CASE(vu_programs_are_told_by_their_code_wherever_they_sit) {
+    constexpr uint32_t upperNop = 0x000002FFu, lowerNop = 0x8000033Cu, ebit = 0x40000000u;
+    auto pair = [](uint32_t lower, uint32_t upper) { return static_cast<uint64_t>(lower) | static_cast<uint64_t>(upper) << 32; };
+    const std::vector<uint64_t> program = {
+        pair((0x08u << 25) | (1u << 16) | 3u, upperNop),    // 0: iaddiu vi01, vi00, 3
+        pair((0x21u << 25) | (15u << 16) | 3u, upperNop),   // 1: bal vi15, to 5 (the delay slot plus 3 pairs)
+        pair(lowerNop, upperNop),                           // 2: its delay slot
+        pair(lowerNop, upperNop | ebit),                    // 3: back from the call: the end
+        pair(lowerNop, upperNop),                           // 4: the E bit's delay slot
+        pair((0x08u << 25) | (2u << 16) | 5u, upperNop),    // 5: iaddiu vi02, vi00, 5
+        pair((0x24u << 25) | (15u << 11), upperNop),        // 6: jr vi15
+        pair(lowerNop, upperNop),                           // 7: its delay slot
+    };
+    std::mt19937_64 random(7);
+    auto memoryWith = [&](uint32_t at, const std::vector<uint64_t>& code) {
+        std::vector<uint64_t> micro(2048);
+        for (uint64_t& w : micro) w = random() & ~(uint64_t(ebit) << 32);   // other code around it
+        for (size_t i = 0; i < code.size(); ++i) micro[(at / 8 + i) % 2048] = code[i];
+        return micro;
+    };
+    auto keys = [](const std::vector<uint64_t>& micro, uint32_t entry) {
+        const auto words = [&micro](uint32_t pc) { return micro[(pc & 0x3FFF) / 8]; };
+        return std::make_pair(vu::entryKey(words, entry, 0x3FFF, 1), vu::programKey(words, entry, 0x3FFF, 1));
+    };
+    const auto here = keys(memoryWith(0x0100, program), 0x0100);
+    CHECK(keys(memoryWith(0x2340, program), 0x2340) == here);
+    CHECK(keys(memoryWith(0x3FE0, program), 0x3FE0) == here);   // round the end of micro memory
+    std::vector<uint64_t> changed = program;
+    changed[5] = pair((0x08u << 25) | (2u << 16) | 6u, upperNop);   // the routine: another program
+    CHECK(keys(memoryWith(0x0100, changed), 0x0100).second != here.second);
+    CHECK_EQ(keys(memoryWith(0x0100, changed), 0x0100).first, here.first);   // its first pairs are the same
+    changed = program;
+    changed[3] = pair(lowerNop, upperNop);   // goes on past where it ended
+    CHECK(keys(memoryWith(0x0100, changed), 0x0100).second != here.second);
+    changed = program;
+    std::swap(changed[5], changed[7]);   // the same pairs, in another order
+    CHECK(keys(memoryWith(0x0100, changed), 0x0100).second != here.second);
+    changed = program;
+    changed[0] = pair((0x08u << 25) | (1u << 16) | 4u, upperNop);
+    CHECK(keys(memoryWith(0x0100, changed), 0x0100).first != here.first);
+    // The same pairs in the same order, where the first branch lands on
+    // another of them: another program.
+    const uint64_t b2 = pair((0x20u << 25) | 2u, upperNop);                            // b, to the delay slot plus 2 pairs
+    const uint64_t back3 = pair((0x29u << 25) | (1u << 11) | 0x7FDu, upperNop);        // ibne vi00, vi01, back 3 pairs from the slot
+    const uint64_t x = pair((0x08u << 25) | (3u << 16) | 1u, upperNop);                // iaddiu vi03, vi00, 1
+    const uint64_t y = pair((0x08u << 25) | (4u << 16) | 1u, upperNop);                // iaddiu vi04, vi00, 1
+    const uint64_t nop = pair(lowerNop, upperNop), end = pair(lowerNop, upperNop | ebit);
+    const std::vector<uint64_t> loopFirst = {b2, nop, x, y, back3, nop, end, nop};       // to y, then x y while vi01
+    const std::vector<uint64_t> gapFirst = {b2, nop, nop, x, y, back3, nop, end, nop};   // to x, then x y while vi01; pair 2 unreached
+    CHECK(keys(memoryWith(0x0100, loopFirst), 0x0100).second != keys(memoryWith(0x0100, gapFirst), 0x0100).second);
+    // Pairs it does not reach are not part of it.
+    changed = program;
+    changed.push_back(pair(lowerNop, upperNop | ebit));   // 8: after the routine's return
+    CHECK(keys(memoryWith(0x0100, changed), 0x0100) == here);
 }
 
 int main(int argc, char** argv) { return ::testing::runAll(argc, argv); }

@@ -9,6 +9,7 @@
 
 #include "ps2/ops_vu0.h"
 #include "ps2/vu_recomp.h"
+#include "ps2n/vu_program.h"
 #include "vu.h"
 
 #include <algorithm>
@@ -18,6 +19,7 @@
 #include <iterator>
 #include <map>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -80,11 +82,21 @@ std::string differences(const Snapshot& a, const Snapshot& b) {
     return d;
 }
 
+uint64_t keyAt(const vu::Unit& u, uint32_t pc) {   // the key of the program micro memory holds at `pc`
+    return ps2n::vu::entryKey(
+        [&u](uint32_t at) {
+            uint64_t w;
+            std::memcpy(&w, u.micro + (at & u.microMask & ~7u), 8);
+            return w;
+        },
+        pc, u.microMask, u.index);
+}
+
 // Every compiled entry goes through here, to count how the compiled code ended.
-std::map<std::pair<int, uint32_t>, vu::ProgramFn> g_compiled;
+std::map<std::tuple<int, uint32_t, uint64_t>, vu::ProgramFn> g_compiled;   // unit, entry, key
 long g_ended[2] = {}, g_handedOver[2] = {};
-uint32_t counted(vu::Unit& u, uint32_t entry) {
-    const uint32_t r = g_compiled.at({u.index, entry})(u, entry);
+uint32_t counted(vu::Unit& u, uint32_t entry, uint32_t base) {
+    const uint32_t r = g_compiled.at({u.index, entry, keyAt(u, entry + base)})(u, entry, base);
     if (r == vu::kEnded) ++g_ended[u.index];
     else if (r != vu::kNotRun) ++g_handedOver[u.index];
     return r;
@@ -108,8 +120,8 @@ int main(int argc, char** argv) {
     std::vector<vu::CompiledProgram> table;
     for (size_t i = 0; i < vufuzz::kVuProgramCount; ++i) {
         const vu::CompiledProgram& p = vufuzz::kVuPrograms[i];
-        g_compiled[{p.unit, p.entry}] = p.fn;
-        table.push_back({p.unit, p.entry, &counted});
+        g_compiled[{p.unit, p.entry, p.key}] = p.fn;
+        table.push_back({p.unit, p.entry, &counted, p.key});
     }
     vu::registerPrograms(table.data(), table.size());
     vufuzz::Random random(0x5EED0002);
@@ -204,6 +216,58 @@ int main(int argc, char** argv) {
     if (ended || handed) {
         std::printf("recompiled code ran %ld times over micro memory that holds other code\n", ended + handed);
         return 1;
+    }
+    // Games put a program wherever micro memory has room: each image moved
+    // round micro memory by `shift` bytes runs its programs from where they
+    // went, compiled as it was interpreted.
+    long movedRuns = 0, movedEnded = 0, movedDirected = 0;
+    for (size_t i = 0; i < images.size(); ++i) {
+        Image moved = images[i];
+        const uint32_t size = static_cast<uint32_t>(moved.micro.size()), shift = moved.unit ? 0x1238u : 0x238u;
+        for (uint32_t a = 0; a < size; ++a) moved.micro[(a + shift) % size] = images[i].micro[a];
+        for (uint32_t& e : moved.entries) e = (e + shift) % size;
+        load(moved);
+        const long before = g_ended[moved.unit], beforeRuns = runs[moved.unit];
+        for (const uint32_t entry : moved.entries)
+            for (int run = 0; run < kRunsPerEntry / 4; ++run) runBoth(i, entry, run);
+        movedRuns += runs[moved.unit] - beforeRuns;
+        movedEnded += g_ended[moved.unit] - before;
+        if (i == 0) movedDirected = g_ended[1] - before;
+    }
+    std::printf("moved round micro memory: %ld runs, compiled code ended %ld of them\n", movedRuns, movedEnded);
+    if (movedEnded < movedRuns / 4) {
+        std::printf("too few moved runs ended in compiled code\n");
+        return 1;
+    }
+    if (!images.empty() && movedDirected != static_cast<long>(images[0].entries.size()) * (kRunsPerEntry / 4)) {
+        std::printf("the hand-written programs, moved, ended recompiled %ld times of %ld\n", movedDirected,
+                    static_cast<long>(images[0].entries.size()) * (kRunsPerEntry / 4));
+        return 1;
+    }
+    // A program in two places at once, the second copy ending after its
+    // first pairs (an E bit and its delay slot): compiled code that ran at
+    // the first must check its words again where the second sits.
+    if (!images.empty()) {
+        const Image& hand = images[0];
+        const uint32_t mask = static_cast<uint32_t>(hand.micro.size()) - 1;
+        for (const uint32_t entry : hand.entries) {
+            Image twice = hand;
+            const uint32_t copy = (entry + 0x2000) & mask;
+            for (uint32_t a = 0; a < 0x100; a += 8) std::memcpy(twice.micro.data() + ((copy + a) & mask), hand.micro.data() + ((entry + a) & mask), 8);
+            uint32_t first = 0;   // pairs in its first block, as ps2n::vu::entryKey counts them
+            for (bool last = false; first < ps2n::vu::kEntryKeyPairs && !last; ++first) {
+                uint64_t w;
+                std::memcpy(&w, hand.micro.data() + ((entry + 8 * first) & mask), 8);
+                const ps2n::vu::Pair p = ps2n::vu::decodePair(static_cast<uint32_t>(w), static_cast<uint32_t>(w >> 32), 1);
+                last = ps2n::vu::isBranchPair(p) || p.ebit;
+                if (last) ++first;   // its delay slot
+            }
+            const uint32_t end[2][2] = {{0x8000033Cu, 0x400002FFu}, {0x8000033Cu, 0x000002FFu}};   // NOP with E, NOP
+            std::memcpy(twice.micro.data() + ((copy + 8 * first) & mask), end, sizeof end);
+            load(twice);
+            runBoth(0, entry, 0);
+            runBoth(0, copy, 0);
+        }
     }
     return mismatches ? 1 : 0;
 }

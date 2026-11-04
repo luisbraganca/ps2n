@@ -151,7 +151,7 @@ console:
 - [x] XGKICK to the GIF
 - [x] VU1's micro programs running alongside the EE, on a thread of their own (real-time runs)
 - [ ] The vector units' timing: a program takes no emulated time
-- [x] A VU recompiler: micro code the runtime recorded, recompiled with the pipeline's timing worked out ahead
+- [x] A VU recompiler: micro code the runtime recorded, recompiled with the pipeline's timing worked out ahead, each program once and run wherever the game puts it
 
 **Movies (IPU)**: 5 of 6
 - [x] Every command: BCLR, IDEC, BDEC, VDEC, FDEC, SETIQ, SETVQ, CSC, PACK, SETTH
@@ -247,9 +247,9 @@ rest of the emulation, the drawing above all. On an Intel i5-14600KF, Agent
 Under Fire runs its movies, its menus and its first mission at full speed, 50
 vblanks a second in real time, a new picture every vblank in its heaviest
 views measured, and its second mission's race at 49.9, with VU1 running the
-mission's micro code on a thread of its own. Resident Evil Code: Veronica X
-runs its menus and movies at full speed, 59.8 vblanks a second (NTSC); its
-game proper has not been measured.
+mission's micro code recompiled, on a thread of its own. Resident Evil Code:
+Veronica X runs its menus and movies at full speed, 59.8 vblanks a second
+(NTSC); its game proper has not been measured.
 [docs/games.md](docs/games.md#speed) has the measurements and what each change
 bought.
 
@@ -269,11 +269,10 @@ Roughly in order:
 4. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
    `ExecPS2`, dual-layer discs, code overlays, and Code: Veronica X past its
    first areas.
-5. **Vector units**: their timing (a program takes no emulated time), and
-   recompiling programs one at a time rather than whole micro memories, so
-   that games that upload them in many combinations, such as Agent Under
-   Fire's driving missions, run them recompiled. VU1 already runs alongside
-   the EE, on a thread of its own.
+5. **Vector units**: their timing (a program takes no emulated time).
+   Programs already run recompiled wherever the game puts them (Agent Under
+   Fire's driving mission puts its programs at hundreds of addresses), and
+   VU1 runs alongside the EE, on a thread of its own.
 6. **Widescreen and higher resolutions**, the way PCSX2 does them:
    - **16:9** works: PS2 games compute their own projection, so PCSX2
      applies per-game widescreen patches (`.pnach` files) that change each

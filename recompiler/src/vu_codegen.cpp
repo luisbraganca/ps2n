@@ -3,6 +3,7 @@
 
 #include "ps2n/util.h"
 #include "ps2n/vu_micro.h"
+#include "ps2n/vu_program.h"
 
 #include <toml.hpp>
 
@@ -34,6 +35,12 @@ std::string hex(uint64_t v, int digits = 8) {
 }
 std::string num(uint64_t v) { return std::to_string(v); }
 const char* boolText(bool b) { return b ? "true" : "false"; }
+
+// Where a pair compiled at `pc` sits at run time: the program runs wherever
+// micro memory holds it, `base` bytes from where it was compiled.
+std::string at(uint32_t pc, uint32_t mask) { return "((" + hex(pc, 4) + "u + base) & " + hex(mask, 4) + "u)"; }
+// A jump's target, which the generated code keeps as a compiled address (`jump`), where it sits at run time.
+std::string jumpAt(uint32_t mask) { return "((jump + base) & " + hex(mask, 4) + "u)"; }
 
 // The pipeline between two pairs, relative to the cycle: what a block starts
 // from. (Timing counts cycles from the start of the program.)
@@ -274,7 +281,7 @@ struct Emitter {
     const Pair* p = nullptr;
 
     bool isolating() const { return p->isolate && lowerRuns(*p); }
-    void setTpc() { out += "    u.vi[ps2::vu::TPC] = " + hex(tpc, 4) + "u;\n"; }
+    void setTpc() { out += "    u.vi[ps2::vu::TPC] = " + at(tpc, mask) + ";\n"; }
 
     void commit(uint32_t slot) {
         out += "    ps2::vu::commitFlags(u, " + slotVar[slot] + ", " + boolText(t.fmac[slot].clip) + ", " + boolText(t.fmac[slot].fsset) + ");\n";
@@ -306,17 +313,18 @@ struct Emitter {
         slotVar[slot] = name;
     }
     // A branch's values: its link, its target or whether it is taken. The
-    // block's exit reads `jump` and `taken` after the delay slot.
+    // block's exit reads `jump` (the target as a compiled address) and
+    // `taken` after the delay slot.
     void branch() {
-        const uint32_t link = (tpc + 8) / 8;
-        const std::string jump = "(static_cast<uint32_t>(ps2::vu::viRead(u, " + num(fFs(lowerWord)) + ")) * 8u) & " + hex(mask & ~7u, 4) + "u";
+        const std::string link = "((" + at(tpc, mask) + " + 8u) >> 3)";   // the pair after the delay slot, as the interpreter counts it
+        const std::string jump = "((static_cast<uint32_t>(ps2::vu::viRead(u, " + num(fFs(lowerWord)) + ")) * 8u) - base) & " + hex(mask & ~7u, 4) + "u";
         switch (p->lower.op) {
         case LowerOp::B: break;
-        case LowerOp::Bal: out += "    ps2::vu::viWrite(u, " + num(fFt(lowerWord)) + ", " + num(link) + "u, false);\n"; break;
+        case LowerOp::Bal: out += "    ps2::vu::viWrite(u, " + num(fFt(lowerWord)) + ", " + link + ", false);\n"; break;
         case LowerOp::Jr: out += "    const uint32_t jump = " + jump + ";\n"; break;
         case LowerOp::Jalr:
             out += "    const uint32_t jump = " + jump + ";\n";
-            out += "    ps2::vu::viWrite(u, " + num(fFt(lowerWord)) + ", " + num(link) + "u, false);\n";
+            out += "    ps2::vu::viWrite(u, " + num(fFt(lowerWord)) + ", " + link + ", false);\n";
             break;
         default: out += "    const bool taken = ps2::vu::branchTaken(u, " + hex(lowerWord >> 25, 2) + "u, " + hex(lowerWord) + "u);\n"; break;
         }
@@ -348,7 +356,9 @@ public:
         }
         std::string out;
         for (const auto& [range, id] : ranges_) {
+            // When micro memory last held the words, and where.
             out += "uint64_t " + fn_ + "_valid" + num(id) + " = ~uint64_t(0);\n";
+            out += "uint32_t " + fn_ + "_base" + num(id) + " = 0;\n";
             out += "constexpr uint64_t " + fn_ + "_words" + num(id) + "[] = {";
             for (uint32_t i = 0; i < range.second; ++i) {
                 if (i % 4 == 0) out += "\n   ";
@@ -356,10 +366,10 @@ public:
             }
             out += "\n};\n";
         }
-        out += "\nuint32_t " + fn_ + "(ps2::vu::Unit& u, uint32_t entry) {\n";
+        out += "\nuint32_t " + fn_ + "(ps2::vu::Unit& u, uint32_t entry, uint32_t base) {\n";
         out += "    const uint64_t gen = ps2::vu::g_microGeneration[" + num(img_.unit) + "];\n";
         out += "    uint64_t cyc = u.t.cycle;\n";
-        out += "    (void)gen;   // (entries that hand over at once use neither)\n    (void)cyc;\n";
+        out += "    (void)gen;   // (entries that hand over at once use none of these)\n    (void)cyc;\n    (void)base;\n";
         for (int i = 0; i < ringUsed_; ++i) out += "    ps2::vu::Unit::Flags r" + num(i) + "{};\n";
         out += "    switch (entry) {\n";
         for (const auto& [e, id] : entryLabels_) out += "    case " + hex(e, 4) + "u: goto L" + num(id) + ";\n";
@@ -448,7 +458,7 @@ private:
     std::string jumpTo(uint32_t pc, const State& s, const Timing& t) {
         const int id = label(pc, s);
         if (id >= 0) return "    goto L" + num(id) + ";\n";
-        return handover(t, canonicalNames(t.count), hex(pc, 4) + "u", 0, "too many pipeline states at " + hex(pc, 4));
+        return handover(t, canonicalNames(t.count), at(pc, img_.mask), 0, "too many pipeline states at " + hex(pc, 4));
     }
 
     void pair(std::string& code, Timing& t, std::array<std::string, 8>& slotVar, uint32_t pc) {
@@ -482,9 +492,10 @@ private:
         for (uint32_t i = 0; i < s0.count; ++i) slotVar[i] = entryNames[i];
         std::string code, exit;
         uint32_t pc = start, pairs = 0;
-        auto handOverHere = [&](uint32_t at) {
+        const uint32_t mask = img_.mask;
+        auto handOverHere = [&](uint32_t where) {
             if (s0.start && pairs == 0) return std::string("    return ps2::vu::kNotRun;\n");
-            return handover(t, currentNames(t, slotVar), hex(at, 4) + "u", t.cycle - kBase, "a branch or E bit in a delay slot");
+            return handover(t, currentNames(t, slotVar), at(where, mask), t.cycle - kBase, "a branch or E bit in a delay slot");
         };
         for (;;) {
             const Pair p = img_.pair(pc);
@@ -507,10 +518,10 @@ private:
                     std::string to;
                     switch (p.lower.op) {
                     case LowerOp::B:
-                    case LowerOp::Bal: to = hex(img_.target(pc, lower), 4) + "u"; break;
+                    case LowerOp::Bal: to = at(img_.target(pc, lower), mask); break;
                     case LowerOp::Jr:
-                    case LowerOp::Jalr: to = "jump"; break;
-                    default: to = "taken ? " + hex(img_.target(pc, lower), 4) + "u : " + hex(img_.next(slot), 4) + "u"; break;
+                    case LowerOp::Jalr: to = jumpAt(mask); break;
+                    default: to = "taken ? " + at(img_.target(pc, lower), mask) + " : " + at(img_.next(slot), mask); break;
                     }
                     exit = "    u.t.cycle = cyc + " + num(t.cycle - kBase) + ";\n    u.vi[ps2::vu::TPC] = " + to + ";\n    return ps2::vu::kEnded;\n";
                     break;
@@ -534,7 +545,7 @@ private:
                         if (target >= 0) cases += "    case " + hex(to, 4) + "u: goto L" + num(target) + ";\n";
                     }
                     if (!cases.empty()) exit += "    switch (jump) {\n" + cases + "    default: break;\n    }\n";
-                    exit += handover(t, canonicalNames(t.count), "jump", 0,
+                    exit += handover(t, canonicalNames(t.count), jumpAt(mask), 0,
                                      p.lower.op == LowerOp::Jr ? "a return to a pair the calls reaching it do not return to"
                                                                : "a call to a pair no program starts at");
                     break;
@@ -559,8 +570,8 @@ private:
                 pairs += 2;
                 Emitter e{code, t, slotVar, fresh_, img_.unit};
                 flushAll(t, e);
-                exit = "    u.t.cycle = cyc + " + num(t.cycle - kBase) + ";\n    u.vi[ps2::vu::TPC] = " + hex(img_.next(slot), 4) +
-                       "u;\n    return ps2::vu::kEnded;\n";
+                exit = "    u.t.cycle = cyc + " + num(t.cycle - kBase) + ";\n    u.vi[ps2::vu::TPC] = " + at(img_.next(slot), mask) +
+                       ";\n    return ps2::vu::kEnded;\n";
                 break;
             }
             pair(code, t, slotVar, pc);
@@ -575,12 +586,13 @@ private:
         if (pairs) {
             const int r = range(start, pairs);
             const std::string notHere =
-                s0.start ? std::string("    return ps2::vu::kNotRun;\n") : handover(timingOf(s0), entryNames, hex(start, 4) + "u", 0, "micro memory no longer holds this code");
-            const std::string valid = fn_ + "_valid" + num(r);
-            head += "    if (" + valid + " != gen) {\n        if (!ps2::vu::microMatches(u, " + hex(start, 4) + "u, " + fn_ + "_words" + num(r) +
-                    ", " + num(pairs) + "u)) {\n" + notHere + "        }\n        " + valid + " = gen;\n    }\n";
+                s0.start ? std::string("    return ps2::vu::kNotRun;\n") : handover(timingOf(s0), entryNames, at(start, mask), 0, "micro memory no longer holds this code");
+            const std::string valid = fn_ + "_valid" + num(r), validBase = fn_ + "_base" + num(r);
+            head += "    if (" + valid + " != gen || " + validBase + " != base) {\n        if (!ps2::vu::microMatches(u, " + at(start, mask) + ", " + fn_ +
+                    "_words" + num(r) + ", " + num(pairs) + "u)) {\n" + notHere + "        }\n        " + valid + " = gen;\n        " + validBase +
+                    " = base;\n    }\n";
             if (!s0.start)
-                head += "    if (u.steps + " + num(pairs) + "u > ps2::vu::g_stepLimit) {\n" + handover(timingOf(s0), entryNames, hex(start, 4) + "u", 0, "the step limit") +
+                head += "    if (u.steps + " + num(pairs) + "u > ps2::vu::g_stepLimit) {\n" + handover(timingOf(s0), entryNames, at(start, mask), 0, "the step limit") +
                         "    }\n";
             head += "    u.steps += " + num(pairs) + ";\n";
         }
@@ -629,15 +641,34 @@ std::string generateVuCode(const std::vector<VuImage>& images, const std::string
         m.entries.insert(m.entries.end(), vi.entries.begin(), vi.entries.end());
         m.targets.insert(m.targets.end(), vi.targets.begin(), vi.targets.end());
     }
-    for (const auto& [hash, vi] : merged) {
+    // A program recorded in several images (the game put it elsewhere, or
+    // another run saw it again) is compiled once: it runs wherever micro
+    // memory holds it.
+    std::set<uint64_t> programs;
+    for (auto& [hash, vi] : merged) {
+        const auto mask = static_cast<uint32_t>(vi.micro.size() - 1);
+        const auto words = [&micro = vi.micro, mask](uint32_t pc) {
+            uint64_t w;
+            std::memcpy(&w, micro.data() + (pc & mask & ~7u), 8);
+            return w;
+        };
+        std::set<uint32_t> entries;
+        for (uint32_t e : vi.entries) entries.insert(e & mask & ~7u);
+        vi.entries.clear();
+        for (uint32_t e : entries) {
+            if (programs.insert(vu::programKey(words, e, mask, vi.unit)).second) vi.entries.push_back(e);
+            else ++stats.repeats;
+        }
+        if (vi.entries.empty()) continue;
         const std::string fn = "vu" + num(vi.unit) + "_" + hex(hash, 16).substr(2);
         ImageCompiler c(vi, fn, stats);
         out += "// VU" + num(vi.unit) + " micro memory " + hex(hash, 16) + "\n" + c.compile() + "\n";
-        for (uint32_t e : c.entries()) table += "    {" + num(vi.unit) + ", " + hex(e, 4) + "u, &" + fn + "},\n";
+        for (uint32_t e : c.entries())
+            table += "    {" + num(vi.unit) + ", " + hex(e, 4) + "u, &" + fn + ", " + hex(vu::entryKey(words, e, mask, vi.unit), 16) + "u},\n";
         ++stats.images;
     }
     out += "} // namespace\n\n";
-    out += "extern const ps2::vu::CompiledProgram kVuPrograms[] = {\n" + table + "    {0, 0, nullptr},\n};\n";
+    out += "extern const ps2::vu::CompiledProgram kVuPrograms[] = {\n" + table + "    {0, 0, nullptr, 0},\n};\n";
     out += "extern const size_t kVuProgramCount = sizeof(kVuPrograms) / sizeof(kVuPrograms[0]) - 1;\n\n";
     out += "} // namespace " + ns + "\n";
     if (statsOut) *statsOut = stats;
