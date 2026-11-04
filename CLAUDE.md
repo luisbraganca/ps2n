@@ -2,11 +2,12 @@
 
 PS2Native (`ps2n`, formerly ps2-uncompiler) recompiles PlayStation 2 EE
 executables into C++ and links them against a runtime that emulates the rest
-of the console at a high level. README.md has the status and roadmap. docs/
-has the depth: games.md (each game's stage, problems and speed),
-architecture.md (the execution model and why), runtime.md (options, coverage,
-where to add things), config.md (game config keys) and input.md (controllers,
-modelled on PCSX2).
+of the console at a high level. README.md has the status and roadmap, and
+GETTING_STARTED.md takes a tester from a fresh machine to playing a game and
+sending its logs, one command at a time. docs/ has the depth: games.md (each
+game's stage, problems and speed), architecture.md (the execution model and
+why), runtime.md (options, coverage, where to add things), config.md (game
+config keys) and input.md (controllers, modelled on PCSX2).
 
 ## Build and test
 
@@ -67,6 +68,7 @@ runtime/src/                     runtime.cpp (options, start-up), dispatch.cpp, 
                                  hostfs (device paths)
   audio/                         sound output: the SDL device, --dump-audio
   video/ input/ ui/ settings.cpp SDL window, input manager, ImGui overlay, ps2n.ini
+games/                           the configs of the games that run, which GETTING_STARTED.md copies
 tests/                           core_tests.cpp, recompiler_tests.cpp, runtime_tests.cpp,
                                  programs/ (assembly programs), sdk/ (programs built with ps2sdk)
 assets/                          branding/ (logo and icons; its README says which to use where),
@@ -240,6 +242,10 @@ assets/                          branding/ (logo and icons; its README says whic
   anything downloaded as untrusted data.
 - No game data in the repo: disc images, extracted files and code generated
   from a game live outside it (game workspaces are under `C:\ps2\`).
+  `games/` holds configs and entry-point lists only. Recorded VU micro code
+  (`ps2n_missing.vu.toml`, the `[vu] code_files`) is the game's own code and
+  stays out, as do PCSX2's pnach files. When a workspace config gains entries
+  or settings, bring them to `games/` too.
 - Input, display and UI features follow PCSX2: its setting names, defaults,
   file format and layout.
 - Report results as they are: failing tests with their output, skipped steps,
@@ -271,6 +277,10 @@ assets/                          branding/ (logo and icons; its README says whic
   - EE instructions: the `X(` rows of `r5900_ops.inc`.
 - Update docs/runtime.md's option and coverage tables, docs/config.md for
   config keys and docs/input.md for input and hotkeys.
+- GETTING_STARTED.md is followed to the letter by testers who are not
+  programmers: when the build, an option, a file location, a log message it
+  quotes or a game's set-up changes, change its commands too. It says Linux
+  has never been built; change that once it has.
 - Style: short declarative sentences, British spelling (behaviour, colour,
   recognise), and say what is not covered.
 - Commit messages: a one-line summary of what changed (parts joined with

@@ -1,0 +1,21 @@
+# 007: Agent Under Fire (Europe, SLES-50539). Copy this folder's .toml files
+# into the game's folder, beside a folder named disc that holds the programs
+# taken from the disc image: SLES_505.39, MOVIE.ELF, ACTION.UK and
+# DRIVING.ELF (see GETTING_STARTED.md).
+#
+# The loader (SLES_505.39) reads MOVIE.ELF itself and jumps into it, with no
+# LoadExecPS2. MOVIE.ELF goes back through the loader, which starts
+# ACTION.<language> the same way, and ACTION.UK goes back through it for a
+# driving mission, which DRIVING.ELF runs. Only the English ACTION.UK is
+# listed: another language runs on the interpreter.
+[input]
+elf = "disc/SLES_505.39"
+programs = ["movie.toml", "action-uk.toml", "driving.toml"]
+
+[output]
+dir = "out/auf"
+name = "auf"
+
+[analysis]
+# Code the runtime had to interpret, written when the game exits.
+entries_files = ["ps2n_missing.toml"]

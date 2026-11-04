@@ -21,7 +21,8 @@ Playable or Perfect.
 
 To bring up another game, start with the README's
 [Porting a game](../README.md#porting-a-game). Then give the game a section
-here, with the same parts as the one below.
+here, with the same parts as the one below, and its config a folder in
+[games](../games/README.md).
 
 ## 007: Agent Under Fire
 
@@ -30,7 +31,8 @@ A PAL game: run it with `--region europe`. Its disc holds a loader
 executable per language (`ACTION.UK` is the English one), and the driving
 missions (`DRIVING.ELF`). The loader is the program the disc boots, so its
 config lists the other executables under `[input] programs`, as in
-[config.md](config.md#games-with-several-executables).
+[config.md](config.md#games-with-several-executables). The configs are in
+[games/agent-under-fire](../games/agent-under-fire).
 
 ### What runs
 
@@ -233,7 +235,8 @@ In the order the changes were made:
 
 The USA release, an NTSC game: it needs no `--region`. It is one executable,
 `SLUS_201.84`, built with Metrowerks CodeWarrior and with its symbols, so its
-config (`cvx.toml`) names little more than the ELF. Code and data share the
+config ([games/code-veronica-x/cvx.toml](../games/code-veronica-x/cvx.toml))
+names little more than the ELF. Code and data share the
 executable's one section, which the recompiler splits at the first data
 object ([config.md](config.md#where-the-code-is)). The game reboots the IOP
 with `IOPRP213.IMG`, and Sony's CSL sound modules (`modhsyn`, `modmidi`,

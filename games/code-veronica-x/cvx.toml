@@ -1,0 +1,16 @@
+# Resident Evil Code: Veronica X (USA, SLUS-20184). Copy this file into the
+# game's folder, beside a folder named disc that holds SLUS_201.84, taken from
+# the disc image (see GETTING_STARTED.md).
+#
+# One executable, built with Metrowerks CodeWarrior: code and data share its
+# one section, "main", and its symbols are intact.
+[input]
+elf = "disc/SLUS_201.84"
+
+[output]
+dir = "out/cvx"
+name = "cvx"
+
+[analysis]
+# Code the runtime had to interpret, written when the game exits.
+entries_files = ["ps2n_missing.toml"]

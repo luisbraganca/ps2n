@@ -1,0 +1,9 @@
+# ACTION.UK, the game proper in English. MOVIE.ELF starts it through the
+# loader, which loads it itself and jumps to 0x00120008.
+[input]
+elf = "disc/ACTION.UK"
+
+[analysis]
+# What the interpreter ran in earlier sessions, then whatever it still
+# interprets.
+entries_files = ["action-uk-entries.toml", "ps2n_missing.ACTION.UK.toml"]

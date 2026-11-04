@@ -8,9 +8,9 @@
 <p align="center">
   <a href="#status">Status</a> ·
   <a href="docs/games.md">Games</a> ·
+  <a href="GETTING_STARTED.md">Getting started</a> ·
   <a href="#roadmap">Roadmap</a> ·
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#porting-a-game">Porting a game</a> ·
+  <a href="#how-it-works">How it works</a> ·
   <a href="#documentation">Documentation</a>
 </p>
 
@@ -54,27 +54,27 @@ L_001001a4:
 
 **Early development: no game is playable yet.** Two games have been tried,
 and both are In-game on PCSX2's scale. 007: Agent Under Fire runs its menus,
-its whole first mission and its second mission's race, and its sound plays
-properly since VU1 got a thread of its own. Resident Evil Code:
-Veronica X runs its menus and movies at full speed, and its first areas play
-with a controller; its status screen, item models and characters now draw
-correctly. [docs/games.md](docs/games.md) has what runs, the known problems
-and the speed, game by game.
+its whole first mission and its second mission's race, with sound. Resident
+Evil Code: Veronica X runs its menus and movies at full speed, and its first
+areas play with a controller. [docs/games.md](docs/games.md) has what runs,
+the known problems and the speed, game by game.
 
 The recompiler, the part that translates code, is the furthest along: it
 covers the whole EE instruction set and has recompiled two retail games. Most
 of the work left is in the runtime, which stands in for the rest of the
 console:
 
-- The graphics come from a software renderer. It needs threads of its own,
-  drawing alongside the EE, to keep the first game at full speed, which it
-  does in the heaviest views measured. That was on one 14-core desktop CPU
-  with nothing else running; slower machines have not been tried.
+- The graphics come from a software renderer, drawing on threads of its own
+  alongside the EE. It keeps the first game at full speed in the heaviest
+  views measured, on one 14-core desktop CPU; slower machines have not been
+  tried.
 - The vector units run their micro code recompiled or interpreted. In
-  real-time runs VU1 runs alongside the EE, on a thread of its own, but a
-  program still takes no emulated time.
+  real-time runs VU1 has a thread of its own, but a program still takes no
+  emulated time.
 - The IOP services cover what the two games needed.
 - The sound comes from an SPU2 emulated at its registers.
+- Windows is the only platform built and tested. Linux has never been built,
+  and macOS not since the project moved to Windows.
 
 ### By area
 
@@ -94,6 +94,7 @@ console:
 | Discs and memory cards | `█████░░░░░` 50% | 5 / 10 | dual-layer DVDs, drive timing |
 | Controllers and window | `███████░░░` 69% | 9 / 13 | multitap, other devices, speed settings |
 | Widescreen, upscaling | `████░░░░░░` 40% | 2 / 5 | no-interlacing patches, a GPU renderer, higher internal resolution (see the [roadmap](#roadmap)) |
+| Platforms | `███░░░░░░░` 33% | 1 / 3 | Linux, never built yet; macOS, not rebuilt since the move to Windows |
 
 <details>
 <summary><b>What each bar counts</b></summary>
@@ -225,6 +226,11 @@ console:
 - [ ] A GPU renderer
 - [ ] Higher internal resolution
 
+**Platforms**: 1 of 3
+- [x] Windows x64, with clang-cl and MSVC
+- [ ] Linux x64: never built yet; [GETTING_STARTED.md](GETTING_STARTED.md) has the steps to try
+- [ ] macOS on Apple silicon, where the project started: not rebuilt since it moved to Windows
+
 </details>
 
 <sub>Each item weighs the same, so a bar says how much of its list is done,
@@ -240,18 +246,16 @@ the runtime accepts with no effect count as implemented.
 ### Speed
 
 Recompiled code is fast: a tight integer loop runs at about 1.8 billion guest
-instructions per second on an Apple M3, about 10 times the interpreter and
-well above the EE's 294.9 MHz, and recompiled VU1 micro code runs a transform
-loop 3.1 times as fast as the VU interpreter. Whole games are held back by the
+instructions a second on an Apple M3, about 10 times the interpreter and well
+above the EE's 294.9 MHz, and recompiled VU1 micro code runs a transform loop
+3.1 times as fast as the VU interpreter. Whole games are held back by the
 rest of the emulation, the drawing above all. On an Intel i5-14600KF, Agent
-Under Fire runs its movies, its menus and its first mission at full speed, 50
-vblanks a second in real time, a new picture every vblank in its heaviest
-views measured, and its second mission's race at 49.9, with VU1 running the
-mission's micro code recompiled, on a thread of its own. Resident Evil Code:
+Under Fire runs at full speed in real time, 50 vblanks a second: its movies,
+its menus and its first mission, with a new picture every vblank in its
+heaviest views measured, and its second mission's race at 49.9. Code:
 Veronica X runs its menus and movies at full speed, 59.8 vblanks a second
-(NTSC); its game proper has not been measured.
-[docs/games.md](docs/games.md#speed) has the measurements and what each change
-bought.
+(NTSC); its game proper has not been measured. [docs/games.md](docs/games.md#speed)
+has the measurements and what each change bought.
 
 ## Roadmap
 
@@ -260,98 +264,77 @@ Roughly in order:
 1. **Agent Under Fire to Playable**: the driving missions past the second
    mission's race (with their read-back from GS memory), then what the game
    reaches next.
-2. **Sound**: PCSX2's audio settings page, and the IOP's DMA channels 4 and
+2. **Linux**: building and playing there, with
+   [GETTING_STARTED.md](GETTING_STARTED.md) as the way in.
+3. **Sound**: PCSX2's audio settings page, and the IOP's DMA channels 4 and
    7 for drivers that program the SPU2 themselves.
-3. **Graphics speed**: the first mission keeps up on a 14-core desktop CPU
+4. **Graphics speed**: the first mission keeps up on a 14-core desktop CPU
    with nothing else running, but has little to spare for slower machines.
    Stepped interpolation would be faster but rounds differently, so pictures
    would change; then a GPU renderer, which higher resolutions also need.
-4. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
+5. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
    `ExecPS2`, dual-layer discs, code overlays, and Code: Veronica X past its
    first areas.
-5. **Vector units**: their timing (a program takes no emulated time).
-   Programs already run recompiled wherever the game puts them (Agent Under
-   Fire's driving mission puts its programs at hundreds of addresses), and
-   VU1 runs alongside the EE, on a thread of its own.
-6. **Widescreen and higher resolutions**, the way PCSX2 does them:
-   - **16:9** works: PS2 games compute their own projection, so PCSX2
-     applies per-game widescreen patches (`.pnach` files) that change each
-     game's field of view. A recompiled game keeps every guest address, so
-     they carry over: `[pnach]` applies a file's groups when the game is
-     recompiled, the runtime makes their writes to memory the game fills at
-     run time every vsync, and the window has PCSX2's aspect ratio
-     settings. Agent Under Fire and Code: Veronica X play in 16:9 with
-     PCSX2's patches. Left: the no-interlacing patches (`gsinterlacemode`),
-     what PCSX2 tests or changes while a game runs (conditions on memory the
-     executable does not initialise, the increment, copy, pointer and
-     bitwise codes, `dpatch`), and the file for each executable of a game
-     that starts them with `LoadExecPS2`.
-   - **Higher internal resolution** needs the GPU renderer: the software
-     rasterizer has little room to spare at the original resolution, and its
-     work grows with the square of the scale. Upscaling also brings the
-     problems PCSX2 handles with per-game fixes: half-pixel offsets, seams
-     between sprites, and effects that read the picture back at its original
-     size.
+6. **Vector units**: their timing (a program takes no emulated time).
+7. **Widescreen and higher resolutions**, the way PCSX2 does them. 16:9
+   works: both games play in 16:9 with PCSX2's patch files (`[pnach]`).
+   Left: the no-interlacing patches, the codes that act while a game runs
+   (conditions on memory the executable does not initialise, the increment,
+   copy, pointer and bitwise codes, `dpatch`), and the files for the
+   executables a game starts with `LoadExecPS2`. Higher internal resolution
+   needs the GPU renderer: the software renderer's work grows with the square
+   of the scale, and upscaling brings the problems PCSX2 fixes game by game
+   (half-pixel offsets, seams between sprites, effects that read the picture
+   back at its original size).
 
-## Quick start
+## Getting started
 
-Developed and tested on Windows x64, with clang-cl and MSVC. The project
-started on macOS (Apple silicon), which has not been rebuilt since the move to
-Windows. Linux is untested.
+**To try a game**, follow [GETTING_STARTED.md](GETTING_STARTED.md). It takes
+a tester from a fresh Linux or Windows computer to playing their own copy of
+a game, one command at a time: the tools, building PS2Native, an image of the
+disc, the game's config, playing, and sending logs.
 
-Requirements: CMake 3.20+, a C++20 compiler, and Ninja or Make; on Windows,
-the Visual Studio 2026 Build Tools. SDL2 is optional: it adds the window and
-keyboard and game controller input
-([docs/runtime.md](docs/runtime.md#running-a-recompiled-game) names the
-Windows package). Without it, frames can be dumped to files, which is what the
-tests check.
+**To build PS2Native** you need CMake 3.20 or later, a C++20 compiler and
+Ninja. SDL2 is optional: it gives games their window, sound and controllers.
+Without it, frames can be dumped to files, which is what the tests check.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build                 # unit tests + end-to-end programs
-
-# The example: assembled, recompiled and compiled as part of the build.
-./build/examples/hello/hello --elf build/examples/hello/hello.elf
+./build/examples/hello/hello --no-window
 ```
 
-On Windows, configure from a Visual Studio developer prompt ("x64 Native Tools
-Command Prompt" or "Developer PowerShell"). clang-cl is the recommended
-compiler; plain MSVC (`cl`) works too.
+On Windows, configure from a Visual Studio developer prompt for x64 (the
+Visual Studio 2026 Build Tools). clang-cl is the recommended compiler, and
+MSVC (`cl`) works too. SDL2's development package for Visual C++ works as it
+comes ([docs/runtime.md](docs/runtime.md#running-a-recompiled-game)):
 
 ```bat
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DSDL2_DIR=<SDL2-devel folder>/cmake
 ```
 
-The example prints:
+[examples/hello](examples/hello) shows the whole path from source to native
+binary. Its program ([hello.s](examples/hello/hello.s)) starts like a real
+PS2 executable (SetupThread, SetupHeap, main, Exit) and exercises loops,
+recursion, a switch jump table, function pointers, MMI, the FPU, VU0, a
+non-local return, kernel threads and a vblank interrupt handler. It prints:
 
 ```
 Hello from a recompiled PS2 program!
 loop: sum(1..100) = 5050
 recursion: fib(20) = 6765
-switch: 0 -> zero
-...
-longjmp: setjmp returned 42
-thread: started worker
-thread: worker running, arg=7
-thread: main woke up
 ...
 vsync: counted 3 vblank interrupts
 done
 ```
-
-[examples/hello](examples/hello) shows the whole path from source to native
-binary. Its program ([hello.s](examples/hello/hello.s)) starts like a real PS2
-executable (SetupThread, SetupHeap, main, Exit) and exercises loops,
-recursion, a switch jump table, function pointers, MMI, the FPU, VU0, a
-non-local return, kernel threads and a vblank interrupt handler.
 
 ## Porting a game
 
 1. **Look at the ELF.**
    `ps2n analyze SLUS_123.45 --write-config game.toml` prints the
    code ranges and what the analysis finds, and writes a starter config.
-2. **(Recommended for stripped games) export Ghidra's function map.** Run
+2. **For a stripped game, export Ghidra's function map** (recommended). Run
    [tools/ghidra/ExportPs2nFunctions.java](tools/ghidra/ExportPs2nFunctions.java)
    in Ghidra and set `[input] ghidra_map` to the CSV. Ghidra's boundaries take
    priority over the recompiler's heuristics. CSVs from PS2Recomp's exporter
@@ -363,8 +346,8 @@ non-local return, kernel threads and a vblank interrupt handler.
    others in `[input] programs`
    ([docs/config.md](docs/config.md#games-with-several-executables)).
 4. **Build and run.** `cmake -S out/game -B out/game/build && cmake --build out/game/build`,
-   then `out/game/build/game --elf SLUS_123.45 --cdrom <disc image or directory>`
-   (add `--region europe` for a PAL game).
+   then `out/game/build/game --cdrom <disc image or directory>` (add
+   `--region europe` for a PAL game).
 5. **Iterate.** The runtime prints a summary of every unimplemented syscall,
    hardware register, IOP call and interpreted address when it exits (Ctrl+C
    works too). From there:
@@ -380,8 +363,9 @@ Run the same build with `--interpret` to execute everything through the
 interpreter instead (functions the config replaced stay replaced); comparing
 the two runs is a quick way to tell a recompiler bug from a runtime gap.
 
-Once the game runs, give it a section in [docs/games.md](docs/games.md): how
-far it gets, its known problems and its speed.
+Once the game runs, give it a section in [docs/games.md](docs/games.md) (how
+far it gets, its known problems and its speed), and its config a folder in
+[games](games/README.md).
 
 ## Command line
 
@@ -519,6 +503,8 @@ runtime/      what recompiled games link against (ps2n_runtime)
   include/ps2/  generated-code API: cpu.h, memory.h, ops_*.h, recomp.h, runtime.h
   src/          dispatcher, interpreter, VU, kernel/ (EE syscalls), hw/ (DMAC, GS, VIF, IPU),
                 iop/ (IOP CPU, kernel, services, SPU2), stubs/, audio/, video/, input/, ui/
+cmake/        build helpers: recompiling at build time, warnings, the runtime's commit
+games/        the configs of the games that run: file names and addresses, no game data
 tools/ghidra/ function-map exporter for Ghidra
 examples/     the end-to-end example
 tests/        unit tests and end-to-end programs
@@ -529,6 +515,8 @@ third_party/  toml++ (MIT), Dear ImGui 1.92.9b (MIT)
 
 ## Documentation
 
+- [GETTING_STARTED.md](GETTING_STARTED.md): from a fresh computer to playing
+  a game and sending its logs, one command at a time, for testers.
 - [docs/games.md](docs/games.md): each game's stage, what runs, its known
   problems and its speed.
 - [docs/architecture.md](docs/architecture.md): the execution model, and why it
@@ -546,57 +534,18 @@ third_party/  toml++ (MIT), Dear ImGui 1.92.9b (MIT)
 ctest --test-dir build --output-on-failure
 ```
 
-- **`core`**: every table row decodes to itself, 10,000+ random instructions
-  round-trip through the disassembler and assembler, known encodings, ELF and
-  IRX parsing.
-- **`recompiler`**: config parsing and errors, function map formats, jump
-  tables, stripped-ELF discovery, code and data sharing one section,
-  bindings, patches, code generation.
-- **`runtime`**:
-  - instruction semantics against independently computed results: sign
-    extension, R5900 division, unaligned access, MMI lanes, FPU clamping, VU0
-    flags, VU1 micro programs' stalls, flag timing and rewriting, VU0's window
-    on VU1's registers; guest printf;
-  - the GS: swizzling against the manual's block tables, depth, fields, both
-    circuits, deinterlacing, drawing on threads matching one thread byte for
-    byte, triangle coverage by the top-left rule, values a triangle's
-    vertices share kept exact, every texture format and CLUT layout,
-    blending's choices, the alpha test's fail modes and the masks; the
-    drawing it reports as left out, the CLUT buffer's loads followed for
-    that;
-  - VU1 on a thread of its own: the pictures the guest thread draws, PATH1
-    in its place among the paths, the EE waiting wherever it looks at VU1,
-    `TOP` and `ITOP` latched at each start, rings that wrap;
-  - the IPU's commands, FIFOs and DMA (against a reference IDCT),
-    scratchpad DMA, a VIF stalled by the i bit holding its DMA channel until
-    STC, and GIF chains stopping at IRQ tags;
-  - SIF RPC end to end, IOP resets and services, discs, recognising programs
-    in RAM, `--strict`, the EE's work held to the clock in real time, short
-    waits lasting their time rather than a timer tick;
-  - controller input and settings;
-  - the SPU2: ADPCM against psx-spx's rules, the interpolation table's step
-    response and every phase, envelope and sweep rates, noise, loop flags, the
-    interrupt address, AutoDMA through both cores, the IOP's answer to an
-    interrupt acting where the SPU2 stopped, reverb in its work area; libsd's
-    register entries and the WAV dump.
-- **`program_*`**: assembly programs recompiled at build time and run twice,
-  recompiled and interpreted, against recorded output or a recorded frame:
-  control-flow edge cases, a stripped ELF that needs the interpreter, a polling
-  loop split in two that must still take a vblank interrupt, the kernel
-  scheduler, interrupt handlers and alarms with their own `$gp`,
-  `SetVSyncFlag` writing once, `printf` over the DECI2 TTY, config bindings,
-  `LoadExecPS2` across three executables, a loader that jumps into the next
-  program.
-- **`sdk_*`**: programs built with ps2sdk, run the same two ways: an IRX with
-  its own RPC server, libsd, libpad and libpadx, VU0 and VU1 micro programs,
-  libcdvd, libmc. The recompiled run runs the VU programs recompiled too. The
-  binaries are checked in under `tests/sdk/bin`
-  ([tests/sdk/README.md](tests/sdk/README.md)).
-- **`vu_compiled`**: random VU1 and VU0 micro programs written at build time
-  and recompiled by `ps2n vu`, each run from the same random states on the
-  interpreter and recompiled: every register, data memory, VU1's registers
-  (VU0 reaches them through its window) and the cycle count must match, and
-  enough of each unit's runs must end in recompiled code.
+| Suite | What it checks |
+|---|---|
+| `core` | Every row of the instruction table decodes to itself; 10,000+ random instructions round-trip through the disassembler and assembler; known encodings; ELF and IRX parsing. |
+| `recompiler` | Config parsing and its errors, function map formats, jump tables, stripped-ELF discovery, code and data sharing one section, bindings, patches, code generation. |
+| `runtime` | The emulation, area by area, against independently computed results: instruction semantics (R5900 division, unaligned access, MMI lanes, FPU clamping, the VU pipeline's stalls and flags), the GS (swizzling, fields and deinterlacing, the top-left rule, every texture format and CLUT layout, blending, drawing on threads matching one thread byte for byte), VU1's thread, the IPU against a reference IDCT, DMA, the VIF and the GIF, SIF RPC and the IOP's services, discs, `--strict`, real-time timing, controller input and settings, the SPU2 and libsd, and the events sent to Axiom. |
+| `program_*` | Assembly programs recompiled at build time and run twice, recompiled and interpreted, against recorded output or a recorded frame: control-flow edge cases, a stripped ELF that needs the interpreter, a polling loop split in two that must still take a vblank interrupt, the kernel scheduler, interrupt handlers and alarms, `LoadExecPS2` across three executables, a loader that jumps into the next program. |
+| `sdk_*` | Programs built with ps2sdk, run the same two ways: an IRX with its own RPC server, libsd, libpad and libpadx, VU0 and VU1 micro programs (recompiled too in the recompiled run), libcdvd, libmc. The binaries are checked in under `tests/sdk/bin` ([tests/sdk/README.md](tests/sdk/README.md)). |
+| `vu_compiled` | Random VU0 and VU1 micro programs, recompiled by `ps2n vu` and run on the interpreter from the same random states: every register, data memory and the cycle count must match. |
+
+New behaviour gets tests, and the tests are checked by planting bugs in the
+code they cover: each commit message says how many planted bugs its tests
+caught.
 
 ## Legal
 

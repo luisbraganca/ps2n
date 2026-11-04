@@ -1,0 +1,11 @@
+# DRIVING.ELF, the driving missions (mis02a and the like). ACTION.UK goes back
+# through the loader, which loads it itself and jumps to 0x00104008, the same
+# address as MOVIE.ELF's entry: the runtime tells them apart by the code in
+# RAM.
+[input]
+elf = "disc/DRIVING.ELF"
+
+[analysis]
+# What the interpreter ran in earlier sessions, then whatever it still
+# interprets.
+entries_files = ["driving-entries.toml", "ps2n_missing.DRIVING.ELF.toml"]

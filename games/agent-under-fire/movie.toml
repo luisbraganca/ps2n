@@ -1,0 +1,10 @@
+# MOVIE.ELF, the movie player. The loader reads it itself and jumps to
+# 0x00104008.
+[input]
+elf = "disc/MOVIE.ELF"
+
+[analysis]
+# Mid-function entries the movie player reached on the interpreter (sessions
+# up to 2026-10-28), then whatever it still interprets.
+entries = [0x00111370, 0x00113710, 0x00113f58, 0x00115868, 0x00115a58, 0x00119220]
+entries_files = ["ps2n_missing.MOVIE.ELF.toml"]
