@@ -53,11 +53,13 @@ L_001001a4:
 ## Status
 
 **Early development: no game is playable yet.** Two games have been tried,
-and both are In-game on PCSX2's scale. 007: Agent Under Fire runs its menus
-and its first mission, where the sound breaks up. Resident Evil Code:
-Veronica X runs its menus and movies at full speed and starts a new game,
-where its status screen draws wrongly. [docs/games.md](docs/games.md) has
-what runs, the known problems and the speed, game by game.
+and both are In-game on PCSX2's scale. 007: Agent Under Fire runs its menus,
+its whole first mission and its second mission's race, and its sound plays
+properly since VU1 got a thread of its own. Resident Evil Code:
+Veronica X runs its menus and movies at full speed, and its first areas play
+with a controller; its status screen, item models and characters now draw
+correctly. [docs/games.md](docs/games.md) has what runs, the known problems
+and the speed, game by game.
 
 The recompiler, the part that translates code, is the furthest along: it
 covers the whole EE instruction set and has recompiled two retail games. Most
@@ -78,7 +80,7 @@ console:
 
 | Area | Progress | Count | Biggest gaps |
 |---|---|--:|---|
-| [Games playable](docs/games.md) | `░░░░░░░░░░` 0% | 0 / 2 | Agent Under Fire runs its first mission, with broken-up sound; Code: Veronica X starts a new game, its status screen drawn wrongly |
+| [Games playable](docs/games.md) | `░░░░░░░░░░` 0% | 0 / 2 | Agent Under Fire played into its second mission and Code: Veronica X through its first areas; neither tried further |
 | EE instructions | `██████████` 100% | 359 / 359 | |
 | Recompiler | `█████████░` 89% | 8 / 9 | overlays |
 | EE kernel syscalls | `█████████░` 88% | 127 / 145 | event flags, `ExecPS2`, the TLB, CPU timers |
@@ -227,7 +229,7 @@ console:
 <sub>Each item weighs the same, so a bar says how much of its list is done,
 not how much work is left: one missing item, such as FILEIO's newer
 protocol, can stop most games. Instructions, syscalls and IOP functions are
-counted instead, last on 2026-10-29: syscalls against the numbers ps2sdk's
+counted instead, last on 2026-11-04: syscalls against the numbers ps2sdk's
 `syscallnr.h` names (reserved ones left out), IOP functions against the export
 tables the project knows ([irx_exports.inc](core/src/irx_exports.inc), plus
 those the runtime declares), not every function of every Sony module. Calls
@@ -245,9 +247,9 @@ Under Fire runs its movies, its menus and its first mission at full speed, 50
 vblanks a second in real time, except in the heaviest views, where drawing
 falls behind and the game shows fewer than 50 pictures a second; its second
 mission's race runs at 49, with VU1 running the mission's micro code on a
-thread of its own. Resident
-Evil Code: Veronica X runs its menus and movies at full speed, 59.8 vblanks a
-second (NTSC); its game proper has not been measured.
+thread of its own. Resident Evil Code: Veronica X runs its menus and movies
+at full speed, 59.8 vblanks a second (NTSC); its game proper has not been
+measured.
 [docs/games.md](docs/games.md#speed) has the measurements and what each change
 bought.
 
@@ -256,8 +258,8 @@ bought.
 Roughly in order:
 
 1. **Agent Under Fire to Playable**: the driving missions past the second
-   mission's race (with their read-back from GS memory), what the game
-   reaches next, and the sudden jumps left in its sound.
+   mission's race (with their read-back from GS memory), then what the game
+   reaches next.
 2. **Sound**: PCSX2's audio settings page, and the IOP's DMA channels 4 and
    7 for drivers that program the SPU2 themselves.
 3. **Graphics speed**: the heaviest views of the first mission still show
@@ -266,7 +268,7 @@ Roughly in order:
    higher resolutions also need.
 4. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
    `ExecPS2`, dual-layer discs, code overlays, and Code: Veronica X past its
-   first moments in the game proper, starting with its status screen.
+   first areas.
 5. **Vector units**: their timing (a program takes no emulated time), and
    recompiling programs one at a time rather than whole micro memories, so
    that games that upload them in many combinations, such as Agent Under
@@ -540,7 +542,8 @@ ctest --test-dir build --output-on-failure
   round-trip through the disassembler and assembler, known encodings, ELF and
   IRX parsing.
 - **`recompiler`**: config parsing and errors, function map formats, jump
-  tables, stripped-ELF discovery, bindings, patches, code generation.
+  tables, stripped-ELF discovery, code and data sharing one section,
+  bindings, patches, code generation.
 - **`runtime`**:
   - instruction semantics against independently computed results: sign
     extension, R5900 division, unaligned access, MMI lanes, FPU clamping, VU0
@@ -548,14 +551,18 @@ ctest --test-dir build --output-on-failure
     on VU1's registers; guest printf;
   - the GS: swizzling against the manual's block tables, depth, fields, both
     circuits, deinterlacing, drawing on threads matching one thread byte for
-    byte, triangle coverage by the top-left rule, every texture format and
-    CLUT layout, blending's choices, the alpha test's fail modes and the
-    masks;
+    byte, triangle coverage by the top-left rule, values a triangle's
+    vertices share kept exact, every texture format and CLUT layout,
+    blending's choices, the alpha test's fail modes and the masks;
+  - VU1 on a thread of its own: the pictures the guest thread draws, PATH1
+    in its place among the paths, the EE waiting wherever it looks at VU1,
+    `TOP` and `ITOP` latched at each start, rings that wrap;
   - the IPU's commands, FIFOs and DMA (against a reference IDCT),
     scratchpad DMA, a VIF stalled by the i bit holding its DMA channel until
     STC, and GIF chains stopping at IRQ tags;
   - SIF RPC end to end, IOP resets and services, discs, recognising programs
-    in RAM, `--strict`, the EE's work held to the clock in real time;
+    in RAM, `--strict`, the EE's work held to the clock in real time, short
+    waits lasting their time rather than a timer tick;
   - controller input and settings;
   - the SPU2: ADPCM against psx-spx's rules, the interpolation table's step
     response and every phase, envelope and sweep rates, noise, loop flags, the
@@ -566,8 +573,10 @@ ctest --test-dir build --output-on-failure
   recompiled and interpreted, against recorded output or a recorded frame:
   control-flow edge cases, a stripped ELF that needs the interpreter, a polling
   loop split in two that must still take a vblank interrupt, the kernel
-  scheduler, `printf` over the DECI2 TTY, config bindings, `LoadExecPS2` across
-  three executables, a loader that jumps into the next program.
+  scheduler, interrupt handlers and alarms with their own `$gp`,
+  `SetVSyncFlag` writing once, `printf` over the DECI2 TTY, config bindings,
+  `LoadExecPS2` across three executables, a loader that jumps into the next
+  program.
 - **`sdk_*`**: programs built with ps2sdk, run the same two ways: an IRX with
   its own RPC server, libsd, libpad and libpadx, VU0 and VU1 micro programs,
   libcdvd, libmc. The recompiled run runs the VU programs recompiled too. The

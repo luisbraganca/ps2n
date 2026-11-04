@@ -16,7 +16,7 @@ Playable or Perfect.
 
 | Game | Region | Serial | Stage | Last tested |
 |---|---|---|---|---|
-| [007: Agent Under Fire](#007-agent-under-fire) | Europe | SLES-50539 | In-game | 2026-11-03 |
+| [007: Agent Under Fire](#007-agent-under-fire) | Europe | SLES-50539 | In-game | 2026-11-04 |
 | [Resident Evil Code: Veronica X](#resident-evil-code-veronica-x) | USA | SLUS-20184 | In-game | 2026-11-04 |
 
 To bring up another game, start with the README's
@@ -41,21 +41,18 @@ config lists the other executables under `[input] programs`, as in
 - The second mission, a driving mission (`mis02a`) that `DRIVING.ELF` runs:
   its opening movie and its race, with their textures.
 - Sound in the movies, the menus, the first mission and the second mission's
-  race.
+  race. Since VU1 got a thread of its own, play tests hear it working
+  properly (2026-11-04): the robotic voices in the race and the faint
+  artifacts heard now and then in the first mission are gone. A counter of
+  sudden jumps in the sound still finds 9 to 11 a second in the first
+  mission's views measured, as many in deterministic runs as in real time,
+  so they do not come from the game's thread falling behind.
 - Controller input, from the keyboard or a game controller.
 
 ### Known problems
 
-- A counter of sudden jumps in the sound finds 9 to 11 a second in the first
-  mission's views measured (its opening outdoors, and two views facing the
-  lobby of the first building), as many in deterministic runs as in real
-  time: they do not come from the game's thread falling behind, and whether
-  they are faults at all has not been checked. Play tests heard faint
-  artifacts now and then, before VU1 had a thread of its own.
-- In the mission's heaviest views drawing falls behind, and the game shows
-  fewer than 50 pictures a second (see [Speed](#speed)).
-- Play tests have heard a glitch in the music on the copyright screen that
-  recordings of it (`--dump-audio`) do not have. The cause has not been found.
+- In the first mission's heaviest views drawing falls behind, and the game
+  shows fewer than 50 pictures a second (see [Speed](#speed)).
 - The driving missions read GS memory back through VIF1 about once a frame
   (reported as `VIF1 to-memory transfer`), which the runtime does not do yet:
   an 8x8 block of the depth buffer (`PSMZ32`) at a point that drifts with the
@@ -66,9 +63,7 @@ config lists the other executables under `[input] programs`, as in
   distinct micro memories in the mission's first two minutes, and they have
   not been recorded for the VU recompiler.
 - In real time the second mission's race slows to 46 vblanks a second at the
-  end of its heaviest stretch measured, and its sound breaks about once a
-  second there; a deterministic run of the race has not been counted to
-  compare (see [Speed](#speed)).
+  end of its heaviest stretch measured (see [Speed](#speed)).
 - The second mission has been played into its race; how far it can be
   played has not been tried.
 
@@ -225,6 +220,9 @@ interpreter. PCSX2 rates this release Perfect, with no game fixes.
 - The first areas, played in real time with a controller: walking, fights,
   doors, picking items up and saving at a typewriter. The status screen with
   its item and file views, and the cutscene where Rodrigo frees Claire.
+  Since the triangle fix under [What it took](#what-it-took), play tests see
+  the status screen's text, the item models and Rodrigo drawn without the
+  artifacts they had.
 - Sound and music in the menus and the movies.
 - Controller input.
 
