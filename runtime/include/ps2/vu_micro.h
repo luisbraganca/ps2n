@@ -76,18 +76,24 @@ struct Unit {
     uint16_t viBackupValue = 0;
     uint64_t steps = 0;           // pairs the current program has run
     std::vector<uint64_t> kick;   // the GIF packet of an XGKICK
+    // VU1: VIF1's TOP and ITOP as the program's start latched them.
+    uint32_t top = 0, itop = 0;
+    bool threaded = false;        // VU1: the program runs on the VU1 thread (vu_thread.cpp)
+    VuReg discard{};              // where results for VF0 go
 };
 
-// The units (vu.cpp): 0 runs on the EE's COP2 registers, 1 on its own.
+// The units (vu.cpp): 0 runs on the EE's COP2 registers, 1 on its own. With
+// VU1 on its own thread, the guest thread calls vu::sync() before it looks.
 Unit& unit(int index);
 
 // Reports an operation micro code should not reach (vu.cpp).
 void unknown(Unit& u, const char* which, uint32_t c);
 // XGKICK (vu.cpp): sends the GIF packet at VI[is] down PATH1.
 void xgkick(Unit& u, uint32_t c);
-// XTOP / XITOP (vu.cpp): VIF1's TOP, the unit's VIF's ITOP.
-uint32_t vifTop();
-uint32_t vifItop(int unit);
+// XTOP / XITOP (vu.cpp): VIF1's TOP, the unit's VIF's ITOP (VU1's as its
+// program's start latched them).
+uint32_t vifTop(const Unit& u);
+uint32_t vifItop(const Unit& u);
 
 // ---- flags -----------------------------------------------------------------------------
 // One component's result: its MAC flags (Z, S at bit 4, U at bit 8, O at bit
@@ -137,10 +143,7 @@ PS2_ALWAYS_INLINE void landQ(Unit& u) {
 PS2_ALWAYS_INLINE void landP(Unit& u) { u.vi[P] = u.efuP; }
 
 // ---- VF and VI access ----------------------------------------------------------------------
-inline VuReg* vfDst(Unit& u, uint32_t r) {
-    static VuReg discard;
-    return r ? &u.vf[r] : &discard;
-}
+inline VuReg* vfDst(Unit& u, uint32_t r) { return r ? &u.vf[r] : &u.discard; }
 inline uint16_t viRead(const Unit& u, uint32_t r) { return static_cast<uint16_t>(u.vi[r & 15]); }
 // `integer`: a result of the integer unit (or an address increment), which a
 // branch right after it does not see yet.
@@ -550,8 +553,8 @@ inline void rget(Unit& u, uint32_t c) { fillVf(u, fFt(c), fDest(c), u.vi[R]); }
 inline void rinit(Unit& u, uint32_t c) { u.vi[R] = 0x3F800000u | (u.vf[fFs(c)].c[fFsf(c)] & 0x007FFFFFu); }
 inline void rxor(Unit& u, uint32_t c) { u.vi[R] = 0x3F800000u | ((u.vi[R] ^ u.vf[fFs(c)].c[fFsf(c)]) & 0x007FFFFFu); }
 inline void mfp(Unit& u, uint32_t c) { fillVf(u, fFt(c), fDest(c), u.vi[P]); }   // MFP ft, P
-inline void xtop(Unit& u, uint32_t c) { viWrite(u, fFt(c), vifTop(), false); }
-inline void xitop(Unit& u, uint32_t c) { viWrite(u, fFt(c), vifItop(u.index), false); }
+inline void xtop(Unit& u, uint32_t c) { viWrite(u, fFt(c), vifTop(u), false); }
+inline void xitop(Unit& u, uint32_t c) { viWrite(u, fFt(c), vifItop(u), false); }
 inline void esum(Unit& u, uint32_t c) {   // ESADD ERSADD ELENG ERLENG ESUM
     const uint32_t is = fFs(c);
     const float x = comp(u, is, 0), y = comp(u, is, 1), z = comp(u, is, 2), w = comp(u, is, 3);

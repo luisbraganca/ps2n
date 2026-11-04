@@ -56,6 +56,7 @@ uint8_t* vuPtr(uint32_t off) {
     // 0x11000000 VU0 micro (4K), 0x11004000 VU0 data (4K), 0x11008000 VU1 micro (16K), 0x1100C000 VU1 data (16K)
     if (off < 0x4000) return vu0Micro + (off & 0xFFF);
     if (off < 0x8000) return vu0Mem + (off & 0xFFF);
+    vu::sync();   // VU1's memories, once its own thread has run what was queued
     if (off < 0xC000) return vu1Micro + (off & 0x3FFF);
     return vu1Mem + (off & 0x3FFF);
 }

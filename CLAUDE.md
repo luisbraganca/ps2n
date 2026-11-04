@@ -55,7 +55,8 @@ recompiler/src/                  analysis.cpp (function discovery), codegen.cpp,
                                  vu_codegen.cpp (recorded VU micro code to C++)
 runtime/include/ps2/ops_*.h      instruction semantics, shared by generated code and the interpreter
 runtime/include/ps2/vu_micro.h   VU micro operations, shared by recompiled micro programs and vu.cpp
-runtime/src/                     runtime.cpp (options, start-up), dispatch.cpp, interpreter.cpp, vu.cpp, clock.cpp
+runtime/src/                     runtime.cpp (options, start-up), dispatch.cpp, interpreter.cpp, vu.cpp, clock.cpp,
+                                 vu_thread.cpp (VU1's own thread), ring.h (a ring between two host threads)
   kernel/kernel.cpp              EE syscalls
   hw/                            hw.cpp (EE registers), dmac, gs (rasterizer, GS thread, draw threads, display), vif, ipu, mpeg
   iop/                           cpu (R3000A), kernel, libs, hle (host libraries), modules (IRX loading),
@@ -124,6 +125,16 @@ assets/                          branding/ (logo and icons; its README says whic
   through `gs::pollEvents` at a safepoint. `--virtual-clock` and `--strict`
   keep the decoding on the guest thread, and `--gs-threads 1` the drawing
   too.
+- In real-time runs VU1 has a thread of its own too (`vu_thread.cpp`). The
+  guest thread queues VIF1's writes to VU1 memory and the programs it starts,
+  in order, and the EE still sees each program finished the moment it
+  starts: whatever reads or writes VU1's state on the guest thread calls
+  `vu::sync()` first (`vuPtr` in memory.cpp does it for the EE's loads and
+  stores). The guest also queues each program in the GS thread's ring, where
+  the GS thread decodes the program's XGKICK packets, so PATH1 keeps its
+  place among the paths. That is why VU1's thread runs only while the GS
+  thread does, and stops first. `--virtual-clock`, `--strict`,
+  `--gs-threads 1` and `--no-vu1-thread` keep VU1 on the guest thread.
 - A vsync's picture is read at the start of the vblank, before the game's
   vsync handler runs, so a game that flips there (Agent Under Fire does)
   shows each picture a vsync later than the console. In FIELD mode, adaptive
@@ -193,7 +204,8 @@ assets/                          branding/ (logo and icons; its README says whic
 - `ps2n disasm --cpp NAME` shows one function's translation. `ps2n irx` and
   `disasm` on the game's own IRX modules are the best protocol reference.
 - `--gs-threads 1` draws on the guest thread alone, which rules the GS
-  thread and the draw threads out when a frame looks wrong.
+  thread and the draw threads out when a frame looks wrong;
+  `--no-vu1-thread` rules VU1's thread out the same way.
 - `--dump-audio FILE` writes the sound as a WAV file, the same on every
   `--virtual-clock` run. In streamed sound, a gap of exact zeros is what the
   driver sent; when the IOP answers late, the last 512 samples repeat instead.

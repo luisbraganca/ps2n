@@ -15,6 +15,7 @@
 #include "log.h"
 #include "settings.h"
 #include "video/video.h"
+#include "vu.h"
 
 #include "ps2n/elf.h"
 #include "ps2n/util.h"
@@ -79,6 +80,8 @@ constexpr const char* kUsage =
     "                        show interlaced fields\n"
     "  --gs-threads N        threads that draw (default 0: half the host's, at\n"
     "                        most 8); 1 draws on the guest thread alone\n"
+    "  --no-vu1-thread       run VU1's micro programs on the guest thread, not on\n"
+    "                        a thread of their own beside the GS thread's\n"
     "  --fpu-round MODE      zero (default, like the EE) or nearest\n"
     "  --strict              stop at the first unimplemented path (exit code 4)\n"
     "  --trace-syscalls      log every syscall\n"
@@ -123,6 +126,7 @@ bool parseOptions(int argc, char** argv) {
         else if (a == "--dump-audio") g_opt.dumpAudio = value();
         else if (a == "--no-window") g_opt.window = false;
         else if (a == "--gs-threads") gs::setDrawThreads(static_cast<int>(std::strtol(value().c_str(), nullptr, 0)));
+        else if (a == "--no-vu1-thread") g_opt.vu1Thread = false;
         else if (a == "--deinterlace") {
             const std::string m = ps2n::toLower(value());
             if (m == "adaptive") gs::setDeinterlace(gs::Deinterlace::Adaptive);
@@ -406,8 +410,9 @@ int run(int argc, char** argv, const GameInfo& game) {
     hw::init();
     gs::init();
     // The GS draws on its own thread, except where runs must repeat exactly
-    // or stop where a gap is.
+    // or stop where a gap is, and VU1 runs on one beside it.
     gs::setOwnThread(!g_opt.virtualClock && !g_opt.strict);
+    vu::setOwnThread(g_opt.vu1Thread);
     dmac::init();
     vif::init();
     ipu::init();

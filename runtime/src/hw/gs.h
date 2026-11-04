@@ -35,8 +35,20 @@ void pollEvents();
 // vsync. Off by default; the runtime turns it on for real-time runs, and
 // setDrawThreads(1) keeps everything on the guest thread. Guest thread.
 void setOwnThread(bool on);
-// Finishes what the GS thread has queued and stops it (at exit).
+// Whether the GS decodes on its own thread now.
+bool ownThread();
+// Finishes what VU1's thread and the GS thread have queued and stops them (at exit).
 void shutdown();
+
+// PATH1 from VU1 on its own thread (vu::setOwnThread). The guest thread
+// queues each program where its XGKICK packets go among the GIF data
+// (path1Run); the VU1 thread sends them (path1Kick), then the program's end
+// (path1End), and the GS thread decodes them there as they come.
+void path1Run(uint64_t program);
+void path1Kick(const uint64_t* qwords, size_t count);
+void path1End(uint64_t program);
+// At exit: ends the waits of both threads on PATH1 for good.
+void path1Close();
 
 void onVblankStart();
 void onVblankEnd();

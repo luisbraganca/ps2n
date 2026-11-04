@@ -4,7 +4,9 @@
 #include "hw/hw.h"
 #include "kernel/kernel.h"
 #include "log.h"
+#include "ring.h"
 #include "video/video.h"
+#include "vu.h"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +15,7 @@
 #include <cfenv>
 #include <climits>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <thread>
@@ -1744,15 +1747,45 @@ Display displayNow() {
 }
 bool buildFrame(const Display& d, Frame& out);
 
+// ---- PATH1 from the VU1 thread ----------------------------------------------------------
+// With VU1 on a thread of its own, its XGKICK packets come in a ring of their
+// own, then each program's end. The GS thread decodes a program's packets
+// where the guest queued the program in its own ring (a Path1 entry), as they
+// come: PATH1 keeps its place among the paths, and a program that kicks more
+// than the ring holds streams through it.
+enum Path1Kind : uint32_t { Path1Data, Path1End };
+WordRing g_path1{uint64_t(1) << 21};   // 16 MB; before g_gsThread, which uses it: destroyed after it
+
+// GS thread: what program `program` kicks, up to its end.
+void decodePath1(uint64_t program) {
+    WordRing::Entry e;
+    while (g_path1.next(e)) {
+        if (e.kind == Path1End) {
+            g_path1.done(e);
+            if (e.arg != program) {
+                PS2_ERROR("gs", "PATH1 from the VU1 thread: program %llu ended where the GS expected program %llu",
+                          static_cast<unsigned long long>(e.arg), static_cast<unsigned long long>(program));
+                std::abort();
+            }
+            return;
+        }
+        for (uint64_t i = 0; i < e.qwords; ++i) gifQword(g_paths[1], g_path1.qword(e, i));
+        g_path1.done(e);
+        g_drawThreads.publish();
+    }
+}
+
 // ---- the GS thread --------------------------------------------------------------------
 // The guest thread queues GIF data, and the commands that act on GIF state,
 // in a ring of 64-bit words; the GS thread runs them in order. An entry is a
 // header (kind, path and payload quadwords; the guest's rounding mode, which
 // the drawing inherits) and its payload. Entries are whole quadwords, so a
-// quadword never wraps round the end of the ring.
+// quadword never wraps round the end of the ring. A VU1 program on the VU1
+// thread is a Path1 entry (its number), where the GS thread decodes the
+// packets the program kicks.
 class GsThread {
 public:
-    enum Kind : uint64_t { Gif, ResetPaths, ResetGs, Vsync, Finish };
+    enum Kind : uint64_t { Gif, ResetPaths, ResetGs, Vsync, Finish, Path1 };
 
     ~GsThread() { stop(false); }
 
@@ -1784,10 +1817,12 @@ public:
         waitFor(head_.load(std::memory_order_relaxed));
     }
 
-    // finish: run what is queued first, else drop it.
+    // finish: run what is queued first, else drop it (and stop waiting for a
+    // VU1 program's packets).
     void stop(bool finish) {
         if (!thread_.joinable()) return;
         if (finish) flush();
+        else g_path1.close();
         stopping_ = true;
         wake_.fetch_add(1);
         wake_.notify_one();
@@ -1886,6 +1921,7 @@ private:
             break;
         }
         case Finish: g_drawThreads.finish(); break;
+        case Path1: decodePath1(ring_[data & kMask]); break;
         }
     }
 
@@ -1910,12 +1946,16 @@ void drawn() {
     if (g_async) g_gsThread.flush();
     else g_drawThreads.finish();
 }
+// VU1's thread runs only beside the GS thread, which decodes what it kicks:
+// it stops first, while the GS thread still takes its packets, and starts last.
 void updateMode() {
     drawn();
     const bool async = g_wantOwnThread && g_drawThreads.count() > 1;
     if (async == g_async) return;
+    if (!async) vu::updateOwnThread(false);
     g_gsThread.stop(true);
     g_async = async;
+    if (async) vu::updateOwnThread(true);
 }
 
 } // namespace
@@ -1945,7 +1985,30 @@ void setOwnThread(bool on) {
     updateMode();
 }
 
-void shutdown() { g_gsThread.stop(true); }
+bool ownThread() { return g_async; }
+
+void shutdown() {
+    vu::updateOwnThread(false);
+    g_gsThread.stop(true);
+}
+
+void path1Run(uint64_t program) {
+    const uint64_t q[2] = {program, 0};
+    g_gsThread.push(GsThread::Path1, 1, q, 1);
+}
+
+void path1Kick(const uint64_t* qwords, size_t count) {
+    while (count) {   // in parts the ring takes
+        const size_t n = std::min<size_t>(count, g_path1.maxQwords());
+        g_path1.put(Path1Data, 0, qwords, n);
+        qwords += 2 * n;
+        count -= n;
+    }
+}
+
+void path1End(uint64_t program) { g_path1.put(Path1End, program, nullptr, 0); }
+
+void path1Close() { g_path1.close(); }
 
 uint64_t csr() { return g_csr; }
 uint64_t imr() { return g_imr; }

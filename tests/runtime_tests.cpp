@@ -36,12 +36,17 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <numbers>
 #include <set>
+#include <thread>
 #include <vector>
 
 using namespace ps2;
@@ -1671,6 +1676,427 @@ TEST_CASE(gs_vsync_shows_what_the_draw_threads_drew) {
     gs::setDrawThreads(0);
     g_opt.dumpFrames.clear();
     std::filesystem::remove_all(dir);
+}
+
+namespace {
+
+// Ends the test run, instead of hanging, when threads wait for each other for good.
+class Watchdog {
+public:
+    explicit Watchdog(const char* test, int seconds = 60)
+        : thread_([this, test, seconds] {
+              std::unique_lock<std::mutex> lock(mutex_);
+              if (!ended_.wait_for(lock, std::chrono::seconds(seconds), [this] { return done_; })) {
+                  std::fprintf(stderr, "[FAIL] %s: still running after %d s\n", test, seconds);
+                  std::fflush(stderr);
+                  std::_Exit(3);
+              }
+          }) {}
+    ~Watchdog() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            done_ = true;
+        }
+        ended_.notify_one();
+        thread_.join();
+    }
+
+private:
+    std::mutex mutex_;
+    std::condition_variable ended_;
+    bool done_ = false;
+    std::thread thread_;   // last: it starts once the rest is ready
+};
+
+// VU1 micro code, a pair (lower word, upper word) at a time.
+using VuProgram = std::vector<std::array<uint32_t, 2>>;
+constexpr uint32_t kVuUpperNop = 0x000002FFu, kVuLowerNop = 0x8000033Cu, kVuEbit = 0x40000000u;
+uint32_t vuImm15(uint32_t op, uint32_t it, uint32_t is, uint32_t imm) {
+    return op << 25 | ((imm >> 11) & 0xF) << 21 | it << 16 | is << 11 | (imm & 0x7FF);
+}
+uint32_t vuIaddiu(uint32_t it, uint32_t is, uint32_t imm) { return vuImm15(0x08, it, is, imm); }
+uint32_t vuIsubiu(uint32_t it, uint32_t is, uint32_t imm) { return vuImm15(0x09, it, is, imm); }
+uint32_t vuIbne(uint32_t it, uint32_t is, int pairs) { return 0x29u << 25 | it << 16 | is << 11 | (static_cast<uint32_t>(pairs) & 0x7FF); }
+uint32_t vuIswX(uint32_t it, uint32_t is, uint32_t imm) { return 0x05u << 25 | 8u << 21 | it << 16 | is << 11 | (imm & 0x7FF); }
+uint32_t vuLq(uint32_t ft, uint32_t is, uint32_t imm) { return 0xFu << 21 | ft << 16 | is << 11 | (imm & 0x7FF); }
+uint32_t vuSq(uint32_t fs, uint32_t it, uint32_t imm) { return 0x02000000u | 0xFu << 21 | it << 16 | fs << 11 | (imm & 0x7FF); }
+uint32_t vuXgkick(uint32_t is) { return 0x80000000u | is << 11 | 0x6FCu; }
+uint32_t vuXtop(uint32_t it) { return 0x80000000u | it << 16 | 0x6BCu; }
+uint32_t vuXitop(uint32_t it) { return 0x80000000u | it << 16 | 0x6BDu; }
+
+// Work for a while (about 131,000 pairs `outer` times), in VI14 and VI15.
+void vuBusy(VuProgram& p, uint32_t outer) {
+    p.push_back({vuIaddiu(14, 0, outer), kVuUpperNop});
+    p.push_back({vuIaddiu(15, 0, 0x7FFF), kVuUpperNop});   // the outer loop
+    p.push_back({vuIsubiu(15, 15, 1), kVuUpperNop});       // the inner loop
+    p.push_back({kVuLowerNop, kVuUpperNop});               // so that the branch sees the new VI15
+    p.push_back({vuIbne(15, 0, -3), kVuUpperNop});
+    p.push_back({kVuLowerNop, kVuUpperNop});
+    p.push_back({vuIsubiu(14, 14, 1), kVuUpperNop});
+    p.push_back({kVuLowerNop, kVuUpperNop});
+    p.push_back({vuIbne(14, 0, -8), kVuUpperNop});
+    p.push_back({kVuLowerNop, kVuUpperNop});
+}
+// The end of a program: the E bit, and the pair after it.
+void vuEnd(VuProgram& p) {
+    p.push_back({kVuLowerNop, kVuUpperNop | kVuEbit});
+    p.push_back({kVuLowerNop, kVuUpperNop});
+}
+
+// A VIF1 stream, sent in whole quadwords.
+struct Vif1Stream {
+    std::vector<uint32_t> w;
+
+    Vif1Stream& code(uint32_t c) {
+        w.push_back(c);
+        return *this;
+    }
+    Vif1Stream& mpg(uint32_t at, const VuProgram& p) {   // at most 256 pairs
+        code(0x4Au << 24 | (static_cast<uint32_t>(p.size()) & 0xFF) << 16 | at / 8);
+        for (const auto& pair : p) w.insert(w.end(), pair.begin(), pair.end());
+        return *this;
+    }
+    Vif1Stream& unpack(uint32_t qw, const std::vector<uint32_t>& words, bool masked = false) {   // V4-32
+        code((masked ? 0x7Cu : 0x6Cu) << 24 | (static_cast<uint32_t>(words.size() / 4) & 0xFF) << 16 | qw);
+        w.insert(w.end(), words.begin(), words.end());
+        return *this;
+    }
+    Vif1Stream& direct(const std::vector<uint64_t>& q) {   // its data starts a quadword
+        while (w.size() % 4 != 3) w.push_back(0);
+        code(0x50u << 24 | static_cast<uint32_t>(q.size() / 2));
+        for (const uint64_t d : q) {
+            w.push_back(static_cast<uint32_t>(d));
+            w.push_back(static_cast<uint32_t>(d >> 32));
+        }
+        return *this;
+    }
+    Vif1Stream& mscal(uint32_t at) { return code(0x14u << 24 | at / 8); }
+    void send() {
+        while (w.size() % 4) w.push_back(0);
+        vif::transfer(1, reinterpret_cast<const uint64_t*>(w.data()), w.size() / 4);
+        w.clear();
+    }
+};
+
+// A sprite as one GIF packet of A+D writes, with a FINISH after it if asked.
+std::vector<uint64_t> spritePacket(int x0, int y0, int x1, int y1, uint32_t rgba, bool finish = false) {
+    std::vector<uint64_t> q = {(finish ? 5u : 4u) | 1ull << 15 | 1ull << 60, 0xE,   // NLOOP, EOP, one register: A+D
+                               6, 0x00, rgba, 0x01, xyz(x0, y0, 0), 0x05, xyz(x1, y1, 0), 0x05};
+    if (finish) {
+        q.push_back(0);
+        q.push_back(0x61);
+    }
+    return q;
+}
+std::vector<uint32_t> wordsOf(const std::vector<uint64_t>& q) {
+    std::vector<uint32_t> w;
+    for (const uint64_t d : q) {
+        w.push_back(static_cast<uint32_t>(d));
+        w.push_back(static_cast<uint32_t>(d >> 32));
+    }
+    return w;
+}
+
+// The GS and VU1 on threads of their own (`threads`) or on the guest thread,
+// drawing to a 64x64 frame at page 0; then back as the other tests expect.
+void vu1ThreadSetUp(bool threads) {
+    gs::init();
+    gs::setDrawThreads(threads ? 2 : 1);
+    gs::setOwnThread(threads);
+    ps2::vu::setOwnThread(threads);
+    CHECK_EQ(ps2::vu::ownThread(), threads);
+    vif::init();
+    vu1Reset();
+    gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
+}
+void vu1ThreadTearDown() {
+    ps2::vu::setOwnThread(false);
+    gs::setOwnThread(false);
+    gs::setDrawThreads(0);
+    std::memset(vu1Mem, 0, sizeof vu1Mem);
+    std::memset(vu1Micro, 0, sizeof vu1Micro);
+    ps2::vu::microChanged(1);
+    vif::init();
+    vu1Reset();
+}
+
+// Sprites down all three paths, VU1 kicking PATH1 between VIF1's DIRECT
+// (PATH2) and PATH3, each program after a while; each also divides 1 by 3
+// with the guest's rounding. The 64x64 frame, then CSR's FINISH and the
+// quotient.
+std::vector<uint32_t> drawThroughVu1(bool threads) {
+    vu1ThreadSetUp(threads);
+    const int mode = std::fegetround();
+    std::fesetround(FE_TOWARDZERO);
+    VuProgram kick;
+    vuBusy(kick, 1);
+    for (const auto& pair : VuProgram{
+             {vuLq(1, 0, 0x3E0), kVuUpperNop},   // VF01 = (1, 3, 0, 0)
+             {vuXitop(1), kVuUpperNop},
+             {kVuLowerNop, kVuUpperNop},
+             {vuXgkick(1), kVuUpperNop},         // the packet at ITOP
+             {0x80000000u | 1u << 23 | 1u << 16 | 1u << 11 | 0xEu << 6 | 0x3Cu, kVuUpperNop},   // DIV Q, VF01x, VF01y
+             {0x80000000u | 0xEu << 6 | 0x3Fu, kVuUpperNop},                                      // WAITQ
+             {kVuLowerNop, 1u << 21 | 2u << 6 | 0x1Cu},                                           // MULq.w VF02, VF00, Q
+             {vuSq(2, 0, 0x3F0), kVuUpperNop}})
+        kick.push_back(pair);
+    vuEnd(kick);
+    const auto bits = [](float v) { return std::bit_cast<uint32_t>(v); };
+    Vif1Stream s;
+    s.code(0x01000101)   // STCYCL: CL 1, WL 1
+        .mpg(0, kick)
+        .unpack(0x3E0, {bits(1.0f), bits(3.0f), 0, 0})
+        .unpack(0x000, wordsOf(spritePacket(0, 0, 64, 64, 0x800000FFu)))   // red
+        .code(0x04u << 24 | 0x000)                                          // ITOP
+        .mscal(0)
+        .direct(spritePacket(16, 16, 48, 48, 0x8000FF00u))                  // green, PATH2
+        .unpack(0x010, wordsOf(spritePacket(24, 24, 40, 40, 0x80FF0000u)))  // blue
+        .code(0x04u << 24 | 0x010)
+        .mscal(0)
+        .send();
+    gsRect(28, 28, 36, 36, 0x80FFFFFFu);                                    // white, PATH3
+    s.unpack(0x020, wordsOf(spritePacket(30, 30, 34, 34, 0x8000FFFFu, true)))   // yellow, then FINISH
+        .code(0x04u << 24 | 0x020)
+        .mscal(0)
+        .send();
+    std::vector<uint32_t> out;
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x) out.push_back(gs::readPixel32(0, 1, 0x00, x, y));
+    out.push_back(static_cast<uint32_t>(gs::csr() & 2));
+    out.push_back(read32(0x1100C000u + 0x3F0 * 16 + 12));
+    std::fesetround(mode);
+    vu1ThreadTearDown();
+    return out;
+}
+
+} // namespace
+
+TEST_CASE(vu1_thread_draws_what_the_guest_thread_draws) {
+    // VU1 on its own thread: the GS decodes what a program kicks where the
+    // guest started the program, among PATH2 and PATH3 data, and the program
+    // runs with the guest's rounding.
+    Watchdog watchdog("vu1_thread_draws_what_the_guest_thread_draws");
+    const std::vector<uint32_t> guest = drawThroughVu1(false);
+    const std::vector<uint32_t> own = drawThroughVu1(true);
+    const auto at = [&](int x, int y) { return guest[static_cast<size_t>(y * 64 + x)]; };
+    CHECK_EQ(at(8, 8), 0x800000FFu);      // red, kicked first
+    CHECK_EQ(at(20, 20), 0x8000FF00u);    // green, DIRECT after it
+    CHECK_EQ(at(26, 26), 0x80FF0000u);    // blue, kicked after that
+    CHECK_EQ(at(29, 29), 0x80FFFFFFu);    // white, PATH3
+    CHECK_EQ(at(31, 31), 0x8000FFFFu);    // yellow, kicked last
+    CHECK_EQ(guest[4096], 2u);            // FINISH
+    CHECK_EQ(guest[4097], 0x3EAAAAAAu);   // 1/3 rounded toward zero
+    size_t differ = 0;
+    for (size_t i = 0; i < guest.size(); ++i) differ += guest[i] != own[i];
+    CHECK_EQ(differ, size_t(0));
+}
+
+TEST_CASE(vu1_thread_ee_access_waits_for_a_program) {
+    // The EE sees a program finished the moment it starts: its loads and
+    // stores in VU1 memory, VU0's window on VU1's registers and the reset
+    // wait for the VU1 thread.
+    Watchdog watchdog("vu1_thread_ee_access_waits_for_a_program");
+    vu1ThreadSetUp(true);
+    VuProgram count;   // after a while, VI05 + 1 to VI05 and to quadword 0x3E0
+    vuBusy(count, 4);
+    count.push_back({vuIaddiu(5, 5, 1), kVuUpperNop});
+    count.push_back({kVuLowerNop, kVuUpperNop});
+    count.push_back({vuIswX(5, 0, 0x3E0), kVuUpperNop});
+    vuEnd(count);
+    VuProgram copy;    // after a while, quadword 0x3E1 to 0x3E2
+    vuBusy(copy, 4);
+    copy.push_back({vuLq(3, 0, 0x3E1), kVuUpperNop});
+    copy.push_back({vuSq(3, 0, 0x3E2), kVuUpperNop});
+    vuEnd(copy);
+    constexpr uint32_t kData = 0x1100C000u;
+    Vif1Stream s;
+    s.code(0x01000101).mpg(0, count).mpg(0x200, copy).send();
+    s.mscal(0).send();
+    CHECK_EQ(read32(kData + 0x3E0 * 16), 1u);   // an EE load
+    s.mscal(0).send();
+    CHECK_EQ(ps2::vu::vu1Reg(5), 2u);
+    s.mscal(0).send();
+    uint32_t w[4] = {};
+    vu0WindowRead(0x400 + 32 + 5, w);           // VU0's window: VI05
+    CHECK_EQ(w[0], 3u);
+    s.mscal(0).send();
+    const uint32_t hundred[4] = {100, 0, 0, 0};
+    vu0WindowWrite(0x400 + 32 + 5, 8, hundred);   // after the program's own write
+    CHECK_EQ(ps2::vu::vu1Reg(5), 100u);
+    const uint64_t before[2] = {0x1111111122222222ull, 0x3333333344444444ull}, after[2] = {5, 6};
+    write128(kData + 0x3E1 * 16, before);
+    s.mscal(0x200).send();
+    write128(kData + 0x3E1 * 16, after);          // an EE store, after the program read the quadword
+    uint64_t copied[2] = {};
+    read128(kData + 0x3E2 * 16, copied);
+    CHECK_EQ(copied[0], before[0]);
+    CHECK_EQ(copied[1], before[1]);
+    s.mscal(0).send();
+    vu1Reset();                                   // after the program, which stores VI05 + 1
+    CHECK_EQ(read32(kData + 0x3E0 * 16), 101u);
+    CHECK_EQ(ps2::vu::vu1Reg(5), 0u);
+    vu1Start(0);                                  // CTC2 to CMSAR1
+    CHECK_EQ(read32(kData + 0x3E0 * 16), 1u);
+    vu1ThreadTearDown();
+}
+
+TEST_CASE(vu1_thread_applies_mpg_and_unpack_in_order) {
+    // VIF1's UNPACK and MPG reach VU1 memory in order with the programs it
+    // starts, the components a write mask protects untouched.
+    Watchdog watchdog("vu1_thread_applies_mpg_and_unpack_in_order");
+    vu1ThreadSetUp(true);
+    VuProgram copy;   // after a while, quadword 0 to 0x100 + ITOP
+    vuBusy(copy, 2);
+    copy.push_back({vuXitop(2), kVuUpperNop});
+    copy.push_back({vuLq(1, 0, 0), kVuUpperNop});
+    copy.push_back({vuSq(1, 2, 0x100), kVuUpperNop});
+    vuEnd(copy);
+    VuProgram mark = {{vuIaddiu(3, 0, 0x77), kVuUpperNop}, {kVuLowerNop, kVuUpperNop}, {vuIswX(3, 0, 0x102), kVuUpperNop}};
+    vuEnd(mark);
+    const uint64_t generation = ps2::vu::g_microGeneration[1];
+    Vif1Stream s;
+    s.code(0x01000101)
+        .mpg(0, copy)
+        .unpack(0, {1, 2, 3, 4})
+        .code(0x04u << 24 | 0)          // ITOP 0
+        .mscal(0)                       // copies (1, 2, 3, 4)
+        .code(0x20u << 24)              // STMASK: y alone written
+        .code(0xF3)
+        .unpack(0, {5, 6, 7, 8}, true)
+        .code(0x04u << 24 | 1)
+        .mscal(0)                       // copies (1, 6, 3, 4)
+        .mpg(0, mark)                   // a new program over the first
+        .mscal(0)
+        .unpack(0x10, {1, 2, 3, 4, 5, 6, 7, 8})
+        .code(0x01000202)               // STCYCL: CL 2, WL 2
+        .code(0x20u << 24)              // STMASK: y alone at the first cycle position, all at the second
+        .code(0x00F3)
+        .unpack(0x10, {9, 10, 11, 12, 13, 14, 15, 16}, true)
+        .send();
+    uint32_t q[4] = {};
+    readBytes(0x1100C000u + 0x100 * 16, q, 16);
+    CHECK(q[0] == 1 && q[1] == 2 && q[2] == 3 && q[3] == 4);
+    readBytes(0x1100C000u + 0x101 * 16, q, 16);
+    CHECK(q[0] == 1 && q[1] == 6 && q[2] == 3 && q[3] == 4);
+    CHECK_EQ(read32(0x1100C000u + 0x102 * 16), 0x77u);
+    CHECK(ps2::vu::g_microGeneration[1] > generation);
+    readBytes(0x1100C000u + 0x10 * 16, q, 16);
+    CHECK(q[0] == 1 && q[1] == 10 && q[2] == 3 && q[3] == 4);
+    readBytes(0x1100C000u + 0x11 * 16, q, 16);
+    CHECK(q[0] == 13 && q[1] == 14 && q[2] == 15 && q[3] == 16);
+    vu1ThreadTearDown();
+}
+
+TEST_CASE(vu1_thread_latches_top_and_itop_at_mscal) {
+    // XTOP and XITOP read what the program's MSCAL latched, not what VIF1
+    // holds when the VU1 thread gets to them; CMSAR1 takes what it holds.
+    Watchdog watchdog("vu1_thread_latches_top_and_itop_at_mscal");
+    vu1ThreadSetUp(true);
+    const auto program = [](uint32_t to) {   // after a while, TOP and ITOP to quadwords `to` and `to` + 1
+        VuProgram p;
+        vuBusy(p, 2);
+        p.push_back({vuXtop(1), kVuUpperNop});
+        p.push_back({vuXitop(2), kVuUpperNop});
+        p.push_back({vuIswX(1, 0, to), kVuUpperNop});
+        p.push_back({vuIswX(2, 0, to + 1), kVuUpperNop});
+        vuEnd(p);
+        return p;
+    };
+    Vif1Stream s;
+    s.code(0x01000101)
+        .mpg(0, program(0x3F0))
+        .mpg(0x200, program(0x3F2))
+        .code(0x03u << 24 | 0x100)    // BASE
+        .code(0x02u << 24 | 0x200)    // OFFSET: TOPS is BASE
+        .code(0x04u << 24 | 0x11)     // ITOP
+        .mscal(0)                     // TOP 0x100, ITOP 0x11; TOPS becomes BASE + OFFSET
+        .code(0x04u << 24 | 0x22)
+        .mscal(0x200)                 // TOP 0x300, ITOP 0x22
+        .send();
+    constexpr uint32_t kData = 0x1100C000u;
+    CHECK_EQ(read32(kData + 0x3F0 * 16), 0x100u);
+    CHECK_EQ(read32(kData + 0x3F1 * 16), 0x11u);
+    CHECK_EQ(read32(kData + 0x3F2 * 16), 0x300u);
+    CHECK_EQ(read32(kData + 0x3F3 * 16), 0x22u);
+    vu1Start(0);
+    CHECK_EQ(read32(kData + 0x3F0 * 16), 0x300u);
+    CHECK_EQ(read32(kData + 0x3F1 * 16), 0x22u);
+    vu1ThreadTearDown();
+}
+
+TEST_CASE(vu1_thread_rings_wrap_and_stream) {
+    // More UNPACKs and programs than the VU1 thread's ring holds (16 MB), and
+    // one program kicking more than PATH1's ring holds (17.6 MB in 1,100
+    // packets, then a sprite): the GS thread decodes the packets as they come.
+    Watchdog watchdog("vu1_thread_rings_wrap_and_stream", 120);
+    vu1ThreadSetUp(true);
+    VuProgram nothing;
+    vuEnd(nothing);
+    Vif1Stream s;
+    s.code(0x01000101).mpg(0, nothing).send();
+    std::vector<uint32_t> words(1024);
+    size_t differ = 0;
+    for (uint32_t n = 0; n < 4200; ++n) {
+        for (uint32_t i = 0; i < 1024; ++i) words[i] = n << 16 | i;
+        s.unpack(0, words).mscal(0).send();
+        if (n % 600 == 599)
+            for (uint32_t i = 0; i < 1024; i += 37) differ += read32(0x1100C000u + i * 4) != (n << 16 | i);
+    }
+    for (uint32_t i = 0; i < 1024; ++i) differ += read32(0x1100C000u + i * 4) != (4199u << 16 | i);
+    CHECK_EQ(differ, size_t(0));
+
+    VuProgram kicks = {
+        {vuIaddiu(2, 0, 1100), kVuUpperNop},
+        {vuXgkick(0), kVuUpperNop},          // the loop: the packet at quadword 0
+        {vuIsubiu(2, 2, 1), kVuUpperNop},
+        {kVuLowerNop, kVuUpperNop},
+        {vuIbne(2, 0, -4), kVuUpperNop},
+        {kVuLowerNop, kVuUpperNop},
+        {vuIaddiu(3, 0, 1001), kVuUpperNop},
+        {kVuLowerNop, kVuUpperNop},
+        {vuXgkick(3), kVuUpperNop},          // the sprite
+    };
+    vuEnd(kicks);
+    std::vector<uint64_t> data(2 * 1006, 0);
+    data[0] = 1000 | 1ull << 15 | 1ull << 60;   // PACKED, NLOOP 1000, EOP, one register: NOP
+    data[1] = 0xF;
+    const std::vector<uint64_t> sprite = spritePacket(0, 0, 8, 8, 0x80654321u);
+    std::copy(sprite.begin(), sprite.end(), data.begin() + 2 * 1001);
+    writeBytes(0x1100C000u, data.data(), static_cast<uint32_t>(data.size() * 8));
+    s.mpg(0, kicks).mscal(0).send();
+    CHECK_EQ(gs::readPixel32(0, 1, 0x00, 4, 4), 0x80654321u);
+    vu1ThreadTearDown();
+}
+
+TEST_CASE(vu1_thread_switching_off_keeps_queued_programs) {
+    // Taking VU1 off its thread, or the GS off its own (which takes VU1 off
+    // first), carries out the programs queued: one working for a while, then
+    // one kicking a sprite and marking quadword 0x3E0.
+    Watchdog watchdog("vu1_thread_switching_off_keeps_queued_programs");
+    VuProgram busy;
+    vuBusy(busy, 4);
+    vuEnd(busy);
+    VuProgram mark = {{vuXgkick(0), kVuUpperNop}, {vuIaddiu(5, 0, 0x66), kVuUpperNop}, {kVuLowerNop, kVuUpperNop},
+                      {vuIswX(5, 0, 0x3E0), kVuUpperNop}};
+    vuEnd(mark);
+    for (const bool gsOff : {false, true}) {
+        vu1ThreadSetUp(true);
+        const uint32_t colour = gsOff ? 0x8000AA00u : 0x800000AAu;
+        Vif1Stream s;
+        s.code(0x01000101)
+            .mpg(0, mark)
+            .mpg(0x200, busy)
+            .unpack(0, wordsOf(spritePacket(0, 0, 8, 8, colour)))
+            .mscal(0x200)
+            .mscal(0)
+            .send();
+        if (gsOff) gs::setOwnThread(false);
+        else ps2::vu::setOwnThread(false);
+        CHECK(!ps2::vu::ownThread());
+        CHECK_EQ(read32(0x1100C000u + 0x3E0 * 16), 0x66u);
+        CHECK_EQ(gs::readPixel32(0, 1, 0x00, 4, 4), colour);
+        vu1ThreadTearDown();
+    }
 }
 
 namespace {

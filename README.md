@@ -68,8 +68,9 @@ console:
   drawing alongside the EE, to keep the first game at full speed, and the
   heaviest views still fall behind. That was measured on one 14-core desktop
   CPU; slower machines have not been tried.
-- The vector units run their micro code recompiled or interpreted, but never
-  alongside the EE.
+- The vector units run their micro code recompiled or interpreted. In
+  real-time runs VU1 runs alongside the EE, on a thread of its own, but a
+  program still takes no emulated time.
 - The IOP services cover what the two games needed.
 - The sound comes from an SPU2 emulated at its registers.
 
@@ -83,7 +84,7 @@ console:
 | EE kernel syscalls | `█████████░` 88% | 127 / 145 | event flags, `ExecPS2`, the TLB, CPU timers |
 | DMA, interrupts, timers | `█████░░░░░` 50% | 4 / 8 | MFIFO, stall control, transfer timing |
 | Graphics (GS) | `███████░░░` 71% | 15 / 21 | the CLUT buffer, reading back to the EE |
-| Vector units | `█████████░` 86% | 6 / 7 | running alongside the EE |
+| Vector units | `█████████░` 88% | 7 / 8 | their timing |
 | Movies (IPU) | `████████░░` 83% | 5 / 6 | timing |
 | Sound (SPU2) | `███████░░░` 71% | 10 / 14 | the IOP's DMA channels for drivers without libsd, an audio settings page |
 | IOP library functions | `████████░░` 77% | 428 / 557 | `mcman` (0 / 40), `dmacman`, `intrman`, `sifman` |
@@ -139,13 +140,14 @@ console:
 - [ ] Anti-aliasing
 - [ ] Transfers from GS memory back to the EE
 
-**Vector units**: 6 of 7
+**Vector units**: 7 of 8
 - [x] VU0 macro mode
 - [x] Every micro instruction, upper and lower, on VU0 and VU1
 - [x] The pipeline as micro code sees it: flag delays, Q and P latencies, stalls, delay slots, the E bit
 - [x] VIF: every UNPACK format and mode, MPG, MSCAL and the double buffer, DIRECT, the i bit's interrupt and stall
 - [x] XGKICK to the GIF
-- [ ] Micro programs running alongside the EE, with their timing
+- [x] VU1's micro programs running alongside the EE, on a thread of their own (real-time runs)
+- [ ] The vector units' timing: a program takes no emulated time
 - [x] A VU recompiler: micro code the runtime recorded, recompiled with the pipeline's timing worked out ahead
 
 **Movies (IPU)**: 5 of 6
@@ -241,7 +243,9 @@ loop 3.1 times as fast as the VU interpreter. Whole games are held back by the
 rest of the emulation, the drawing above all. On an Intel i5-14600KF, Agent
 Under Fire runs its movies, its menus and its first mission at full speed, 50
 vblanks a second in real time, except in the heaviest views, where drawing
-falls behind and the game shows fewer than 50 pictures a second. Resident
+falls behind and the game shows fewer than 50 pictures a second; its second
+mission's race runs at 49, with VU1 running the mission's micro code on a
+thread of its own. Resident
 Evil Code: Veronica X runs its menus and movies at full speed, 59.8 vblanks a
 second (NTSC); its game proper has not been measured.
 [docs/games.md](docs/games.md#speed) has the measurements and what each change
@@ -251,8 +255,9 @@ bought.
 
 Roughly in order:
 
-1. **Agent Under Fire to Playable**: the first mission's sound, the driving
-   missions' executable, and what the game reaches next.
+1. **Agent Under Fire to Playable**: the driving missions past the second
+   mission's race (with their read-back from GS memory), what the game
+   reaches next, and the sudden jumps left in its sound.
 2. **Sound**: PCSX2's audio settings page, and the IOP's DMA channels 4 and
    7 for drivers that program the SPU2 themselves.
 3. **Graphics speed**: the heaviest views of the first mission still show
@@ -262,9 +267,11 @@ Roughly in order:
 4. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
    `ExecPS2`, dual-layer discs, code overlays, and Code: Veronica X past its
    first moments in the game proper, starting with its status screen.
-5. **Vector units**: run micro programs alongside the EE, with their timing.
-   They run recompiled already, and in the first game drawing, not the vector
-   units, is what limits the speed.
+5. **Vector units**: their timing (a program takes no emulated time), and
+   recompiling programs one at a time rather than whole micro memories, so
+   that games that upload them in many combinations, such as Agent Under
+   Fire's driving missions, run them recompiled. VU1 already runs alongside
+   the EE, on a thread of its own.
 6. **Widescreen and higher resolutions**, the way PCSX2 does them:
    - **16:9.** PS2 games compute their own projection, so there is no general
      switch. PCSX2 applies per-game widescreen patches (`.pnach` files) that
@@ -460,7 +467,7 @@ Every key is documented in [docs/config.md](docs/config.md).
   timers and thread switches at loop back-edges and syscalls. The GS is a
   software rasterizer. It draws on several threads, with exactly the pixels
   one thread would draw, and in real-time runs it runs alongside the EE, on a
-  thread of its own.
+  thread of its own; so do VU1's micro programs, on another.
 
 The full model, including why it was chosen, is in
 [docs/architecture.md](docs/architecture.md).

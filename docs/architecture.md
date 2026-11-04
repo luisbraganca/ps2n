@@ -263,10 +263,10 @@ kick instead made a frame cost the EE's work plus the drawing, and a game
 that redraws a 3D scene on every vsync (Agent Under Fire's copyright screen)
 never got to run its main thread. So in real-time runs the GS has a host
 thread of its own, as PCSX2's MTGS does. DMA, VIF and VU1 hand their GIF data
-to a 32 MB ring, and the GS thread parses it in order and queues the
-primitives for the draw threads. The GIF resets (`GIF_CTRL.RST`,
-`CSR.RESET`) go through the ring too, so the GS sees every write in the
-order the guest made it.
+to a 32 MB ring (VU1 on its own thread through a ring of its own, below), and
+the GS thread parses it in order and queues the primitives for the draw
+threads. The GIF resets (`GIF_CTRL.RST`, `CSR.RESET`) go through the ring
+too, so the GS sees every write in the order the guest made it.
 
 The guest thread waits for the GS thread in three places only:
 
@@ -276,6 +276,49 @@ The guest thread waits for the GS thread in three places only:
 - reading GS memory back (`gs::currentFrame`, `gs::readPixel32`) waits until
   the ring is empty and the draw threads have drawn it;
 - a full ring waits for room.
+
+### The VU1 thread
+
+On the console VU1 runs its micro programs while the EE runs on. Running a
+program inside the DMA transfer that starts it made the guest thread do both:
+in Agent Under Fire's second mission, whose VU1 code runs on the
+interpreter, the programs took over 40% of the guest thread's time, and the
+race ran at 39 vblanks a second, its sound breaking 38 times a second. So in
+real-time runs VU1 has a host thread of its own too, as PCSX2's MTVU does
+(`runtime/src/vu_thread.cpp`), and the race runs at 49 vblanks a second, its
+sound breaking about once a second.
+
+The guest thread queues what acts on VU1 in a 16 MB ring, in its own order:
+what VIF1 writes to VU1's data memory (`UNPACK`, worked out on the guest
+thread, where the VIF's row, column and write masks are), what it writes to
+micro memory (`MPG`), and each program it starts (`MSCAL`, `MSCALF`,
+`MSCNT`, and `CTC2` to `CMSAR1`), with the `TOP` and `ITOP` that start
+latched and the guest's rounding mode. The VU1 thread carries them out in
+order, each program recompiled or on the interpreter as before.
+
+To the EE a program still finishes the moment it starts. `VPU_STAT` never
+shows VU1 busy, and whatever could see a program running waits for the VU1
+thread to carry out everything queued (`vu::sync`): the EE's loads and
+stores in VU1's memories (one place, where `memory.cpp` maps them), VU0's
+window on VU1's registers, the reset (`FBRST`) and the runtime's own looks.
+So a program's results are the ones it would have had on the guest thread,
+and the guest waits for the VU1 thread only there and when its ring is full.
+
+A program's `XGKICK` packets go to the GS thread through a second ring
+(PATH1, 16 MB). The guest queues each program in the GS thread's ring as
+well, as a placeholder where its packets belong, and the GS thread decodes
+the program's packets there as the VU1 thread sends them, until the
+program's end. So PATH1 keeps its place among the PATH2 and PATH3 data
+around it, as when the guest thread ran the program, and a program that
+kicks more than the ring holds streams through it. That is also why the VU1
+thread runs only while the GS has one: it stops first, once it has carried
+out what is queued, and starts last. With `--virtual-clock`, `--strict` or
+`--gs-threads 1` VU1 runs on the guest thread, and `--no-vu1-thread` keeps
+it there in real-time runs too.
+
+What changes is when things happen, not what: the GS thread may reach a
+program's packets later than it would have, so `FINISH` and `SIGNAL` from
+PATH1 can reach the EE later. A program still takes no emulated time.
 
 ### The draw threads
 
@@ -439,7 +482,9 @@ pace with the host's audio device, which a ring buffer feeds (`audio/`).
 Games upload micro programs at run time, through VIF `MPG` commands or direct
 writes, often from data, and start them with `MSCAL`, `VCALLMS` or `CMSAR1`.
 A program runs to completion when it starts, as if the VU were infinitely
-fast compared to the EE. What micro code can observe of the pipeline is kept:
+fast compared to the EE (in real-time runs VU1's run on a thread of their
+own, but the EE sees the same: see [The VU1 thread](#the-vu1-thread)). What
+micro code can observe of the pipeline is kept:
 results written after both halves of a 64-bit pair (an upper FMAC instruction
 and a lower one) read their inputs, MAC/status/clip flags that only appear
 four cycles later, Q and P latencies, stalls on register hazards (a stall
@@ -487,7 +532,9 @@ second. In real time drawing is the limit. Facing the lobby the game shows
 41 to 42 pictures a second either way. In the cutscene that opens the
 mission the recompiled programs raise the pictures from 38 to 40 a second,
 and the guest then waits longer for the GS thread, which may only be two
-vsyncs behind: vblanks come at 42 a second instead of 46. The programs still
-run inside the DMA transfer that starts them, on the guest thread; with
-drawing the limit, running VU1 alongside the EE would not make Agent Under
-Fire faster yet.
+vsyncs behind: vblanks come at 42 a second instead of 46. Those programs ran
+inside the DMA transfer that starts them, on the guest thread, and drawing
+was the limit. The second mission's VU1 code is not recompiled (it uploads
+its programs in many combinations); there, running the programs on VU1's own
+thread brought the race from 39 to 49 vblanks a second ([The VU1
+thread](#the-vu1-thread)).

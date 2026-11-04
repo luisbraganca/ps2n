@@ -3,7 +3,8 @@
 // modes, skipping and filling writes), MSCAL/MSCNT (start the VU, with VIF1's
 // TOP/TOPS double buffering) and DIRECT/DIRECTHL (GIF PATH2). A code with the
 // i bit interrupts the EE once it has been carried out and stalls the VIF
-// until FBRST.STC.
+// until FBRST.STC. VIF1's writes to VU1 memory and the programs it starts go
+// through vu.h, which queues them for VU1's own thread when it has one.
 #include "hw/vif.h"
 
 #include "hw/dmac.h"
@@ -41,9 +42,7 @@ struct Unit {
 
 Unit g_vif[2];
 
-uint8_t* vuMem(int unit) { return unit == 0 ? vu0Mem : vu1Mem; }
 uint32_t vuMemSize(int unit) { return unit == 0 ? 4096u : 16384u; }
-uint8_t* vuMicro(int unit) { return unit == 0 ? vu0Micro : vu1Micro; }
 uint32_t vuMicroSize(int unit) { return unit == 0 ? 4096u : 16384u; }
 
 // Bytes of source data per vector, by the low four bits of the UNPACK code.
@@ -61,9 +60,10 @@ uint32_t unpackWords(const Unit& u, uint32_t cmd, uint32_t num) {
     return (vectors * kVectorBytes[cmd & 0xF] + 3) / 4;
 }
 
-// One component written as the mask and mode say (masks: 0 data, 1 ROW,
-// 2 COL, 3 write-protected; modes: 1 adds ROW, 2 accumulates into ROW).
-void writeComponent(Unit& u, uint32_t& dst, uint32_t comp, uint32_t cyclePos, uint32_t value, bool masked, uint32_t mode) {
+// One component as the mask and mode say (masks: 0 data, 1 ROW, 2 COL,
+// 3 write-protected; modes: 1 adds ROW, 2 accumulates into ROW). False if it
+// is not written.
+bool writeComponent(Unit& u, uint32_t& dst, uint32_t comp, uint32_t cyclePos, uint32_t value, bool masked, uint32_t mode) {
     const uint32_t m = masked ? (u.mask >> (std::min(cyclePos, 3u) * 8 + comp * 2)) & 3 : 0;
     switch (m) {
     case 0:
@@ -73,12 +73,36 @@ void writeComponent(Unit& u, uint32_t& dst, uint32_t comp, uint32_t cyclePos, ui
         case 3: dst = u.row[comp] = value; break;
         default: dst = value; break;
         }
-        break;
-    case 1: dst = u.row[comp]; break;
-    case 2: dst = u.col[std::min(cyclePos, 3u)]; break;
-    default: break;
+        return true;
+    case 1: dst = u.row[comp]; return true;
+    case 2: dst = u.col[std::min(cyclePos, 3u)]; return true;
+    default: return false;
     }
 }
+
+// What an UNPACK writes to VU1's data memory, in runs of consecutive
+// quadwords with the same components written, for vu::writeVu1Data (which
+// with VU1 on its own thread queues them, in order with its programs).
+struct Vu1Writes {
+    uint32_t first = 0, mask = 0;
+    std::vector<uint32_t> words;   // four per quadword
+
+    void add(uint32_t qw, uint32_t m, const uint32_t (&w)[4]) {
+        const auto n = static_cast<uint32_t>(words.size() / 4);
+        if (n && (m != mask || ((first + n) & 0x3FF) != qw)) send();
+        if (words.empty()) {
+            first = qw;
+            mask = m;
+        }
+        words.insert(words.end(), w, w + 4);
+    }
+    void send() {
+        if (words.empty()) return;
+        vu::writeVu1Data(first, mask, words.data(), words.size() / 4);
+        words.clear();
+    }
+};
+Vu1Writes g_vu1Writes;
 
 void doUnpack(int unit, Unit& u) {
     const uint32_t vl = u.cmd & 3, vn = (u.cmd >> 2) & 3;
@@ -94,7 +118,6 @@ void doUnpack(int unit, Unit& u) {
     const uint32_t vsize = kVectorBytes[u.cmd & 0xF];
     const auto* src = reinterpret_cast<const uint8_t*>(u.payload.data());
     const size_t avail = u.payload.size() * 4;
-    uint8_t* mem = vuMem(unit);
     const uint32_t memQw = vuMemSize(unit) / 16;
 
     // Element `i` of the vector at byte offset `pos` (zero past the end of the payload).
@@ -134,8 +157,17 @@ void doUnpack(int unit, Unit& u) {
         } else {                // V3 takes w from the next element; V4 is all four
             for (uint32_t c = 0; c < 4; ++c) v[c] = element(pos, c);
         }
-        auto* dst = reinterpret_cast<uint32_t*>(mem + (addr % memQw) * 16);
-        for (uint32_t c = 0; c < 4; ++c) writeComponent(u, dst[c], c, cyclePos, v[c], masked, mode);
+        uint32_t out[4], written = 0;
+        for (uint32_t c = 0; c < 4; ++c)
+            if (writeComponent(u, out[c], c, cyclePos, v[c], masked, mode)) written |= 1u << c;
+        const uint32_t qw = addr % memQw;
+        if (unit == 1) {
+            if (written) g_vu1Writes.add(qw, written, out);
+        } else {
+            auto* dst = reinterpret_cast<uint32_t*>(vu0Mem + qw * 16);
+            for (uint32_t c = 0; c < 4; ++c)
+                if ((written >> c) & 1) dst[c] = out[c];
+        }
         ++addr;
         ++cyclePos;
         if (fill) {
@@ -149,6 +181,7 @@ void doUnpack(int unit, Unit& u) {
             }
         }
     }
+    if (unit == 1) g_vu1Writes.send();
 }
 
 // MSCAL / MSCALF / MSCNT: latch ITOP (and on VIF1 TOP, flipping the double buffer), then run the VU.
@@ -163,7 +196,7 @@ void startMicro(int unit, Unit& u, uint32_t addrBytes) {
             u.tops = u.base + u.ofst;
             u.stat |= 0x80u;
         }
-        vu::runVu1(addrBytes);
+        vu::startVu1(addrBytes, u.top, u.itop);
     } else {
         vu0CallMicro(addrBytes);
     }
@@ -188,10 +221,13 @@ void finishCommand(int unit, Unit& u) {
     case 0x4A: {                                                                  // MPG
         const uint32_t start = (u.imm * 8) % vuMicroSize(unit);
         const size_t bytes = u.payload.size() * 4;
-        uint8_t* micro = vuMicro(unit);
-        for (size_t i = 0; i < bytes; ++i)
-            micro[(start + i) % vuMicroSize(unit)] = reinterpret_cast<const uint8_t*>(u.payload.data())[i];
-        vu::microChanged(unit);
+        const auto* from = reinterpret_cast<const uint8_t*>(u.payload.data());
+        if (unit == 1) {
+            vu::writeVu1Micro(start, from, bytes);
+            break;
+        }
+        for (size_t i = 0; i < bytes; ++i) vu0Micro[(start + i) % vuMicroSize(0)] = from[i];
+        vu::microChanged(0);
         break;
     }
     case 0x50:

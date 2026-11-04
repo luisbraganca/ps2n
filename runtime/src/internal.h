@@ -28,6 +28,7 @@ struct Options {
     uint32_t dumpEvery = 1;
     std::filesystem::path dumpAudio;    // write the SPU2's output here (WAV)
     bool window = true;            // open an SDL window when built with SDL2
+    bool vu1Thread = true;         // VU1 on a thread of its own beside the GS thread (--no-vu1-thread)
     bool strict = false;           // stop at the first unimplemented path (PS2_UNIMPL)
     bool traceSyscalls = false;
     bool traceFunctions = false;

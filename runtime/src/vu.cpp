@@ -6,7 +6,9 @@
 // programs). This file decodes pairs, steps through them and runs programs.
 //
 // Programs run to completion when they are started (MSCAL, VCALLMS), as if
-// the VU were infinitely fast compared to the EE.
+// the VU were infinitely fast compared to the EE. In real-time runs VU1's run
+// on a thread of their own (vu_thread.cpp), and the EE still sees each
+// finished the moment it starts.
 //
 // A pair is decoded once: its timing and the operations its halves run, all
 // of which its words fix. The decoding serves while the words stay the same:
@@ -23,6 +25,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <set>
 #include <unordered_map>
 #include <vector>
@@ -151,7 +154,8 @@ struct Recorded {
     std::set<uint32_t> targets;   // where compiled code handed a program over (a JR or JALR it did not expect)
 };
 bool g_recording = false;
-std::map<uint64_t, Recorded> g_recorded;
+std::map<uint64_t, Recorded> g_recorded;   // VU0's images on the guest thread, VU1's on the VU1 thread
+std::mutex g_recordedMutex;                // for the map; an image is only ever touched by its unit's thread
 struct {
     uint64_t generation = ~uint64_t(0);
     Recorded* image = nullptr;
@@ -176,7 +180,9 @@ Recorded& recordedImage(const Unit& u) {
     if (now.generation != generation || !now.image) {
         const size_t bytes = u.microMask + 1;
         now.generation = generation;
-        Recorded& r = g_recorded[hashMicro(u.micro, bytes) ^ static_cast<uint64_t>(u.index)];
+        const uint64_t key = hashMicro(u.micro, bytes) ^ static_cast<uint64_t>(u.index);
+        std::lock_guard<std::mutex> lock(g_recordedMutex);
+        Recorded& r = g_recorded[key];
         if (r.micro.empty()) {
             r.unit = u.index;
             r.micro.assign(u.micro, u.micro + bytes);
@@ -266,15 +272,24 @@ bool microMatches(const Unit& u, uint32_t pc, const uint64_t* words, uint32_t pa
 }
 
 void registerPrograms(const CompiledProgram* programs, size_t count) {
+    sync();
     for (auto& table : g_compiled) table.clear();
     for (size_t i = 0; i < count; ++i) g_compiled[programs[i].unit & 1][programs[i].entry].push_back(programs[i].fn);
 }
 
-void useCompiledPrograms(bool on) { g_useCompiled = on; }
+void useCompiledPrograms(bool on) {
+    sync();
+    g_useCompiled = on;
+}
 
-void recordPrograms(bool on) { g_recording = on; }
+void recordPrograms(bool on) {
+    sync();
+    g_recording = on;
+}
 
 void writeRecordedPrograms(const std::filesystem::path& file) {
+    sync();
+    std::lock_guard<std::mutex> lock(g_recordedMutex);
     if (g_recorded.empty() || file.empty()) return;
     std::ofstream out(file);
     if (!out) return;
@@ -325,8 +340,8 @@ void unknown(Unit& u, const char* which, uint32_t c) {
     PS2_UNIMPL("vu", key, "unknown VU%d %s instruction 0x%08x at 0x%04x", u.index, which, c, u.vi[TPC] - 8);
 }
 
-uint32_t vifTop() { return vif::top(1); }
-uint32_t vifItop(int unit) { return vif::itop(unit); }
+uint32_t vifTop(const Unit& u) { return u.index ? u.top : vif::top(1); }
+uint32_t vifItop(const Unit& u) { return u.index ? u.itop : vif::itop(0); }
 
 void xgkick(Unit& u, uint32_t c) {
     if (u.index != 1) return unknown(u, "XGKICK on VU0", c);
@@ -358,12 +373,24 @@ void xgkick(Unit& u, uint32_t c) {
         }
         if (eop) break;
     }
-    gs::gifTransfer(q.data(), q.size() / 2, 1);
+    // On the VU1 thread the packet goes to the GS thread's PATH1 queue, which
+    // it decodes where the guest queued the program.
+    if (u.threaded) gs::path1Kick(q.data(), q.size() / 2);
+    else gs::gifTransfer(q.data(), q.size() / 2, 1);
 }
 
-uint32_t vu1Reg(uint32_t index) { return g_vu1.vi[index & 31]; }
+uint32_t vu1Reg(uint32_t index) {
+    sync();
+    return g_vu1.vi[index & 31];
+}
 
-void runVu1(uint32_t startByte) { run(g_unit[1], startByte); }
+void runVu1(uint32_t startByte, uint32_t top, uint32_t itop, bool threaded) {
+    Unit& u = g_unit[1];
+    u.top = top;
+    u.itop = itop;
+    u.threaded = threaded;
+    run(u, startByte);
+}
 
 } // namespace vu
 
@@ -380,6 +407,7 @@ void windowOnControl(uint32_t vi, const char* access) {   // VI16-31: as held, w
 } // namespace
 
 void vu0WindowRead(uint32_t qwAddr, uint32_t (&w)[4]) {
+    vu::sync();
     const uint32_t r = qwAddr & 0x3F;
     if (r < 32) {
         std::memcpy(w, vu::g_vu1.vf[r].c, 16);
@@ -392,6 +420,7 @@ void vu0WindowRead(uint32_t qwAddr, uint32_t (&w)[4]) {
 }
 
 void vu0WindowWrite(uint32_t qwAddr, uint32_t dest, const uint32_t (&w)[4]) {
+    vu::sync();
     const uint32_t r = qwAddr & 0x3F;
     if (r < 32) {
         if (r == 0) return;   // VF0 is constant
@@ -405,7 +434,7 @@ void vu0WindowWrite(uint32_t qwAddr, uint32_t dest, const uint32_t (&w)[4]) {
     vu::g_vu1.vi[vi] = vi < 16 ? w[0] & 0xFFFF : w[0];
 }
 
-void vu1Start(uint32_t addr) { vu::run(vu::g_unit[1], addr); }
+void vu1Start(uint32_t addr) { vu::startVu1(addr, vif::top(1), vif::itop(1)); }
 
 void vu0Reset() {
     for (uint32_t i = 1; i < 32; ++i) std::memset(cpu.vf[i].c, 0, 16);
@@ -414,6 +443,9 @@ void vu0Reset() {
     cpu.vi[VU_STATUS] = cpu.vi[VU_MAC] = cpu.vi[VU_CLIP] = 0;
 }
 
-void vu1Reset() { vu::g_vu1 = {}; }
+void vu1Reset() {
+    vu::sync();
+    vu::g_vu1 = {};
+}
 
 } // namespace ps2

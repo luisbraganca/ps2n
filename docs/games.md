@@ -40,17 +40,18 @@ config lists the other executables under `[input] programs`, as in
   the menus, and the first mission, Trouble in Paradise, played to its end.
 - The second mission, a driving mission (`mis02a`) that `DRIVING.ELF` runs:
   its opening movie and its race, with their textures.
-- Sound in the movies, the menus and the first mission.
+- Sound in the movies, the menus, the first mission and the second mission's
+  race.
 - Controller input, from the keyboard or a game controller.
 
 ### Known problems
 
-- In real time the first mission's sound still breaks up in places, most of
-  all in its heaviest views. Facing the lobby of the first building, the
-  game's thread misses about one in 20 of the blocks it sends the sound
-  driver. There the vector units' work, which runs on that thread, takes
-  about half of each second, up to 16 ms at a time, longer than one of the
-  driver's blocks lasts (see [Speed](#speed)).
+- A counter of sudden jumps in the sound finds 9 to 11 a second in the first
+  mission's views measured (its opening outdoors, and two views facing the
+  lobby of the first building), as many in deterministic runs as in real
+  time: they do not come from the game's thread falling behind, and whether
+  they are faults at all has not been checked. Play tests heard faint
+  artifacts now and then, before VU1 had a thread of its own.
 - In the mission's heaviest views drawing falls behind, and the game shows
   fewer than 50 pictures a second (see [Speed](#speed)).
 - Play tests have heard a glitch in the music on the copyright screen that
@@ -60,15 +61,14 @@ config lists the other executables under `[input] programs`, as in
   an 8x8 block of the depth buffer (`PSMZ32`) at a point that drifts with the
   view, most likely to tell whether the sun is hidden before its glare is
   drawn. What the glare does without it has not been checked.
-- `DRIVING.ELF`'s VU1 micro code runs on the interpreter. It uploads its
-  programs in many combinations, over 5,000 distinct micro memories in the
-  mission's first two minutes, and they have not been recorded for the VU
-  recompiler.
-- In real time the second mission's race runs below full speed, at 38 to 46
-  vblanks a second in its heaviest stretch, and its sound breaks up: the
-  driver repeats blocks the game's thread was late to send, and voices sound
-  robotic. Most of that thread's time goes to the mission's VU1 programs on
-  the interpreter (see [Speed](#speed)).
+- `DRIVING.ELF`'s VU1 micro code runs on the interpreter (in real time on
+  VU1's own thread). It uploads its programs in many combinations, over 5,000
+  distinct micro memories in the mission's first two minutes, and they have
+  not been recorded for the VU recompiler.
+- In real time the second mission's race slows to 46 vblanks a second at the
+  end of its heaviest stretch measured, and its sound breaks about once a
+  second there; a deterministic run of the race has not been counted to
+  compare (see [Speed](#speed)).
 - The second mission has been played into its race; how far it can be
   played has not been tried.
 
@@ -88,12 +88,15 @@ building, the heaviest view measured, the game shows 39 pictures a second at
 50 vblanks a second, with its VU1 micro code recompiled. With the micro code
 interpreted, the game itself slows to 46 vblanks a second there, and drawing
 keeps up. A lighter view in the building shows 50 pictures a second, and the
-helicopter cutscene that opens the mission 49.
+helicopter cutscene that opens the mission 49. Measured again on November 4,
+the heaviest view showed 27 pictures a second, at 50 vblanks a second, with
+VU1 on its own thread or not; why it is down from 39 has not been looked
+into.
 
-The second mission's race runs at 38 to 46 vblanks a second in real time in
+The second mission's race runs at 49.4 vblanks a second in real time over
 its heaviest stretch measured (vblanks 6,800 to 9,000 of a scripted run that
-starts it in place of the first mission). The game's thread is the limit,
-most of it running the mission's VU1 micro code on the interpreter.
+starts it in place of the first mission): 50 for most of it, 46 at its end.
+VU1 runs the mission's micro code on its own thread, on the interpreter.
 
 #### What each change bought
 
@@ -185,6 +188,18 @@ In the order the changes were made:
   and in real time the extra charge held it to 29 to 32 vblanks a second in
   its heaviest stretch. Charging only the back-edges that ran, the same
   stretch runs at 38 to 46. The sound there still breaks up about as often.
+- **VU1 on a thread of its own.** In real time VU1 runs its micro programs on
+  a host thread of its own, the game's thread only queuing them. Measured on
+  one build, with and without `--no-vu1-thread`: the second mission's race
+  runs at 49.4 vblanks a second instead of 39.2 over vblanks 6,800 to 9,000,
+  and its sound breaks 0.9 times a second instead of 38 (the repeated blocks
+  that made voices sound robotic). Facing the lobby of the first building
+  the sound breaks 9.9 times a second instead of 29.9 in the lighter view,
+  and 10.5 instead of 55.6 in the heaviest, as many as deterministic runs of
+  the same views count; vblanks stay at 50, and pictures are the same either
+  way (50 and 27 a second). The first mission's opening is unchanged: 49.9
+  vblanks a second, and 9.0 breaks a second instead of 9.2. Deterministic
+  runs draw the same frames as before.
 
 ## Resident Evil Code: Veronica X
 
