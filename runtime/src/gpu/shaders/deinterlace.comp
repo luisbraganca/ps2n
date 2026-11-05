@@ -1,0 +1,157 @@
+#version 460
+// FIELD mode's pictures at N times the console's resolution, as gs.cpp's
+// deinterlaceField makes them, in three passes (pc.p[1]):
+//   compare: whether this field (the control buffer's free image, which
+//            display.comp just filled) differs from the newest field shown;
+//   control: one invocation takes the vsync's decisions and moves the
+//            history on, as deinterlaceField does with its FieldHistory;
+//   pixels:  each pixel of the picture, by those decisions.
+// A picture line is N image lines: line y of the picture is lines N * y to
+// N * y + N - 1, each made from the same lines of the fields.
+//
+// pc.p: 0 N, 1 the pass, 2 width, 3 height (image pixels: the field's for
+// compare, the picture's for pixels), 4 the field's parity, 5 the vsync
+// (fieldCount), 6 the mode (0 adaptive, 1 weave, 2 bob), 7 the field's
+// lines, 8 the picture's lines (h), 9 the picture's output image.
+
+#include "common.glsl"
+#include "display.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+const int kMotion = 16;   // a channel changing by more than this is motion
+const int kOutside = 2;   // how far a woven line may stand out from the lines around it
+
+int change(uint a, uint b) {
+    int m = 0;
+    for (uint s = 0u; s < 24u; s += 8u) m = max(m, abs(int((a >> s) & 0xFFu) - int((b >> s) & 0xFFu)));
+    return m;
+}
+
+int outside(uint a, uint b, uint c) {
+    int m = 0;
+    for (uint s = 0u; s < 24u; s += 8u) {
+        const int va = int((a >> s) & 0xFFu), vb = int((b >> s) & 0xFFu), vc = int((c >> s) & 0xFFu);
+        m = max(m, max(vc - max(va, vb), min(va, vb) - vc));
+    }
+    return m;
+}
+
+uint averagePixel(uint a, uint b) {
+    uint px = 0xFF000000u;
+    for (uint s = 0u; s < 24u; s += 8u) px |= ((((a >> s) & 0xFFu) + ((b >> s) & 0xFFu) + 1u) / 2u) << s;
+    return px;
+}
+
+uint at(uint image, int x, int y) { return packPixel(imageLoad(pictures[nonuniformEXT(image)], ivec2(x, y))); }
+
+// Field line k (clamped) of `image`, sub-line `sub` of it, at x.
+uint row(uint image, int k, int sub, int x) {
+    const int n = int(pc.p[0]), lines = int(pc.p[7]);
+    return at(image, x, clamp(k, 0, lines - 1) * n + sub);
+}
+
+void compare() {
+    const uvec2 xy = gl_GlobalInvocationID.xy;
+    if (xy.x >= pc.p[2] || xy.y >= pc.p[3]) return;
+    const uint last = control[C_IMAGE + control[C_NEWEST] * 2u];
+    if (at(control[C_FREE], int(xy.x), int(xy.y)) != at(last, int(xy.x), int(xy.y))) atomicOr(control[C_DIFFERS], 1u);
+}
+
+void decide() {
+    if (gl_GlobalInvocationID.x != 0u || gl_GlobalInvocationID.y != 0u) return;
+    const uint when = pc.p[5], odd = pc.p[4];
+    const bool adaptive = pc.p[6] == 0u;
+    const uint newest = control[C_NEWEST], last = newest * 2u;
+    const bool lastShown = control[C_VALID + last] != 0u && when <= control[C_WHEN + last] + 1u && control[C_PICVALID] != 0u;
+    const bool same = adaptive && lastShown && control[C_DIFFERS] == 0u;
+    const uint prev = (odd ^ 1u) * 2u, prev2 = odd * 2u, prev3 = (odd ^ 1u) * 2u + 1u;
+    const bool havePrev = control[C_VALID + prev] != 0u && control[C_WHEN + prev] + 1u == when;
+    const bool havePrev2 = havePrev && control[C_VALID + prev2] != 0u && control[C_WHEN + prev2] < control[C_WHEN + prev];
+    const bool havePrev3 = havePrev2 && control[C_VALID + prev3] != 0u && control[C_WHEN + prev3] < control[C_WHEN + prev2];
+    control[C_D_SAME] = same ? 1u : 0u;
+    control[C_D_LASTSHOWN] = lastShown ? 1u : 0u;
+    control[C_D_HAVEPREV] = havePrev ? 1u : 0u;
+    control[C_D_HAVEPREV2] = havePrev2 ? 1u : 0u;
+    control[C_D_HAVEPREV3] = havePrev3 ? 1u : 0u;
+    control[C_D_AGAIN] = adaptive && !havePrev && lastShown && newest == odd ? 1u : 0u;
+    control[C_D_CUR] = control[C_FREE];
+    control[C_D_PREV] = control[C_IMAGE + prev];
+    control[C_D_PREV2] = control[C_IMAGE + prev2];
+    control[C_D_PREV3] = control[C_IMAGE + prev3];
+    control[C_D_LAST] = control[C_IMAGE + last];
+    control[C_D_PIC] = control[C_PICIMAGE];
+    if (same) {   // the same field again: the last picture stays, its field shown once more
+        control[C_WHEN + last] = when;
+    } else {      // the field goes in front of the older one of its parity, whose image becomes free
+        const uint s0 = odd * 2u, s1 = odd * 2u + 1u, older = control[C_IMAGE + s1];
+        control[C_IMAGE + s1] = control[C_IMAGE + s0];
+        control[C_WHEN + s1] = control[C_WHEN + s0];
+        control[C_VALID + s1] = control[C_VALID + s0];
+        control[C_IMAGE + s0] = control[C_FREE];
+        control[C_WHEN + s0] = when;
+        control[C_VALID + s0] = 1u;
+        control[C_FREE] = older;
+        control[C_NEWEST] = odd;
+        control[C_PICVALID] = 1u;
+    }
+    control[C_DIFFERS] = 0u;
+}
+
+void pixels() {
+    const uvec2 xy = gl_GlobalInvocationID.xy;
+    if (xy.x >= pc.p[2] || xy.y >= pc.p[3]) return;
+    const int n = int(pc.p[0]), x = int(xy.x), y = int(xy.y) / n, sub = int(xy.y) % n;
+    const int odd = int(pc.p[4]), h = int(pc.p[8]);
+    const uint mode = pc.p[6];
+    const uint pic = control[C_D_PIC];
+    uint o;
+    if (control[C_D_SAME] != 0u) {
+        o = at(pic, x, int(xy.y));
+    } else {
+        const uint cur = control[C_D_CUR];
+        if ((y & 1) == odd) {
+            o = row(cur, (y - odd) / 2, sub, x);
+        } else {
+            // A line this field lacks: between its lines above and below.
+            const int above = y > 0 ? (y - 1 - odd) / 2 : (y + 1 - odd) / 2;
+            const int below = y + 1 < h ? (y + 1 - odd) / 2 : above;
+            const uint a = row(cur, above, sub, x), b = row(cur, below, sub, x);
+            if (control[C_D_AGAIN] != 0u) {
+                const uint last = control[C_D_LAST];
+                const uint la = row(last, above, sub, x), lb = row(last, below, sub, x);
+                const uint p = at(pic, x, int(xy.y));
+                const int ma = change(a, la), mb = change(b, lb);
+                const bool moving = max(ma, mb) > kMotion, changed = (ma | mb) != 0, stray = outside(a, b, p) > kOutside;
+                o = moving || (changed && stray) ? averagePixel(a, b) : p;
+            } else if (mode == 2u || control[C_D_HAVEPREV] == 0u) {
+                o = a;
+            } else {
+                const int k = (y - (1 - odd)) / 2;
+                const uint p = row(control[C_D_PREV], k, sub, x);
+                if (mode == 1u) {
+                    o = p;
+                } else if (control[C_D_HAVEPREV2] == 0u) {
+                    o = averagePixel(a, b);
+                } else {
+                    const uint pa = row(control[C_D_PREV2], above, sub, x), pb = row(control[C_D_PREV2], below, sub, x);
+                    const bool haveP3 = control[C_D_HAVEPREV3] != 0u;
+                    const uint p3 = haveP3 ? row(control[C_D_PREV3], k, sub, x) : p;
+                    const int ma = change(a, pa), mb = change(b, pb), mc = change(p, p3);
+                    const bool moving = max(max(ma, mb), mc) > kMotion;
+                    const bool changed = haveP3 ? mc != 0 : (ma | mb) != 0;
+                    const bool stray = outside(a, b, p) > kOutside;
+                    o = moving || (changed && stray) ? averagePixel(a, b) : p;
+                }
+            }
+        }
+        imageStore(pictures[nonuniformEXT(pic)], ivec2(xy), unpackPixel(o));
+    }
+    imageStore(pictures[nonuniformEXT(pc.p[9])], ivec2(xy), unpackPixel(o));
+}
+
+void main() {
+    if (pc.p[1] == DEINTERLACE_COMPARE) compare();
+    else if (pc.p[1] == DEINTERLACE_CONTROL) decide();
+    else pixels();
+}

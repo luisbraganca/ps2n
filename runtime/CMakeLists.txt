@@ -84,6 +84,105 @@ if(WIN32)
     target_sources(ps2n_runtime INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/../assets/ps2n.rc")
 endif()
 
+# The Vulkan renderer (src/gpu). It needs no SDK: the Vulkan headers are
+# vendored (third_party/vulkan) and the graphics driver's Vulkan library is
+# loaded when a game starts. Here, like SDL2 below, so that generated game
+# projects get it too.
+option(PS2N_WITH_VULKAN "Build the Vulkan renderer (no SDK needed: the graphics driver's Vulkan is loaded when a game starts)" ON)
+if(PS2N_WITH_VULKAN)
+    target_include_directories(ps2n_runtime SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/vulkan/include")
+    target_compile_definitions(ps2n_runtime PRIVATE PS2N_HAVE_VULKAN=1 VK_NO_PROTOTYPES)
+    target_sources(ps2n_runtime PRIVATE
+        src/gpu/compose.cpp
+        src/gpu/device.cpp
+        src/gpu/loader.cpp
+        src/gpu/picture.cpp
+        src/gpu/renderer.cpp
+        src/gpu/renderer_display.cpp
+        src/gpu/renderer_setup.cpp
+        src/gpu/resources.cpp)
+    target_link_libraries(ps2n_runtime PRIVATE ${CMAKE_DL_LIBS})
+
+    # The shaders, compiled to SPIR-V by glslc (the Vulkan SDK's, or a
+    # distribution's shaderc package) when it is there. Without it the build
+    # uses the compiled copy that comes with the sources,
+    # src/gpu/shaders/ps2n_spirv.h; ps2n_update_shaders refreshes that copy.
+    set(ps2n_shader_dir "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders")
+    set(ps2n_spirv_dir "${CMAKE_CURRENT_BINARY_DIR}/spirv")
+    # name, source file, then glslc's definitions
+    set(ps2n_shaders
+        "present_vert|present.vert|"
+        "present_frag|present.frag|"
+        "gs_vert|gs.vert|"
+        "gs_frag_rtz_f64|gs.frag|ROUND_TOWARD_ZERO,FLOAT64"
+        "gs_frag_rtz|gs.frag|ROUND_TOWARD_ZERO"
+        "gs_frag_rte_f64|gs.frag|FLOAT64"
+        "gs_frag_rte|gs.frag|"
+        "resolve_comp|resolve.comp|"
+        "expand_comp|expand.comp|"
+        "push_comp|push.comp|"
+        "copy_comp|copy.comp|"
+        "display_comp|display.comp|"
+        "deinterlace_comp|deinterlace.comp|")
+    file(GLOB ps2n_sdk_bins "C:/VulkanSDK/*/Bin")
+    find_program(PS2N_GLSLC NAMES glslc HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin" ${ps2n_sdk_bins})
+    if(PS2N_GLSLC)
+        execute_process(COMMAND "${PS2N_GLSLC}" --version OUTPUT_VARIABLE glslc_version ERROR_QUIET)
+        string(REGEX MATCH "^[^\r\n]*" glslc_version "${glslc_version}")
+        set(spirv_inputs "")
+        set(spirv_files "")
+        foreach(entry IN LISTS ps2n_shaders)
+            string(REPLACE "|" ";" parts "${entry}")
+            list(GET parts 0 name)
+            list(GET parts 1 source)
+            list(GET parts 2 defines)
+            set(define_args "")
+            if(defines)
+                string(REPLACE "," ";" defines "${defines}")
+                foreach(d IN LISTS defines)
+                    list(APPEND define_args "-D${d}")
+                endforeach()
+            endif()
+            set(out "${ps2n_spirv_dir}/${name}.inc")
+            add_custom_command(
+                OUTPUT "${out}"
+                COMMAND "${CMAKE_COMMAND}" -E make_directory "${ps2n_spirv_dir}"
+                COMMAND "${PS2N_GLSLC}" --target-env=vulkan1.3 -mfmt=c ${define_args} -MD -MF "${out}.d" -o "${out}" "${ps2n_shader_dir}/${source}"
+                DEPENDS "${ps2n_shader_dir}/${source}"
+                DEPFILE "${out}.d"
+                COMMENT "Compiling the shader ${name}"
+                VERBATIM)
+            list(APPEND spirv_inputs "${name}=${out}")
+            list(APPEND spirv_files "${out}")
+        endforeach()
+        string(REPLACE ";" "|" spirv_inputs "${spirv_inputs}")
+        add_custom_command(
+            OUTPUT "${ps2n_spirv_dir}/ps2n_spirv.h"
+            COMMAND "${CMAKE_COMMAND}" "-DOUTPUT=${ps2n_spirv_dir}/ps2n_spirv.h" "-DCOMPILER=${glslc_version}"
+                    "-DINPUTS=${spirv_inputs}" -P "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/Ps2nSpirvHeader.cmake"
+            DEPENDS ${spirv_files} "${CMAKE_CURRENT_SOURCE_DIR}/../cmake/Ps2nSpirvHeader.cmake"
+            COMMENT "Writing ps2n_spirv.h"
+            VERBATIM)
+        target_sources(ps2n_runtime PRIVATE "${ps2n_spirv_dir}/ps2n_spirv.h")
+        target_include_directories(ps2n_runtime PRIVATE "${ps2n_spirv_dir}")
+        if(NOT TARGET ps2n_update_shaders)
+            add_custom_target(ps2n_update_shaders
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${ps2n_spirv_dir}/ps2n_spirv.h" "${ps2n_shader_dir}/ps2n_spirv.h"
+                DEPENDS "${ps2n_spirv_dir}/ps2n_spirv.h"
+                COMMENT "Copying the compiled shaders to src/gpu/shaders/ps2n_spirv.h"
+                VERBATIM)
+        endif()
+        set_property(GLOBAL PROPERTY PS2N_SPIRV_BUILT "${ps2n_spirv_dir}/ps2n_spirv.h")
+        message(STATUS "ps2n runtime: Vulkan renderer built in; shaders compiled with ${PS2N_GLSLC}")
+    else()
+        target_include_directories(ps2n_runtime PRIVATE "${ps2n_shader_dir}")
+        message(STATUS "ps2n runtime: Vulkan renderer built in; glslc not found, so the compiled shaders that come with the sources are used")
+    endif()
+else()
+    target_sources(ps2n_runtime PRIVATE src/gpu/gpu_stub.cpp)
+    message(STATUS "ps2n runtime: Vulkan renderer not built (PS2N_WITH_VULKAN is off)")
+endif()
+
 # Here rather than in the top-level project, so that generated game projects,
 # which add this directory themselves, get the window too.
 option(PS2N_WITH_SDL2 "Open a window for GS output when SDL2 is available" ON)
@@ -123,6 +222,15 @@ if(PS2N_WITH_SDL2)
             target_compile_options(ps2n_imgui PUBLIC /FIintrin.h)
         endif()
         target_link_libraries(ps2n_imgui PUBLIC ${sdl2_target})
+        # With the Vulkan renderer the window shows its pictures through
+        # Vulkan, the overlay too: ImGui's Vulkan backend (from the same
+        # release), calling Vulkan through the runtime's loader.
+        if(PS2N_WITH_VULKAN)
+            target_sources(ps2n_imgui PRIVATE ${imgui_dir}/backends/imgui_impl_vulkan.cpp)
+            target_include_directories(ps2n_imgui SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/vulkan/include")
+            target_compile_definitions(ps2n_imgui PUBLIC IMGUI_IMPL_VULKAN_NO_PROTOTYPES VK_NO_PROTOTYPES)
+            target_sources(ps2n_runtime PRIVATE src/video/present_vk.cpp)
+        endif()
         target_link_libraries(ps2n_runtime PRIVATE ${sdl2_target} ps2n_imgui)
         target_sources(ps2n_runtime PRIVATE src/input/sdl.cpp src/ui/overlay.cpp)
     else()

@@ -61,9 +61,27 @@ config lists the other executables under `[input] programs`, as in
   loader and `MOVIE.ELF` get none. The window shows 16:9 under Auto. As in
   PCSX2, the menus and the HUD stretch with the picture, and the films do too
   unless FMV Aspect Ratio Override is Standard (4:3).
+- The Vulkan renderer. At 1x it draws the software renderer's pictures:
+  deterministic runs through the movies, the copyright and title screens and
+  the main menu (86 frames to vblank 8,600), and into the first mission's
+  first building (180 frames to vblank 9,000), are the same bit for bit. At
+  2x, along the way into the building, every frame's pixels (2x, 2y) are the
+  same but in 9 frames of the cutscene at its door (26 to 64 pixels each):
+  the game draws the character into a texture, which the card reads at its
+  own resolution (reading every texture from GS memory at 1x instead gave
+  the same frames). Above 1x edges come out finer, the menus' figures and
+  lines too.
 
 ### Known problems
 
+- With the Vulkan renderer, the game often sends pixels into GS memory the
+  card drew in another layout, and those pages come back from the card
+  first, each time a wait for it: 597 times in a real-time run of 180 s into
+  the first mission's building (`pages read back: written in another
+  layout`). Its drawing also puts depth buffers in the frame's memory, which
+  the card draws without the depth test (`frame and depth overlap`, 270
+  drawing states in that run); the title session's frames came out the same
+  as the software renderer's all the same.
 - The driving missions read GS memory back through VIF1 about once a frame
   (reported as `VIF1 to-memory transfer`), which the runtime does not do yet:
   an 8x8 block of the depth buffer (`PSMZ32`) at a point that drifts with the
@@ -114,6 +132,16 @@ starts it in place of the first mission), with nothing else running. VU1
 runs the mission's micro code on its own thread, recompiled, busy 288 ms a
 second on average there and 379 at most; 292 and 381 with the widescreen
 patch.
+
+The Vulkan renderer (on an NVIDIA GeForce RTX 4070 SUPER) keeps the way into
+the first mission's first building at full speed in real time at 1x, 2x and
+4x, as the software renderer does (49.9 vblanks a second): 9,000 vblanks of
+a scripted headless run take 180.4 s at 1x and 180.7 s at 4x, and with a
+frame dumped every 100 vblanks 2x runs at 49.8 to 49.9 vblanks a second
+(at 4x, writing a 2560 x 2048 dump every 100 vblanks holds it to 47.6). The
+card reads GS memory back 597 times in that run, the game sending pixels
+into memory it drew in another layout. A deterministic run of the same way
+takes 85 s at 1x and 88 s at 2x, against 118 s with the software renderer.
 
 #### What each change bought
 
@@ -262,6 +290,16 @@ interpreter. PCSX2 rates this release Perfect, with no game fixes.
   artifacts they had.
 - Sound and music in the menus and the movies.
 - Controller input.
+- The Vulkan renderer. A deterministic run from start-up through a new game
+  to the status screen in the first room (200 frames to vblank 20,000) draws
+  the software renderer's pictures at 1x, and at 3x every frame's pixels
+  (3x, 3y) are the same, with the status screen's models and text drawn
+  finer. It took two things GS memory does: the game's scissor is a pixel
+  wider than its 640-wide frame, so that column lands on the next row of
+  pages, and the game parks the scissor past the end of memory to draw
+  nothing. Its in-game picture is blended into the buffer it shows through a
+  1024 x 512 texture, which reaches into that buffer; the card reads the
+  picture at its own resolution all the same.
 - 16:9, with PCSX2's widescreen patch for this disc: the `Widescreen 16:9`
   group of `SLUS-20184_24036809.pnach` (by Gabominated, ported from
   ElHecht's patch for the European release, in PCSX2's
@@ -316,6 +354,14 @@ interpreter. PCSX2 rates this release Perfect, with no game fixes.
   words (its test for an upward push compares the wrong way round), as it
   would on a console. Neither the menus nor play go by that word: with the
   stick untouched, Claire stands still.
+- With the Vulkan renderer, the game keeps its CLUTs in the depth buffer's
+  memory past the picture, and every CLUT it sends there brings that page
+  back from the card first, a wait for it (`pages read back: written in
+  another layout`, 5,471 times in a deterministic run to vblank 20,000).
+  Its in-game picture is blended into the buffer it shows through a texture
+  declared 512 lines high, which reaches into that buffer: the card handles
+  each such sprite on its own (`primitive reads what it writes`, 41,676
+  times in that run), reading the texels it draws over as they were before.
 
 ### Speed
 
@@ -326,6 +372,13 @@ screen and its menu, and the start of a new game. The game proper has not
 been measured in real time. A deterministic run (`--virtual-clock`) takes
 about three minutes from start-up to the first moments in the game proper,
 21,000 vblanks.
+
+With the Vulkan renderer at 3x (an NVIDIA GeForce RTX 4070 SUPER), the same
+7,200 vblanks take 120.7 s in real time (59.7 a second), against 120.5 s
+with the software renderer, the card reading GS memory back 3,954 times on
+the way (the CLUTs it sends into the depth buffer's memory). A
+deterministic run to vblank 20,000 takes 84 s at 1x and 89 s at 3x, against
+151 s with the software renderer.
 
 The explosion in the graveyard, before the first zombies, slowed real-time
 play down (2026-11-04). The game draws a picture every second vblank; there
@@ -359,7 +412,11 @@ kernel's syscall table, installs its patches for the kernel and starts its
 timers. The IOP restarts with the game's own image, and FMOD Ex's module
 loads. The game then draws its loading sign, a turning blue arrow in the
 bottom-right corner, and stays there (2026-11-04): see the first known
-problem.
+problem. The Vulkan renderer draws it as the software renderer does, at 1x
+and at the console's pixels at 2x (15 frames to vblank 1,500). At start-up
+the game clears all of GS memory with a scissor a pixel past its end, which
+the card's targets cannot hold: the software rasterizer draws those two
+sprites in GS memory.
 
 ### What it took
 

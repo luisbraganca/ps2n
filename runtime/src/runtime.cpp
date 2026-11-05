@@ -3,6 +3,7 @@
 #include "audio/audio.h"
 #include "axiom.h"
 #include "clock.h"
+#include "gpu/gpu.h"
 #include "hw/dmac.h"
 #include "hw/gs.h"
 #include "hw/hw.h"
@@ -79,6 +80,12 @@ constexpr const char* kUsage =
     "  --no-window           do not open a window (SDL builds)\n"
     "  --deinterlace MODE    adaptive (default), weave or bob, for games that\n"
     "                        show interlaced fields\n"
+    "  --renderer MODE       auto (default: Vulkan where the graphics card can),\n"
+    "                        software or vulkan, for this run\n"
+    "  --upscale N           draw at N times the console's resolution (1 to 8)\n"
+    "                        with Vulkan, for this run\n"
+    "  --gpu-debug           check every Vulkan call with the validation layer\n"
+    "                        (it comes with the Vulkan SDK)\n"
     "  --gs-threads N        threads that draw (default 0: half the host's, at\n"
     "                        most 8); 1 draws on the guest thread alone\n"
     "  --no-vu1-thread       run VU1's micro programs on the guest thread, not on\n"
@@ -138,6 +145,24 @@ bool parseOptions(int argc, char** argv) {
                 std::exit(2);
             }
         }
+        else if (a == "--renderer") {
+            const std::string m = value();
+            const auto r = video::parseRendererOption(m);
+            if (!r) {
+                std::fprintf(stderr, "unknown renderer %s (auto, software or vulkan)\n", m.c_str());
+                std::exit(2);
+            }
+            g_opt.renderer = static_cast<int>(*r);
+        }
+        else if (a == "--upscale") {
+            const auto n = ps2n::parseInt(value());
+            if (!n || *n < 1 || *n > video::kMaxUpscale) {
+                std::fprintf(stderr, "--upscale needs a whole number from 1 to %d\n", video::kMaxUpscale);
+                std::exit(2);
+            }
+            g_opt.upscale = static_cast<int>(*n);
+        }
+        else if (a == "--gpu-debug") g_opt.gpuDebug = true;
         else if (a == "--fpu-round") g_opt.fpuRoundToZero = value() != "nearest";
         else if (a == "--strict") g_opt.strict = true;
         else if (a == "--trace-syscalls") g_opt.traceSyscalls = true;
@@ -409,9 +434,7 @@ void startPendingProgram() {
 namespace {
 
 // The settings file's [Axiom] section: where this run's log goes, if anywhere.
-void startAxiom(const std::filesystem::path& settingsFile, const GameInfo& game, int argc, char** argv) {
-    settings::Ini ini;
-    ini.load(settingsFile);
+void startAxiom(const settings::Ini& ini, const GameInfo& game, int argc, char** argv) {
     const axiom::Config cfg = axiom::readConfig(ini);
     if (!cfg.problem.empty()) PS2_WARN("axiom", "%s", cfg.problem.c_str());
     axiom::start(cfg, game, std::vector<std::string>(argv, argv + argc), buildCommit());
@@ -430,13 +453,34 @@ int run(int argc, char** argv, const GameInfo& game) {
     // says, and send nothing to Axiom.
     const bool useSettings = g_opt.window || !g_opt.settingsFile.empty();
     const std::filesystem::path settingsFile = settings::locate(executableDir(argc > 0 ? argv[0] : ""), g_opt.settingsFile);
-    if (useSettings) startAxiom(settingsFile, game, argc, argv);
+    settings::Ini ini;
+    if (useSettings) ini.load(settingsFile);
+    // Who draws: the settings' Renderer, unless --renderer says otherwise for
+    // this run. The graphics card opens first, so that the log (and Axiom's
+    // start event) can say which renderer runs and on what.
+    std::vector<std::string> displayWarnings;
+    const video::DisplaySettings saved = video::readDisplaySettings(ini, &displayWarnings);
+    video::Renderer renderer = g_opt.renderer ? static_cast<video::Renderer>(*g_opt.renderer) : saved.renderer;
+    const int upscale = g_opt.upscale ? *g_opt.upscale : saved.upscale;
+    std::string noVulkan;
+    if (renderer != video::Renderer::Software && !gpu::init({g_opt.window, g_opt.gpuDebug})) noVulkan = gpu::status().reason;
+    const bool vulkan = renderer != video::Renderer::Software && gpu::available() && gs::useVulkan(upscale, noVulkan);
+    axiom::describeRenderer({vulkan ? "vulkan" : "software", vulkan ? upscale : 1, gpu::describe()});
+    if (useSettings) startAxiom(ini, game, argc, argv);
     g_opt.elfPath = findElf(argc > 0 ? argv[0] : "", game);
     PS2_INFO("runtime", "%s, recompiled by %s: %zu functions; runtime %s", game.name, game.generator, game.functionCount,
              buildCommit());
+    for (const std::string& w : displayWarnings) PS2_WARN("video", "%s", w.c_str());
+    if (vulkan)
+        PS2_INFO("gpu", "rendering with Vulkan on %s, at %dx the console's resolution", gpu::describe().c_str(), upscale);
+    else if (renderer == video::Renderer::Software)
+        PS2_INFO("gpu", "rendering with the software renderer, as %s", g_opt.renderer ? "--renderer asks" : "the settings ask (Renderer = 13)");
+    else
+        PS2_WARN("gpu", "rendering with the software renderer: %s", noVulkan.c_str());
 
     clockInit(g_opt.virtualClock, g_opt.noThrottle);
     if (!loadElf(game)) {
+        gpu::shutdown();
         axiom::finish(1, issueCounts());
         return 1;
     }
@@ -455,7 +499,7 @@ int run(int argc, char** argv, const GameInfo& game) {
     ipu::init();
     iop::init();
     if (useSettings) input::init(settingsFile);
-    video::init();
+    video::init(saved);
     audio::init();
     initDispatch(game);
     kernel::init(game.entry, bootArgv());
@@ -470,6 +514,7 @@ int run(int argc, char** argv, const GameInfo& game) {
     printIssueSummary();
     audio::shutdown();
     video::shutdown();
+    gpu::shutdown();   // after the GS and the window let go of the graphics card
     PS2_INFO("runtime", "exit code %d", g_exitCode);
     axiom::finish(g_exitCode, issueCounts());
     return g_exitCode;

@@ -10,11 +10,21 @@
 
 #include <SDL.h>
 
+#ifdef PS2N_HAVE_VULKAN
+#include "gpu/vk.h"
+#endif
+
 #include <string>
 
 namespace ps2::ui {
 
+// SDL's renderer draws the overlay.
 void init(SDL_Window* window, SDL_Renderer* renderer);
+#ifdef PS2N_HAVE_VULKAN
+// The window shows its pictures through Vulkan (video/present_vk.h), the
+// overlay too.
+void initVulkan(SDL_Window* window);
+#endif
 void shutdown();
 
 // Every SDL event: the overlay's widgets and the binding capture read them.
@@ -23,6 +33,12 @@ void processEvent(const SDL_Event& ev);
 // render() then draws it, after the game's picture.
 void frame(const input::HostState& host);
 void render();
+#ifdef PS2N_HAVE_VULKAN
+// With Vulkan: records the overlay into the window's command buffer, inside
+// its rendering. The window's queue lock is held: ImGui uploads its textures
+// with submissions of its own.
+void render(VkCommandBuffer cmd);
+#endif
 
 // The pause menu or the settings are up: the game pauses and the input is the overlay's.
 bool menuOpen();

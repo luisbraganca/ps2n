@@ -1,4 +1,7 @@
 #include "hw/gs.h"
+#include "hw/gs_internal.h"
+
+#include "gpu/renderer.h"
 
 #include "clock.h"
 #include "hw/hw.h"
@@ -27,230 +30,19 @@
 
 namespace ps2::gs {
 
+// Local memory and the tables its addressing uses (gs_internal.h), in this
+// order: the CLUT offsets come from the swizzles.
+namespace detail {
+uint32_t g_vram[1024 * 1024];
+const Swizzle g_swizzle;
+const ClutOffsets g_clutOffsets;
+const Log2Steps g_log2Steps;
+Transfer g_xfer;
+} // namespace detail
+
 namespace {
 
-// ===========================================================================
-// Local memory (4 MB) and pixel addressing
-// ===========================================================================
-// The swizzle formulas below reproduce the block/column tables of the GS
-// User's Manual (verified entry-for-entry against PCSX2's tables).
-uint32_t g_vram[1024 * 1024];
-
-enum Psm : uint32_t {
-    PSMCT32 = 0x00, PSMCT24 = 0x01, PSMCT16 = 0x02, PSMCT16S = 0x0A, PSMT8 = 0x13, PSMT4 = 0x14,
-    PSMT8H = 0x1B, PSMT4HL = 0x24, PSMT4HH = 0x2C, PSMZ32 = 0x30, PSMZ24 = 0x31, PSMZ16 = 0x32, PSMZ16S = 0x3A,
-};
-
-constexpr uint32_t ct32(uint32_t x, uint32_t y) { return (x & 1) | ((y & 1) << 1) | ((x & 2) << 1) | ((x & 4) << 1) | ((y & 6) << 3); }
-constexpr uint32_t bt32(uint32_t bx, uint32_t by) { return (bx & 1) | ((by & 1) << 1) | ((bx & 2) << 1) | ((by & 2) << 2) | ((bx & 4) << 2); }
-constexpr uint32_t bt16(uint32_t bx, uint32_t by) { return (by & 1) | ((bx & 1) << 1) | ((by & 2) << 1) | ((bx & 2) << 2) | ((by & 4) << 2); }
-constexpr uint32_t bt16s(uint32_t bx, uint32_t by) { return (by & 1) | ((bx & 1) << 1) | (by & 4) | ((by & 2) << 2) | ((bx & 2) << 3); }
-constexpr uint32_t ct16(uint32_t x, uint32_t y) { return 2 * ct32(x & 7, y) + ((x >> 3) & 1); }
-constexpr uint32_t ct8(uint32_t x, uint32_t y) {
-    const uint32_t c = y >> 2, r = y & 3, rot = ((r >> 1) ^ (c & 1)) & 1;
-    return 4 * ct32((x + 4 * rot) & 7, c * 2 + (r & 1)) + ((r >> 1) & 1) + 2 * ((x >> 3) & 1);
-}
-constexpr uint32_t ct4(uint32_t x, uint32_t y) {
-    const uint32_t c = y >> 2, r = y & 3, rot = ((r >> 1) ^ (c & 1)) & 1;
-    return 2 * (4 * ct32((x + 4 * rot) & 7, c * 2 + (r & 1)) + ((x >> 3) & 3)) + ((r >> 1) & 1);
-}
-
-bool isZ(uint32_t psm) { return (psm & 0x30) == 0x30; }
-
-// The swizzles as tables: each pixel's offset within its page (64x32 pixels
-// for 32-bit formats, 64x64 for 16-bit, 128x64 for 8-bit, 128x128 for 4-bit),
-// in the format's units, filled once from the formulas above. A pixel's
-// address is then its page's first unit plus one table entry.
-struct Swizzle {
-    uint16_t c32[2][32][64];    // words; [1] the Z layout (blocks ^ 0x18)
-    uint16_t c16[4][64][64];    // halfwords; [s | z << 1]
-    uint16_t c8[64][128];       // bytes
-    uint16_t c4[128][128];      // nibbles
-    Swizzle() {
-        for (uint32_t y = 0; y < 128; ++y) {
-            for (uint32_t x = 0; x < 128; ++x) {
-                if (y < 32 && x < 64)
-                    for (uint32_t z = 0; z < 2; ++z) c32[z][y][x] = static_cast<uint16_t>((bt32(x >> 3, y >> 3) ^ (z ? 0x18 : 0)) * 64 + ct32(x & 7, y & 7));
-                if (y < 64 && x < 64) {
-                    for (uint32_t v = 0; v < 4; ++v) {
-                        const uint32_t block = (v & 1) ? bt16s(x >> 4, y >> 3) : bt16(x >> 4, y >> 3);
-                        c16[v][y][x] = static_cast<uint16_t>((block ^ ((v & 2) ? 0x18 : 0)) * 128 + ct16(x & 15, y & 7));
-                    }
-                }
-                if (y < 64) c8[y][x] = static_cast<uint16_t>(bt32(x >> 4, y >> 4) * 256 + ct8(x & 15, y & 15));
-                c4[y][x] = static_cast<uint16_t>(bt16(x >> 5, y >> 4) * 512 + ct4(x & 31, y & 15));
-            }
-        }
-    }
-};
-const Swizzle g_swizzle;
-
-// Where each CLUT entry sits in the CLUT's first page, in the CLUT format's
-// units: [0] 32-bit (words), [1] CT16, [2] CT16S (halfwords). An 8-bit
-// texel's entry comes from its index in CSM1 order; a 4-bit texel's from its
-// index plus CSA's offset, the first 16 entries in two rows of 8 and the
-// rest in CSM1 order.
-struct ClutOffsets {
-    uint16_t t8[3][256];
-    uint16_t t4[3][512];
-    static uint32_t csm1(uint32_t i) { return (i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1); }
-    static uint16_t at(int kind, uint32_t x, uint32_t y) {
-        return kind ? g_swizzle.c16[kind - 1][y][x] : g_swizzle.c32[0][y][x];
-    }
-    ClutOffsets() {
-        for (int kind = 0; kind < 3; ++kind) {
-            for (uint32_t index = 0; index < 256; ++index) {
-                const uint32_t i = csm1(index);
-                t8[kind][index] = at(kind, i & 15, i >> 4);
-            }
-            for (uint32_t i = 0; i < 512; ++i) {
-                const uint32_t j = csm1(i);
-                t4[kind][i] = i < 16 ? at(kind, i & 7, (i >> 3) & 1) : at(kind, j & 15, j >> 4);
-            }
-        }
-    }
-};
-const ClutOffsets g_clutOffsets;
-
-// Word index of a 32-bit pixel (CT32/CT24/Z32/Z24 and the T8H/T4HL/T4HH host words).
-uint32_t addr32(uint32_t bp, uint32_t bw, uint32_t x, uint32_t y, bool z) {
-    const uint32_t page = (y >> 5) * std::max(bw, 1u) + (x >> 6);
-    return (bp * 64 + page * 2048 + g_swizzle.c32[z][y & 31][x & 63]) & 0xFFFFF;
-}
-// Halfword index of a 16-bit pixel.
-uint32_t addr16(uint32_t bp, uint32_t bw, uint32_t x, uint32_t y, bool s, bool z) {
-    const uint32_t page = (y >> 6) * std::max(bw, 1u) + (x >> 6);
-    return (bp * 128 + page * 4096 + g_swizzle.c16[(s ? 1 : 0) | (z ? 2 : 0)][y & 63][x & 63]) & 0x1FFFFF;
-}
-uint32_t addr8(uint32_t bp, uint32_t bw, uint32_t x, uint32_t y) {
-    const uint32_t page = (y >> 6) * std::max(bw >> 1, 1u) + (x >> 7);
-    return (bp * 256 + page * 8192 + g_swizzle.c8[y & 63][x & 127]) & 0x3FFFFF;
-}
-uint32_t addr4(uint32_t bp, uint32_t bw, uint32_t x, uint32_t y) {
-    const uint32_t page = (y >> 7) * std::max(bw >> 1, 1u) + (x >> 7);
-    return (bp * 512 + page * 16384 + g_swizzle.c4[y & 127][x & 127]) & 0x7FFFFF;
-}
-
-uint8_t* vramBytes() { return reinterpret_cast<uint8_t*>(g_vram); }
-
-// The memory unit holding pixel (x, y) in format psm: a word, halfword, byte
-// or nibble, as the format addresses memory.
-uint32_t pixelUnit(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y) {
-    switch (psm) {
-    case PSMCT32: case PSMZ32: case PSMCT24: case PSMZ24: return addr32(bp, bw, x, y, isZ(psm));
-    case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S: return addr16(bp, bw, x, y, (psm & 0x08) != 0, isZ(psm));
-    case PSMT8: return addr8(bp, bw, x, y);
-    case PSMT4: return addr4(bp, bw, x, y);
-    case PSMT8H: case PSMT4HL: case PSMT4HH: return addr32(bp, bw, x, y, false);
-    default: return 0;
-    }
-}
-
-// A frame or depth buffer's addressing, worked out with the drawing state:
-// the unit pixelUnit() gives, the 32 and 16-bit layouts' sums inline.
-struct Buffer {
-    uint32_t bp, bw, psm;
-    int layout;                  // 32 or 16 bits; 0: through pixelUnit
-    uint32_t base, rowOfPages;   // in words or halfwords
-    int table;                   // the swizzle: Z for 32 bits, S | Z << 1 for 16
-};
-Buffer bufferOf(uint32_t bp, uint32_t bw, uint32_t psm) {
-    Buffer b{bp, bw, psm, 0, 0, 0, 0};
-    switch (psm) {
-    case PSMCT32: case PSMZ32: case PSMCT24: case PSMZ24: case PSMT8H: case PSMT4HL: case PSMT4HH:
-        b.layout = 32;
-        b.base = bp * 64;
-        b.rowOfPages = std::max(bw, 1u) * 2048;
-        b.table = isZ(psm) ? 1 : 0;
-        break;
-    case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S:
-        b.layout = 16;
-        b.base = bp * 128;
-        b.rowOfPages = std::max(bw, 1u) * 4096;
-        b.table = ((psm & 0x08) ? 1 : 0) | (isZ(psm) ? 2 : 0);
-        break;
-    default: break;
-    }
-    return b;
-}
-PS2_ALWAYS_INLINE uint32_t unitOf(const Buffer& b, uint32_t x, uint32_t y) {
-    if (b.layout == 32) return (b.base + (y >> 5) * b.rowOfPages + (x >> 6) * 2048 + g_swizzle.c32[b.table][y & 31][x & 63]) & 0xFFFFF;
-    if (b.layout == 16) return (b.base + (y >> 6) * b.rowOfPages + (x >> 6) * 4096 + g_swizzle.c16[b.table][y & 63][x & 63]) & 0x1FFFFF;
-    return pixelUnit(b.bp, b.bw, b.psm, x, y);
-}
-
-// Raw read: the format's own bits (32/24/16-bit colour, Z, or a CLUT index).
-PS2_ALWAYS_INLINE uint32_t readUnit(uint32_t psm, uint32_t n) {
-    switch (psm) {
-    case PSMCT32: case PSMZ32: return g_vram[n];
-    case PSMCT24: case PSMZ24: return g_vram[n] & 0xFFFFFF;
-    case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S: {
-        uint16_t h;
-        std::memcpy(&h, vramBytes() + 2 * n, 2);
-        return h;
-    }
-    case PSMT8: return vramBytes()[n];
-    case PSMT4: return (vramBytes()[n >> 1] >> ((n & 1) * 4)) & 0xF;
-    case PSMT8H: return g_vram[n] >> 24;
-    case PSMT4HL: return (g_vram[n] >> 24) & 0xF;
-    case PSMT4HH: return g_vram[n] >> 28;
-    default: return 0;
-    }
-}
-uint32_t readRaw(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y) { return readUnit(psm, pixelUnit(bp, bw, psm, x, y)); }
-
-PS2_ALWAYS_INLINE void writeUnit(uint32_t psm, uint32_t n, uint32_t v) {
-    switch (psm) {
-    case PSMCT32: case PSMZ32: g_vram[n] = v; return;
-    case PSMCT24: case PSMZ24: g_vram[n] = (g_vram[n] & 0xFF000000u) | (v & 0xFFFFFF); return;
-    case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S: {
-        const auto h = static_cast<uint16_t>(v);
-        std::memcpy(vramBytes() + 2 * n, &h, 2);
-        return;
-    }
-    case PSMT8: vramBytes()[n] = static_cast<uint8_t>(v); return;
-    case PSMT4: {
-        uint8_t& b = vramBytes()[n >> 1];
-        b = (n & 1) ? static_cast<uint8_t>((b & 0x0F) | ((v & 0xF) << 4)) : static_cast<uint8_t>((b & 0xF0) | (v & 0xF));
-        return;
-    }
-    case PSMT8H: g_vram[n] = (g_vram[n] & 0x00FFFFFFu) | (v << 24); return;
-    case PSMT4HL: g_vram[n] = (g_vram[n] & 0xF0FFFFFFu) | ((v & 0xF) << 24); return;
-    case PSMT4HH: g_vram[n] = (g_vram[n] & 0x0FFFFFFFu) | ((v & 0xF) << 28); return;
-    default: return;
-    }
-}
-uint32_t bitsPerPixel(uint32_t psm) {
-    switch (psm) {
-    case PSMCT32: case PSMZ32: return 32;
-    case PSMCT24: case PSMZ24: return 24;
-    case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S: return 16;
-    case PSMT8: case PSMT8H: return 8;
-    case PSMT4: case PSMT4HL: case PSMT4HH: return 4;
-    default: return 32;
-    }
-}
-
-// 16-bit 1:5:5:5 colour -> 32-bit RGBA, alpha per TEXA: TA1 with the A bit
-// set, else TA0, or 0 with AEM when all 16 bits are 0. Black with the A bit
-// set keeps TA1.
-uint32_t expand16(uint32_t c, uint32_t ta0 = 0, uint32_t ta1 = 0x80, bool aem = false) {
-    const uint32_t r = (c & 0x1F) << 3, g = ((c >> 5) & 0x1F) << 3, b = ((c >> 10) & 0x1F) << 3;
-    uint32_t a = (c & 0x8000) ? ta1 : ta0;
-    if (aem && (c & 0xFFFF) == 0) a = 0;
-    return r | (g << 8) | (b << 16) | (a << 24);
-}
-uint32_t pack16(uint32_t c) {
-    return ((c >> 3) & 0x1F) | (((c >> 11) & 0x1F) << 5) | (((c >> 19) & 0x1F) << 10) | ((c >> 31) << 15);
-}
-
-// A frame buffer pixel as 32-bit RGBA; fbp in pages.
-uint32_t pixel32(uint32_t fbp, uint32_t fbw, uint32_t psm, int x, int y) {
-    const uint32_t raw = readRaw(fbp * 32, fbw, psm, static_cast<uint32_t>(x), static_cast<uint32_t>(y));
-    if (psm == PSMCT16 || psm == PSMCT16S) return expand16(raw);
-    if (psm == PSMCT24) return raw | 0xFF000000u;
-    return raw;
-}
+using namespace detail;
 
 // ===========================================================================
 // Registers and state
@@ -305,8 +97,6 @@ enum Reg : uint32_t {
     FINISH = 0x61, LABEL = 0x62,
 };
 
-constexpr uint64_t field(uint64_t v, int lo, int bits) { return (v >> lo) & ((1ull << bits) - 1); }
-
 void updateGsInterrupt() {
     // CSR bits 0-4 (SIGNAL FINISH HSINT VSINT EDWINT) vs IMR bits 8-12.
     const uint64_t pending = g_csr.load() & 0x1F & ~((g_imr >> 8) & 0x1F);
@@ -316,6 +106,13 @@ void updateGsInterrupt() {
 // The GS draws on its own thread (setOwnThread, unless one thread draws).
 // Only the guest thread changes it, while the GS thread is stopped.
 bool g_async = false;
+// The Vulkan renderer draws (useVulkan), not the software rasterizer. Set
+// before the guest starts, while no GS thread runs.
+bool g_vulkan = false;
+// Its scale, for any thread; and one the settings page asked for, which the
+// guest thread takes at the next vsync (0: none).
+std::atomic<int> g_vulkanScale{1};
+std::atomic<int> g_wantScale{0};
 // The CSR events the GS thread raised since the guest thread last looked.
 std::atomic<uint64_t> g_events{0};
 
@@ -333,16 +130,6 @@ void setSiglblid(uint64_t mask, uint64_t value) {
     uint64_t old = g_siglblid.load();
     while (!g_siglblid.compare_exchange_weak(old, (old & ~mask) | (value & mask))) {}
 }
-
-// ---- vertices -----------------------------------------------------------------
-struct Vertex {
-    float x = 0, y = 0;          // window coordinates (pixels)
-    uint32_t z = 0;
-    float r = 0, g = 0, b = 0, a = 0;
-    float s = 0, t = 0, q = 1;
-    float u = 0, v = 0;          // texels (FST=1)
-    float fog = 0;
-};
 
 uint8_t g_rgba[4] = {0x80, 0x80, 0x80, 0x80};
 float g_q = 1.0f, g_s = 0, g_t = 0;
@@ -522,22 +309,16 @@ void transferWrite(uint32_t psm, uint32_t n, uint32_t v) {
     }
 }
 
-struct Transfer {
-    bool active = false;
-    uint32_t dbp = 0, dbw = 0, dpsm = 0;
-    uint32_t dsax = 0, dsay = 0, rrw = 0, rrh = 0;
-    uint32_t x = 0, y = 0;
-    uint64_t bitBuf = 0;
-    uint32_t bitCount = 0;
-} g_xfer;
-
 void writeTransferPixel(uint32_t v) {
     Transfer& t = g_xfer;
     if (!t.active) return;
     transferWrite(t.dpsm, pixelUnit(t.dbp, t.dbw, t.dpsm, (t.dsax + t.x) & 2047, (t.dsay + t.y) & 2047), v);
     if (++t.x >= t.rrw) {
         t.x = 0;
-        if (++t.y >= t.rrh) t.active = false;
+        if (++t.y >= t.rrh) {
+            t.active = false;
+            if (g_vulkan) gpu::renderer::transferEnded();   // the rectangle to the targets that hold it
+        }
     }
 }
 
@@ -565,6 +346,9 @@ void transferData(uint64_t data) {
 void startTransfer(uint32_t dir) {
     finishDrawing();   // queued primitives may read what it writes, or write what it reads
     const uint64_t bb = g_regs[BITBLTBUF], pos = g_regs[TRXPOS], reg = g_regs[TRXREG];
+    // The Vulkan renderer copies between its targets itself; otherwise it
+    // readies their pages for the CPU's writes below.
+    if (g_vulkan && gpu::renderer::transfer(dir, bb, pos, reg)) return;
     if (dir == 0) {   // host -> local
         g_xfer.active = true;
         g_xfer.dbp = static_cast<uint32_t>(field(bb, 32, 14));
@@ -589,22 +373,11 @@ void startTransfer(uint32_t dir) {
         for (uint32_t y = 0; y < h; ++y)
             for (uint32_t x = 0; x < w; ++x)
                 transferWrite(dpsm, pixelUnit(dbp, dbw, dpsm, dsax + x, dsay + y), readRaw(sbp, sbw, spsm, ssax + x, ssay + y));
+        if (g_vulkan) gpu::renderer::transferEnded();
     } else if (dir == 1) {
         PS2_UNIMPL("gs", "local->host transfer", "GS local->host image transfer (readback) is not implemented");
     }
 }
-
-// ---- drawing ------------------------------------------------------------------------
-struct Env {
-    uint64_t prim;
-    uint32_t fbp, fbw, fpsm, fbmsk;
-    uint32_t zbp, zpsm;
-    bool zmsk;
-    uint64_t test, alpha, tex0, tex1, clamp, miptbp1, miptbp2;
-    int ofx, ofy;   // 12.4 fixed point
-    int scx0, scx1, scy0, scy1;
-    bool fba;
-};
 
 Env currentEnv() {
     Env e{};
@@ -637,60 +410,6 @@ Env currentEnv() {
     return e;
 }
 
-// One level of a texture: the first is TEX0's, the next six (mipmaps) are
-// MIPTBP1's and MIPTBP2's, each half the size of the one before.
-struct Level {
-    uint32_t tbp, tbw;
-    int tw, th;                          // size, texels
-    int minu, maxu, minv, maxv;          // CLAMP's region, scaled to the level
-    uint32_t base, rowOfPages;           // its first unit and a row of pages, in the format's units
-};
-
-struct Draw;
-using SampleFn = uint32_t (*)(const Draw& d, float u, float v, float q);
-
-// What a primitive's pixels need, decoded from the registers when they
-// change rather than for every pixel.
-struct Draw {
-    Env e;
-    bool tex, fst, gouraud;              // PRIM: TME, FST, IIP
-    uint32_t tpsm;                       // TEX0
-    float twf, thf;                      // the first level's size, texels
-    uint32_t tfx;                        // modulate, decal, highlight, highlight2
-    bool tcc;
-    uint32_t wms, wmt;                   // CLAMP
-    // TEX1: nearest or bilinear, from one level or blending two. The level
-    // of detail (LOD) picks the filter for a magnified texture (MMAG) or a
-    // reduced one (MMIN), and MMIN's level. `linear` holds the filter unless
-    // the LOD depends on the pixel's Q (lodByQ) or there are mipmaps.
-    bool linear, lodByQ, magLinear, minLinear;
-    int lodK, lodL;                      // K in sixteenths, L
-    uint32_t magnifiedFrom;              // with lodByQ: the bits of the least |Q| whose LOD is below 0
-    int mipLevels;                       // the levels after the first that MMIN reaches (MXL)
-    int firstLevel, lastLevel;           // the levels sampling can reach: by Q all of them, else those K picks
-    bool mipLinear;                      // MMIN blends the two levels around the LOD
-    Level level[7];
-    SampleFn sample;                     // sampleTexture for the texture's format
-    uint32_t ta0, ta1;                   // TEXA
-    bool aem;
-    uint32_t cbp, cpsm, csa;             // the CLUT
-    bool clutWide;                       // 32-bit entries, else 16-bit
-    uint32_t clutBase;                   // CBP in the entries' units
-    const uint16_t* clutOffsets;         // by a texel's index (ClutOffsets)
-    bool ate;                            // alpha test
-    uint32_t atst, aref, afail;
-    bool zte;                            // depth test
-    uint32_t ztst, zmax;
-    bool fge;                            // fog
-    uint32_t fogr, fogg, fogb;
-    bool abe, pabe, colclamp;            // blending
-    uint64_t ba, bb, bc, bd;
-    uint32_t blendA[2], blendB[2], blendD[2];   // A, B and D as masks on Cs and Cd: one, or neither for 0
-    uint32_t fix;
-    bool fb16;                           // a 16-bit frame buffer, and its mask
-    uint32_t fbmsk16;
-    Buffer frame, depth;                 // their addressing
-};
 Draw g_draw;
 bool g_drawDirty = true;   // a drawing register changed since g_draw was decoded
 uint64_t g_drawGen = 0;    // counts the decodings, which tells states apart
@@ -808,44 +527,6 @@ uint32_t sampleLevel(const Draw& d, int n, bool linear, float u, float v) {
     return (rb & kLanes) | (ga & kLanes) << 8;
 }
 
-// floor(128 * log2(1 + m / 2^23)) for a float's mantissa m: log2 in steps
-// of 1/128 of an octave. Step i starts at the mantissa
-// ceil(2^23 * (2^(i / 128) - 1)), which doubles get exactly (none is within
-// 10^-5 of a whole number). The steps are wider than 2^15, so each 2^15 of
-// mantissa holds at most one start: the table keeps the steps before each,
-// and where a step starts inside it.
-struct Log2Steps {
-    std::array<uint8_t, 256> before{};
-    std::array<uint32_t, 256> start{};
-    Log2Steps() {
-        auto starts = [](int i) {
-            return i < 128 ? static_cast<uint32_t>(std::ceil(8388608.0 * (std::exp2(i / 128.0) - 1.0))) : 1u << 23;
-        };
-        int i = 1;
-        for (uint32_t b = 0; b < 256; ++b) {
-            while (starts(i) <= b << 15) ++i;
-            before[b] = static_cast<uint8_t>(i - 1);
-            start[b] = starts(i) < (b + 1) << 15 ? starts(i) : ~0u;
-        }
-    }
-    int operator()(uint32_t m) const { return before[m >> 15] + (m >= start[m >> 15] ? 1 : 0); }
-};
-const Log2Steps g_log2Steps;
-
-constexpr int kFarthest = 1 << 20;   // a level of detail past every level
-
-// The level of detail at |Q|, given as its float's bits, in sixteenths (K's
-// precision): log2(1 / |Q|) * 2^L + K, rounded down. That is K less
-// ceil(log2|Q| * 2^(4 + L)): the exponent's octaves and the mantissa's
-// steps, plus one unless the mantissa is 0 (any other has an irrational
-// log2). Q = 0 is the farthest. It falls as |Q| grows.
-int levelOfDetail(const Draw& d, uint32_t bits) {
-    const int e = static_cast<int>(bits >> 23);
-    if (e == 0) return kFarthest;   // 0 (the PS2 has no denormals)
-    const uint32_t m = bits & 0x7FFFFFu;
-    return d.lodK - (e - 127) * (16 << d.lodL) - (m ? (g_log2Steps(m) >> (3 - d.lodL)) + 1 : 0);
-}
-
 // The texture at (u, v), texel coordinates of the first level; the level of
 // detail (LOD) comes from the pixel's Q or from K. Below 0 the texture is
 // magnified and MMAG filters the first level. From 0 on MMIN filters the
@@ -896,28 +577,6 @@ void address(Level& l, uint32_t psm) {
     case PSMT8: l.base = l.tbp * 256; l.rowOfPages = std::max(l.tbw >> 1, 1u) * 8192; break;
     case PSMT4: l.base = l.tbp * 512; l.rowOfPages = std::max(l.tbw >> 1, 1u) * 16384; break;
     default: l.base = l.tbp * 64; l.rowOfPages = std::max(l.tbw, 1u) * 2048; break;   // CT32, CT24, T8H, T4HL, T4HH
-    }
-}
-
-bool alphaTestPass(const Draw& d, uint32_t a) {
-    if (!d.ate) return true;
-    switch (d.atst) {
-    case 0: return false;
-    case 1: return true;
-    case 2: return a < d.aref;
-    case 3: return a <= d.aref;
-    case 4: return a == d.aref;
-    case 5: return a >= d.aref;
-    case 6: return a > d.aref;
-    default: return a != d.aref;
-    }
-}
-
-uint32_t zMax(uint32_t zpsm) {
-    switch (zpsm) {
-    case PSMZ24: return 0xFFFFFF;
-    case PSMZ16: case PSMZ16S: return 0xFFFF;
-    default: return 0xFFFFFFFF;
     }
 }
 
@@ -1342,8 +1001,6 @@ void drawLine(const Draw& d, const Vertex& a, const Vertex& b, int part, int par
     }
 }
 
-enum class Shape : uint8_t { Point, Line, Triangle, Sprite };
-
 // Draws the rows of a primitive that belong to `part` of `parts`.
 void drawShape(const Draw& d, Shape shape, const Vertex* v, int part, int parts) {
     switch (shape) {
@@ -1357,121 +1014,6 @@ void drawShape(const Draw& d, Shape shape, const Vertex* v, int part, int parts)
     case Shape::Triangle: drawTriangle(d, v[0], v[1], v[2], part, parts); break;
     case Shape::Sprite: drawSprite(d, v[0], v[1], part, parts); break;
     }
-}
-
-// ---- drawing on several threads ----------------------------------------------------
-// The words of local memory that pixels (0..w-1, 0..h-1) of a buffer can
-// address: from its first block to the end of the last page they reach.
-struct Span {
-    uint64_t lo, hi;
-};
-Span footprint(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t w, uint32_t h) {
-    uint32_t pw = 64, ph = 32, wide = std::max(bw, 1u);   // 32-bit layouts, T8H/T4HL/T4HH too
-    switch (psm) {
-    case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S: ph = 64; break;
-    case PSMT8: pw = 128; ph = 64; wide = std::max(bw >> 1, 1u); break;
-    case PSMT4: pw = 128; ph = 128; wide = std::max(bw >> 1, 1u); break;
-    default: break;
-    }
-    const uint64_t pages = static_cast<uint64_t>((std::max(h, 1u) - 1) / ph) * wide + (std::max(w, 1u) - 1) / pw + 1;
-    return {static_cast<uint64_t>(bp) * 64, static_cast<uint64_t>(bp) * 64 + pages * 2048};
-}
-constexpr uint64_t kWords = uint64_t(1) << 20;   // local memory, in words
-bool meets(Span a, Span b) {
-    if (a.hi > kWords || b.hi > kWords) return true;   // wraps round the end of memory: assume the worst
-    return a.lo < b.hi && b.lo < a.hi;
-}
-
-// Local memory's 512 pages of 2048 words, a bit each.
-struct Pages {
-    std::array<uint64_t, 8> bits{};
-    void add(Span s) {
-        if (s.hi > kWords) return bits.fill(~uint64_t(0));   // wraps round: all of it
-        for (uint64_t p = s.lo >> 11; p <= (s.hi - 1) >> 11; ++p) bits[p >> 6] |= uint64_t(1) << (p & 63);
-    }
-    void add(const Pages& o) {
-        for (size_t i = 0; i < bits.size(); ++i) bits[i] |= o.bits[i];
-    }
-    bool meets(const Pages& o) const {
-        for (size_t i = 0; i < bits.size(); ++i)
-            if (bits[i] & o.bits[i]) return true;
-        return false;
-    }
-};
-
-// What primitives drawn with a state touch: the frame and depth buffers they
-// write (with the layout that maps a pixel to its word: other rows own other
-// words under another one), and the texels and CLUT they read.
-struct Access {
-    uint32_t frameLayout = 0, depthLayout = 0;
-    Pages frame, depth, reads;
-    bool depthUsed = false;
-    bool alone = false;   // reads what it writes, or in an unsupported format
-};
-uint32_t layout(uint32_t bp, uint32_t bw, uint32_t psm) {
-    uint32_t family = 0;   // 32 and 24-bit colour
-    switch (psm) {
-    case PSMCT16: family = 1; break;
-    case PSMCT16S: family = 2; break;
-    case PSMZ32: case PSMZ24: family = 3; break;
-    case PSMZ16: family = 4; break;
-    case PSMZ16S: family = 5; break;
-    default: break;
-    }
-    return bp | bw << 14 | family << 20;
-}
-// The words holding the CLUT entries a texel can pick: 256 for an 8-bit
-// texture, 16 from CSA's for a 4-bit one. A page from CBP on was too much:
-// a CLUT in the last blocks of memory seemed to wrap round its end, and
-// every primitive using it went to one thread (Code: Veronica X's fire).
-Span clutSpan(const Draw& d) {
-    const uint32_t entries = d.tpsm == PSMT8 || d.tpsm == PSMT8H ? 256 : 16;
-    uint32_t lo = ~0u, hi = 0;
-    for (uint32_t i = 0; i < entries; ++i) {
-        lo = std::min<uint32_t>(lo, d.clutOffsets[i]);
-        hi = std::max<uint32_t>(hi, d.clutOffsets[i]);
-    }
-    const uint64_t first = static_cast<uint64_t>(d.clutBase) + lo, last = static_cast<uint64_t>(d.clutBase) + hi;
-    return d.clutWide ? Span{first, last + 1} : Span{first / 2, last / 2 + 1};   // 16-bit entries: halfwords
-}
-
-Access accessOf(const Draw& d) {
-    const Env& e = d.e;
-    Access a;
-    // As far as the scissor lets it draw.
-    const auto w = static_cast<uint32_t>(std::max(e.scx1, 0) + 1), h = static_cast<uint32_t>(std::max(e.scy1, 0) + 1);
-    const Span frame = footprint(e.fbp, e.fbw, e.fpsm, w, h), depth = footprint(e.zbp, e.fbw, e.zpsm, w, h);
-    a.frameLayout = layout(e.fbp, e.fbw, e.fpsm);
-    a.frame.add(frame);
-    if (d.zte) {
-        a.depthUsed = true;
-        a.depthLayout = layout(e.zbp, e.fbw, e.zpsm);
-        a.depth.add(depth);
-        if (meets(frame, depth)) a.alone = true;
-    }
-    if (d.tex) {
-        switch (d.tpsm) {
-        case PSMCT32: case PSMCT24: case PSMCT16: case PSMCT16S: break;
-        case PSMT8: case PSMT4: case PSMT8H: case PSMT4HL: case PSMT4HH: {
-            const Span clut = clutSpan(d);
-            if (meets(clut, frame) || (d.zte && meets(clut, depth))) a.alone = true;
-            a.reads.add(clut);
-            break;
-        }
-        default: a.alone = true; break;   // reported as unsupported, from one thread
-        }
-        // Every level sampling can read. Region clamp and repeat can reach past
-        // a level's size, up to 1024 texels on the first level, 512 on the next...
-        for (int n = d.firstLevel; n <= d.lastLevel; ++n) {
-            const Level& l = d.level[n];
-            const auto tw = static_cast<uint32_t>(d.wms >= 2 ? 1024 >> n : l.tw);
-            const auto th = static_cast<uint32_t>(d.wmt >= 2 ? 1024 >> n : l.th);
-            const Span texels = footprint(l.tbp, l.tbw, d.tpsm, tw, th);
-            if (meets(texels, frame) || (d.zte && meets(texels, depth))) a.alone = true;
-            a.reads.add(texels);
-        }
-    }
-    return a;
 }
 
 // The draw threads work through a batch of primitives together, each drawing
@@ -1684,6 +1226,17 @@ DrawThreads g_drawThreads;
 bool drawingQueued() { return g_drawThreads.busy(); }
 void finishDrawing() { g_drawThreads.finish(); }
 
+// A primitive to whichever renderer draws.
+void drawPrimitive(const Draw& d, Shape shape, const Vertex* v) {
+    if (!g_vulkan) return g_drawThreads.draw(d, g_drawGen, shape, v);
+    if (gpu::renderer::draw(d, g_drawGen, shape, v)) return;
+    // One the card cannot hold: drawn here, in GS memory.
+    gpu::renderer::cpuDraws(d);
+    g_drawThreads.draw(d, g_drawGen, shape, v);
+    g_drawThreads.finish();
+    gpu::renderer::cpuDrew(d);
+}
+
 void kick(bool draw) {
     const Draw& d = currentDraw();
     const Env& e = d.e;
@@ -1708,31 +1261,31 @@ void kick(bool draw) {
     if (g_queueCount < 3) g_queue[g_queueCount++] = v;
     switch (type) {
     case 0:   // point
-        if (draw) g_drawThreads.draw(d, g_drawGen, Shape::Point, &v);
+        if (draw) drawPrimitive(d, Shape::Point, &v);
         g_queueCount = 0;
         break;
     case 1:   // line
         if (g_queueCount == 2) {
-            if (draw) g_drawThreads.draw(d, g_drawGen, Shape::Line, g_queue);
+            if (draw) drawPrimitive(d, Shape::Line, g_queue);
             g_queueCount = 0;
         }
         break;
     case 2:   // line strip
         if (g_queueCount == 2) {
-            if (draw) g_drawThreads.draw(d, g_drawGen, Shape::Line, g_queue);
+            if (draw) drawPrimitive(d, Shape::Line, g_queue);
             g_queue[0] = g_queue[1];
             g_queueCount = 1;
         }
         break;
     case 3:   // triangle
         if (g_queueCount == 3) {
-            if (draw) g_drawThreads.draw(d, g_drawGen, Shape::Triangle, g_queue);
+            if (draw) drawPrimitive(d, Shape::Triangle, g_queue);
             g_queueCount = 0;
         }
         break;
     case 4:   // triangle strip
         if (g_queueCount == 3) {
-            if (draw) g_drawThreads.draw(d, g_drawGen, Shape::Triangle, g_queue);
+            if (draw) drawPrimitive(d, Shape::Triangle, g_queue);
             g_queue[0] = g_queue[1];
             g_queue[1] = g_queue[2];
             g_queueCount = 2;
@@ -1740,14 +1293,14 @@ void kick(bool draw) {
         break;
     case 5:   // triangle fan
         if (g_queueCount == 3) {
-            if (draw) g_drawThreads.draw(d, g_drawGen, Shape::Triangle, g_queue);
+            if (draw) drawPrimitive(d, Shape::Triangle, g_queue);
             g_queue[1] = g_queue[2];
             g_queueCount = 2;
         }
         break;
     case 6:   // sprite
         if (g_queueCount == 2) {
-            if (draw) g_drawThreads.draw(d, g_drawGen, Shape::Sprite, g_queue);
+            if (draw) drawPrimitive(d, Shape::Sprite, g_queue);
             g_queueCount = 0;
         }
         break;
@@ -1944,13 +1497,6 @@ void resetPaths() {
     for (auto& p : g_paths) p = GifPath{};
 }
 
-// What the display circuits show at a vsync: the privileged registers, CSR
-// (its FIELD bit) and the vsync count, which tells consecutive fields apart.
-struct Display {
-    uint64_t priv[0x10];
-    uint64_t csr;
-    uint64_t fieldCount;
-};
 Display displayNow() {
     Display d{};
     std::memcpy(d.priv, g_priv, sizeof g_priv);
@@ -1959,6 +1505,7 @@ Display displayNow() {
     return d;
 }
 bool buildFrame(const Display& d, Frame& out);
+void vulkanVsync(const Display& disp, const video::Present& how);
 
 // ---- PATH1 from the VU1 thread ----------------------------------------------------------
 // With VU1 on a thread of its own, its XGKICK packets come in a ring of their
@@ -2023,10 +1570,12 @@ public:
         before = head_.load(std::memory_order_relaxed);
     }
 
-    // Waits until the GS thread has run everything queued, and the draw threads drawn it.
-    void flush() {
+    // Waits until the GS thread has run everything queued, and the draw
+    // threads drawn it; with `readBack`, until GS memory holds what the card
+    // drew too.
+    void flush(bool readBack) {
         if (!thread_.joinable()) return;
-        put(Finish, 0, nullptr, 0);
+        put(Finish, readBack ? 1 : 0, nullptr, 0);
         waitFor(head_.load(std::memory_order_relaxed));
     }
 
@@ -2034,7 +1583,7 @@ public:
     // VU1 program's packets).
     void stop(bool finish) {
         if (!thread_.joinable()) return;
-        if (finish) flush();
+        if (finish) flush(false);
         else g_path1.close();
         stopping_ = true;
         wake_.fetch_add(1);
@@ -2126,6 +1675,10 @@ private:
             for (size_t i = 0; i < 2 * kVsyncQwords; ++i) q[i] = ring_[(data + i) & kMask];
             VsyncEntry v;
             std::memcpy(&v, q, sizeof v);
+            if (g_vulkan) {
+                vulkanVsync(v.display, v.how);
+                break;
+            }
             Frame f;
             if (v.how.dump || v.how.show) {
                 g_drawThreads.finish();
@@ -2133,7 +1686,10 @@ private:
             }
             break;
         }
-        case Finish: g_drawThreads.finish(); break;
+        case Finish:
+            g_drawThreads.finish();
+            if (g_vulkan && path) gpu::renderer::syncAll();   // what the card drew, back in GS memory
+            break;
         case Path1: decodePath1(ring_[data & kMask]); break;
         }
     }
@@ -2154,16 +1710,23 @@ GsThread g_gsThread;   // after g_drawThreads, which it uses: destroyed first
 // The GS thread runs when it is wanted and more than one thread draws.
 bool g_wantOwnThread = false;
 
-// Guest thread: waits until everything sent so far is drawn.
-void drawn() {
-    if (g_async) g_gsThread.flush();
-    else g_drawThreads.finish();
+// Guest thread: waits until everything sent so far is drawn; with
+// `readBack`, until GS memory holds what the card drew too (for the CPU's
+// reads; a reset or a change of threads needs no pages).
+void drawn(bool readBack = true) {
+    if (g_async) {
+        g_gsThread.flush(readBack);
+        return;
+    }
+    g_drawThreads.finish();
+    if (g_vulkan && readBack) gpu::renderer::syncAll();
 }
 // VU1's thread runs only beside the GS thread, which decodes what it kicks:
 // it stops first, while the GS thread still takes its packets, and starts last.
+// The Vulkan renderer has no draw threads: the GS thread is all it needs.
 void updateMode() {
-    drawn();
-    const bool async = g_wantOwnThread && g_drawThreads.count() > 1;
+    drawn(false);
+    const bool async = g_wantOwnThread && (g_vulkan || g_drawThreads.count() > 1);
     if (async == g_async) return;
     if (!async) vu::updateOwnThread(false);
     g_gsThread.stop(true);
@@ -2177,7 +1740,7 @@ void updateMode() {
 // Public interface
 // ===========================================================================
 void init() {
-    drawn();
+    drawn(false);   // GS memory is cleared: what the card drew is not wanted
     std::memset(g_vram, 0, sizeof g_vram);
     std::memset(g_regs, 0, sizeof g_regs);
     std::memset(g_priv, 0, sizeof g_priv);
@@ -2192,7 +1755,36 @@ void init() {
     resetPaths();
     resetClut();
     g_regs[PRMODECONT] = 1;
+    if (g_vulkan) gpu::renderer::reset();   // every page the CPU's, as cleared
 }
+
+bool useVulkan(int scale, std::string& why) {
+    drawn(false);
+    scale = std::clamp(scale, 1, 8);
+    if (g_vulkan) {   // drawing already: on at the new scale, the window's pictures kept
+        gpu::renderer::rescale(scale);
+        g_vulkanScale = scale;
+        return true;
+    }
+    if (!gpu::renderer::start(scale, why)) return false;
+    g_vulkan = true;
+    g_vulkanScale = scale;
+    updateMode();
+    return true;
+}
+
+void useSoftware() {
+    if (!g_vulkan) return;
+    drawn();
+    gpu::renderer::stop(true);
+    g_vulkan = false;
+    g_vulkanScale = 1;
+    updateMode();
+}
+
+bool vulkanDraws() { return g_vulkan; }
+int vulkanScale() { return g_vulkanScale; }
+void requestScale(int scale) { g_wantScale = std::clamp(scale, 1, 8); }
 
 void setOwnThread(bool on) {
     g_wantOwnThread = on;
@@ -2204,6 +1796,10 @@ bool ownThread() { return g_async; }
 void shutdown() {
     vu::updateOwnThread(false);
     g_gsThread.stop(true);
+    if (g_vulkan) {
+        gpu::renderer::stop(false);   // at exit nothing reads GS memory again
+        g_vulkan = false;
+    }
 }
 
 void path1Run(uint64_t program) {
@@ -2289,12 +1885,18 @@ void privWrite32(uint32_t addr, uint32_t v) {
 }
 
 void onVblankStart() {
+    if (const int scale = g_wantScale.exchange(0); scale && g_vulkan && scale != g_vulkanScale) {
+        std::string why;
+        useVulkan(scale, why);
+        PS2_INFO("gpu", "drawing at %dx the console's resolution from now on", scale);
+    }
     g_csr |= 8;             // VSINT
     g_csr ^= 1ull << 13;    // FIELD toggles every field
     ++g_fieldCount;
     updateGsInterrupt();
     const video::Present how = video::onVsync();
     if (g_async) return g_gsThread.vsync(displayNow(), how);   // also when nothing shows: it paces the GS thread
+    if (g_vulkan) return vulkanVsync(displayNow(), how);
     if (!how.dump && !how.show) return;
     g_drawThreads.finish();
     Frame f;
@@ -2355,34 +1957,6 @@ uint32_t debugAddress(uint32_t psm, uint32_t bp, uint32_t bw, uint32_t x, uint32
 }
 
 namespace {
-
-// A CRTC read-out circuit: where its picture sits on screen (DISPLAY, in video
-// clocks and lines) and where it is read from (DISPFB).
-struct Circuit {
-    uint32_t fbp = 0, fbw = 0, psm = 0;
-    int dbx = 0, dby = 0;
-    int dx = 0, dy = 0, magh = 1, magv = 1;
-    int width = 0, height = 0;   // video clocks and lines
-    bool valid = false;
-};
-
-Circuit readCircuit(const Display& d, int i) {
-    const uint64_t dispfb = d.priv[i == 0 ? 0x7 : 0x9], display = d.priv[i == 0 ? 0x8 : 0xA];
-    Circuit c;
-    c.fbp = static_cast<uint32_t>(field(dispfb, 0, 9));
-    c.fbw = static_cast<uint32_t>(field(dispfb, 9, 6));
-    c.psm = static_cast<uint32_t>(field(dispfb, 15, 5));
-    c.dbx = static_cast<int>(field(dispfb, 32, 11));
-    c.dby = static_cast<int>(field(dispfb, 43, 11));
-    c.dx = static_cast<int>(field(display, 0, 12));
-    c.dy = static_cast<int>(field(display, 12, 11));
-    c.magh = static_cast<int>(field(display, 23, 4)) + 1;
-    c.magv = static_cast<int>(field(display, 27, 2)) + 1;
-    c.width = static_cast<int>(field(display, 32, 12)) + 1;
-    c.height = static_cast<int>(field(display, 44, 11)) + 1;
-    c.valid = c.width / c.magh > 0 && c.width / c.magh <= 2048 && c.height / c.magv <= 2048;
-    return c;
-}
 
 // ---- Deinterlacing -----------------------------------------------------------
 //
@@ -2550,6 +2124,20 @@ bool circuitPixel(const Circuit& c, int clock, int line, bool perField, int odd,
     return true;
 }
 
+// The lines a picture's field takes, as buildFrame works them out (fieldLines
+// once, for a picture that is made and shows).
+int vulkanField(const Display& disp) {
+    const uint64_t pmode = disp.priv[0x0], smode2 = disp.priv[0x2];
+    const Circuit c1 = readCircuit(disp, 0), c2 = readCircuit(disp, 1);
+    const bool en1 = (pmode & 1) && c1.valid, en2 = (pmode & 2) && c2.valid;
+    return (en1 || en2) && (smode2 & 1) && (smode2 & 2) ? fieldLines(disp, en1 ? &c1 : nullptr, en2 ? &c2 : nullptr) : 0;
+}
+
+// The Vulkan renderer's picture for a vsync.
+void vulkanVsync(const Display& disp, const video::Present& how) {
+    gpu::renderer::vsync(disp, how, how.dump || how.show ? vulkanField(disp) : 0);
+}
+
 bool buildFrame(const Display& disp, Frame& out) {
     const uint64_t pmode = disp.priv[0x0], smode2 = disp.priv[0x2];
     const Circuit c1 = readCircuit(disp, 0), c2 = readCircuit(disp, 1);
@@ -2616,6 +2204,11 @@ bool buildFrame(const Display& disp, Frame& out) {
 } // namespace
 
 bool currentFrame(Frame& out) {
+    if (g_vulkan) {   // the card's picture, at its scale; the GS thread waits meanwhile
+        if (g_async) g_gsThread.flush(false);
+        const Display disp = displayNow();
+        return gpu::renderer::picture(disp, vulkanField(disp), out);
+    }
     drawn();
     return buildFrame(displayNow(), out);
 }
@@ -2633,7 +2226,7 @@ const char* deinterlaceName(Deinterlace mode) {
 }
 
 void setDrawThreads(int n) {
-    drawn();
+    drawn(false);
     g_drawThreads.setCount(n);
     updateMode();
 }

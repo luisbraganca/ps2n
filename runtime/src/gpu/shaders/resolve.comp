@@ -1,0 +1,30 @@
+#version 460
+// Pages of targets into GS memory (the mirror): each word of a page from the
+// pixel (or the two 16-bit pixels) the swizzle puts there, read at N * x,
+// N * y of the target: where the software draws the same pixel. A
+// workgroup per page; the entries (layout.h, PAGE_*) start at pc.p[1].
+
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+void main() {
+    const uint e = pc.p[1] + gl_WorkGroupID.x * PAGE_WORDS;
+    const uint image = upload[e + PAGE_IMAGE], x0 = upload[e + PAGE_X], y0 = upload[e + PAGE_Y];
+    const uint kind = upload[e + PAGE_KIND], page = upload[e + PAGE_PAGE];
+    const uint n = pc.p[0];
+    for (uint w = gl_LocalInvocationID.x; w < 2048u; w += 256u) {
+        uint word;
+        if (kind < 2u) {
+            const uint pixel = tables[T_INV32 + kind * 2048u + w];
+            word = imageLoad(images[nonuniformEXT(image)], ivec2((x0 + (pixel & 63u)) * n, (y0 + (pixel >> 6)) * n)).r;
+        } else {
+            const uint lo = tables[T_INV16 + (kind - 2u) * 4096u + 2u * w];
+            const uint hi = tables[T_INV16 + (kind - 2u) * 4096u + 2u * w + 1u];
+            const uint a = imageLoad(images[nonuniformEXT(image)], ivec2((x0 + (lo & 63u)) * n, (y0 + (lo >> 6)) * n)).r;
+            const uint b = imageLoad(images[nonuniformEXT(image)], ivec2((x0 + (hi & 63u)) * n, (y0 + (hi >> 6)) * n)).r;
+            word = (a & 0xFFFFu) | (b << 16);
+        }
+        vram[page * 2048u + w] = word;
+    }
+}

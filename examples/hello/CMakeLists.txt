@@ -11,7 +11,7 @@ ps2n_add_recompiled_game(
 
 if(PS2N_BUILD_TESTS)
     foreach(mode recompiled interpreted)
-        set(args --elf "${elf}" --virtual-clock --no-window --missing-out "${CMAKE_CURRENT_BINARY_DIR}/hello_missing_${mode}.toml")
+        set(args --elf "${elf}" --virtual-clock --no-window --renderer software --missing-out "${CMAKE_CURRENT_BINARY_DIR}/hello_missing_${mode}.toml")
         if(mode STREQUAL "interpreted")
             list(APPEND args --interpret)
         endif()

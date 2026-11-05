@@ -1,0 +1,27 @@
+#version 460
+// Pages of GS memory (the mirror) into targets: each pixel's unit, N x N
+// times. 8 x 8 pixels a workgroup, 8 x 8 workgroups a page (a 32-bit page
+// has 32 lines: the lower half has nothing to do); the entries (layout.h,
+// PAGE_*) start at pc.p[1], one per gl_WorkGroupID.z.
+
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+void main() {
+    const uint e = pc.p[1] + gl_WorkGroupID.z * PAGE_WORDS;
+    const uint image = upload[e + PAGE_IMAGE], x0 = upload[e + PAGE_X], y0 = upload[e + PAGE_Y];
+    const uint kind = upload[e + PAGE_KIND], page = upload[e + PAGE_PAGE];
+    const uint x = gl_GlobalInvocationID.x, y = gl_GlobalInvocationID.y;
+    uint unit;
+    if (kind < 2u) {
+        if (y >= 32u) return;
+        unit = vram[page * 2048u + c32(kind, y, x)];
+    } else {
+        const uint h = c16(kind - 2u, y, x);
+        unit = (vram[page * 2048u + (h >> 1)] >> ((h & 1u) * 16u)) & 0xFFFFu;
+    }
+    const uint n = pc.p[0];
+    for (uint j = 0u; j < n; ++j)
+        for (uint i = 0u; i < n; ++i) imageStore(images[nonuniformEXT(image)], ivec2((x0 + x) * n + i, (y0 + y) * n + j), uvec4(unit));
+}

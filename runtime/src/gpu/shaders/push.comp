@@ -1,0 +1,39 @@
+#version 460
+// A transfer's rectangle written into a target at scale: each unit the EE
+// sent, N x N times, into the pixels of the target's pages (the mask), the
+// other bits of a word kept where the unit is part of one (CT24 keeps the top
+// byte, T8H/T4HL/T4HH write only theirs) in every sub-pixel. 8 x 8 pixels a
+// workgroup; the entry (layout.h, PUSH_*) at pc.p[1].
+
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+void main() {
+    const uint e = pc.p[1];
+    const uint x = gl_GlobalInvocationID.x, y = gl_GlobalInvocationID.y;
+    if (x >= upload[e + PUSH_W] || y >= upload[e + PUSH_H]) return;
+    // The transfer's pixel, wrapped as TRXPOS wraps, then the target's.
+    const uint tx = ((upload[e + PUSH_X] + x) & 2047u) + upload[e + PUSH_ORIGIN];
+    const uint ty = ((upload[e + PUSH_Y] + y) & 2047u) + upload[e + PUSH_ORIGINY];
+    const uint pageH = upload[e + PUSH_PAGEH], fbw = upload[e + PUSH_FBW];
+    if (tx >= fbw * 64u) return;
+    const uint page = (upload[e + PUSH_BASEPAGE] + (ty / pageH) * fbw + tx / 64u) & 511u;
+    if ((upload[e + PUSH_MASK + (page >> 5)] & (1u << (page & 31u))) == 0u) return;
+    const uint unit = upload[upload[e + PUSH_SRC] + y * upload[e + PUSH_W] + x];
+    const uint kind = upload[e + PUSH_UNIT], image = upload[e + PUSH_IMAGE];
+    const uint n = pc.p[0];
+    for (uint j = 0u; j < n; ++j)
+        for (uint i = 0u; i < n; ++i) {
+            const ivec2 at = ivec2(tx * n + i, ty * n + j);
+            uint word = unit;
+            if (kind != PUSH_UNIT_WHOLE) {
+                const uint old = imageLoad(images[nonuniformEXT(image)], at).r;
+                if (kind == PUSH_UNIT_LOW24) word = (old & 0xFF000000u) | (unit & 0xFFFFFFu);
+                else if (kind == PUSH_UNIT_T8H) word = (old & 0x00FFFFFFu) | (unit << 24);
+                else if (kind == PUSH_UNIT_T4HL) word = (old & 0xF0FFFFFFu) | ((unit & 0xFu) << 24);
+                else word = (old & 0x0FFFFFFFu) | ((unit & 0xFu) << 28);
+            }
+            imageStore(images[nonuniformEXT(image)], at, uvec4(word));
+        }
+}

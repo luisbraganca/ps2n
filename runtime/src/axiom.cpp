@@ -330,6 +330,7 @@ const char* levelName(LogLevel l) {
 
 std::mutex g_mutex;   // the session and everything in it; taken after the log's lock, never before
 std::atomic<bool> g_active{false};
+RendererInfo g_renderer{"software", 1, ""};   // describeRenderer, before start
 
 struct Session {
     Config cfg;
@@ -620,6 +621,8 @@ Delivery judge(int status, std::string_view body) {
 
 // ---- the session ----
 
+void describeRenderer(const RendererInfo& info) { g_renderer = info; }
+
 void start(const Config& cfg, const GameInfo& game, const std::vector<std::string>& args, std::string_view build,
            Transport transport) {
     if (!cfg.enabled || g_active) return;
@@ -664,6 +667,9 @@ void start(const Config& cfg, const GameInfo& game, const std::vector<std::strin
                         .str("cpu", cpuName())
                         .num("threads", int64_t(std::thread::hardware_concurrency()))
                         .str("display", displayKind())
+                        .str("renderer", g_renderer.renderer)
+                        .num("upscale", int64_t(g_renderer.upscale))
+                        .str("gpu", g_renderer.gpu)
                         .str("args", withoutHome(line, s->home))
                         .done();
     {

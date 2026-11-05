@@ -13,6 +13,15 @@
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_sdlrenderer2.h>
 
+#ifdef PS2N_HAVE_VULKAN
+#include "gpu/device.h"
+#include "log.h"
+#include "video/present_vk.h"
+
+#include <SDL_vulkan.h>
+#include <imgui_impl_vulkan.h>
+#endif
+
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
@@ -36,6 +45,7 @@ using input::PadConfig;
 
 SDL_Window* g_window = nullptr;
 SDL_Renderer* g_renderer = nullptr;
+bool g_vulkan = false;   // drawn through ImGui's Vulkan backend, not SDL's renderer
 ImGuiStyle g_baseStyle;
 float g_scale = 0.0f;
 
@@ -772,11 +782,30 @@ void drawGraphics() {
         static_assert(std::size(kAspect) == size_t(video::AspectRatio::Count));
         static_assert(std::size(kFmv) == size_t(video::FmvAspectRatio::Count));
         const float labels = ImGui::GetFontSize() * 13.0f, combo = ImGui::GetFontSize() * 18.0f;
-        ImGui::SeparatorText("Display");
+        ImGui::SeparatorText("Rendering");
         if (g_focusMenu) {
             ImGui::SetKeyboardFocusHere();
             g_focusMenu = false;
         }
+        static constexpr video::Renderer kRenderers[] = {video::Renderer::Auto, video::Renderer::Software, video::Renderer::Vulkan};
+        int renderer = 0;
+        for (int i = 0; i < 3; ++i)
+            if (kRenderers[i] == video::rendererSetting()) renderer = i;
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Renderer:");
+        ImGui::SameLine(labels);
+        ImGui::SetNextItemWidth(combo);
+        if (ImGui::Combo("##renderer", &renderer, [](void*, int i) { return video::rendererName(kRenderers[i]); }, nullptr, 3))
+            video::setRendererSetting(kRenderers[renderer]);
+        int upscale = video::upscaleSetting() - 1;
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Internal Resolution:");
+        ImGui::SameLine(labels);
+        ImGui::SetNextItemWidth(combo);
+        if (ImGui::Combo("##upscale", &upscale, [](void*, int i) { return video::upscaleName(i + 1); }, nullptr, video::kMaxUpscale))
+            video::setUpscaleSetting(upscale + 1);
+        if (const std::string note = video::rendererNote(); !note.empty()) ImGui::TextDisabled("%s", note.c_str());
+        ImGui::SeparatorText("Display");
         int aspect = static_cast<int>(video::aspectRatio());
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Aspect Ratio:");
@@ -791,6 +820,19 @@ void drawGraphics() {
         ImGui::SetNextItemWidth(combo);
         if (ImGui::Combo("##fmv", &fmv, kFmv, static_cast<int>(std::size(kFmv))))
             video::setFmvAspectRatio(video::FmvAspectRatio(fmv));
+        int bilinear = static_cast<int>(video::bilinearMode());
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Bilinear Filtering:");
+        ImGui::SameLine(labels);
+        ImGui::SetNextItemWidth(combo);
+        if (ImGui::Combo("##bilinear", &bilinear, [](void*, int i) { return video::bilinearModeName(video::BilinearMode(i)); }, nullptr,
+                         static_cast<int>(video::BilinearMode::Count)))
+            video::setBilinearMode(video::BilinearMode(bilinear));
+        bool integer = video::integerScaling();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Integer Scaling:");
+        ImGui::SameLine(labels);
+        if (ImGui::Checkbox("##integer", &integer)) video::setIntegerScaling(integer);
         if (g_game && g_game->aspectRatio) {
             ImGui::Spacing();
             ImGui::TextDisabled("This game was recompiled with patches for %s, which Auto shows.", g_game->aspectRatio);
@@ -873,7 +915,11 @@ void loadFont() {
 // Sizes follow the window: text for a 720-line window at 18 pixels.
 void scaleToWindow() {
     int w = 0, h = 0;
-    SDL_GetRendererOutputSize(g_renderer, &w, &h);
+#ifdef PS2N_HAVE_VULKAN
+    if (g_vulkan) SDL_Vulkan_GetDrawableSize(g_window, &w, &h);
+    else
+#endif
+        SDL_GetRendererOutputSize(g_renderer, &w, &h);
     const float scale = std::clamp(static_cast<float>(h) / 720.0f, 0.75f, 3.0f);
     if (std::fabs(scale - g_scale) < 0.01f) return;
     g_scale = scale;
@@ -884,11 +930,7 @@ void scaleToWindow() {
     style.FontScaleMain = scale;
 }
 
-} // namespace
-
-void init(SDL_Window* window, SDL_Renderer* renderer) {
-    g_window = window;
-    g_renderer = renderer;
+void createContext() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -907,18 +949,71 @@ void init(SDL_Window* window, SDL_Renderer* renderer) {
     g_baseStyle = style;
     g_scale = 0.0f;
     loadFont();
+}
+
+} // namespace
+
+void init(SDL_Window* window, SDL_Renderer* renderer) {
+    g_window = window;
+    g_renderer = renderer;
+    g_vulkan = false;
+    createContext();
     ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer2_Init(renderer);
     ImGui_ImplSDL2_SetGamepadMode(ImGui_ImplSDL2_GamepadMode_AutoAll);
 }
 
+#ifdef PS2N_HAVE_VULKAN
+void initVulkan(SDL_Window* window) {
+    g_window = window;
+    g_renderer = nullptr;
+    g_vulkan = true;
+    createContext();
+    ImGui_ImplSDL2_InitForVulkan(window);
+    // Vulkan's functions come from the runtime's loader, not from a linked library.
+    ImGui_ImplVulkan_LoadFunctions(VK_API_VERSION_1_3, [](const char* name, void*) {
+        return gpu::loader::lookup(name, gpu::device().instance, gpu::device().handle);
+    });
+    static VkFormat format;
+    format = video::vulkan::format();
+    ImGui_ImplVulkan_InitInfo info{};
+    info.ApiVersion = VK_API_VERSION_1_3;
+    info.Instance = gpu::device().instance;
+    info.PhysicalDevice = gpu::device().physical;
+    info.Device = gpu::device().handle;
+    info.QueueFamily = gpu::device().family;
+    info.Queue = video::vulkan::queue();
+    info.DescriptorPoolSize = 16;
+    info.MinImageCount = 2;
+    info.ImageCount = video::vulkan::imageCount();
+    info.UseDynamicRendering = true;
+    info.PipelineInfoMain.PipelineRenderingCreateInfo = gpu::make<VkPipelineRenderingCreateInfoKHR>(VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO);
+    info.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+    info.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &format;
+    info.CheckVkResultFn = [](VkResult r) {
+        if (r < 0) PS2_ERROR("ui", "ImGui's Vulkan backend: %s", gpu::resultName(r));
+    };
+    ImGui_ImplVulkan_Init(&info);
+    ImGui_ImplSDL2_SetGamepadMode(ImGui_ImplSDL2_GamepadMode_AutoAll);
+}
+
+void render(VkCommandBuffer cmd) { ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd); }
+#endif
+
 void shutdown() {
-    if (!g_renderer) return;
-    ImGui_ImplSDLRenderer2_Shutdown();
+    if (!g_renderer && !g_vulkan) return;
+#ifdef PS2N_HAVE_VULKAN
+    if (g_vulkan) {
+        const std::lock_guard<std::mutex> lock(video::vulkan::queueMutex());
+        ImGui_ImplVulkan_Shutdown();
+    } else
+#endif
+        ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();
     g_renderer = nullptr;
     g_window = nullptr;
+    g_vulkan = false;
 }
 
 void processEvent(const SDL_Event& ev) {
@@ -938,7 +1033,11 @@ void frame(const input::HostState& host) {
     g_host = host;
     if (g_capture.active && ImGui::GetTime() - g_capture.started > kCaptureSeconds) endCapture();
     scaleToWindow();
-    ImGui_ImplSDLRenderer2_NewFrame();
+#ifdef PS2N_HAVE_VULKAN
+    if (g_vulkan) ImGui_ImplVulkan_NewFrame();
+    else
+#endif
+        ImGui_ImplSDLRenderer2_NewFrame();
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
     if (g_screen == Screen::PauseMenu) drawPauseMenu();

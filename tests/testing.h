@@ -29,6 +29,16 @@ inline int& failures() {
     return n;
 }
 
+// A case that cannot run here (no graphics card, no shader compiler) says
+// why with SKIP: it is counted apart, neither passed nor failed.
+struct Skip {
+    std::string reason;
+};
+inline int& skips() {
+    static int n = 0;
+    return n;
+}
+
 inline void fail(const char* file, int line, const std::string& msg) {
     ++failures();
     std::fprintf(stderr, "%s:%d: %s\n", file, line, msg.c_str());
@@ -56,15 +66,19 @@ inline int runAll(int argc, char** argv) {
     for (const auto& c : registry()) {
         if (!filter.empty() && std::string(c.name).find(filter) == std::string::npos) continue;
         const int before = failures();
+        ++ran;
         try {
             c.fn();
+        } catch (const Skip& s) {
+            ++skips();
+            std::printf("%s %s: %s\n", failures() == before ? "[skip]" : "[FAIL]", c.name, s.reason.c_str());
+            continue;
         } catch (const std::exception& e) {
             fail(c.name, 0, std::string("unexpected exception: ") + e.what());
         }
-        ++ran;
         std::printf("%s %s\n", failures() == before ? "[ ok ]" : "[FAIL]", c.name);
     }
-    std::printf("%d test(s), %d failure(s)\n", ran, failures());
+    std::printf("%d test(s), %d skipped, %d failure(s)\n", ran, skips(), failures());
     return failures() ? 1 : 0;
 }
 
@@ -74,6 +88,8 @@ inline int runAll(int argc, char** argv) {
     static void name();                                                     \
     static ::testing::Registrar name##_registrar(#name, name);              \
     static void name()
+
+#define SKIP(reason) throw ::testing::Skip{reason}
 
 #define CHECK(cond)                                                         \
     do {                                                                    \

@@ -1,0 +1,92 @@
+#version 460
+// A vsync's picture, or in FIELD mode its field, at N times the console's
+// resolution: gs.cpp's buildFrame and circuitPixel for each image pixel.
+// A circuit reads a target at its scale or, at 1x, GS memory (the mirror);
+// the two merge as the PCRTC merges them. Output pixel (X, Y) shows what
+// the console shows at picture pixel (X / N, Y / N): exactly that pixel's
+// value at X = N * x, Y = N * y.
+//
+// pc.p: 0 N, 1 the output (binding 6; ~0u: the field image the control
+// buffer names), 2 width, 3 height (image pixels), 4 flags (DISPLAY_*),
+// 5 ALP, 6 BGCOLOR, 7 x0 (video clocks), 8 y0 (lines), 9 clocks per picture
+// pixel, 10 the field's parity, 11 the picture's lines (h), 12 the
+// circuits' entries in the upload buffer (CIRCUIT_*, two).
+
+#include "common.glsl"
+#include "display.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// The circuit's pixel at (x, y) of its buffer, as RGBA (gs.cpp's pixel32):
+// from the target that holds its page, at scale, or from GS memory.
+uint circuitColour(uint e, uint x, uint y, uint subX, uint subY) {
+    const uint psm = upload[e + CIRCUIT_PSM];
+    const bool wide = psm == PSMCT32 || psm == PSMCT24, narrow = psm == PSMCT16 || psm == PSMCT16S;
+    if (!wide && !narrow) return 0u;   // a format the display reads as nothing, as gs.cpp does
+    const uint bp = upload[e + CIRCUIT_FBP] * 32u, bw = max(upload[e + CIRCUIT_FBW], 1u);
+    const uint pageH = wide ? 32u : 64u;
+    const uint page = (y / pageH) * bw + (x >> 6);   // from the buffer's first page
+    const uint at = upload[e + CIRCUIT_PAGES + ((upload[e + CIRCUIT_FBP] + page) & 511u)];
+    uint raw;
+    if ((at & CIRCUIT_PAGE_AT) != 0u) {
+        const uint sc = pc.p[0];
+        const uint tx = (at & 63u) * 64u + (x & 63u), ty = ((at >> 6) & 511u) * pageH + (y & (pageH - 1u));
+        raw = imageLoad(images[nonuniformEXT((at >> 15) & 0xFFFu)], ivec2(tx * sc + subX, ty * sc + subY)).r;
+        raw &= wide ? 0xFFFFFFFFu : 0xFFFFu;
+    } else if (wide) {   // readRaw(fbp * 32, fbw, psm, x, y) in GS memory
+        raw = vram[(bp * 64u + page * 2048u + c32(0u, y & 31u, x & 63u)) & 0xFFFFFu];
+    } else {
+        raw = mirrorHalfword((bp * 128u + page * 4096u + c16(psm == PSMCT16S ? 1u : 0u, y & 63u, x & 63u)) & 0x1FFFFFu);
+    }
+    if (narrow) return expand16(raw, 0u, 0x80u, false);
+    if (psm == PSMCT24) return (raw & 0xFFFFFFu) | 0xFF000000u;
+    return raw;
+}
+
+// circuitPixel at picture position (clock, line) and its sub-pixel, scaled
+// by the picture's clocks across: false where the circuit does not cover it.
+bool circuitPixel(uint e, int clock, int line, uint subX, uint subY, bool perField, int odd, out uint px) {
+    const int dx = int(upload[e + CIRCUIT_DX]), dy = int(upload[e + CIRCUIT_DY]);
+    const int width = int(upload[e + CIRCUIT_WIDTH]), height = int(upload[e + CIRCUIT_HEIGHT]);
+    const int magh = int(upload[e + CIRCUIT_MAGH]), magv = int(upload[e + CIRCUIT_MAGV]);
+    px = 0u;
+    if (clock < dx || line < dy || clock >= dx + width || line >= dy + height) return false;
+    const int n = int(pc.p[0]), clocks = int(pc.p[9]);
+    // Where in the circuit's pixel, in Nths: its pixels are magh clocks wide, the picture's `clocks`.
+    const int across = ((clock - dx) * n + int(subX) * clocks) / magh;
+    const int x = across / n;
+    int y = (line - dy) / magv;
+    if (perField) y = clamp((y - odd) / 2, 0, max(height / magv / 2, 1) - 1);
+    px = circuitColour(e, uint(x) + upload[e + CIRCUIT_DBX], uint(y) + upload[e + CIRCUIT_DBY], uint(across - x * n), subY);
+    return true;
+}
+
+void main() {
+    const uvec2 at = gl_GlobalInvocationID.xy;
+    if (at.x >= pc.p[2] || at.y >= pc.p[3]) return;
+    const uint n = pc.p[0], flags = pc.p[4];
+    const bool perField = (flags & DISPLAY_FIELD) != 0u;
+    const int odd = int(pc.p[10]), h = int(pc.p[11]);
+    const int x = int(at.x / n);
+    int line;
+    if (perField) line = int(pc.p[8]) + min(2 * int(at.y / n) + odd, h - 1);
+    else line = int(pc.p[8]) + int(at.y / n);
+    const int clock = int(pc.p[7]) + x * int(pc.p[9]);
+    const uint subX = at.x % n, subY = at.y % n;
+    const uint e1 = pc.p[12], e2 = pc.p[12] + CIRCUIT_WORDS;
+    uint p1 = 0u, p2 = 0u, px = 0u;
+    const bool has1 = (flags & DISPLAY_EN1) != 0u && circuitPixel(e1, clock, line, subX, subY, perField, odd, p1);
+    const bool has2 = (flags & DISPLAY_EN2) != 0u && circuitPixel(e2, clock, line, subX, subY, perField, odd, p2);
+    if ((flags & DISPLAY_BLEND) == 0u) {
+        px = has1 ? p1 : p2;
+    } else {
+        const uint bg = (flags & DISPLAY_SLBG) != 0u ? pc.p[6] : (has2 ? p2 : 0u);
+        const uint a = !has1 ? 0u : (flags & DISPLAY_MMOD) != 0u ? pc.p[5] : min((p1 >> 24) * 2u, 255u);
+        for (uint shift = 0u; shift < 24u; shift += 8u) {
+            const uint s = (p1 >> shift) & 0xFFu, d = (bg >> shift) & 0xFFu;
+            px |= ((s * a + d * (255u - a)) / 255u) << shift;
+        }
+    }
+    const uint out_ = pc.p[1] != 0xFFFFFFFFu ? pc.p[1] : control[C_FREE];
+    imageStore(pictures[nonuniformEXT(out_)], ivec2(at), unpackPixel(px | 0xFF000000u));
+}

@@ -265,8 +265,9 @@ never got to run its main thread. So in real-time runs the GS has a host
 thread of its own, as PCSX2's MTGS does. DMA, VIF and VU1 hand their GIF data
 to a 32 MB ring (VU1 on its own thread through a ring of its own, below), and
 the GS thread parses it in order and queues the primitives for the draw
-threads. The GIF resets (`GIF_CTRL.RST`, `CSR.RESET`) go through the ring
-too, so the GS sees every write in the order the guest made it.
+threads, or with the Vulkan renderer records the card's work for them. The
+GIF resets (`GIF_CTRL.RST`, `CSR.RESET`) go through the ring too, so the GS
+sees every write in the order the guest made it.
 
 The guest thread waits for the GS thread in three places only:
 
@@ -399,8 +400,9 @@ data is queued, where a console would show the GS busy until it is done.
 
 Because the GS thread changes when `FINISH` and `SIGNAL` arrive relative to
 guest code, it is off where runs must repeat (`--virtual-clock`, the tests)
-or stop where a gap is (`--strict`), and with `--gs-threads 1`. Given the
-same GIF data, each vsync's picture is the same either way.
+or stop where a gap is (`--strict`), and with `--gs-threads 1` and the
+software renderer. Given the same GIF data, each vsync's picture is the same
+either way.
 
 ### The CLUT buffer
 
@@ -420,6 +422,114 @@ a tagged half leaves its slot out of date, and a draw compares the slots it
 reads with the tags of the memory the rasterizer reads; the result is kept
 until the texture's CLUT fields or the slots change. Memory that primitives
 draw into after a load is not checked.
+
+### The Vulkan renderer
+
+The software rasterizer's work grows with the number of pixels, so higher
+resolutions need the graphics card, and on slower CPUs drawing is what holds
+a game back. The Vulkan renderer (`runtime/src/gpu/renderer*.cpp`) draws the
+primitives the GS decodes on the card instead, at N times the console's
+resolution, N from 1 to 8.
+
+**One exact pipeline.** PCSX2's hardware renderers draw with the card's
+fixed-function blending and depth test, and make up for where they differ
+with accuracy levels and settings per game. Here each pixel goes through the
+software rasterizer's steps in one fragment shader (`gs.frag`), on storage
+images that hold the GS's raw units, a word or a halfword a pixel: the depth
+test, texturing, fog, the alpha test, blending and the masks, in integers, as
+`plot()` does. Fragment shader interlock (`VK_EXT_fragment_shader_interlock`)
+orders each pixel's reads and writes in the order of the primitives, as the
+GS does; without it a pixel would depend on how the card schedules its work,
+so the renderer requires it.
+
+A pixel's values come from the software's float operations, in the same
+order and rounded the same way. The shader works out a triangle's weights
+for its own position from the vertices, not with the card's interpolation.
+An execution mode rounds its floats toward zero, as the EE does; depth is
+interpolated in doubles, which the card rounds to nearest, so each operation
+is corrected toward zero where Dekker's product or Knuth's sum shows its
+error went the other way. Vulkan allows a division to be 2.5 ulp off, so the
+shader divides by integer long division, exactly. Sprites, lines and points
+take their vertices' values as the software does; a line's pixels are the
+software's DDA, a quad each.
+
+**Positions at scale.** A vertex at x lands at N x + 0.5 on the card, which
+samples pixel k at k + 0.5: pixel k is covered where the GS would cover
+position k / N, so pixel N px exactly where the GS covers pixel px, and the
+top-left rules agree. The shader's position for pixel k is k / N, whole for
+those pixels. So at 1x every pixel is the software's, and above it pixel
+(N x, N y) is, while the pixels between are drawn at their own positions:
+finer edges, gradients and textures the card drew.
+
+A texture the card drew is read at its own resolution. Its pixel m holds
+what the GS draws at position m / N, and texture coordinate u is position
+u - 1/2 (a texel's centre is half a texel in), so nearest filtering takes
+the pixel nearest that position and bilinear the two around it; at 1x this
+is the GS's own rule. A copy through texel centres, as both games here copy
+their pictures, then copies every pixel at any scale. No rule serves copies
+through texel edges as well: they come out half a console pixel to the left
+above 1x (taking the card's own rule instead, floor(u N), shifts copies
+through centres half a pixel to the right). This is the ambiguity PCSX2's
+half-pixel offset settings settle game by game.
+
+**Pages.** GS memory is 512 pages of 8 KB. Each belongs to the CPU (the
+software's memory, which the EE's transfers write) or to one target: an
+image of one buffer layout (its first page, its width and its pixel family:
+CT32 and CT24, CT16, CT16S, Z32 and Z24, Z16, Z16S), N x N image pixels a GS
+pixel. A page has one owner, so no memory is held twice. The card also keeps
+a copy of GS memory at 1x, the mirror, which textures in any layout, CLUTs
+and the display read. Pages move exactly: from a target to the mirror as its
+pixels (N x, N y), from the mirror to a target as each unit N x N times,
+from the mirror to the CPU (a read back: the CPU waits for the card) and from
+the CPU to the mirror. A primitive's frame and depth pages become its
+targets'. A texture laid out as a target is read from the target at its
+scale in the pages the target holds, and from the mirror in the rest: a
+picture read as a texture is declared to the next power of two (640 x 448
+as 1024 x 512), which reaches into the buffer after it. Any other texture
+is read from the mirror. A transfer into a target's layout reaches
+the target as its pixels come, the rows sent and the start of the next, so a
+primitive between two IMAGE packets sees what has come so far; one in
+another layout gives the pages back to the CPU first, which is the read back
+games pay for (the exit summary counts them). A local copy between targets
+of one layout runs on the card at scale. A pixel past a buffer's width is on
+the next row of pages, in GS memory and so in a target: a scissor wider than
+the buffer draws there (Code: Veronica X's is a pixel wider than its frame),
+and a texture wider than its buffer reads there (a 640-wide picture read as a
+1024-wide texture). The interlock orders pixels by their place in the image,
+not in memory, so a primitive that draws past its frame's width comes
+between two barriers. A target cannot reach round the end of memory: a
+primitive whose buffers do (Secret Agent Clank clears all of GS memory and
+a pixel more at start-up) is drawn by the software rasterizer in GS memory,
+which takes the pages it touches back from the card; games also park the
+scissor past the end of memory to draw nothing, which needs nothing drawn.
+
+**Order.** Within one rendering pass the interlock orders each pixel's
+primitives. Where a primitive reads what earlier ones in the pass wrote (a
+texture they drew), or writes what they read, the pass ends with a barrier
+first (a cut), where the draw threads would wait for their batch. A
+primitive that samples the memory it draws into reads a copy taken before
+it: the console reads its own new pixels, which cannot be ordered on the
+card, so it is reported.
+
+**The display.** Each circuit reads each page from the target that holds
+it, at scale, or from the mirror at 1x, and the circuits merge as
+`buildFrame` merges them, picture pixel (X, Y) being (X / N, Y / N) and its
+sub-pixel. FIELD mode's deinterlacer runs on the card over fields at scale,
+and takes its decisions there too (whether a field is the last one again,
+which fields are recent), so the picture needs nothing read back.
+
+**Threads.** In real-time runs the GS thread records the card's work where
+it queued primitives for the draw threads; on the virtual clock the guest
+thread does. A vsync's picture goes to a mailbox of three, from which the
+window's thread composes the newest into the swapchain with the overlay,
+waiting on the renderer's timeline semaphore for it; `--dump-frames` reads
+it back. The guest's reads of GS memory (`gs::readPixel32`, the tests) wait
+for the GS thread and read the pages back.
+
+Not covered: what the software rasterizer leaves out too; a depth test
+whose buffer is in the frame's memory (drawn without it, reported); the
+per-game fixes PCSX2's upscaling needs; scales that are not whole numbers;
+cards without fragment shader interlock.
 
 ### The interpreter
 

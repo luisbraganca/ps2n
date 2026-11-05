@@ -13,6 +13,15 @@ target_link_libraries(ps2n_runtime_tests PRIVATE ps2n_runtime)
 ps2n_copy_runtime_dlls(ps2n_runtime_tests)
 # White-box access to runtime internals (GS addressing, guest printf).
 target_include_directories(ps2n_runtime_tests PRIVATE ${PS2N_SOURCE_DIR}/runtime/src)
+# The Vulkan renderer's internals too, and where the compiled shaders are:
+# gpu_shaders_are_current compares the build's with the sources' copy.
+if(PS2N_WITH_VULKAN)
+    target_include_directories(ps2n_runtime_tests SYSTEM PRIVATE ${PS2N_SOURCE_DIR}/third_party/vulkan/include)
+    get_property(ps2n_spirv_built GLOBAL PROPERTY PS2N_SPIRV_BUILT)
+    target_compile_definitions(ps2n_runtime_tests PRIVATE PS2N_HAVE_VULKAN=1 VK_NO_PROTOTYPES
+        "PS2N_SPIRV_BUILT=\"${ps2n_spirv_built}\""
+        "PS2N_SPIRV_SOURCE=\"${PS2N_SOURCE_DIR}/runtime/src/gpu/shaders/ps2n_spirv.h\"")
+endif()
 ps2n_set_warnings(ps2n_runtime_tests)
 add_test(NAME runtime COMMAND ps2n_runtime_tests)
 

@@ -38,6 +38,11 @@ Configured trees (Ninja, git-ignored). Reuse them:
   -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
   -DPS2N_WARNINGS_AS_ERRORS=ON`. For the window, add
   `-DSDL2_DIR=C:/ps2/deps/SDL2-2.32.10/cmake`.
+- Every tree builds the Vulkan renderer (the headers are vendored; the
+  driver's loader is opened at run time). The shaders are compiled with
+  glslc, found in `C:/VulkanSDK/*/Bin`. After changing a shader, build the
+  `ps2n_update_shaders` target and commit `runtime/src/gpu/shaders/ps2n_spirv.h`
+  (builds without glslc use it); `gpu_shaders_are_current` fails until then.
 - One runtime test: `build-werror/tests/ps2n_runtime_tests.exe <filter>`. The
   filter is a substring (`gs_` also matches `settings_`), and the cases share
   one process (see Tests), so run the whole suite before finishing.
@@ -61,7 +66,12 @@ runtime/src/                     runtime.cpp (options, start-up), dispatch.cpp, 
                                  vu_thread.cpp (VU1's own thread), ring.h (a ring between two host threads),
                                  axiom.cpp (a tester's log sent to Axiom), version.cpp (the runtime's commit)
   kernel/kernel.cpp              EE syscalls
-  hw/                            hw.cpp (EE registers), dmac, gs (rasterizer, GS thread, draw threads, display), vif, ipu, mpeg
+  hw/                            hw.cpp (EE registers), dmac, gs (rasterizer, GS thread, draw threads, display), vif, ipu, mpeg;
+                                 gs_internal.h (what gs.cpp shares with the Vulkan renderer)
+  gpu/                           the Vulkan renderer: loader, device, resources, renderer.cpp (pages, targets,
+                                 transfers, drawing), renderer_setup.cpp, renderer_display.cpp (display,
+                                 deinterlacing), compose.cpp and picture.cpp (the window's side); shaders/
+                                 (GLSL, layout.h shared with the C++, ps2n_spirv.h the compiled copy)
   iop/                           cpu (R3000A), kernel, libs, hle (host libraries), modules (IRX loading),
                                  iop.cpp (SIF, RPC), services (FILEIO, LOADFILE, ...), cdvd, disc,
                                  memcard, pad, spu2 (the SPU2, its registers), sound (libsd on it),
@@ -108,6 +118,20 @@ assets/                          branding/ (logo and icons; its README says whic
   mode. A host thread doing guest-visible float work must take the caller's
   mode (`fegetround`), as the GS thread and the draw threads do; without it,
   colours come out one step off.
+- The Vulkan renderer draws at 1x exactly the software rasterizer's pixels,
+  and at N x its pixel (N x, N y) is the software's (x, y), except where a
+  texture the card drew is read at its own resolution (texture coordinate
+  u is position u - 1/2 there, so copies through texel centres copy every
+  pixel; see architecture.md). It computes each
+  pixel's values from the vertices with the software's float steps, in the
+  same order, rounded toward zero, never with the card's interpolation,
+  blending or depth test; a change to how the software draws a pixel goes
+  into `gs.frag` too, and the `gpu_` tests rerun the GS's tests on the card
+  at 1x and above to hold them together. Each page of GS memory belongs to
+  the CPU or to one target; pages move between them only through the
+  mirror, exactly, and every read of GS memory on the CPU side reads the
+  pages back first (`drawn()`, `syncAll`). The GS starts in software mode;
+  only `run()` (and the tests, through `useVulkan`) switches it.
 - Drawing on several threads (`--gs-threads`) must give exactly what one
   thread gives, or runs stop being reproducible. The draw threads work
   through a batch of queued primitives, each drawing its own bands of four
@@ -128,7 +152,8 @@ assets/                          branding/ (logo and icons; its README says whic
   thread never touches guest state: `FINISH` and `SIGNAL` reach the guest
   through `gs::pollEvents` at a safepoint. `--virtual-clock` and `--strict`
   keep the decoding on the guest thread, and `--gs-threads 1` the drawing
-  too.
+  too with the software renderer. With Vulkan the GS thread records the
+  card's work, whatever `--gs-threads` says.
 - In real-time runs VU1 has a thread of its own too (`vu_thread.cpp`). The
   guest thread queues VIF1's writes to VU1 memory and the programs it starts,
   in order, and the EE still sees each program finished the moment it
@@ -138,7 +163,8 @@ assets/                          branding/ (logo and icons; its README says whic
   the GS thread decodes the program's XGKICK packets, so PATH1 keeps its
   place among the paths. That is why VU1's thread runs only while the GS
   thread does, and stops first. `--virtual-clock`, `--strict`,
-  `--gs-threads 1` and `--no-vu1-thread` keep VU1 on the guest thread.
+  `--no-vu1-thread`, and `--gs-threads 1` with the software renderer, keep
+  VU1 on the guest thread.
 - A vsync's picture is read at the start of the vblank, before the game's
   vsync handler runs, so a game that flips there (Agent Under Fire does)
   shows each picture a vsync later than the console. In FIELD mode, adaptive
@@ -177,9 +203,15 @@ assets/                          branding/ (logo and icons; its README says whic
   real-time clock, where an SPU2 register access mixes whatever time has
   passed; the SPU2 tests stop the clock (`FrozenClock`) and mix with
   `spu2::runSamples`.
+- The `gpu_` tests need a card with Vulkan 1.3 and fragment shader
+  interlock; elsewhere they print `[skip]` with the reason and do not fail
+  the run. They run with the validation layer where it is installed and
+  check it reported nothing. `GpuRun` switches the GS to the card for one
+  test and back.
 - End-to-end tests run each program twice, recompiled and `--interpret`,
   against `.expected` output, plus a SHA-256 of a dumped frame for drawing
-  tests. New assembly programs go in `tests/programs` (`ps2n_program_test`);
+  tests. They pass `--renderer software`, as every deterministic run that
+  hashes or records pictures must. New assembly programs go in `tests/programs` (`ps2n_program_test`);
   a `<name>.toml` beside one replaces `default.toml`, for extra entry points
   or bindings. The ps2sdk programs are prebuilt in `tests/sdk/bin`.
   Rebuilding them needs the ps2dev toolchain, which is not installed: ask
@@ -207,9 +239,12 @@ assets/                          branding/ (logo and icons; its README says whic
   executable). Add them to `[analysis] entries_files` and recompile.
 - `ps2n disasm --cpp NAME` shows one function's translation. `ps2n irx` and
   `disasm` on the game's own IRX modules are the best protocol reference.
-- `--gs-threads 1` draws on the guest thread alone, which rules the GS
-  thread and the draw threads out when a frame looks wrong;
-  `--no-vu1-thread` rules VU1's thread out the same way.
+- `--renderer software` rules the graphics card out when a frame looks
+  wrong; `--gpu-debug` checks every Vulkan call with the validation layer.
+  With the software renderer, `--gs-threads 1` draws on the guest thread
+  alone, which rules the GS thread and the draw threads out;
+  `--no-vu1-thread` rules VU1's thread out the same way. The exit summary
+  counts the card's read-backs by why (`pages read back: ...`).
 - `--dump-audio FILE` writes the sound as a WAV file, the same on every
   `--virtual-clock` run. In streamed sound, a gap of exact zeros is what the
   driver sent; when the IOP answers late, the last 512 samples repeat instead.
@@ -275,8 +310,9 @@ assets/                          branding/ (logo and icons; its README says whic
     `defineLibrary` entry. An entry is implemented when its function is not
     `nullptr` or is set with `setExport`.
   - EE instructions: the `X(` rows of `r5900_ops.inc`.
-- Update docs/runtime.md's option and coverage tables, docs/config.md for
-  config keys and docs/input.md for input and hotkeys.
+- Update docs/runtime.md's option and coverage tables (the settings file's
+  `[EmuCore/GS]` keys too), docs/config.md for config keys and docs/input.md
+  for input, hotkeys and the settings pages.
 - GETTING_STARTED.md is followed to the letter by testers who are not
   programmers: when the build, an option, a file location, a log message it
   quotes or a game's set-up changes, change its commands too. It says Linux

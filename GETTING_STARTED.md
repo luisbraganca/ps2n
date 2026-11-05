@@ -61,24 +61,25 @@ Ubuntu, Linux Mint, Pop!_OS, Debian:
 
 ```sh
 sudo apt update
-sudo apt install build-essential git cmake ninja-build clang libsdl2-dev libarchive-tools curl
+sudo apt install build-essential git cmake ninja-build clang libsdl2-dev libarchive-tools curl libvulkan1 mesa-vulkan-drivers
 ```
 
 Fedora:
 
 ```sh
-sudo dnf install git cmake ninja-build clang gcc-c++ SDL2-devel bsdtar curl
+sudo dnf install git cmake ninja-build clang gcc-c++ SDL2-devel bsdtar curl vulkan-loader mesa-vulkan-drivers
 ```
 
 Arch, Manjaro, EndeavourOS:
 
 ```sh
-sudo pacman -S --needed base-devel git cmake ninja clang sdl2-compat libarchive curl
+sudo pacman -S --needed base-devel git cmake ninja clang sdl2-compat libarchive curl vulkan-icd-loader vulkan-radeon vulkan-intel
 ```
 
 Git downloads PS2Native; CMake, Ninja and Clang build it; SDL2 gives the
 games their window, sound and controllers; `bsdtar` takes files out of a disc
-image; `curl` sends your logs.
+image; `curl` sends your logs; the Vulkan packages let the graphics card
+draw the games (an NVIDIA card's own driver brings its part).
 
 Check that the compiler finds its files:
 
@@ -105,7 +106,9 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang
 Near the end, the output should have a line like
 `-- ps2n runtime: SDL2 2.30.0 found, window output enabled` (your version may
 differ). If it says `SDL2 not found` instead, the games would have no window:
-install SDL2 (step 1) and run the `cmake -S` command again.
+install SDL2 (step 1) and run the `cmake -S` command again. A line before it
+starts `-- ps2n runtime: Vulkan renderer built in`; the rest of that line
+does not matter.
 
 Build it (a few minutes) and run its tests (under a minute):
 
@@ -426,6 +429,20 @@ While the game runs, the terminal fills with PS2Native's messages. Warnings
 are normal: each is something the game asked for that PS2Native does not do
 yet, and the developer reads them in the log.
 
+The graphics card draws the game when it can. One of the first messages
+says which draws:
+
+```
+[info:gpu] rendering with Vulkan on <your graphics card>, at 1x the console's resolution
+```
+
+or, where the card cannot, `[warn:gpu] rendering with the software renderer:`
+and the reason. The game still plays then, drawn by the processor. To draw
+sharper, press Escape, choose Graphics Settings and pick an Internal
+Resolution: 2x, 3x or more, as far as your card keeps up. If the picture is
+black or garbled with Vulkan, set Renderer to Software there, quit and start
+the game again, and report it (step 6).
+
 A game's folder then holds:
 
 ```
@@ -542,6 +559,15 @@ cmake --build out/game/build
   the session's log.
 - **A controller does nothing.** Press Escape and choose Controller Settings,
   then Controller Port 1, then Automatic Mapping.
+- **`rendering with the software renderer: no Vulkan loader`** near the
+  start of the log. Install the Vulkan packages of step 1 (on Windows, the
+  latest driver for your graphics card) and start the game again. Other
+  reasons after `software renderer:` name what the graphics card lacks: the
+  game plays all the same, drawn by the processor.
+- **The picture is black, garbled or flickers** with Vulkan. Press Escape,
+  choose Graphics Settings, set Renderer to Software, quit and start the game
+  again. Send the log of the session where it went wrong, and say what it
+  looked like.
 - **No window opens, or the game stops at once.** Send the session's log.
 
 ## On Windows
@@ -550,7 +576,7 @@ Windows 10 or 11, 64-bit. The steps are the same; these are the commands
 that differ. Run them in PowerShell.
 
 **1. The tools.** Git, Visual Studio's Build Tools (with Clang, CMake and
-Ninja) and SDL2:
+Ninja) and SDL2. For the graphics card nothing is needed beyond its driver:
 
 ```powershell
 winget install --id Git.Git -e

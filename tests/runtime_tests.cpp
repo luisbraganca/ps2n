@@ -4,6 +4,7 @@
 #include "audio/audio.h"
 #include "axiom.h"
 #include "clock.h"
+#include "gpu/gpu.h"
 #include "hw/dmac.h"
 #include "hw/gs.h"
 #include "hw/hw.h"
@@ -31,6 +32,11 @@
 #include "ps2n/elf.h"
 #include "ps2n/util.h"
 #include "ps2n/vu_program.h"
+
+#ifdef PS2N_HAVE_VULKAN
+#include "gpu/compose.h"
+#include "gpu/resources.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -926,6 +932,26 @@ void gsRect(int x0, int y0, int x1, int y1, uint32_t rgba) {
     gsWrite({{0x00, 6}, {0x01, rgba}, {0x05, xyz(x0, y0, 0)}, {0x05, xyz(x1, y1, 0)}});
 }
 
+// The display's picture now (gs::currentFrame), at the console's resolution:
+// where the Vulkan renderer draws at N times it, the picture's pixels N * x,
+// N * y, which show what the console shows at x, y.
+bool shownPicture(gs::Frame& f) {
+    if (!gs::currentFrame(f)) return false;
+    const int n = gs::vulkanScale();
+    if (n == 1) return true;
+    if (f.width % n || f.height % n) {
+        testing::fail(__FILE__, __LINE__, "the picture is not a whole multiple of the console's");
+        return false;
+    }
+    gs::Frame small;
+    small.width = f.width / n;
+    small.height = f.height / n;
+    for (int y = 0; y < small.height; ++y)
+        for (int x = 0; x < small.width; ++x) small.pixels.push_back(f.pixels[static_cast<size_t>(y * n * f.width + x * n)]);
+    f = std::move(small);
+    return true;
+}
+
 } // namespace
 
 TEST_CASE(gs_layers_at_one_depth_do_not_fight) {
@@ -962,7 +988,7 @@ TEST_CASE(gs_display_doubles_fields_and_merges_circuits) {
     gs::privWrite(0x12000090, 1 << 9);                                   // DISPFB2: page 0, 64 wide
     gs::privWrite(0x120000A0, 63ull << 32 | 7ull << 44);                 // DISPLAY2: 64 clocks, 8 lines
     gs::Frame f;
-    CHECK(gs::currentFrame(f));
+    CHECK(shownPicture(f));
     CHECK_EQ(f.width, 64);
     CHECK_EQ(f.height, 8);
     for (int y = 0; y < 8; ++y) CHECK_EQ(pixel(f, 5, y), rows[y / 2] | 0xFF000000u);
@@ -973,7 +999,7 @@ TEST_CASE(gs_display_doubles_fields_and_merges_circuits) {
     gs::privWrite(0x12000070, 2 | 1 << 9);                              // DISPFB1: page 2
     gs::privWrite(0x12000080, 32 | 15ull << 32 | 3ull << 44);           // DISPLAY1
     gs::privWrite(0x12000000, 0x7);                                      // PMODE: both, MMOD 0, SLBG 0
-    CHECK(gs::currentFrame(f));
+    CHECK(shownPicture(f));
     CHECK_EQ(f.width, 64);
     CHECK_EQ(pixel(f, 34, 1), 0xFFFF0000u);                              // circuit 1, alpha 0x80
     CHECK_EQ(pixel(f, 42, 1), rows[1] | 0xFF000000u);                    // alpha 0: circuit 2 shows
@@ -982,11 +1008,11 @@ TEST_CASE(gs_display_doubles_fields_and_merges_circuits) {
     // Circuit 1 alone fades towards BGCOLOR with SLBG; without it ALP does nothing.
     gs::privWrite(0x120000E0, 0xFF);                                     // BGCOLOR: red
     gs::privWrite(0x12000000, 0x1 | 0x4 | 1 << 5 | 1 << 7 | 0x80 << 8);  // EN1, MMOD, SLBG, ALP 0x80
-    CHECK(gs::currentFrame(f));
+    CHECK(shownPicture(f));
     CHECK_EQ(f.width, 16);
     CHECK_EQ(pixel(f, 2, 0), 0xFF80007Fu);                               // half blue, half red
     gs::privWrite(0x12000000, 0x1 | 0x4 | 1 << 5 | 0x80 << 8);           // ps2sdk's default PMODE
-    CHECK(gs::currentFrame(f));
+    CHECK(shownPicture(f));
     CHECK_EQ(pixel(f, 2, 0), 0xFFFF0000u);
 }
 
@@ -1008,7 +1034,7 @@ TEST_CASE(gs_deinterlaces_fields) {
         gs::onVblankStart();
         draw(rows);
         gs::Frame f;
-        CHECK(gs::currentFrame(f));
+        CHECK(shownPicture(f));
         CHECK_EQ(f.height, 8);
         std::array<uint32_t, 8> lines{};
         for (int y = 0; y < 8 && f.height == 8; ++y) lines[size_t(y)] = f.pixels[static_cast<size_t>(y * f.width + 5)] & 0xFFFFFFu;
@@ -1053,7 +1079,7 @@ TEST_CASE(gs_deinterlaces_fields) {
     gs::setDeinterlace(gs::Deinterlace::Adaptive);
     // A frame read twice in one field: the same picture again.
     gs::Frame f;
-    CHECK(gs::currentFrame(f));
+    CHECK(shownPicture(f));
     CHECK_EQ(f.pixels[static_cast<size_t>(2 * f.width + 5)] & 0xFFFFFFu, rgb(odd[0]));
     // Fields that are not consecutive (frames dumped every few vsyncs) are not woven either.
     gs::onVblankStart();
@@ -1090,7 +1116,7 @@ TEST_CASE(gs_deinterlacing_keeps_late_fields_in_place) {
         gs::onVblankStart();
         if (rows) draw(*rows, forOdd);
         gs::Frame f;
-        CHECK(gs::currentFrame(f));
+        CHECK(shownPicture(f));
         CHECK_EQ(f.height, 8);
         std::array<uint32_t, 8> lines{};
         for (int y = 0; y < 8 && f.height == 8; ++y) lines[size_t(y)] = f.pixels[static_cast<size_t>(y * f.width + 5)] & 0xFFFFFFu;
@@ -1173,7 +1199,7 @@ TEST_CASE(gs_deinterlacing_weaves_only_lines_that_fit) {
         gs::onVblankStart();
         for (int y = 0; y < 4; ++y) gsRect(0, y, 64, y + 1, 0x80000000u | red[size_t(y)]);
         gs::Frame f;
-        CHECK(gs::currentFrame(f));
+        CHECK(shownPicture(f));
         CHECK_EQ(f.height, 8);
         std::array<uint32_t, 8> lines{};
         for (int y = 0; y < 8 && f.height == 8; ++y) lines[size_t(y)] = f.pixels[static_cast<size_t>(y * f.width + 5)] & 0xFFFFFFu;
@@ -1219,6 +1245,20 @@ TEST_CASE(gs_deinterlacing_weaves_only_lines_that_fit) {
     CHECK(l == (std::array<uint32_t, 8>{0x60, 0x70, 0x80, 0x70, 0x60, 0x20, 0x60, 0xB0}));
     l = field(bars);
     CHECK(l == (std::array<uint32_t, 8>{0x60, 0x20, 0x68, 0xB0, 0x60, 0x20, 0x60, 0xB0}));
+
+    // The threshold: the even line 1 changing by 16 leaves the odd lines
+    // around it woven; by 17 they move.
+    for (const uint32_t step : {0x10u, 0x11u}) {
+        setUp();
+        field(odd);
+        field(even);
+        CHECK(field(odd) == ramp);
+        CHECK(field(even) == ramp);
+        CHECK(field(odd) == ramp);
+        l = field({0x40, 0x50 + step, 0x60, 0x70});
+        CHECK(l == (step == 0x10u ? std::array<uint32_t, 8>{0x40, 0x48, 0x60, 0x58, 0x60, 0x68, 0x70, 0x78}
+                                  : std::array<uint32_t, 8>{0x40, 0x51, 0x61, 0x61, 0x60, 0x68, 0x70, 0x78}));
+    }
 }
 
 namespace {
@@ -1260,7 +1300,10 @@ uint64_t bits64(float f) { return std::bit_cast<uint32_t>(f); }
 // A scene of large primitives, drawn by `threads` threads under the EE's
 // round-to-zero (the guest thread's, which the drawing inherits), on the GS's
 // own thread if `ownThread`. Returns the frame buffer and the depth buffer.
-std::vector<uint32_t> drawScene(int threads, bool ownThread = false) {
+// The last sprite copies the frame onto itself, or with `copyItself` false
+// a picture at page 100 (the Vulkan renderer reads a frame it draws into as
+// it was before the primitive, not as the primitive changes it).
+std::vector<uint32_t> drawScene(int threads, bool ownThread = false, bool copyItself = true) {
     gs::init();
     gs::setDrawThreads(threads);
     gs::setOwnThread(ownThread);
@@ -1271,6 +1314,7 @@ std::vector<uint32_t> drawScene(int threads, bool ownThread = false) {
     gsUpload(64 * 32, 1, 0x00, 64, 64, pseudoRandom(64 * 64, 1));
     gsUpload(72 * 32, 2, 0x13, 64, 64, pseudoRandom(64 * 64 / 4, 2));
     gsUpload(80 * 32, 1, 0x00, 16, 16, pseudoRandom(256, 3));
+    if (!copyItself) gsUpload(100 * 32, 4, 0x00, 256, 128, pseudoRandom(256 * 128, 4));
     const uint64_t frame = 4ull << 16;                              // FRAME_1: page 0, 256 wide, PSMCT32
     gsWrite({{0x4C, frame}, {0x4E, 32},                             // ZBUF_1: page 32, PSMZ32
              {0x40, 255ull << 16 | 127ull << 48}, {0x18, 0}, {0x1A, 1},
@@ -1301,7 +1345,7 @@ std::vector<uint32_t> drawScene(int threads, bool ownThread = false) {
              {0x03, (64 * 16) | static_cast<uint64_t>(64 * 16) << 16}, {0x05, xyz(224, 112, 0x400000)}});
     // A sprite copying the frame onto itself four rows down: it reads rows it
     // writes, so it must be drawn by one thread whatever the setting.
-    const uint64_t texFrame = 0 | 4ull << 14 | 8ull << 26 | 7ull << 30 | 1ull << 34 | 1ull << 35;
+    const uint64_t texFrame = (copyItself ? 0 : 100 * 32) | 4ull << 14 | 8ull << 26 | 7ull << 30 | 1ull << 34 | 1ull << 35;
     gsWrite({{0x06, texFrame}, {0x08, 0}, {0x47, 0},
              {0x00, 6 | 1 << 4 | 1 << 8}, {0x03, 0}, {0x05, xyz(0, 4, 0)},
              {0x03, (256 * 16) | static_cast<uint64_t>(124 * 16) << 16}, {0x05, xyz(256, 128, 0)}});
@@ -5335,6 +5379,95 @@ TEST_CASE(window_aspect_ratio_follows_the_settings_and_the_games_patches) {
     CHECK(same(video::fitPicture(1000, 700, 0.0), 0, 0, 1000, 700));
 }
 
+// The display settings as PCSX2 writes them under [EmuCore/GS]: the
+// defaults, what each key takes, and what becomes of a value that cannot be
+// used (the default, or the nearest multiplier from 1 to 8, and a warning).
+TEST_CASE(window_display_settings_read_as_pcsx2_writes_them) {
+    using video::BilinearMode;
+    using video::Renderer;
+    std::vector<std::string> warnings;
+    video::DisplaySettings s = video::readDisplaySettings(settings::Ini{}, &warnings);
+    CHECK(s.renderer == Renderer::Auto);
+    CHECK_EQ(s.upscale, 1);
+    CHECK(s.bilinear == BilinearMode::Smooth);
+    CHECK(!s.integerScaling);
+    CHECK(s.aspect == video::AspectRatio::Auto);
+    CHECK(warnings.empty());
+
+    settings::Ini ini;
+    ini.parse("[EmuCore/GS]\nRenderer = 14\nupscale_multiplier = 3.000000\nlinear_present_mode = 2\nIntegerScaling = true\n"
+              "AspectRatio = 16:9\nFMVAspectRatioSwitch = 4:3\n");
+    s = video::readDisplaySettings(ini, &warnings);
+    CHECK(s.renderer == Renderer::Vulkan);
+    CHECK_EQ(s.upscale, 3);
+    CHECK(s.bilinear == BilinearMode::Sharp);
+    CHECK(s.integerScaling);
+    CHECK(s.aspect == video::AspectRatio::R16_9);
+    CHECK(s.fmvAspect == video::FmvAspectRatio::R4_3);
+    CHECK(warnings.empty());
+
+    // Written back with PCSX2's spellings, and read again the same.
+    settings::Ini out;
+    video::writeDisplaySettings(out, s);
+    const std::string text = out.text();
+    for (const char* line : {"Renderer = 14", "upscale_multiplier = 3", "linear_present_mode = 2", "IntegerScaling = true", "AspectRatio = 16:9"})
+        CHECK(text.find(line) != std::string::npos);
+    const video::DisplaySettings again = video::readDisplaySettings(out, &warnings);
+    CHECK(again.renderer == s.renderer && again.upscale == s.upscale && again.bilinear == s.bilinear &&
+          again.integerScaling == s.integerScaling && again.aspect == s.aspect && again.fmvAspect == s.fmvAspect);
+    CHECK(warnings.empty());
+
+    const struct {
+        const char* line;
+        int upscale;
+        Renderer renderer;
+        BilinearMode bilinear;
+    } bad[] = {
+        {"upscale_multiplier = 2.5", 3, Renderer::Auto, BilinearMode::Smooth},
+        {"upscale_multiplier = 0", 1, Renderer::Auto, BilinearMode::Smooth},
+        {"upscale_multiplier = 12", 8, Renderer::Auto, BilinearMode::Smooth},
+        {"upscale_multiplier = fast", 1, Renderer::Auto, BilinearMode::Smooth},
+        {"Renderer = 12", 1, Renderer::Auto, BilinearMode::Smooth},   // PCSX2's OpenGL
+        {"linear_present_mode = 5", 1, Renderer::Auto, BilinearMode::Smooth},
+        {"IntegerScaling = maybe", 1, Renderer::Auto, BilinearMode::Smooth},
+    };
+    for (const auto& b : bad) {
+        settings::Ini one;
+        one.parse(std::string("[EmuCore/GS]\n") + b.line + "\n");
+        warnings.clear();
+        s = video::readDisplaySettings(one, &warnings);
+        CHECK_EQ(warnings.size(), size_t(1));
+        CHECK_EQ(s.upscale, b.upscale);
+        CHECK(s.renderer == b.renderer);
+        CHECK(s.bilinear == b.bilinear);
+        CHECK(!s.integerScaling);
+    }
+
+    CHECK(video::parseRendererOption("auto") == Renderer::Auto);
+    CHECK(video::parseRendererOption(" SOFTWARE ") == Renderer::Software);
+    CHECK(video::parseRendererOption("Vulkan") == Renderer::Vulkan);
+    CHECK(!video::parseRendererOption("opengl"));
+    CHECK_EQ(std::string(video::rendererName(Renderer::Auto)), std::string("Automatic (Default)"));
+    CHECK_EQ(std::string(video::upscaleName(1)), std::string("1x Native (PS2)"));
+    CHECK_EQ(std::string(video::upscaleName(8)), std::string("8x Native (~2880p/5K)"));
+    CHECK_EQ(std::string(video::bilinearModeName(BilinearMode::Sharp)), std::string("Bilinear (Sharp)"));
+}
+
+// Integer scaling makes the picture's height a whole multiple of its lines,
+// keeping the shape fitPicture gave it, centred; below one multiple it
+// leaves the fitted rectangle as it is.
+TEST_CASE(window_integer_scaling_keeps_whole_multiples) {
+    auto same = [](video::Rect r, int x, int y, int w, int h) { return r.x == x && r.y == y && r.w == w && r.h == h; };
+    const video::Rect fitted = video::fitPicture(1920, 1080, 4.0 / 3.0);   // 240, 0, 1440, 1080
+    CHECK(same(video::integerRect(fitted, 1920, 1080, 448), 362, 92, 1195, 896));
+    CHECK(same(video::integerRect(fitted, 1920, 1080, 224), 362, 92, 1195, 896));   // 4x a 224-line field
+    CHECK(same(video::integerRect(fitted, 1920, 1080, 512), 277, 28, 1365, 1024));   // 2x
+    CHECK(same(video::integerRect(fitted, 1920, 1080, 600), 560, 240, 800, 600));    // only 1x fits
+    CHECK(same(video::integerRect(video::fitPicture(1000, 700, 0.0), 1000, 700, 224), 20, 14, 960, 672));   // Stretch
+    CHECK(same(video::integerRect(video::fitPicture(640, 400, 4.0 / 3.0), 640, 400, 448), 53, 0, 533, 400));   // smaller
+    CHECK(same(video::integerRect(fitted, 1920, 1080, 1792), 240, 0, 1440, 1080));   // a 4x picture
+}
+
 // PCSX2's FMV switch knows a film by the IPU decoding its bit stream: every
 // seventh VDEC starts one at the next vsync, and it ends at the first vsync
 // 60,000,000 cycles after the last VDEC.
@@ -5674,6 +5807,973 @@ TEST_CASE(axiom_samples_the_vblank_rate) {
         CHECK(std::atof(eventField(e, "seconds").c_str()) >= 0.04);
     }
     CHECK(samples >= 2);
+}
+
+// ---- The graphics card (gpu/) ------------------------------------------------------------------
+
+// The device opens, or the runtime says why not in one sentence; a buffer
+// copied on the card, and an image filled from it and read back, come back
+// as they went. It opens again after a shutdown.
+TEST_CASE(gpu_device_opens_or_says_why) {
+    if (!gpu::init({})) {
+        const std::string why = gpu::status().reason;
+        CHECK(!why.empty());
+        CHECK(!gpu::available());
+        // Every Vulkan 1.3 loader and driver has the core functions: a missing
+        // one is the runtime's mistake (a name, or asked of the wrong object).
+        CHECK(why.find("lacks vk") == std::string::npos);
+        SKIP(why);
+    }
+    CHECK(gpu::available());
+    CHECK(!gpu::status().deviceName.empty());
+    CHECK(!gpu::status().canPresent);   // no window asked for: no swapchains
+    CHECK(!gpu::describe().empty());
+#ifdef PS2N_HAVE_VULKAN
+    {
+        gpu::Commands cmds;
+        CHECK(cmds.init(*gpu::device().render, "test"));
+        constexpr uint32_t kSide = 128, kWords = kSide * kSide;
+        gpu::Buffer up, middle, down;
+        gpu::Image image;
+        CHECK(gpu::createBuffer(up, kWords * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, gpu::Memory::Upload, "test upload"));
+        CHECK(gpu::createBuffer(middle, kWords * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                gpu::Memory::Device, "test middle"));
+        CHECK(gpu::createBuffer(down, kWords * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, gpu::Memory::Readback, "test readback"));
+        CHECK(gpu::createImage(image, VK_FORMAT_R32_UINT, kSide, kSide,
+                               VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT, "test image"));
+        const std::vector<uint32_t> words = pseudoRandom(kWords, 7);
+        std::memcpy(up.mapped, words.data(), kWords * 4);
+        VkCommandBuffer cmd = cmds.current();
+        const VkBufferCopy whole{0, 0, kWords * 4};
+        vkCmdCopyBuffer(cmd, up.handle, middle.handle, 1, &whole);
+        gpu::imageBarrier(cmd, image.handle, VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_GENERAL);
+        gpu::memoryBarrier(cmd, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                           VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        const VkBufferImageCopy picture{0, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {kSide, kSide, 1}};
+        vkCmdCopyBufferToImage(cmd, middle.handle, image.handle, VK_IMAGE_LAYOUT_GENERAL, 1, &picture);
+        gpu::memoryBarrier(cmd, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                           VK_ACCESS_2_TRANSFER_READ_BIT);
+        vkCmdCopyImageToBuffer(cmd, image.handle, VK_IMAGE_LAYOUT_GENERAL, down.handle, 1, &picture);
+        gpu::memoryBarrier(cmd, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+                           VK_ACCESS_2_HOST_READ_BIT);
+        CHECK(cmds.wait(cmds.submit()));
+        gpu::invalidate(down);
+        CHECK(std::memcmp(down.mapped, words.data(), kWords * 4) == 0);
+        gpu::destroy(image);
+        gpu::destroy(down);
+        gpu::destroy(middle);
+        gpu::destroy(up);
+        cmds.shutdown();
+    }
+#endif
+    CHECK_EQ(gpu::validationMessages(), uint64_t(0));
+    gpu::shutdown();
+    CHECK(!gpu::available());
+    CHECK(gpu::init({}));
+    CHECK(gpu::available());
+    gpu::shutdown();
+}
+
+#ifdef PS2N_HAVE_VULKAN
+// The window's picture as the composer draws it, read back from a 16x12
+// image: nearest repeats each texel of a 4x3 picture in whole 4x4 blocks,
+// sharp at a whole scale does the same, smooth keeps equal neighbours exact
+// and blends different ones, dimming halves each channel, and a smaller
+// rectangle leaves the rest of the image as it was cleared.
+TEST_CASE(gpu_composes_the_picture_as_the_settings_ask) {
+    if (!gpu::init({})) SKIP(gpu::status().reason);
+    gpu::Commands cmds;
+    gpu::Composer composer;
+    CHECK(cmds.init(*gpu::device().render, "compose test"));
+    CHECK(composer.init(VK_FORMAT_R8G8B8A8_UNORM));
+    constexpr uint32_t kW = 4, kH = 3, kOutW = 16, kOutH = 12;
+    // Every row alike (so blending down the picture changes nothing): two
+    // columns alike on the left, then two colours of their own.
+    std::vector<uint32_t> picture(kW * kH);
+    for (uint32_t y = 0; y < kH; ++y)
+        for (uint32_t x = 0; x < kW; ++x) picture[y * kW + x] = x < 2 ? 0xFF2040C0u : x == 2 ? 0xFF00F010u : 0xFFF01090u;
+    gpu::Image source, target;
+    gpu::Buffer up, back;
+    CHECK(gpu::createImage(source, VK_FORMAT_R8G8B8A8_UNORM, kW, kH, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, "source"));
+    CHECK(gpu::createImage(target, VK_FORMAT_R8G8B8A8_UNORM, kOutW, kOutH,
+                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, "target"));
+    CHECK(gpu::createBuffer(up, kW * kH * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, gpu::Memory::Upload, "up"));
+    CHECK(gpu::createBuffer(back, kOutW * kOutH * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, gpu::Memory::Readback, "back"));
+    std::memcpy(up.mapped, picture.data(), picture.size() * 4);
+    VkCommandBuffer cmd = cmds.current();
+    gpu::imageBarrier(cmd, source.handle, VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, VK_IMAGE_LAYOUT_UNDEFINED,
+                      VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    const VkBufferImageCopy in{0, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {kW, kH, 1}};
+    vkCmdCopyBufferToImage(cmd, up.handle, source.handle, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &in);
+    gpu::imageBarrier(cmd, source.handle, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    CHECK(cmds.wait(cmds.submit()));
+    gpu::ComposeSource s;
+    CHECK(composer.bind(s, source.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, kW, kH));
+
+    // Draws the picture into (x, y, w, h) of the target, cleared to blue, and reads the target back.
+    auto compose = [&](gpu::Filter filter, float brightness, int x, int y, int w, int h) {
+        VkCommandBuffer c = cmds.current();
+        gpu::imageBarrier(c, target.handle, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        auto colour = gpu::make<VkRenderingAttachmentInfo>(VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO);
+        colour.imageView = target.view;
+        colour.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colour.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colour.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        colour.clearValue.color = {{0.0f, 0.0f, 1.0f, 1.0f}};
+        auto rendering = gpu::make<VkRenderingInfo>(VK_STRUCTURE_TYPE_RENDERING_INFO);
+        rendering.renderArea = {{0, 0}, {kOutW, kOutH}};
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachments = &colour;
+        vkCmdBeginRendering(c, &rendering);
+        composer.draw(c, s, x, y, w, h, kOutW, kOutH, filter, brightness);
+        vkCmdEndRendering(c);
+        gpu::imageBarrier(c, target.handle, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        const VkBufferImageCopy out{0, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {kOutW, kOutH, 1}};
+        vkCmdCopyImageToBuffer(c, target.handle, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, back.handle, 1, &out);
+        gpu::memoryBarrier(c, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_HOST_BIT,
+                           VK_ACCESS_2_HOST_READ_BIT);
+        CHECK(cmds.wait(cmds.submit()));
+        gpu::invalidate(back);
+        std::vector<uint32_t> pixels(kOutW * kOutH);
+        std::memcpy(pixels.data(), back.mapped, pixels.size() * 4);
+        return pixels;
+    };
+    auto texelAt = [&](uint32_t x, uint32_t y) { return picture[(y / 4) * kW + x / 4]; };
+    auto channelsWithin = [](uint32_t a, uint32_t b, int tolerance) {
+        for (int shift = 0; shift < 32; shift += 8)
+            if (std::abs(int((a >> shift) & 0xFF) - int((b >> shift) & 0xFF)) > tolerance) return false;
+        return true;
+    };
+
+    const std::vector<uint32_t> nearest = compose(gpu::Filter::Nearest, 1.0f, 0, 0, kOutW, kOutH);
+    size_t wrong = 0;
+    for (uint32_t y = 0; y < kOutH; ++y)
+        for (uint32_t x = 0; x < kOutW; ++x) wrong += nearest[y * kOutW + x] != texelAt(x, y);
+    CHECK_EQ(wrong, size_t(0));
+    CHECK(compose(gpu::Filter::Sharp, 1.0f, 0, 0, kOutW, kOutH) == nearest);
+
+    // Smooth at 4x: pixel x samples (x + 0.5) / 4 texels in, blending the two
+    // texels around it. Columns 0-5 only reach the two alike texels (and the
+    // edge, clamped), 14-15 only the last; 6-13 blend two different ones.
+    const std::vector<uint32_t> smooth = compose(gpu::Filter::Smooth, 1.0f, 0, 0, kOutW, kOutH);
+    wrong = 0;
+    size_t outside = 0, blended = 0;
+    for (uint32_t y = 0; y < kOutH; ++y)
+        for (uint32_t x = 0; x < kOutW; ++x) {
+            const uint32_t c = smooth[y * kOutW + x];
+            if (x < 6 || x >= 14) {
+                wrong += c != texelAt(x, y);
+                continue;
+            }
+            const uint32_t a = picture[(x - 2) / 4], b = picture[(x + 2) / 4];   // the texels either side
+            for (int shift = 0; shift < 24; shift += 8) {
+                const int va = int((a >> shift) & 0xFF), vb = int((b >> shift) & 0xFF), vc = int((c >> shift) & 0xFF);
+                outside += vc < std::min(va, vb) - 1 || vc > std::max(va, vb) + 1;
+            }
+            blended += c != a && c != b;
+        }
+    CHECK_EQ(wrong, size_t(0));
+    CHECK_EQ(outside, size_t(0));
+    CHECK(blended >= kOutH * 6);
+
+    const std::vector<uint32_t> dim = compose(gpu::Filter::Nearest, 0.5f, 0, 0, kOutW, kOutH);
+    wrong = 0;
+    for (size_t i = 0; i < dim.size(); ++i) {
+        const uint32_t t = nearest[i], half = (((t & 0xFF) / 2) | (((t >> 8) & 0xFF) / 2) << 8 | (((t >> 16) & 0xFF) / 2) << 16 | 0xFF000000u);
+        wrong += !channelsWithin(dim[i], half, 1);
+    }
+    CHECK_EQ(wrong, size_t(0));
+
+    const std::vector<uint32_t> boxed = compose(gpu::Filter::Nearest, 1.0f, 4, 0, 8, 6);   // 2x2 blocks
+    wrong = 0;
+    for (uint32_t y = 0; y < kOutH; ++y)
+        for (uint32_t x = 0; x < kOutW; ++x) {
+            const bool inside = x >= 4 && x < 12 && y < 6;
+            wrong += boxed[y * kOutW + x] != (inside ? picture[(y / 2) * kW + (x - 4) / 2] : 0xFFFF0000u);
+        }
+    CHECK_EQ(wrong, size_t(0));
+
+    composer.release(s);
+    composer.shutdown();
+    cmds.shutdown();
+    gpu::destroy(source);
+    gpu::destroy(target);
+    gpu::destroy(up);
+    gpu::destroy(back);
+    CHECK_EQ(gpu::validationMessages(), uint64_t(0));
+    gpu::shutdown();
+}
+
+// The compiled shaders that come with the sources (what builds without glslc
+// use) are those this build's glslc makes from them: a shader changed without
+// building ps2n_update_shaders fails here. A different glslc may compile
+// differently, so another compiler's copy is not compared.
+TEST_CASE(gpu_shaders_are_current) {
+    const std::string built = PS2N_SPIRV_BUILT, source = PS2N_SPIRV_SOURCE;
+    if (built.empty()) SKIP("glslc was not found when the build was configured");
+    auto read = [](const std::string& path) {
+        std::ifstream f(path, std::ios::binary);
+        std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        std::erase(text, '\r');
+        return text;
+    };
+    const std::string mine = read(built), theirs = read(source);
+    CHECK(!mine.empty());
+    auto compiler = [](const std::string& text) {
+        const size_t at = text.find("kCompiler[] = ");
+        return at == std::string::npos ? std::string() : text.substr(at, text.find('\n', at) - at);
+    };
+    if (!theirs.empty() && compiler(mine) != compiler(theirs))
+        SKIP("the sources' shaders were compiled by another glslc (" + compiler(theirs) + ")");
+    if (mine != theirs) testing::fail(__FILE__, __LINE__, "the shaders changed: build the ps2n_update_shaders target");
+}
+#endif
+
+// ---- The Vulkan renderer (gpu/renderer*.cpp) ---------------------------------------------------
+
+namespace {
+
+// The Vulkan renderer draws for one test, at `scale` times the console's
+// resolution, with the validation layer where it is installed; the test
+// skips where there is no card that can. After it the software rasterizer
+// draws again, with what the card drew in GS memory, and the device closes.
+class GpuRun {
+public:
+    explicit GpuRun(int scale) {
+        gs::init();
+        if (!gpu::init({false, true})) SKIP(gpu::status().reason);
+        std::string why;
+        if (!gs::useVulkan(scale, why)) {
+            gpu::shutdown();
+            SKIP(why);
+        }
+    }
+    ~GpuRun() {
+        gs::useSoftware();
+        CHECK_EQ(gpu::validationMessages(), uint64_t(0));
+        gpu::shutdown();
+        gs::init();
+    }
+    GpuRun(const GpuRun&) = delete;
+    GpuRun& operator=(const GpuRun&) = delete;
+};
+
+} // namespace
+
+// The software rasterizer's tests, drawn by the card: at the console's
+// resolution, and above it, where pixel N * x, N * y of a target is what the
+// console draws at x, y (GS memory and the display's picture are read there).
+TEST_CASE(gpu_layers_at_one_depth_do_not_fight) {
+    for (int scale : {1, 3}) {
+        GpuRun gpu(scale);
+        gs_layers_at_one_depth_do_not_fight();
+    }
+}
+TEST_CASE(gpu_triangles_cover_by_the_top_left_rule) {
+    for (int scale : {1, 3}) {
+        GpuRun gpu(scale);
+        gs_triangles_cover_by_the_top_left_rule();
+    }
+}
+TEST_CASE(gpu_triangles_sharing_an_edge_draw_it_once) {
+    for (int scale : {1, 3}) {
+        GpuRun gpu(scale);
+        gs_triangles_sharing_an_edge_draw_it_once();
+    }
+}
+TEST_CASE(gpu_triangles_keep_what_their_vertices_share) {
+    for (int scale : {1, 3}) {
+        GpuRun gpu(scale);
+        gs_triangles_keep_what_their_vertices_share();
+    }
+}
+TEST_CASE(gpu_pixels_write_what_the_tests_and_masks_allow) {
+    for (int scale : {1, 3}) {
+        GpuRun gpu(scale);
+        gs_pixels_write_what_the_tests_and_masks_allow();
+    }
+}
+TEST_CASE(gpu_blending_takes_what_alpha_picks) {
+    for (int scale : {1, 3}) {
+        GpuRun gpu(scale);
+        gs_blending_takes_what_alpha_picks();
+    }
+}
+TEST_CASE(gpu_textures_read_every_format) {
+    for (int scale : {1, 3}) {
+        GpuRun gpu(scale);
+        gs_textures_read_every_format();
+    }
+}
+TEST_CASE(gpu_textures_filter_as_tex1_asks) {
+    for (int scale : {1, 3}) {
+        GpuRun gpu(scale);
+        gs_textures_filter_as_tex1_asks();
+    }
+}
+TEST_CASE(gpu_textures_use_mipmaps_as_tex1_asks) {
+    for (int scale : {1, 3}) {
+        GpuRun gpu(scale);
+        gs_textures_use_mipmaps_as_tex1_asks();
+    }
+}
+TEST_CASE(gpu_tex2_keeps_tex0s_texture) {
+    GpuRun gpu(1);
+    gs_tex2_keeps_tex0s_texture();
+}
+TEST_CASE(gpu_display_doubles_fields_and_merges_circuits) {
+    for (int scale : {1, 2}) {
+        GpuRun gpu(scale);
+        gs_display_doubles_fields_and_merges_circuits();
+    }
+}
+TEST_CASE(gpu_deinterlaces_fields) {
+    for (int scale : {1, 2}) {
+        GpuRun gpu(scale);
+        gs_deinterlaces_fields();
+    }
+}
+TEST_CASE(gpu_deinterlacing_keeps_late_fields_in_place) {
+    for (int scale : {1, 2}) {
+        GpuRun gpu(scale);
+        gs_deinterlacing_keeps_late_fields_in_place();
+    }
+}
+TEST_CASE(gpu_deinterlacing_weaves_only_lines_that_fit) {
+    for (int scale : {1, 2}) {
+        GpuRun gpu(scale);
+        gs_deinterlacing_weaves_only_lines_that_fit();
+    }
+}
+TEST_CASE(gpu_thread_shows_each_vsync_as_it_was) {
+    for (int scale : {1, 2}) {
+        GpuRun gpu(scale);
+        gs_thread_shows_each_vsync_as_it_was();
+    }
+}
+
+// drawScene's primitives (perspective textures, CLUTs, trilinear mipmaps,
+// fog, blending, depth), the last sprite copying another picture: the card
+// draws what the software draws, frame and depth, on the guest thread and on
+// the GS's own, at the console's resolution and at three times it.
+TEST_CASE(gpu_draws_what_the_software_draws) {
+    const std::vector<uint32_t> software = drawScene(1, false, false);
+    CHECK(std::set<uint32_t>(software.begin(), software.end()).size() > 1000);
+    for (const auto& [scale, ownThread] : {std::pair{1, false}, std::pair{3, false}, std::pair{2, true}}) {
+        GpuRun gpu(scale);
+        const std::vector<uint32_t> card = drawScene(1, ownThread, false);
+        CHECK_EQ(card.size(), software.size());
+        size_t differ = 0;
+        for (size_t i = 0; i < std::min(card.size(), software.size()); ++i) differ += card[i] != software[i];
+        CHECK_EQ(differ, size_t(0));
+    }
+}
+
+namespace {
+
+// A scene drawn by the software rasterizer, then by the card at each scale:
+// what `read` reads of GS memory afterwards is the same. `onCard` checks each
+// of the card's runs between the drawing and the reading.
+void sameOnTheCard(const std::function<void()>& draw, const std::function<std::vector<uint32_t>()>& read,
+                   std::initializer_list<int> scales, const std::function<void(int)>& onCard = {}) {
+    draw();
+    const std::vector<uint32_t> software = read();
+    CHECK(!software.empty());
+    for (const int scale : scales) {
+        GpuRun gpu(scale);
+        draw();
+        if (onCard) onCard(scale);
+        const std::vector<uint32_t> card = read();
+        CHECK_EQ(card.size(), software.size());
+        size_t differ = 0, first = 0;
+        for (size_t i = 0; i < std::min(card.size(), software.size()); ++i)
+            if (card[i] != software[i] && differ++ == 0) first = i;
+        if (differ)
+            std::fprintf(stderr, "  at %dx, %zu values differ; the first, %zu: 0x%08x where the software has 0x%08x\n", scale, differ,
+                         first, card[first], software[first]);
+        CHECK_EQ(differ, size_t(0));
+    }
+}
+
+// A w x h rectangle of a buffer as readPixel32 reads it, appended to `out`.
+void readArea(std::vector<uint32_t>& out, uint32_t fbp, uint32_t fbw, uint32_t psm, int w, int h) {
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) out.push_back(gs::readPixel32(fbp, fbw, psm, x, y));
+}
+
+// A host-to-local transfer of a w x h rectangle at (dx, dy), started; its
+// pixels follow in IMAGE packets (gsImage), packed as the format packs them.
+void gsUploadTo(uint32_t dbp, uint32_t dbw, uint32_t psm, int dx, int dy, int w, int h) {
+    gsWrite({{0x50, static_cast<uint64_t>(dbp) << 32 | static_cast<uint64_t>(dbw) << 48 | static_cast<uint64_t>(psm) << 56},
+             {0x51, static_cast<uint64_t>(dx) << 32 | static_cast<uint64_t>(dy) << 48},
+             {0x52, static_cast<uint64_t>(w) | static_cast<uint64_t>(h) << 32},
+             {0x53, 0}});
+}
+void gsImage(const std::vector<uint32_t>& words) {
+    std::vector<uint64_t> q = {(words.size() + 3) / 4 | 1ull << 15 | 2ull << 58, 0};
+    for (size_t i = 0; i < words.size(); i += 4) {
+        auto at = [&](size_t k) { return static_cast<uint64_t>(k < words.size() ? words[k] : 0); };
+        q.push_back(at(i) | at(i + 1) << 32);
+        q.push_back(at(i + 2) | at(i + 3) << 32);
+    }
+    gs::gifTransfer(q.data(), q.size() / 2, 3);
+}
+
+// A local-to-local transfer of a w x h rectangle.
+void gsCopy(uint32_t sbp, uint32_t sbw, uint32_t spsm, int sx, int sy, uint32_t dbp, uint32_t dbw, uint32_t dpsm, int dx, int dy, int w,
+            int h) {
+    gsWrite({{0x50, static_cast<uint64_t>(sbp) | static_cast<uint64_t>(sbw) << 16 | static_cast<uint64_t>(spsm) << 24 |
+                        static_cast<uint64_t>(dbp) << 32 | static_cast<uint64_t>(dbw) << 48 | static_cast<uint64_t>(dpsm) << 56},
+             {0x51, static_cast<uint64_t>(sx) | static_cast<uint64_t>(sy) << 16 | static_cast<uint64_t>(dx) << 32 |
+                        static_cast<uint64_t>(dy) << 48},
+             {0x52, static_cast<uint64_t>(w) | static_cast<uint64_t>(h) << 32},
+             {0x53, 2}});
+}
+
+// A Gouraud triangle with depth, in the current context.
+void gsShade(int x0, int y0, int x1, int y1, int x2, int y2, uint32_t z) {
+    gsWrite({{0x00, 3 | 1 << 3}, {0x01, 0x80FF2000}, {0x05, xyz(x0, y0, z)}, {0x01, 0x8020FF40}, {0x05, xyz(x1, y1, z + 0x1234)},
+             {0x01, 0x804020FF}, {0x05, xyz(x2, y2, z + 0x5678)}});
+}
+
+} // namespace
+
+// The scene the draw threads share, drawn by the card: textures it drew
+// itself, mipmap levels, a local copy over a texture in use, a page drawn in
+// two layouts, points and a line strip, on the guest thread and on the GS's.
+// At the console's resolution: above it the textures the card drew are read
+// at their own resolution, where texture coordinates between texel centres
+// take the finer texels around them.
+TEST_CASE(gpu_batches_draw_what_the_software_draws) {
+    const std::vector<uint32_t> software = drawBatchScene(1);
+    for (const bool ownThread : {false, true}) {
+        const int scale = 1;
+        GpuRun gpu(scale);
+        const std::vector<uint32_t> card = drawBatchScene(1, ownThread);
+        CHECK_EQ(card.size(), software.size());
+        size_t differ = 0;
+        for (size_t i = 0; i < std::min(card.size(), software.size()); ++i) differ += card[i] != software[i];
+        CHECK_EQ(differ, size_t(0));
+    }
+}
+
+// A page drawn in one layout and then another moves between the card's
+// targets through its copy of GS memory, without a read back: CT32, CT16,
+// CT16S and CT32 again (blending over what the others left), sampled in
+// another layout, and a depth buffer drawn over as a frame. GS memory ends
+// as the software leaves it.
+TEST_CASE(gpu_moves_pages_between_layouts_exactly) {
+    Reports layouts("pages read back: written in another layout"), copies("pages read back: a local copy reads them in another layout"),
+        reads("pages read back: the CPU reads GS memory");
+    auto readBacks = [&] { return layouts() + copies() + reads(); };
+    auto draw = [&] {
+        gs::init();
+        readBacks();   // those of the reads before
+        const int mode = std::fegetround();
+        std::fesetround(FE_TOWARDZERO);
+        gsWrite({{0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}, {0x42, 0x44}, {0x14, 0}, {0x08, 0}});
+        gsWrite({{0x4C, 120 | 1ull << 16}});                         // page 120: CT32, 64 wide
+        gsRect(0, 0, 64, 64, 0x80123456);
+        gsShade(2, 2, 60, 10, 20, 60, 0);
+        gsWrite({{0x4C, 120 | 1ull << 16 | 2ull << 24}});            // CT16
+        gsRect(8, 8, 40, 20, 0x80FF00FF);
+        gsWrite({{0x4C, 120 | 1ull << 16 | 0xAull << 24}});          // CT16S
+        gsShade(20, 30, 50, 60, 4, 50, 0);
+        gsWrite({{0x4C, 120 | 1ull << 16}});                         // CT32, blended over them
+        gsWrite({{0x00, 6 | 1 << 6}, {0x01, 0x40808080}, {0x05, xyz(4, 4, 0)}, {0x05, xyz(60, 60, 0)}});
+        // Page 124 shows page 120 read as a CT16 texture, then as a CT32 one.
+        gsWrite({{0x4C, 124 | 1ull << 16}, {0x06, 120 * 32 | 1ull << 14 | 2ull << 20 | 6ull << 26 | 6ull << 30 | 1ull << 35}});
+        gsWrite({{0x00, 6 | 1 << 4 | 1 << 8}, {0x03, 8 | 8 << 16}, {0x05, xyz(0, 0, 0)}, {0x03, (64 * 16 + 8) | (32 * 16 + 8) << 16}, {0x05, xyz(64, 32, 0)}});
+        gsWrite({{0x06, 120 * 32 | 1ull << 14 | 6ull << 26 | 6ull << 30 | 1ull << 35}});
+        gsWrite({{0x00, 6 | 1 << 4 | 1 << 8}, {0x03, 8 | 8 << 16}, {0x05, xyz(0, 32, 0)}, {0x03, (64 * 16 + 8) | (32 * 16 + 8) << 16}, {0x05, xyz(64, 64, 0)}});
+        // Depth at page 126 (Z24, its top byte kept), then page 126 drawn over as a CT32 frame.
+        gsWrite({{0x4C, 128 | 1ull << 16}, {0x4E, 126 | 1ull << 24}, {0x47, 1ull << 16 | 1ull << 17}});
+        gsShade(0, 0, 64, 0, 0, 64, 0x00ABCDEF);
+        gsShade(64, 64, 0, 64, 64, 0, 0x00123456);
+        gsWrite({{0x47, 0}, {0x4C, 126 | 1ull << 16}});
+        gsWrite({{0x00, 6 | 1 << 6}, {0x01, 0x40102030}, {0x05, xyz(16, 16, 0)}, {0x05, xyz(48, 48, 0)}});
+        std::fesetround(mode);
+    };
+    auto read = [] {
+        std::vector<uint32_t> out;
+        readArea(out, 120, 1, 0x00, 64, 64);
+        readArea(out, 120, 1, 0x02, 64, 64);
+        readArea(out, 120, 1, 0x0A, 64, 64);
+        readArea(out, 124, 1, 0x00, 64, 64);
+        readArea(out, 126, 1, 0x00, 64, 64);
+        readArea(out, 126, 1, 0x31, 64, 64);
+        readArea(out, 128, 1, 0x00, 64, 64);
+        return out;
+    };
+    sameOnTheCard(draw, read, {1, 3}, [&](int) { CHECK_EQ(readBacks(), 0u); });
+}
+
+// Image transfers into pages the card drew. Into a buffer of the target's
+// layout the pixels go to the card as they come, so a primitive drawn
+// between two IMAGE packets sees the rows sent so far (and each pixel covers
+// N x N of the target); into another layout the pages come back to GS memory
+// first. The 8- and 4-bit formats of the 32-bit layout (T8H, T4HL, T4HH)
+// change only their bits of a word, as CT24 keeps its top byte.
+TEST_CASE(gpu_writes_transfers_into_what_it_drew) {
+    const std::vector<uint32_t> pixels = pseudoRandom(64 * 64, 21);
+    auto draw = [&] {
+        gs::init();
+        gsWrite({{0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}, {0x14, 0}, {0x08, 0}});
+        gsWrite({{0x4C, 1ull << 16}});                               // page 0: CT32, 64 wide
+        gsRect(0, 0, 64, 64, 0x80102030);
+        // Half the rows and part of the next, then page 20 copies page 0 as a texture, then the rest.
+        gsUploadTo(0, 1, 0x00, 0, 0, 64, 64);
+        gsImage(std::vector<uint32_t>(pixels.begin(), pixels.begin() + 64 * 32 + 20));
+        gsWrite({{0x4C, 20 | 1ull << 16}, {0x06, 0 | 1ull << 14 | 6ull << 26 | 6ull << 30 | 1ull << 34 | 1ull << 35}});
+        gsWrite({{0x00, 6 | 1 << 4 | 1 << 8}, {0x03, 8 | 8 << 16}, {0x05, xyz(0, 0, 0)}, {0x03, (64 * 16 + 8) | (64 * 16 + 8) << 16}, {0x05, xyz(64, 64, 0)}});
+        gsImage(std::vector<uint32_t>(pixels.begin() + 64 * 32 + 20, pixels.end()));
+        // Page 0 again as CT16: GS memory's way.
+        gsUploadTo(0, 1, 0x02, 8, 8, 16, 16);
+        gsImage(pseudoRandom(16 * 16 / 2, 22));
+        // T8H, T4HL and T4HH into page 20's CT32 target; CT24 into page 40's.
+        gsUploadTo(20 * 32, 1, 0x1B, 0, 0, 32, 32);
+        gsImage(pseudoRandom(32 * 32 / 4, 23));
+        gsUploadTo(20 * 32, 1, 0x24, 32, 0, 32, 32);
+        gsImage(pseudoRandom(32 * 32 / 8, 24));
+        gsUploadTo(20 * 32, 1, 0x2C, 16, 32, 32, 32);
+        gsImage(pseudoRandom(32 * 32 / 8, 25));
+        gsWrite({{0x4C, 40 | 1ull << 16}});
+        gsRect(0, 0, 64, 64, 0x80FFFFFF);
+        gsUploadTo(40 * 32, 1, 0x01, 4, 4, 32, 32);
+        gsImage(pseudoRandom(32 * 32 * 3 / 4, 26));
+    };
+    auto read = [] {
+        std::vector<uint32_t> out;
+        readArea(out, 0, 1, 0x00, 64, 64);
+        readArea(out, 20, 1, 0x00, 64, 64);
+        readArea(out, 40, 1, 0x00, 64, 64);
+        return out;
+    };
+    sameOnTheCard(draw, read, {1, 2});
+
+    // At 2x each pixel a transfer sends covers 2 x 2 of the target: the
+    // picture of page 0 (shown at 2x) repeats it, where a triangle drawn
+    // first had its edge at 2x.
+    GpuRun gpu(2);
+    gs::privWrite(0x12000000, 0x6);                                  // PMODE: circuit 2
+    gs::privWrite(0x12000090, 1 << 9);                               // DISPFB2: page 0, 64 wide
+    gs::privWrite(0x120000A0, 63ull << 32 | 63ull << 44);            // DISPLAY2: 64 clocks, 64 lines
+    gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
+    gsRect(0, 0, 64, 64, 0x80000000);
+    gsShade(0, 0, 63, 5, 3, 63, 0);
+    gsUploadTo(0, 1, 0x00, 16, 16, 32, 32);
+    gsImage(pseudoRandom(32 * 32, 27));
+    gs::Frame f;
+    CHECK(gs::currentFrame(f));
+    CHECK_EQ(f.width, 128);
+    size_t blocky = 0, finer = 0;
+    for (int y = 0; y < 64 && f.width == 128; ++y)
+        for (int x = 0; x < 64; ++x) {
+            const auto at = [&](int i, int j) { return f.pixels[static_cast<size_t>((2 * y + j) * 128 + 2 * x + i)]; };
+            const bool same = at(1, 0) == at(0, 0) && at(0, 1) == at(0, 0) && at(1, 1) == at(0, 0);
+            const bool sent = x >= 16 && x < 48 && y >= 16 && y < 48;
+            if (sent) blocky += same;
+            else finer += !same;
+        }
+    CHECK_EQ(blocky, size_t(32 * 32));
+    CHECK(finer > 100);   // the triangle, drawn at 2x around the pixels sent
+}
+
+// A page the EE wrote (a picture it sent) that the card then draws in comes
+// to the card's target as each pixel N x N times: at 2x the picture shows the
+// pixels sent in whole 2 x 2 blocks, around the corner the card drew.
+TEST_CASE(gpu_takes_pages_from_gs_memory_whole) {
+    GpuRun gpu(2);
+    gs::privWrite(0x12000000, 0x6);                                  // PMODE: circuit 2
+    gs::privWrite(0x12000090, 1 << 9);                               // DISPFB2: page 0, 64 wide
+    gs::privWrite(0x120000A0, 63ull << 32 | 63ull << 44);            // DISPLAY2: 64 clocks, 64 lines
+    gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
+    const std::vector<uint32_t> sent = pseudoRandom(64 * 64, 61);
+    gsUpload(0, 1, 0x00, 64, 64, sent);                              // GS memory's: no target holds the page yet
+    gsRect(0, 0, 8, 8, 0x80FFFFFF);                                  // the card takes the page
+    gs::Frame f;
+    CHECK(gs::currentFrame(f));
+    CHECK_EQ(f.width, 128);
+    size_t wrong = 0;
+    for (int y = 0; y < 64 && f.width == 128; ++y)
+        for (int x = 0; x < 64; ++x) {
+            const uint32_t want = x < 8 && y < 8 ? 0xFFFFFFFFu : sent[static_cast<size_t>(y * 64 + x)] | 0xFF000000u;
+            for (int j = 0; j < 2; ++j)
+                for (int i = 0; i < 2; ++i) wrong += f.pixels[static_cast<size_t>((2 * y + j) * 128 + 2 * x + i)] != want;
+        }
+    CHECK_EQ(wrong, size_t(0));
+}
+
+// Local-to-local transfers: between targets of one layout the card copies at
+// its scale; between formats the CPU copies GS memory and the destination's
+// target gets the pixels. A rectangle copied over itself, down the page,
+// reads the source as it was (the console reads rows it has just written).
+TEST_CASE(gpu_copies_between_targets_at_scale) {
+    auto draw = [] {
+        gs::init();
+        const int mode = std::fegetround();
+        std::fesetround(FE_TOWARDZERO);
+        gsWrite({{0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
+        gsWrite({{0x4C, 1ull << 16}});                               // page 0: a gradient
+        gsRect(0, 0, 64, 64, 0x80000000);
+        gsShade(0, 0, 64, 8, 8, 64, 0);
+        gsWrite({{0x4C, 20 | 1ull << 16}});                          // page 20: grey
+        gsRect(0, 0, 64, 64, 0x80808080);
+        gsCopy(0, 1, 0x00, 8, 8, 20 * 32, 1, 0x00, 16, 4, 32, 40);   // CT32 to CT32
+        gsWrite({{0x4C, 40 | 1ull << 16 | 2ull << 24}});             // page 40: CT16
+        gsRect(0, 0, 64, 64, 0x80FF0000);
+        gsCopy(40 * 32, 1, 0x02, 0, 0, 0, 1, 0x02, 32, 32, 16, 16);  // CT16 into page 0, read as CT16
+        gsCopy(0, 1, 0x00, 0, 20, 20 * 32, 1, 0x00, 0, 0, 16, 16);   // up page 20: reads rows not yet written
+        gsCopy(20 * 32, 1, 0x00, 0, 20, 20 * 32, 1, 0x00, 0, 0, 64, 30);
+        std::fesetround(mode);
+    };
+    auto read = [] {
+        std::vector<uint32_t> out;
+        readArea(out, 0, 1, 0x00, 64, 64);
+        readArea(out, 20, 1, 0x00, 64, 64);
+        return out;
+    };
+    sameOnTheCard(draw, read, {1, 2});
+
+    // Down the page, over itself: the card copies what was there before.
+    Reports overlaps("transfer reads what it writes");
+    GpuRun gpu(2);
+    gsWrite({{0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}, {0x4C, 20 | 1ull << 16}});
+    gsRect(0, 0, 64, 64, 0x80000000);
+    for (int y = 0; y < 64; ++y) gsRect(0, y, 64, y + 1, 0x80000000u | static_cast<uint32_t>(y * 3));
+    gsCopy(20 * 32, 1, 0x00, 0, 0, 20 * 32, 1, 0x00, 0, 4, 64, 60);
+    for (int y = 0; y < 64; ++y) CHECK_EQ(gs::readPixel32(20, 1, 0x00, 7, y), 0x80000000u | static_cast<uint32_t>((y < 4 ? y : y - 4) * 3));
+    CHECK_EQ(overlaps(), 1u);
+}
+
+// A primitive that samples the frame it draws into reads it as it was before
+// the primitive (the console reads pixels the primitive has just drawn): a
+// sprite copying the frame four rows down moves it whole.
+TEST_CASE(gpu_reads_what_a_primitive_writes_as_it_was) {
+    for (const int scale : {1, 2}) {
+        Reports selfReads("primitive reads what it writes");
+        GpuRun gpu(scale);
+        gsWrite({{0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}, {0x14, 0}, {0x08, 0}, {0x4C, 1ull << 16}});
+        gsRect(0, 0, 64, 64, 0x80000000);
+        const std::vector<uint32_t> pixels = pseudoRandom(64 * 64, 31);
+        gsUploadTo(0, 1, 0x00, 0, 0, 64, 64);
+        gsImage(pixels);
+        gsWrite({{0x06, 0 | 1ull << 14 | 6ull << 26 | 6ull << 30 | 1ull << 34 | 1ull << 35}});   // (the scissor ends it at row 63)
+        gsWrite({{0x00, 6 | 1 << 4 | 1 << 8}, {0x03, 8 | 8 << 16}, {0x05, xyz(0, 4, 0)}, {0x03, (64 * 16 + 8) | (64 * 16 + 8) << 16}, {0x05, xyz(64, 68, 0)}});
+        size_t wrong = 0;
+        for (int y = 0; y < 64; ++y)
+            for (int x = 0; x < 64; ++x)
+                wrong += gs::readPixel32(0, 1, 0x00, x, y) != pixels[static_cast<size_t>((y < 4 ? y : y - 4) * 64 + x)];
+        CHECK_EQ(wrong, size_t(0));
+        CHECK_EQ(selfReads(), 1u);
+    }
+}
+
+// Changing the scale mid-scene gives back what was drawn and goes on at the
+// new one: the picture is the software's wherever it changes. The settings
+// page's choice takes effect at the next vsync.
+TEST_CASE(gpu_changes_scale_exactly) {
+    auto draw = [](bool change) {
+        gs::init();
+        gsWrite({{0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}, {0x42, 0x44}, {0x4C, 1ull << 16}});
+        gsRect(0, 0, 64, 64, 0x80204060);
+        gsShade(0, 0, 64, 20, 10, 64, 0);
+        std::string why;
+        if (change) CHECK(gs::useVulkan(4, why));
+        gsWrite({{0x00, 6 | 1 << 6}, {0x01, 0x40FFFFFF}, {0x05, xyz(8, 8, 0)}, {0x05, xyz(56, 40, 0)}});
+        gsShade(64, 0, 0, 30, 50, 64, 0);
+        if (change) {
+            gs::requestScale(1);
+            CHECK_EQ(gs::vulkanScale(), 4);
+        }
+        gs::onVblankStart();
+        if (change) CHECK_EQ(gs::vulkanScale(), 1);
+        gsRect(0, 0, 8, 8, 0x80FF00FF);
+    };
+    auto read = [] {
+        std::vector<uint32_t> out;
+        readArea(out, 0, 1, 0x00, 64, 64);
+        return out;
+    };
+    draw(false);
+    const std::vector<uint32_t> software = read();
+    GpuRun gpu(2);
+    draw(true);
+    CHECK(read() == software);
+}
+
+// Lines and points: each pixel of the software's DDA, an N x N square at N
+// times the resolution; Gouraud lines change colour half way.
+TEST_CASE(gpu_lines_and_points_follow_the_dda) {
+    auto draw = [] {
+        gs::init();
+        gsWrite({{0x40, 127ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}, {0x4C, 2ull << 16}});
+        gsRect(0, 0, 128, 64, 0x80000000);
+        uint32_t seed = 5;
+        auto rnd = [&](uint32_t n) {
+            seed = seed * 1664525u + 1013904223u;
+            return (seed >> 8) % n;
+        };
+        for (int i = 0; i < 60; ++i) {
+            const uint64_t prim = i < 20 ? 1 : i < 40 ? (1 | 1 << 3) : 0;   // lines, Gouraud lines, points
+            gsWrite({{0x00, prim}, {0x01, 0x80000000u | rnd(1 << 24)}, {0x05, xyz16(rnd(128 * 16), rnd(64 * 16))},
+                     {0x01, 0x80000000u | rnd(1 << 24)}, {0x05, xyz16(rnd(128 * 16), rnd(64 * 16))}});
+        }
+    };
+    auto read = [] {
+        std::vector<uint32_t> out;
+        readArea(out, 0, 2, 0x00, 128, 64);
+        return out;
+    };
+    sameOnTheCard(draw, read, {1, 2});
+}
+
+// Flat shapes take what one vertex has: a triangle the last one's colour, a
+// sprite its second vertex's colour, depth and fog, whatever the others
+// carry.
+TEST_CASE(gpu_flat_shapes_take_their_last_vertex) {
+    auto draw = [] {
+        gs::init();
+        gsWrite({{0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x4C, 1ull << 16}, {0x4E, 8}, {0x3D, 0x204060},
+                 {0x47, 1ull << 16 | 1ull << 17}});
+        gsRect(0, 0, 64, 64, 0x80000000);
+        gsWrite({{0x00, 3}, {0x01, 0x80FF0000}, {0x05, xyz(0, 0, 100)}, {0x01, 0x8000FF00}, {0x05, xyz(60, 4, 200)}, {0x01, 0x800000FF},
+                 {0x05, xyz(8, 60, 300)}});
+        gsWrite({{0x00, 6 | 1 << 5}, {0x01, 0x80102030}, {0x04, xyz(30, 30, 0x1000) | 0x20ull << 56}, {0x01, 0x80405060},
+                 {0x04, xyz(50, 50, 0x2000) | 0xC0ull << 56}});
+    };
+    auto read = [] {
+        std::vector<uint32_t> out;
+        readArea(out, 0, 1, 0x00, 64, 64);
+        readArea(out, 8, 1, 0x30, 64, 64);
+        return out;
+    };
+    sameOnTheCard(draw, read, {1, 2});
+}
+
+// A frame read as a texture wider than its buffer, as games read a 640-wide
+// picture as a 1024-wide texture: texels past the buffer's width are on the
+// next row of pages, and wrapping past the texture's width goes back to its
+// start, bilinear filtering reading either side. The card reads them from the
+// target that drew the frame as GS memory has them. A gradient filtered
+// bilinearly is the software's at 1x (above it the card filters the finer
+// texels it drew); stripes a texel apart, sampled nearest, at any scale.
+TEST_CASE(gpu_reads_a_target_past_its_width_as_gs_memory_does) {
+    auto draw = [](bool stripes) {
+        gs::init();
+        const int mode = std::fegetround();
+        std::fesetround(FE_TOWARDZERO);
+        gsWrite({{0x40, 639ull << 16 | 127ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}, {0x4C, 10ull << 16}});   // page 0, 640 wide
+        if (stripes) {
+            for (int y = 0; y < 128; y += 32)
+                for (int x = 0; x < 640; x += 8) gsRect(x, y, x + 8, y + 32, 0x80000000u | static_cast<uint32_t>(x / 8 * 3 + y * 0x2001));
+        } else {
+            gsShade(0, 0, 640, 0, 0, 128, 0);
+            gsShade(640, 128, 0, 128, 640, 0, 0);
+            gsRect(300, 40, 340, 90, 0x80F0E0D0);
+        }
+        // Page 60 (256 wide) shows the frame as a 1024 x 64 texture: the
+        // gradient, texels 600 to 1023, then 1000 to 1023 and on round to
+        // the start; the stripes texel for pixel, through texel centres, from
+        // texel 600 and from texel 1000 on round to the start (by ST).
+        gsWrite({{0x4C, 60 | 4ull << 16}, {0x40, 255ull << 16 | 63ull << 48}, {0x08, 0}, {0x14, stripes ? 0u : 1u << 5},
+                 {0x06, 0 | 10ull << 14 | 10ull << 26 | 6ull << 30 | 1ull << 34 | 1ull << 35}});
+        if (stripes) {
+            gsWrite({{0x00, 6 | 1 << 4}, {0x01, 0x80808080u | bits64(1.0f) << 32}, {0x02, bits64(1201.0f / 2048) | bits64(17.0f / 128) << 32},
+                     {0x05, xyz(0, 0, 0)}, {0x02, bits64(1713.0f / 2048) | bits64(81.0f / 128) << 32}, {0x05, xyz(256, 32, 0)}});
+            gsWrite({{0x00, 6 | 1 << 4}, {0x02, bits64(2001.0f / 2048) | bits64(41.0f / 128) << 32}, {0x05, xyz(0, 32, 0)},
+                     {0x02, bits64(2513.0f / 2048) | bits64(105.0f / 128) << 32}, {0x05, xyz(256, 64, 0)}});
+        } else {
+            gsWrite({{0x00, 6 | 1 << 4 | 1 << 8}, {0x03, 600 * 16 | 8 << 16}, {0x05, xyz(0, 0, 0)}, {0x03, 1023 * 16 + 15 | 40 * 16 << 16},
+                     {0x05, xyz(256, 32, 0)}});
+            gsWrite({{0x00, 6 | 1 << 4 | 1 << 8}, {0x03, 1000 * 16 | 20 * 16 << 16}, {0x05, xyz(0, 32, 0)},
+                     {0x03, 1023 * 16 + 15 | 60 * 16 << 16}, {0x05, xyz(256, 64, 0)}});
+        }
+        std::fesetround(mode);
+    };
+    auto read = [] {
+        std::vector<uint32_t> out;
+        readArea(out, 60, 4, 0x00, 256, 64);
+        return out;
+    };
+    sameOnTheCard([&] { draw(false); }, read, {1});
+    sameOnTheCard([&] { draw(true); }, read, {1, 2, 3});
+}
+
+// A 640 x 448 picture read as a 1024 x 512 texture, the next buffer right
+// after it, as double-buffered games copy their picture: the texture reaches
+// into the next buffer's pages, but the texels the copy reads are the
+// picture's, which the card reads at its scale. The copy shown at 2x is the
+// picture shown at 2x, its triangle's finer edge too; at the console's pixels
+// both are the software's.
+TEST_CASE(gpu_reads_a_frame_declared_larger_than_it_is_at_scale) {
+    auto draw = [] {
+        gs::init();
+        const int mode = std::fegetround();
+        std::fesetround(FE_TOWARDZERO);
+        gsWrite({{0x40, 639ull << 16 | 447ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}, {0x14, 0}, {0x08, 0}, {0x4C, 10ull << 16}});
+        gsRect(0, 0, 640, 448, 0x80000000);                          // the picture, page 0
+        gsWrite({{0x00, 3}, {0x01, 0x80FFFFFF}, {0x05, xyz(3, 2, 0)}, {0x05, xyz(250, 40, 0)}, {0x05, xyz(60, 125, 0)}});
+        gsWrite({{0x4C, 140 | 10ull << 16}});                        // the next buffer, page 140
+        gsRect(0, 0, 640, 448, 0x80402010);
+        gsWrite({{0x4C, 300 | 10ull << 16}, {0x40, 255ull << 16 | 127ull << 48},   // the copy, page 300, through texel centres
+                 {0x06, 0 | 10ull << 14 | 10ull << 26 | 9ull << 30 | 1ull << 34 | 1ull << 35}});
+        gsWrite({{0x00, 6 | 1 << 4 | 1 << 8}, {0x03, 8 | 8 << 16}, {0x05, xyz(0, 0, 0)}, {0x03, (256 * 16 + 8) | (128 * 16 + 8) << 16},
+                 {0x05, xyz(256, 128, 0)}});
+        gsWrite({{0x4C, 400 | 10ull << 16}, {0x14, 1 << 5}});          // again bilinear, page 400
+        gsWrite({{0x00, 6 | 1 << 4 | 1 << 8}, {0x03, 8 | 8 << 16}, {0x05, xyz(0, 0, 0)}, {0x03, (256 * 16 + 8) | (128 * 16 + 8) << 16},
+                 {0x05, xyz(256, 128, 0)}});
+        gsWrite({{0x14, 0}});
+        std::fesetround(mode);
+    };
+    auto read = [] {
+        std::vector<uint32_t> out;
+        readArea(out, 300, 10, 0x00, 256, 128);
+        readArea(out, 400, 10, 0x00, 256, 128);
+        return out;
+    };
+    sameOnTheCard(draw, read, {1, 2});
+
+    GpuRun gpu(2);
+    draw();
+    gs::privWrite(0x12000000, 0x6);                                  // PMODE: circuit 2
+    gs::privWrite(0x120000A0, 255ull << 32 | 127ull << 44);          // DISPLAY2: 256 clocks, 128 lines
+    auto shown = [](uint32_t page) {
+        gs::privWrite(0x12000090, page | 10 << 9);                   // DISPFB2: 640 wide
+        gs::Frame f;
+        CHECK(gs::currentFrame(f));
+        return f.pixels;
+    };
+    const std::vector<uint32_t> picture = shown(0), copy = shown(300), filtered = shown(400);
+    CHECK_EQ(picture.size(), size_t(512 * 256));
+    CHECK(copy == picture);
+    CHECK(filtered == picture);
+    size_t finer = 0;   // 2 x 2 blocks the triangle's edge crosses: drawn at 2x
+    for (size_t y = 0; y + 1 < 256 && picture.size() == 512 * 256; y += 2)
+        for (size_t x = 0; x + 1 < 512; x += 2) {
+            const uint32_t a = picture[y * 512 + x];
+            finer += picture[y * 512 + x + 1] != a || picture[(y + 1) * 512 + x] != a || picture[(y + 1) * 512 + x + 1] != a;
+        }
+    CHECK(finer > 100);
+}
+
+// A scissor one pixel wider than a 640-wide frame, as Code: Veronica X sets
+// it: pixel (640, y) is in GS memory at (0, y + 32), on the next row of
+// pages, for the frame and the depth buffer alike. Primitives drawn before
+// and after over the pixels it lands on keep their order.
+TEST_CASE(gpu_draws_past_the_frame_width_as_gs_memory_does) {
+    auto draw = [] {
+        gs::init();
+        const int mode = std::fegetround();
+        std::fesetround(FE_TOWARDZERO);
+        gsWrite({{0x40, 639ull << 16 | 127ull << 48}, {0x18, 0}, {0x1A, 1}, {0x4C, 10ull << 16}, {0x4E, 300},
+                 {0x47, 1ull << 16 | 1ull << 17}});                  // depth ALWAYS, written
+        gsRect(0, 0, 640, 128, 0x80000000);
+        gsWrite({{0x40, 640ull << 16 | 127ull << 48}});
+        gsWrite({{0x00, 6}, {0x01, 0x800000FF}, {0x05, xyz(0, 32, 0x100)}, {0x05, xyz(20, 64, 0x100)}});
+        gsWrite({{0x00, 6}, {0x01, 0x8000FF00}, {0x05, xyz(630, 0, 0x200)}, {0x05, xyz(641, 40, 0x200)}});
+        gsWrite({{0x00, 6}, {0x01, 0x80FF0000}, {0x05, xyz(0, 60, 0x300)}, {0x05, xyz(10, 80, 0x300)}});
+        gsShade(600, 0, 641, 100, 620, 127, 0x400);
+        std::fesetround(mode);
+    };
+    auto read = [] {
+        std::vector<uint32_t> out;
+        readArea(out, 0, 10, 0x00, 640, 128);
+        readArea(out, 300, 10, 0x30, 640, 128);
+        return out;
+    };
+    sameOnTheCard(draw, read, {1, 2});
+}
+
+// What the card leaves undrawn or draws differently is reported: a depth
+// buffer in the frame's memory, once for each drawing state.
+TEST_CASE(gpu_reports_what_it_leaves_out) {
+    Reports overlap("frame and depth overlap");
+    GpuRun gpu(1);
+    gsWrite({{0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x4C, 1ull << 16}, {0x4E, 1}, {0x47, 1ull << 16 | 1ull << 17}});
+    gsWrite({{0x00, 6}, {0x01, 0x80FFFFFF}, {0x05, xyz(0, 0, 0)}, {0x05, xyz(8, 8, 0)}, {0x05, xyz(8, 8, 0)}, {0x05, xyz(16, 16, 0)}});
+    CHECK_EQ(overlap(), 1u);                                         // two sprites, one state
+    gsWrite({{0x4E, 0}});                                            // ZBUF on page 0: a new state
+    gsRect(0, 0, 8, 8, 0x80FFFFFF);
+    CHECK_EQ(overlap(), 1u);
+    gsWrite({{0x4E, 8}});                                            // apart: no report
+    gsRect(0, 0, 8, 8, 0x80FFFFFF);
+    CHECK_EQ(overlap(), 0u);
+
+    // A scissor parked on row 2047 of a 640-wide frame, past the end of GS
+    // memory, as Code: Veronica X parks it to draw nothing: primitives
+    // outside it draw nothing on the console either, and are not reported;
+    // one reaching into it goes to the software rasterizer, reported.
+    Reports wraps("drawn by the software rasterizer");
+    gsWrite({{0x47, 0}, {0x4C, 10ull << 16}, {0x40, 2016ull << 16 | 2047ull << 32 | 2047ull << 48}});
+    gsRect(0, 0, 64, 64, 0x80FFFFFF);
+    CHECK_EQ(wraps(), 0u);
+    gsRect(0, 2040, 64, 2048, 0x80FFFFFF);
+    CHECK_EQ(wraps(), 1u);
+}
+
+// A primitive the card cannot hold, as Secret Agent Clank clears the whole
+// of GS memory at start-up with a scissor a pixel past it (1025 x 1025 of a
+// 1024-wide frame, round the end of memory): the software rasterizer draws it
+// in GS memory, taking back the pages the card drew in, and the card takes
+// them from there. GS memory afterwards is the software's.
+TEST_CASE(gpu_leaves_to_the_software_what_it_cannot_hold) {
+    Reports software("drawn by the software rasterizer");
+    auto draw = [&] {
+        gs::init();
+        software();   // those of the runs before
+        gsWrite({{0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}, {0x4C, 1ull << 16}});
+        gsRect(0, 0, 64, 64, 0x80102030);                            // the card draws on page 0
+        gsWrite({{0x4C, 16ull << 16}, {0x40, 1024ull << 16 | 1024ull << 48}});
+        gsRect(0, 0, 1025, 1025, 0x80405060);                        // the clear, round the end of memory
+        gsWrite({{0x4C, 1ull << 16}, {0x40, 63ull << 16 | 63ull << 48}});
+        gsShade(0, 0, 64, 10, 10, 64, 0);                            // the card again, over what it cleared
+    };
+    auto read = [] {
+        std::vector<uint32_t> out;
+        readArea(out, 0, 1, 0x00, 64, 64);
+        readArea(out, 100, 4, 0x00, 256, 64);
+        readArea(out, 0, 16, 0x00, 1024, 2);
+        return out;
+    };
+    sameOnTheCard(draw, read, {1, 2}, [&](int) { CHECK_EQ(software(), 1u); });
+}
+
+// The display shows each page from where it is: a target's at its scale, GS
+// memory's (a picture the EE sent) at 1x; at the console's pixels the picture
+// is the software's.
+TEST_CASE(gpu_display_shows_each_page_from_where_it_is) {
+    auto picture = [] {
+        gs::init();
+        gs::privWrite(0x12000000, 0x6);                              // PMODE: circuit 2
+        gs::privWrite(0x12000090, 2 << 9);                           // DISPFB2: page 0, 128 wide
+        gs::privWrite(0x120000A0, 127ull << 32 | 63ull << 44);       // DISPLAY2: 128 clocks, 64 lines
+        gsWrite({{0x40, 127ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}, {0x4C, 2ull << 16}});
+        gsRect(0, 0, 64, 32, 0x80123456);                            // pages 0 drawn
+        gsShade(0, 0, 64, 10, 5, 32, 0);
+        gsUpload(1 * 32, 1, 0x00, 64, 32, pseudoRandom(64 * 32, 41));   // page 1 sent (64 wide: its own layout)
+        gsWrite({{0x4C, 2 | 2ull << 16 | 2ull << 24}});              // page 2 drawn as CT16 (64x64 of it)
+        gsRect(0, 0, 64, 64, 0x80FF8000);
+        gs::Frame f;
+        CHECK(shownPicture(f));
+        return f.pixels;
+    };
+    const std::vector<uint32_t> software = picture();
+    CHECK_EQ(software.size(), size_t(128 * 64));
+    for (const int scale : {1, 2}) {
+        Reports native("picture shown at the console's resolution");
+        GpuRun gpu(scale);
+        CHECK(picture() == software);
+        CHECK_EQ(native(), scale > 1 ? 1u : 0u);   // page 2, drawn as CT16 and shown as CT32
+    }
 }
 
 int main(int argc, char** argv) { return ::testing::runAll(argc, argv); }

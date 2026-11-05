@@ -66,10 +66,13 @@ covers the whole EE instruction set and has recompiled the executables of
 three retail games. Most of the work left is in the runtime, which stands in
 for the rest of the console:
 
-- The graphics come from a software renderer, drawing on threads of its own
-  alongside the EE. It keeps the first game at full speed in the heaviest
-  views measured, on one 14-core desktop CPU; slower machines have not been
-  tried.
+- The graphics come from a Vulkan renderer on the graphics card, at 1 to 8
+  times the console's resolution. At the console's resolution it draws the
+  same pixels as the software renderer, which draws on CPU threads alongside
+  the EE where the card lacks what the Vulkan renderer needs (Vulkan 1.3 and
+  fragment shader interlock) or the settings ask for it. The software
+  renderer keeps the first game at full speed in the heaviest views
+  measured, on one 14-core desktop CPU; slower machines have not been tried.
 - The vector units run their micro code recompiled or interpreted. In
   real-time runs VU1 has a thread of its own, but a program still takes no
   emulated time.
@@ -95,7 +98,7 @@ for the rest of the console:
 | IOP services | `████████░░` 75% | 9 / 12 | FILEIO for SDK 2.2 and later, used by most later games |
 | Discs and memory cards | `█████░░░░░` 50% | 5 / 10 | dual-layer DVDs, drive timing |
 | Controllers and window | `███████░░░` 69% | 9 / 13 | multitap, other devices, speed settings |
-| Widescreen, upscaling | `████░░░░░░` 40% | 2 / 5 | no-interlacing patches, a GPU renderer, higher internal resolution (see the [roadmap](#roadmap)) |
+| Widescreen, upscaling | `████████░░` 80% | 4 / 5 | no-interlacing patches, PCSX2's per-game upscaling fixes (see the [roadmap](#roadmap)) |
 | Platforms | `███░░░░░░░` 33% | 1 / 3 | Linux, never built yet; macOS, not rebuilt since the move to Windows |
 
 <details>
@@ -222,12 +225,12 @@ for the rest of the console:
 - [x] Screenshots, frame dumps and on-screen messages
 - [ ] Speed settings: turbo and slow-motion speeds
 
-**Widescreen, upscaling**: 2 of 5
+**Widescreen, upscaling**: 4 of 5
 - [x] PCSX2's aspect ratio settings: Stretch, Auto 4:3/3:2, 4:3, 16:9, 10:7, and its FMV override
 - [x] Widescreen patches: PCSX2's pnach files, applied when a game is recompiled, and their writes to memory a game fills at run time every vsync
 - [ ] No-interlacing patches
-- [ ] A GPU renderer
-- [ ] Higher internal resolution
+- [x] A GPU renderer: Vulkan, drawing the software renderer's pixels at the console's resolution
+- [x] Higher internal resolution: 1x to 8x, PCSX2's `upscale_multiplier`, changed while a game runs
 
 **Platforms**: 1 of 3
 - [x] Windows x64, with clang-cl and MSVC
@@ -257,7 +260,10 @@ Under Fire runs at full speed in real time, 50 vblanks a second: its movies,
 its menus and its first mission, with a new picture every vblank in its
 heaviest views measured, and its second mission's race at 49.9. Code:
 Veronica X runs its menus and movies at full speed, 59.8 vblanks a second
-(NTSC); its game proper has not been measured. [docs/games.md](docs/games.md#speed)
+(NTSC); its game proper has not been measured. With the Vulkan renderer, on
+an NVIDIA GeForce RTX 4070 SUPER, both stay at full speed where measured:
+Agent Under Fire's way into its first mission at 1x, 2x and 4x, and Code:
+Veronica X's start-up, movies and menus at 3x. [docs/games.md](docs/games.md#speed)
 has the measurements and what each change bought.
 
 ## Roadmap
@@ -271,10 +277,12 @@ Roughly in order:
    [GETTING_STARTED.md](GETTING_STARTED.md) as the way in.
 3. **Sound**: PCSX2's audio settings page, and the IOP's DMA channels 4 and
    7 for drivers that program the SPU2 themselves.
-4. **Graphics speed**: the first mission keeps up on a 14-core desktop CPU
-   with nothing else running, but has little to spare for slower machines.
-   Stepped interpolation would be faster but rounds differently, so pictures
-   would change; then a GPU renderer, which higher resolutions also need.
+4. **Graphics speed**: the Vulkan renderer takes the drawing off the CPU. Left:
+   the read-backs from the graphics card that games which reuse memory in
+   another layout cost (the exit summary counts them), and the software
+   renderer's own speed for machines without Vulkan 1.3: the first mission
+   keeps up on a 14-core desktop CPU with nothing else running, but has
+   little to spare for slower machines.
 5. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
    `ExecPS2`, dual-layer discs, code overlays and relocatable modules,
    Code: Veronica X past its first areas, and Secret Agent Clank past its
@@ -287,10 +295,10 @@ Roughly in order:
    (conditions on memory the executable does not initialise, the increment,
    copy, pointer and bitwise codes, `dpatch`), and the files for the
    executables a game starts with `LoadExecPS2`. Higher internal resolution
-   needs the GPU renderer: the software renderer's work grows with the square
-   of the scale, and upscaling brings the problems PCSX2 fixes game by game
-   (half-pixel offsets, seams between sprites, effects that read the picture
-   back at its original size).
+   works with the Vulkan renderer, 1x to 8x. Left: the problems PCSX2 fixes
+   game by game when it upscales (half-pixel offsets for copies through
+   texel edges, seams between sprites, effects that read the picture back at
+   its original size), none of which has been seen in the games here yet.
 
 ## Getting started
 
@@ -463,10 +471,13 @@ Every key is documented in [docs/config.md](docs/config.md).
   in one place, and the generated code has the timing worked out ahead.
 - **The runtime** loads the ELF's data at startup (the generated code embeds no
   game data), runs the program from its entry point, and services interrupts,
-  timers and thread switches at loop back-edges and syscalls. The GS is a
-  software rasterizer. It draws on several threads, with exactly the pixels
-  one thread would draw, and in real-time runs it runs alongside the EE, on a
-  thread of its own; so do VU1's micro programs, on another.
+  timers and thread switches at loop back-edges and syscalls. The GS draws
+  on the graphics card through Vulkan, at the resolution the settings ask
+  for, each pixel worked out with the console's integer arithmetic in one
+  fragment shader; or in a software rasterizer on several threads, with
+  exactly the pixels one thread would draw. In real-time runs the GS runs
+  alongside the EE, on a thread of its own; so do VU1's micro programs, on
+  another.
 
 The full model, including why it was chosen, is in
 [docs/architecture.md](docs/architecture.md).
@@ -485,7 +496,7 @@ takes a different route, these are the reasons:
 | SIMD | SSE intrinsics, sse2neon on ARM | portable lane loops (auto-vectorised) | builds as-is on ARM64 (Apple silicon) and x86-64 |
 | Missed code | a function-not-found error | a built-in interpreter, plus a list of the addresses for the next recompile | a missed entry point costs speed, not a crash |
 | IOP | runs IRX modules on an R3000 interpreter | also runs IRX modules on an R3000 interpreter, but the IOP kernel and Sony's system modules (CD/DVD, memory cards, pads, libsd) are host code speaking their RPC protocols; libsd drives an SPU2 emulated at its registers | game-specific modules behave as written, while the system side needs no BIOS image and no SIO2 or CDVD register emulation |
-| Dependencies | ELFIO, toml11, fmt, libdwarf, rabbitizer (fetched at configure time) | toml++ and Dear ImGui (vendored); SDL2 optional, for the window | offline, reproducible builds |
+| Dependencies | ELFIO, toml11, fmt, libdwarf, rabbitizer (fetched at configure time) | toml++, Dear ImGui and the Vulkan headers (vendored; the driver's Vulkan loaded at run time); SDL2 optional, for the window | offline, reproducible builds; no SDK to build or run |
 | Output size | `ctx->pc = ...` before every instruction | pc stored only at control transfers | smaller, faster code |
 
 Also worth knowing:
@@ -507,7 +518,8 @@ recompiler/   analysis, code generation, config, CLI (ps2n_recomp, ps2n)
 runtime/      what recompiled games link against (ps2n_runtime)
   include/ps2/  generated-code API: cpu.h, memory.h, ops_*.h, recomp.h, runtime.h
   src/          dispatcher, interpreter, VU, kernel/ (EE syscalls), hw/ (DMAC, GS, VIF, IPU),
-                iop/ (IOP CPU, kernel, services, SPU2), stubs/, audio/, video/, input/, ui/
+                gpu/ (the Vulkan renderer and its shaders), iop/ (IOP CPU, kernel, services, SPU2),
+                stubs/, audio/, video/, input/, ui/
 cmake/        build helpers: recompiling at build time, warnings, the runtime's commit
 games/        the configs of the games that run: file names and addresses, no game data
 tools/ghidra/ function-map exporter for Ghidra
@@ -515,7 +527,7 @@ examples/     the end-to-end example
 tests/        unit tests and end-to-end programs
 docs/         the documentation below
 assets/       the logo and icons (branding/), and the Windows executables' icon (ps2n.rc)
-third_party/  toml++ (MIT), Dear ImGui 1.92.9b (MIT)
+third_party/  toml++ (MIT), Dear ImGui 1.92.9b (MIT), Vulkan headers 1.4.363 (Apache-2.0 or MIT)
 ```
 
 ## Documentation
@@ -543,7 +555,7 @@ ctest --test-dir build --output-on-failure
 |---|---|
 | `core` | Every row of the instruction table decodes to itself; 10,000+ random instructions round-trip through the disassembler and assembler; known encodings; ELF and IRX parsing. |
 | `recompiler` | Config parsing and its errors, function map formats, jump tables, stripped-ELF discovery, code and data sharing one section, bindings, patches, code generation. |
-| `runtime` | The emulation, area by area, against independently computed results: instruction semantics (R5900 division, unaligned access, MMI lanes, FPU clamping, the VU pipeline's stalls and flags), the GS (swizzling, fields and deinterlacing, the top-left rule, every texture format and CLUT layout, blending, drawing on threads matching one thread byte for byte), VU1's thread, the IPU against a reference IDCT, DMA, the VIF and the GIF, SIF RPC and the IOP's services, discs, `--strict`, real-time timing, controller input and settings, the SPU2 and libsd, and the events sent to Axiom. |
+| `runtime` | The emulation, area by area, against independently computed results: instruction semantics (R5900 division, unaligned access, MMI lanes, FPU clamping, the VU pipeline's stalls and flags), the GS (swizzling, fields and deinterlacing, the top-left rule, every texture format and CLUT layout, blending, drawing on threads matching one thread byte for byte), the Vulkan renderer against the software one (the GS's tests again on the card at 1x and above it, pages moving between layouts, transfers, copies, the display; skipped where no card can), VU1's thread, the IPU against a reference IDCT, DMA, the VIF and the GIF, SIF RPC and the IOP's services, discs, `--strict`, real-time timing, controller input and settings, the SPU2 and libsd, and the events sent to Axiom. |
 | `program_*` | Assembly programs recompiled at build time and run twice, recompiled and interpreted, against recorded output or a recorded frame: control-flow edge cases, a stripped ELF that needs the interpreter, a polling loop split in two that must still take a vblank interrupt, the kernel scheduler, interrupt handlers and alarms, `LoadExecPS2` across three executables, a loader that jumps into the next program. |
 | `sdk_*` | Programs built with ps2sdk, run the same two ways: an IRX with its own RPC server, libsd, libpad and libpadx, VU0 and VU1 micro programs (recompiled too in the recompiled run), libcdvd, libmc. The binaries are checked in under `tests/sdk/bin` ([tests/sdk/README.md](tests/sdk/README.md)). |
 | `vu_compiled` | Random VU0 and VU1 micro programs, recompiled by `ps2n vu` and run on the interpreter from the same random states: every register, data memory and the cycle count must match. |
@@ -561,9 +573,11 @@ are linked with ps2sdk (Academic Free License 2.0).
 
 ## Acknowledgements
 
-[toml++](https://github.com/marzer/tomlplusplus) (MIT) parses configs, and
+[toml++](https://github.com/marzer/tomlplusplus) (MIT) parses configs,
 [Dear ImGui](https://github.com/ocornut/imgui) (MIT) draws the settings in
-the window. Controller input follows [PCSX2](https://github.com/PCSX2/pcsx2)'s
+the window, and the Khronos Group's
+[Vulkan headers](https://github.com/KhronosGroup/Vulkan-Headers) (Apache-2.0
+or MIT) describe the graphics card's API. Controller input follows [PCSX2](https://github.com/PCSX2/pcsx2)'s
 design: its settings format, defaults and settings pages, written anew.
 Instruction encodings were checked against
 [rabbitizer](https://github.com/Decompollaborate/rabbitizer)'s tables, edge-case

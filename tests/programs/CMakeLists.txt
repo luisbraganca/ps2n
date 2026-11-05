@@ -18,7 +18,7 @@ function(ps2n_program_test name)
     ps2n_add_recompiled_game(TARGET prog_${name} CONFIG "${config}" ELF "${elf}" FILES ${P_FILES} SOURCES ${P_SOURCES}
                              DEPENDS ${P_DEPENDS})
     foreach(mode recompiled interpreted)
-        set(args --elf "${elf}" --virtual-clock --no-window --missing-out "${CMAKE_CURRENT_BINARY_DIR}/${name}_${mode}_missing.toml" ${P_RUN_ARGS})
+        set(args --elf "${elf}" --virtual-clock --no-window --renderer software --missing-out "${CMAKE_CURRENT_BINARY_DIR}/${name}_${mode}_missing.toml" ${P_RUN_ARGS})
         if(mode STREQUAL "interpreted")
             list(APPEND args --interpret)
         endif()
@@ -54,7 +54,7 @@ ps2n_add_recompiled_game(TARGET prog_exec CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/de
                          ELF "${CMAKE_CURRENT_BINARY_DIR}/exec_boot.elf" PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/exec_main.elf"
                          FILES 1 DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/exec_extra.elf")
 foreach(mode recompiled interpreted)
-    set(args --elf "${CMAKE_CURRENT_BINARY_DIR}/exec_boot.elf" --host0 "${CMAKE_CURRENT_BINARY_DIR}" --virtual-clock --no-window
+    set(args --elf "${CMAKE_CURRENT_BINARY_DIR}/exec_boot.elf" --host0 "${CMAKE_CURRENT_BINARY_DIR}" --virtual-clock --no-window --renderer software
              --missing-out "${CMAKE_CURRENT_BINARY_DIR}/exec_${mode}_missing.toml")
     if(mode STREQUAL "interpreted")
         list(APPEND args --interpret)
@@ -74,7 +74,7 @@ ps2n_assemble(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/handoff.elf" SOURCE "${CMAKE_C
 ps2n_add_recompiled_game(TARGET prog_handoff CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/default.toml"
                          ELF "${CMAKE_CURRENT_BINARY_DIR}/handoff.elf" PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/handoff_next.elf" FILES 1)
 foreach(mode recompiled interpreted)
-    set(args --elf "${CMAKE_CURRENT_BINARY_DIR}/handoff.elf" --virtual-clock --no-window
+    set(args --elf "${CMAKE_CURRENT_BINARY_DIR}/handoff.elf" --virtual-clock --no-window --renderer software
              --missing-out "${CMAKE_CURRENT_BINARY_DIR}/handoff_${mode}_missing.toml")
     if(mode STREQUAL "interpreted")
         list(APPEND args --interpret)
@@ -89,7 +89,7 @@ endforeach()
 ps2n_assemble(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/gs.elf" SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/gs.s")
 ps2n_add_recompiled_game(TARGET prog_gs CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/default.toml" ELF "${CMAKE_CURRENT_BINARY_DIR}/gs.elf" FILES 1)
 foreach(mode recompiled interpreted)
-    set(args --elf "${CMAKE_CURRENT_BINARY_DIR}/gs.elf" --virtual-clock --no-window --max-vsyncs 2
+    set(args --elf "${CMAKE_CURRENT_BINARY_DIR}/gs.elf" --virtual-clock --no-window --renderer software --max-vsyncs 2
              --missing-out "${CMAKE_CURRENT_BINARY_DIR}/gs_${mode}_missing.toml")
     if(mode STREQUAL "interpreted")
         list(APPEND args --interpret)

@@ -11,11 +11,27 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace ps2::gs {
 
 void init();
+
+// The Vulkan renderer (gpu/renderer.h) draws instead of the software
+// rasterizer, at `scale` (1 to 8) times the console's resolution. With the
+// device open (gpu::init), before the guest starts or on its thread; called
+// again while the card draws, it goes on at the new scale. False, with
+// `why`, where it cannot.
+bool useVulkan(int scale, std::string& why);
+// The software rasterizer draws again, with every page the card drew back in
+// GS memory. Guest thread, or a test's.
+void useSoftware();
+bool vulkanDraws();
+int vulkanScale();   // 1 while the software rasterizer draws; any thread
+// The settings page's resolution, which the Vulkan renderer takes at the next
+// vsync (useVulkan again, on the guest thread). Any thread.
+void requestScale(int scale);
 
 uint64_t privRead(uint32_t addr);
 void privWrite(uint32_t addr, uint64_t value);

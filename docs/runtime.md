@@ -29,8 +29,11 @@ model.
 | `--dump-audio FILE` | Write the sound to `FILE`, a 16-bit stereo 48 kHz WAV: what the SPU2 puts out, before the host's volume. With `--virtual-clock` it is the same on every run. |
 | `--no-window` | Do not open a window (builds with SDL2). |
 | `--deinterlace MODE` | How a game that shows interlaced fields becomes whole pictures: `adaptive` (default), `weave` or `bob`. See Video below. |
-| `--gs-threads N` | Threads that draw: `0` (default) is half the host's threads, at most 8. They share every primitive, each drawing its own bands of four rows. In a real-time run the GS also has a thread of its own, which decodes what the game sends while the game runs on, up to two vsyncs behind it; with `--virtual-clock` or `--strict` the game's thread decodes it. `1` draws everything on the game's thread. The picture is the same either way. |
-| `--no-vu1-thread` | Run VU1's micro programs on the game's thread. A real-time run otherwise gives VU1 a thread of its own beside the GS's, as PCSX2's MTVU does ([architecture.md](architecture.md#the-vu1-thread)); with `--virtual-clock`, `--strict` or `--gs-threads 1` VU1 runs on the game's thread anyway. What the game sees and draws is the same either way. |
+| `--renderer MODE` | Who draws, for this run (not saved): `auto` (default: Vulkan where the graphics card can, the software renderer otherwise), `software` or `vulkan`. See [Rendering](#rendering). |
+| `--upscale N` | With Vulkan, draw at N times the console's resolution, 1 to 8, for this run (not saved). |
+| `--gpu-debug` | Check every Vulkan call with the validation layer, which comes with the Vulkan SDK; what it reports goes to the log as `[warn:gpu] validation: ...`. |
+| `--gs-threads N` | Threads that draw with the software renderer: `0` (default) is half the host's threads, at most 8. They share every primitive, each drawing its own bands of four rows. In a real-time run the GS also has a thread of its own, which decodes what the game sends while the game runs on, up to two vsyncs behind it; with `--virtual-clock` or `--strict` the game's thread decodes it. `1` draws everything on the game's thread. The picture is the same either way. With Vulkan the card draws, and the GS's own thread records its work in real-time runs, whatever this says. |
+| `--no-vu1-thread` | Run VU1's micro programs on the game's thread. A real-time run otherwise gives VU1 a thread of its own beside the GS's, as PCSX2's MTVU does ([architecture.md](architecture.md#the-vu1-thread)); with `--virtual-clock`, `--strict`, or `--gs-threads 1` and the software renderer, VU1 runs on the game's thread anyway. What the game sees and draws is the same either way. |
 | `--fpu-round MODE` | `zero` (default, like the EE) or `nearest`. |
 | `--strict` | Stop at the first unimplemented path, with exit code 4. |
 | `--trace-syscalls` | Log every syscall with its arguments. |
@@ -68,11 +71,16 @@ open PPM files, and ImageMagick or Pillow convert them. The window runs on the
 main thread and the game on a worker thread, as macOS requires. Play with the
 real-time clock: `--virtual-clock` runs the game as fast as the host can.
 
-The shape comes from PCSX2's settings, kept in the settings file's
-`[EmuCore/GS]` and set in the pause menu's Graphics Settings:
+The renderer, its resolution and the picture's shape come from PCSX2's
+settings, kept in the settings file's `[EmuCore/GS]` and set in the pause
+menu's Graphics Settings:
 
 | Key | Default | Meaning |
 |---|---|---|
+| `Renderer` | `-1` | Who draws, by PCSX2's numbers: `-1` Automatic (Vulkan where the graphics card can, the software renderer otherwise), `13` Software, `14` Vulkan (the software renderer still draws where Vulkan cannot, with a warning). Another value counts as `-1`, with a warning. A change in the settings page takes effect when the game starts again. See [Rendering](#rendering). |
+| `upscale_multiplier` | `1` | With Vulkan, the internal resolution: `N` draws at N times the console's resolution, 1 to 8 ("1x Native (PS2)" to "8x Native (~2880p/5K)" in the settings page). PCSX2 writes a number such as `2.000000`: it is rounded to the nearest whole number and kept within 1 to 8, with a warning where it changes. A change in the settings page takes effect at the next vsync. |
+| `linear_present_mode` | `1` | How the picture is scaled to the window: `0` Off (nearest), `1` Bilinear (Smooth), `2` Bilinear (Sharp): each picture pixel stays flat over most of the window pixels it covers and blends only at its edges. |
+| `IntegerScaling` | `false` | The picture's height a whole multiple of its own, with black bars around it, so every picture pixel covers as many window pixels as the next. |
 | `AspectRatio` | `Auto 4:3/3:2` | `Auto 4:3/3:2`: 4:3, or what the game's patches ask for (their `gsaspectratio`, applied when the game was recompiled: see [config.md](config.md#pnach-pcsx2s-patch-files)). `4:3`, `16:9`, `10:7`: that shape. `Stretch`: the window's. |
 | `FMVAspectRatioSwitch` | `Off` | The shape while a film plays: `Off` keeps `AspectRatio`'s; `Auto 4:3/3:2`, `4:3`, `16:9` and `10:7` as above, the patches having their say under Auto here too, as in PCSX2. A film plays from the seventh time the IPU decodes a bit stream (`VDEC`) until 60,000,000 EE cycles (a fifth of a second) pass without one, as PCSX2 tells them. |
 
@@ -85,8 +93,8 @@ runs, before the game hears of the vblank. Cycle Aspect Ratio (F6) goes
 through `AspectRatio`'s values for the run without saving them. The window
 opens in the shape the settings give. Not covered: the 3:2 of Auto for a progressive (480p)
 picture, which the runtime does not show (Auto is 4:3), and PCSX2's other
-display settings (crop, vertical stretch, integer scaling, the picture's
-alignment and offsets).
+display settings (crop, vertical stretch, the picture's alignment and
+offsets, its other renderers and their accuracy settings).
 
 Games that render each field of an interlaced picture (FIELD mode: half the
 lines, redrawn every vsync a line lower on odd fields) are deinterlaced as
@@ -138,6 +146,84 @@ On Windows, SDL2's development package for Visual C++
 unpack it and pass `-DSDL2_DIR=<unpacked folder>/cmake` when configuring the
 repository or a generated game project. The build copies `SDL2.dll` next to
 every executable that links the runtime.
+
+### Rendering
+
+Two renderers draw what the game sends the GS. The Vulkan renderer draws on
+the graphics card, at 1 to 8 times the console's resolution
+(`upscale_multiplier`). The software renderer draws on the CPU, at the
+console's resolution, on `--gs-threads` threads. Automatic (`Renderer = -1`,
+the default) takes Vulkan where the card can. A line near the start of the
+log says which draws, and why:
+
+```
+[info:gpu] rendering with Vulkan on NVIDIA GeForce RTX 4070 SUPER (NVIDIA 621.01, Vulkan 1.4), at 2x the console's resolution
+[info:gpu] rendering with the software renderer, as the settings ask (Renderer = 13)
+[warn:gpu] rendering with the software renderer: no Vulkan loader (vulkan-1.dll) on this computer: the graphics driver installs it
+```
+
+Vulkan needs nothing installed beyond the graphics driver: the runtime loads
+the driver's Vulkan library when it starts, and its shaders come compiled
+with it. The card needs Vulkan 1.3 and `VK_EXT_fragment_shader_interlock`,
+which lets each pixel's depth test, blending and writes run in the order the
+primitives come; current NVIDIA and Intel drivers and Mesa's RADV have it,
+and `vulkaninfo` says whether an AMD card's Windows driver does. The warning
+names what a card lacks.
+
+At the console's resolution the Vulkan renderer draws the software
+renderer's pixels exactly: each pixel is worked out in one fragment shader,
+with the GS's integer arithmetic and the software renderer's float steps
+rounded the way the EE rounds them (toward zero). The tests compare the two,
+and so did runs of Agent Under Fire and Code: Veronica X (every frame
+compared, bit for bit; see [games.md](games.md)). At N times the
+resolution, pixel (N x, N y) of what the card drew is what the console draws
+at (x, y), and the pixels between come from the same arithmetic at the
+positions between: edges are finer. A texture the card drew is read at its
+own resolution, which is where the console's pixels can differ too, by
+design. What the EE sends (textures, films, CLUTs) stays at the console's
+resolution.
+
+The card keeps the pages of GS memory it drew in, at its resolution, and
+gives a page back to GS memory when something reads it in another way: a
+transfer or a copy in another pixel layout, the EE, a test. Each read back
+waits for the card to finish, so the exit summary counts them, by why
+(`pages read back: written in another layout`, `... a local copy reads them
+in another layout`, `... the CPU reads GS memory`, `... the software
+rasterizer draws a primitive`). Other entries say where
+the card's result is not the console's: `primitive reads what it writes` (a
+primitive that samples the memory it draws into reads it as it was before the
+primitive, where the console reads its own new pixels), `transfer reads what
+it writes` (the same for a local copy down or right over itself), `frame and
+depth overlap` (a depth buffer in the frame's memory: the card draws those
+primitives without their depth test), `picture shown at the console's
+resolution` (the display shows pages the card drew in another layout),
+`drawn by the software rasterizer` (a primitive whose frame or depth buffer
+goes round the end of GS memory, or past what the card's images hold at its
+scale: the software rasterizer draws it in GS memory, which takes the pages
+it touches back from the card; games park the scissor past the end of memory
+to draw nothing, which is not reported).
+
+With a window, the picture reaches it through Vulkan as well when the card
+can show pictures, filtered and scaled as `linear_present_mode` and
+`IntegerScaling` ask; otherwise SDL's renderer shows it, as with the software
+renderer. `--dump-frames` writes the pictures at the resolution drawn. Runs
+on the virtual clock draw the same frames every time with either renderer;
+the tests and the recorded frames use `--renderer software`, which gives the
+same pixels on every machine. `--renderer software` also rules the card out
+when a picture looks wrong, and `--gpu-debug` checks every Vulkan call.
+
+Not covered: what the software renderer leaves out too (the destination
+alpha test, dithering, anti-aliasing, scan masks, the CLUT buffer, depth
+buffers sampled as textures, transfers back to the EE); scales that are not
+whole numbers; texture filtering beyond what the game asks (PCSX2's
+anisotropic and forced bilinear filtering); the per-game fixes PCSX2 applies
+when it upscales (half-pixel offsets, rounded sprites, merged sprites): a
+copy of a picture the card drew through texel edges, rather than texel
+centres, comes out half a console pixel to the left above 1x
+([architecture.md](architecture.md#the-vulkan-renderer)); a
+depth test whose buffer is in the frame's memory; a renderer for cards
+without fragment shader interlock; changing the renderer while a game runs
+(its resolution changes at the next vsync); macOS.
 
 ## Diagnosing a run
 
@@ -375,7 +461,7 @@ enters the code (function pointers, a resumed thread).
 | VIF | VIF0 and VIF1: `UNPACK` into VU memory (every format, write masks with `STROW`/`STCOL`, the `STMOD` offset and difference modes, skipping and filling writes, `TOPS`-relative addresses), `MPG` uploads, `MSCAL`/`MSCALF`/`MSCNT` (VIF1 flips the `TOP`/`TOPS` double buffer), VIF1 `DIRECT`/`DIRECTHL` to the GIF, and the register codes (`STCYCL`, `OFFSET`, `BASE`, `ITOP`, `STMOD`, `STMASK`, `STROW`, `STCOL`, `MSKPATH3`, `MARK`, `FLUSH*`). A code with the i bit raises the VIF's interrupt once it has been carried out (`STAT.INT`) and stalls the VIF (`STAT.VIS`) until `FBRST.STC`, unless `ERR.MII` masks it; the words that arrive meanwhile wait in its FIFO. `FBRST.RST` resets the VIF and ends a stall. ForceBreak and STOP (`FBRST.FBK`, `STP`) are reported, not modelled, and `STAT` shows neither the FIFO's count nor the decoding state |
 | VU | micro mode for VU0 (`VCALLMS`, `VCALLMSR`) and VU1 (`MSCAL`, `CMSAR1`): an interpreter that keeps what micro code can observe of the pipeline. MAC, status and clip flags arrive 4 cycles after the instruction that set them, Q (DIV/SQRT/RSQRT) and P (VU1 EFU) after their latencies (`WAITQ`/`WAITP` and register hazards stall, and a stall holds the whole pair: an operation on Q paired with `WAITQ` reads the new Q), branches have a delay slot, the E bit ends a program after one more instruction, upper and lower instructions read their inputs before either writes, `XGKICK` sends GIF packets down PATH1, and VU0 reaches VU1's registers at `0x4000`, in micro and macro mode: VF0-31, then VI0-31, a quadword each, an integer register in the x word (stores to VF0 and VI0 are lost; the control registers, VI16-31, read and write as held and report a gap). A program runs to completion when it is started, as far as the EE can tell: in real-time runs VU1's programs run on a thread of their own, in the order VIF1 and `CMSAR1` started them and after the `UNPACK` and `MPG` data sent before them, and whatever reads or writes VU1's state from the EE (loads and stores in its memories, VU0's window, the reset) waits for them ([architecture.md](architecture.md#the-vu1-thread)). Each instruction pair is decoded once, and the decoding kept while micro memory holds the same words. Programs listed in `[vu] code_files` run recompiled wherever micro memory holds them (games upload a program wherever there is room: the runtime finds it by its first pairs, and the compiled code adds where it sits to every address it uses), with the pipeline's timing worked out at recompile time; the interpreter runs the rest, and goes on where a recompiled program hands over. |
 | GIF | `PACKED`, `REGLIST` and `IMAGE` modes from PATH1 (VU1's `XGKICK`), PATH2 (VIF1) and PATH3 (DMA channel 2 or the FIFO), PATH3 masking. The paths are decoded in the order the game sent their data; what VU1's own thread kicks keeps the place where the game started the program |
-| GS | privileged registers (`PMODE`, `SMODE2`, `DISPFB1/2`, `DISPLAY1/2`, `CSR` with `SIGNAL`/`FINISH`/`LABEL` events, `IMR`); a software rasterizer for points, lines, line strips, triangles, strips, fans and sprites with flat and Gouraud shading (a triangle carries its colours, texture coordinates and fog from its first vertex, so a value its vertices share stays exact; triangles and sprites cover the pixels whose centres are inside, a centre on an edge only for a left or a top edge), textures in every colour format, 4/8-bit CLUT ones included, and `TEXA` (which 16-bit CLUT entries take their alpha from too, `AEM` making only an all-zero entry transparent), the four texture functions, `REPEAT`/`CLAMP`/`REGION_CLAMP` wrapping, nearest, bilinear and trilinear filtering as `TEX1` asks (the level of detail, `log2(1/\|Q\|) * 2^L + K`, or `K` alone with `LCM` and for texture coordinates by UV, where Q is not interpolated, in sixteenths, picks `MMAG` or `MMIN`, but with `MXL` 0 `MMAG` alone, as PCSX2 found on a console; bilinear weighs the four texels around the point half a texel up and left, in sixteenths of a texel), mipmaps (up to six more levels from `MIPTBP1`/`MIPTBP2` or placed by `MTBA`, each half the size of the one before, `CLAMP`'s region halved too; `MMIN` rounds the level of detail to a level or blends the two levels around it by its sixteenths), fog, alpha test with `AFAIL`, depth test (depth interpolated exactly, so layers drawn at one depth do not fight), alpha blending with `PABE` and `FBA`, scissoring, frame-buffer masks; host-to-local and local-to-local transfers; display read-out of both circuits at their `DISPLAY` positions, circuit 1 blended over circuit 2 or `BGCOLOR` (`SLBG`) by its pixels' alpha or `ALP` (`MMOD`), and interlaced FIELD mode (`FFMD`), where each field's lines are deinterlaced (see Video). In real-time runs the GS draws on its own thread, up to two vsyncs behind the game, as PCSX2's MTGS does ([architecture.md](architecture.md#the-gs-thread)); `FINISH` and `SIGNAL` reach the EE at its next safepoint, and `GIF_STAT` shows the GS idle as soon as data is queued, not when it is drawn. Several draw threads (`--gs-threads`) share every primitive, each drawing its own bands of four rows of a queued batch, in order. A primitive that depends on the batch (a texture it drew, memory it sampled, the same memory under another layout) waits for it, as do image transfers and the display; one that reads memory it draws into (texture or CLUT), or whose frame and depth buffers overlap, is drawn by one thread. So the picture is always the one a single thread draws. The drawing state is decoded once per primitive, and the swizzles are tables; each texture format samples through its own code, with each level's addressing, the CLUT's layout and the frame and depth buffers' addressing worked out with the drawing state, the depth test comes before texturing, and triangles work out eight pixels' weights at a time, with the same operations as one at a time ([architecture.md](architecture.md#pixels)) |
+| GS | privileged registers (`PMODE`, `SMODE2`, `DISPFB1/2`, `DISPLAY1/2`, `CSR` with `SIGNAL`/`FINISH`/`LABEL` events, `IMR`); a software rasterizer for points, lines, line strips, triangles, strips, fans and sprites with flat and Gouraud shading (a triangle carries its colours, texture coordinates and fog from its first vertex, so a value its vertices share stays exact; triangles and sprites cover the pixels whose centres are inside, a centre on an edge only for a left or a top edge), textures in every colour format, 4/8-bit CLUT ones included, and `TEXA` (which 16-bit CLUT entries take their alpha from too, `AEM` making only an all-zero entry transparent), the four texture functions, `REPEAT`/`CLAMP`/`REGION_CLAMP` wrapping, nearest, bilinear and trilinear filtering as `TEX1` asks (the level of detail, `log2(1/\|Q\|) * 2^L + K`, or `K` alone with `LCM` and for texture coordinates by UV, where Q is not interpolated, in sixteenths, picks `MMAG` or `MMIN`, but with `MXL` 0 `MMAG` alone, as PCSX2 found on a console; bilinear weighs the four texels around the point half a texel up and left, in sixteenths of a texel), mipmaps (up to six more levels from `MIPTBP1`/`MIPTBP2` or placed by `MTBA`, each half the size of the one before, `CLAMP`'s region halved too; `MMIN` rounds the level of detail to a level or blends the two levels around it by its sixteenths), fog, alpha test with `AFAIL`, depth test (depth interpolated exactly, so layers drawn at one depth do not fight), alpha blending with `PABE` and `FBA`, scissoring, frame-buffer masks; host-to-local and local-to-local transfers; display read-out of both circuits at their `DISPLAY` positions, circuit 1 blended over circuit 2 or `BGCOLOR` (`SLBG`) by its pixels' alpha or `ALP` (`MMOD`), and interlaced FIELD mode (`FFMD`), where each field's lines are deinterlaced (see Video). In real-time runs the GS draws on its own thread, up to two vsyncs behind the game, as PCSX2's MTGS does ([architecture.md](architecture.md#the-gs-thread)); `FINISH` and `SIGNAL` reach the EE at its next safepoint, and `GIF_STAT` shows the GS idle as soon as data is queued, not when it is drawn. Several draw threads (`--gs-threads`) share every primitive, each drawing its own bands of four rows of a queued batch, in order. A primitive that depends on the batch (a texture it drew, memory it sampled, the same memory under another layout) waits for it, as do image transfers and the display; one that reads memory it draws into (texture or CLUT), or whose frame and depth buffers overlap, is drawn by one thread. So the picture is always the one a single thread draws. The drawing state is decoded once per primitive, and the swizzles are tables; each texture format samples through its own code, with each level's addressing, the CLUT's layout and the frame and depth buffers' addressing worked out with the drawing state, the depth test comes before texturing, and triangles work out eight pixels' weights at a time, with the same operations as one at a time ([architecture.md](architecture.md#pixels)). The Vulkan renderer draws all of it on the graphics card instead, at 1 to 8 times the console's resolution, with the software rasterizer's pixels at the console's ([Rendering](#rendering), [architecture.md](architecture.md#the-vulkan-renderer)) |
 | IPU | the MPEG-2 decoder, every command: `BCLR`, `IDEC`, `BDEC`, `VDEC`, `FDEC`, `SETIQ`, `SETVQ`, `CSC`, `PACK`, `SETTH`. Decoding follows ISO/IEC 13818-2: the Annex B code tables, zigzag and alternate scan, inverse quantisation with MPEG-2 mismatch control or MPEG-1 rounding, an inverse DCT within IEEE 1180's error limits, frame and field DCT, `SCD`/`ECD`. CSC is ITU-R BT.601 with the alpha thresholds of `SETTH` and dithered RGB16. Input and output go through the 8-qword FIFOs at `0x10007010`/`0x10007000`, which DMA channels 4 and 3 fill and empty as the IPU uses them; a command that runs out of data waits, and `IPU_BP` (BP, IFC, FP), `IPU_TOP` and the channels' `MADR`/`QWC` show where it stopped. Each finished command raises the IPU interrupt. |
 
 Not covered yet:
@@ -396,7 +482,9 @@ Not covered yet:
   not checked ([architecture.md](architecture.md#the-clut-buffer)). Not
   reported: the GS's own precision in texture filtering (sixteenths of a
   texel and of a level here, rounded down; no public source gives the
-  hardware's).
+  hardware's). The Vulkan renderer leaves out the same, draws the rest as the
+  software renderer does, and reports what it does differently (see
+  [Rendering](#rendering)).
 - **DMA and the VIFs**: scratchpad-to-RAM DMA in chain mode, VIF1
   GS-to-memory transfers, the VIFs' ForceBreak and STOP, and their FIFOs'
   depth (on the console a channel keeps filling the FIFO of a stalled VIF;
@@ -580,6 +668,8 @@ generated code does not need to be regenerated.
 | An SPU2 register | `readCore()`/`writeCore()` in [iop/spu2.cpp](../runtime/src/iop/spu2.cpp). libsd's calls ([iop/sound.cpp](../runtime/src/iop/sound.cpp)) are register reads and writes through `spu2::read16()`/`write16()`. |
 | A stub | A `PS2_STUB(name, summary)` line in [stub_list.inc](../runtime/include/ps2/stub_list.inc) and `void ps2::stub::name_()` in [stubs/stubs.cpp](../runtime/src/stubs/stubs.cpp). The recompiler reads the same list, so configs can bind the new name once it is rebuilt. |
 | An instruction fix | The `ops_*.h` headers in [runtime/include/ps2](../runtime/include/ps2). Recompiled code and the interpreter both pick it up. |
+| GS drawing | The software rasterizer in [hw/gs.cpp](../runtime/src/hw/gs.cpp), and the same in the Vulkan renderer: the per-pixel steps in [gpu/shaders/gs.frag](../runtime/src/gpu/shaders/gs.frag), the drawing state's record in `record()` in [gpu/renderer.cpp](../runtime/src/gpu/renderer.cpp) with its layout in [gpu/shaders/layout.h](../runtime/src/gpu/shaders/layout.h). The `gpu_` tests run the GS's tests on the card, so a change to one renderer shows in the other's tests. After changing a shader, build the `ps2n_update_shaders` target and commit `gpu/shaders/ps2n_spirv.h`, which builds without glslc use. |
+| A Vulkan function or feature | The function lists in [gpu/vk.h](../runtime/src/gpu/vk.h) (the loader resolves them by name), the device's required features in the table at the top of [gpu/device.cpp](../runtime/src/gpu/device.cpp), each with the sentence that says a card lacks it. |
 | Game-specific behaviour | Not in the runtime: use `[functions] override` and `[output] extra_sources` ([config.md](config.md#functions-skip-or-override)). |
 
 Report what you do not implement with `PS2_UNIMPL(category, key, format, ...)`

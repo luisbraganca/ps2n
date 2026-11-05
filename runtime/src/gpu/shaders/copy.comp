@@ -1,0 +1,19 @@
+#version 460
+// A local-to-local transfer between targets of one layout, at their scale:
+// each scaled pixel of the rectangle, a 24-bit one keeping the destination's
+// top byte. pc.p: 0 N, 1 source image, 2 destination image, 3 and 4 the
+// source rectangle's first pixel, 5 and 6 the destination's, 7 and 8 its
+// size (all scaled), 9 whether the units are 24-bit.
+
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+void main() {
+    const uvec2 xy = gl_GlobalInvocationID.xy;
+    if (xy.x >= pc.p[7] || xy.y >= pc.p[8]) return;
+    uint v = imageLoad(images[nonuniformEXT(pc.p[1])], ivec2(pc.p[3] + xy.x, pc.p[4] + xy.y)).r;
+    const ivec2 to = ivec2(pc.p[5] + xy.x, pc.p[6] + xy.y);
+    if (pc.p[9] != 0u) v = (imageLoad(images[nonuniformEXT(pc.p[2])], to).r & 0xFF000000u) | (v & 0xFFFFFFu);
+    imageStore(images[nonuniformEXT(pc.p[2])], to, uvec4(v));
+}

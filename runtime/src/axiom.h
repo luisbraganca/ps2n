@@ -54,6 +54,16 @@ struct Delivery {
 // Sends one batch, NDJSON. The default runs curl.
 using Transport = std::function<Delivery(const std::string& body)>;
 
+// What draws this run's pictures, for the start event: the renderer
+// ("vulkan" or "software"), its internal resolution, and the graphics card
+// (empty without one). Set before start().
+struct RendererInfo {
+    std::string renderer;
+    int upscale = 1;
+    std::string gpu;
+};
+void describeRenderer(const RendererInfo& info);
+
 // Starts sending this run's log (nothing when !cfg.enabled). `args`: the
 // command line, `build`: the runtime's commit.
 void start(const Config& cfg, const GameInfo& game, const std::vector<std::string>& args, std::string_view build,

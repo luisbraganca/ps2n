@@ -18,7 +18,7 @@ function(ps2n_sdk_test name)
     endif()
     ps2n_add_recompiled_game(TARGET sdk_${name} CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/${T_CONFIG}" ELF "${elf}" FILES 4 ${vu})
     foreach(mode recompiled interpreted)
-        set(args --elf "${elf}" --virtual-clock --no-window --host0 "${CMAKE_CURRENT_SOURCE_DIR}/bin"
+        set(args --elf "${elf}" --virtual-clock --no-window --renderer software --host0 "${CMAKE_CURRENT_SOURCE_DIR}/bin"
                  --missing-out "${CMAKE_CURRENT_BINARY_DIR}/${name}_${mode}_missing.toml" ${T_RUN_ARGS})
         if(mode STREQUAL "interpreted")
             list(APPEND args --interpret)
