@@ -98,6 +98,21 @@ config lists the other executables under `[input] programs`, as in
   vblanks a second late in the mission, VU1's thread busy all the time and
   the GS waiting for its drawing (see [Speed](#speed)). Recompiled, the thread
   is busy under a third of the time.
+- `DRIVING.ELF` sets its controller back to "not found" while its timer
+  (Timer 0, from the program's start) reads 6 to 8 seconds
+  (`sub_0027cfc8`). A console is still loading the mission then. The runtime
+  reads the disc far faster (about 15 MB from the program's start to the
+  race), so once the opening film was skipped the race had begun, and the
+  game paused with "analog controller (DUALSHOCK 2) is not inserted into
+  controller port 1" until the timer passed 8 seconds. A patch in
+  `games/agent-under-fire/driving.toml` makes the game skip that reset
+  always, as it does outside those seconds. The disc's read time is not
+  modelled, so other waits a game times against loading may come out short.
+- A play test with the Vulkan renderer at 1x (2026-11-05) slowed down late in
+  the second mission's race: for about 15 seconds every other vblank came
+  40 to 62 ms late (25 to 28 vblanks a second), with no read-back from the
+  card and no VU1 program on the interpreter. Scripted runs of the race, with
+  the fire button held too, keep 48 to 50 vblanks a second. Not found yet.
 - The second mission has been played into its race; how far it can be
   played has not been tried.
 - With the widescreen patch, the race's camera takes 1.817 for its width

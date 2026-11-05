@@ -9,3 +9,15 @@ elf = "disc/DRIVING.ELF"
 # What the interpreter ran in earlier sessions, then whatever it still
 # interprets.
 entries_files = ["driving-entries.toml", "ps2n_missing.DRIVING.ELF.toml"]
+
+# The game sets its controller back to "not found" while its timer (Timer 0,
+# from DRIVING.ELF's start) reads 6 to 8 seconds (sub_0027cfc8). A console is
+# still loading the mission then. The runtime reads the disc far faster, so
+# once the film is skipped the race has begun, and the game pauses with
+# "analog controller (DUALSHOCK 2) is not inserted into controller port 1".
+# This branch now always skips the reset, as it does outside those seconds;
+# its delay slot (lbu $v1, 7($s1)) runs either way.
+[[patches]]
+address = 0x0027d038
+value = 0x1000000c    # b 0x0027d06c
+expect = 0x5060000c   # beqzl $v1, 0x0027d06c
