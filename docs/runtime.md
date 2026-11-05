@@ -184,12 +184,14 @@ design. What the EE sends (textures, films, CLUTs) stays at the console's
 resolution.
 
 The card keeps the pages of GS memory it drew in, at its resolution, and
-gives a page back to GS memory when something reads it in another way: a
-transfer or a copy in another pixel layout, the EE, a test. A transfer that
-writes a page whole, in a format that writes every bit of it (CT32, CT16,
-CT16S, the Z formats but Z24, T8, T4), needs nothing back: the page becomes
-GS memory's as the transfer writes it. Each read back
-waits for the card to finish, so the exit summary counts them, by why
+resolves them to its 1x mirror when something reads them in another layout.
+A host-to-local transfer over such pages merges into the mirror without a
+read back; the CPU's copies stay stale until the EE or a test reads them. A
+transfer that writes a page whole, in a format that writes every bit of it
+(CT32, CT16, CT16S, the Z formats but Z24, T8, T4), instead makes the CPU's
+page current as the transfer writes it. Wrapping rectangles keep the CPU's
+path. Each actual read back waits for the card to finish, so the exit summary
+counts them, by why
 (`pages read back: written in another layout`, `... a local copy reads them
 in another layout`, `... the CPU reads GS memory`, `... the software
 rasterizer draws a primitive`). Other entries say where

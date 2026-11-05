@@ -1,0 +1,53 @@
+#version 460
+// A host-to-local transfer's rectangle merged into the card's copy of GS
+// memory. Subword units change only their own bits, atomically where several
+// pixels share a word. The entry (layout.h, MERGE_*) is at pc.p[0].
+
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+void main() {
+    const uint e = pc.p[0];
+    const uint x = gl_GlobalInvocationID.x, y = gl_GlobalInvocationID.y;
+    if (x >= upload[e + MERGE_W] || y >= upload[e + MERGE_H]) return;
+    const uint psm = upload[e + MERGE_PSM];
+    const uint px = (upload[e + MERGE_X] + x) & 2047u, py = (upload[e + MERGE_Y] + y) & 2047u;
+    const uint bp = upload[e + MERGE_DBP], bw = upload[e + MERGE_DBW];
+    const bool z = (psm & 0x30u) == 0x30u;
+    uint word, shift = 0u, mask = 0xFFFFFFFFu;
+    if (psm == PSMCT32 || psm == PSMCT24 || psm == PSMZ32 || psm == PSMZ24 || psm == PSMT8H || psm == PSMT4HL || psm == PSMT4HH) {
+        word = (bp * 64u + (py >> 5) * max(bw, 1u) * 2048u + (px >> 6) * 2048u + c32(z ? 1u : 0u, py & 31u, px & 63u)) & 0xFFFFFu;
+        if (psm == PSMCT24 || psm == PSMZ24) mask = 0x00FFFFFFu;
+        else if (psm == PSMT8H) { shift = 24u; mask = 0xFF000000u; }
+        else if (psm == PSMT4HL) { shift = 24u; mask = 0x0F000000u; }
+        else if (psm == PSMT4HH) { shift = 28u; mask = 0xF0000000u; }
+    } else if (psm == PSMCT16 || psm == PSMCT16S || psm == PSMZ16 || psm == PSMZ16S) {
+        const uint variant = ((psm & 8u) != 0u ? 1u : 0u) | (z ? 2u : 0u);
+        const uint n = (bp * 128u + (py >> 6) * max(bw, 1u) * 4096u + (px >> 6) * 4096u + c16(variant, py & 63u, px & 63u)) & 0x1FFFFFu;
+        word = n >> 1;
+        shift = (n & 1u) * 16u;
+        mask = 0xFFFFu << shift;
+    } else if (psm == PSMT8) {
+        const uint n = (bp * 256u + (py >> 6) * max(bw >> 1, 1u) * 8192u + (px >> 7) * 8192u + c8(py & 63u, px & 127u)) & 0x3FFFFFu;
+        word = n >> 2;
+        shift = (n & 3u) * 8u;
+        mask = 0xFFu << shift;
+    } else if (psm == PSMT4) {
+        const uint n = (bp * 512u + (py >> 7) * max(bw >> 1, 1u) * 16384u + (px >> 7) * 16384u + c4(py & 127u, px & 127u)) & 0x7FFFFFu;
+        word = n >> 3;
+        shift = (n & 7u) * 4u;
+        mask = 0xFu << shift;
+    } else {
+        return;
+    }
+    const uint page = word >> 11;
+    if ((upload[e + MERGE_MASK + (page >> 5)] & (1u << (page & 31u))) == 0u) return;
+    const uint unit = upload[upload[e + MERGE_SRC] + y * upload[e + MERGE_W] + x];
+    if (mask == 0xFFFFFFFFu) {
+        vram[word] = unit;
+        return;
+    }
+    atomicAnd(vram[word], ~mask);
+    atomicOr(vram[word], (unit << shift) & mask);
+}

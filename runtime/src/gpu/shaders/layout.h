@@ -179,4 +179,16 @@
 #define PUSH_UNIT_T4HL 3u
 #define PUSH_UNIT_T4HH 4u
 
+// Units of a host-to-local transfer merged into GS memory (the mirror).
+#define MERGE_X 0        // the rectangle's first pixel, in the transfer's coordinates
+#define MERGE_Y 1
+#define MERGE_W 2
+#define MERGE_H 3
+#define MERGE_SRC 4      // its units, row by row, in the upload buffer
+#define MERGE_DBP 5      // the destination's first block, width and format
+#define MERGE_DBW 6
+#define MERGE_PSM 7
+#define MERGE_MASK 8     // 16 words: the mirror's pages this transfer writes
+#define MERGE_WORDS 24
+
 #endif

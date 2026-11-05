@@ -291,17 +291,33 @@ void checkClut(uint64_t tex0) {
 // A transfer's write of unit n in format psm, which leaves out of date the
 // slots of the CLUT buffer loaded from halves of the word that it changes.
 void transferWrite(uint32_t psm, uint32_t n, uint32_t v) {
-    uint32_t word = n;   // the 32-bit layouts
+    uint32_t word = n, written = ~0u;   // the 32-bit layouts
     switch (psm) {
-    case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S: word = n >> 1; break;
-    case PSMT8: word = n >> 2; break;
-    case PSMT4: word = n >> 3; break;
+    case PSMCT24: case PSMZ24: written = 0x00FFFFFFu; break;
+    case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S:
+        word = n >> 1;
+        written = 0xFFFFu << ((n & 1) * 16);
+        break;
+    case PSMT8:
+        word = n >> 2;
+        written = 0xFFu << ((n & 3) * 8);
+        break;
+    case PSMT4:
+        word = n >> 3;
+        written = 0xFu << ((n & 7) * 4);
+        break;
+    case PSMT8H: written = 0xFF000000u; break;
+    case PSMT4HL: written = 0x0F000000u; break;
+    case PSMT4HH: written = 0xF0000000u; break;
     default: break;
     }
     if (!g_clut.columns[word >> 4]) return writeUnit(psm, n, v);
     const uint32_t before = g_vram[word];
     writeUnit(psm, n, v);
-    const uint32_t changed = before ^ g_vram[word];
+    uint32_t changed = before ^ g_vram[word];
+    // Where the card holds the page, that comparison used a stale word. The
+    // exact old value is unknown here, so count every bit this unit can write.
+    if (!gpu::renderer::cpuPageValid(word >> 11)) changed |= written;
     for (uint32_t slot = 0; changed && slot < 32; ++slot) {
         const uint32_t tag = g_clut.slot[slot];
         if (tag >= kClutColumn && (tag - kClutColumn) >> 1 == word >> 4 && (changed >> (16 * ((tag - kClutColumn) & 1)) & 0xFFFF))

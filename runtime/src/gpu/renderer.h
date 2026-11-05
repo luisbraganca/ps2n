@@ -2,14 +2,16 @@
 // graphics card, at N times the console's resolution, instead of the
 // software rasterizer.
 //
-// GS memory is shared out by pages of 8 KB. A page belongs to the CPU
-// (g_vram holds it) or to one target: an image of one buffer layout (its
-// first page, width and pixel family), N x N image pixels a GS pixel, each
-// holding the pixel's raw unit. The card also keeps a copy of GS memory, the
-// mirror, which textures, CLUTs and the display read in any layout. Pages
-// move between them exactly: a target's page goes to GS memory as its pixels
-// N * x, N * y, which are what the software would have drawn there, and
-// comes from it as each unit N x N times. So whatever reads GS memory (a
+// GS memory is shared out by pages of 8 KB. A page's current contents belong
+// to the CPU (g_vram holds them), to one target or to the card's mirror. A
+// target is an image of one buffer layout (its first page, width and pixel
+// family), N x N image pixels a GS pixel, each holding the pixel's raw unit.
+// The mirror is the card's copy of GS memory at 1x, which textures, CLUTs and
+// the display read in any layout. A partial cross-layout transfer merges into
+// it and leaves g_vram stale until the CPU reads the page. Pages move exactly:
+// a target's page goes to GS memory as its pixels N * x, N * y, which are what
+// the software would have drawn there, and comes from it as each unit N x N
+// times. So whatever reads GS memory (a
 // texture in another layout, a CLUT, the EE, the tests) sees what the
 // software rasterizer would have drawn, at any N; only targets read as
 // textures in their own layout, and the display, use the extra pixels.
@@ -61,6 +63,8 @@ void cpuDrew(const gs::detail::Draw& d);
 // rectangle is complete (at once for local-to-local).
 bool transfer(uint32_t dir, uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
 void transferEnded();
+// Whether g_vram holds a page's current contents (the transfer CLUT checks).
+bool cpuPageValid(uint32_t page);
 // Before the CPU reads GS memory: these pages, or all, hold what was drawn.
 void syncPages(const gs::detail::Pages& pages);
 void syncAll();

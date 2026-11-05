@@ -127,10 +127,12 @@ assets/                          branding/ (logo and icons; its README says whic
   same order, rounded toward zero, never with the card's interpolation,
   blending or depth test; a change to how the software draws a pixel goes
   into `gs.frag` too, and the `gpu_` tests rerun the GS's tests on the card
-  at 1x and above to hold them together. Each page of GS memory belongs to
-  the CPU or to one target; pages move between them only through the
-  mirror, exactly, and every read of GS memory on the CPU side reads the
-  pages back first (`drawn()`, `syncAll`). The GS starts in software mode;
+  at 1x and above to hold them together. Each page's current contents belong
+  to the CPU, to one target, or to the card's mirror; a partial cross-layout
+  upload can leave the mirror holding them exactly while the CPU's page is
+  stale. Pages move between them only through the mirror, exactly, and every
+  read of GS memory on the CPU side reads stale pages back first (`drawn()`,
+  `syncAll`). The GS starts in software mode;
   only `run()` (and the tests, through `useVulkan`) switches it.
 - Drawing on several threads (`--gs-threads`) must give exactly what one
   thread gives, or runs stop being reproducible. The draw threads work

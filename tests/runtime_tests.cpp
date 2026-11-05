@@ -6370,9 +6370,9 @@ TEST_CASE(gpu_moves_pages_between_layouts_exactly) {
 // Image transfers into pages the card drew. Into a buffer of the target's
 // layout the pixels go to the card as they come, so a primitive drawn
 // between two IMAGE packets sees the rows sent so far (and each pixel covers
-// N x N of the target); into another layout the pages come back to GS memory
-// first. The 8- and 4-bit formats of the 32-bit layout (T8H, T4HL, T4HH)
-// change only their bits of a word, as CT24 keeps its top byte.
+// N x N of the target); into another layout they merge into the mirror. The
+// 8- and 4-bit formats of the 32-bit layout (T8H, T4HL, T4HH) change only
+// their bits of a word, as CT24 keeps its top byte.
 TEST_CASE(gpu_writes_transfers_into_what_it_drew) {
     const std::vector<uint32_t> pixels = pseudoRandom(64 * 64, 21);
     auto draw = [&] {
@@ -6386,7 +6386,7 @@ TEST_CASE(gpu_writes_transfers_into_what_it_drew) {
         gsWrite({{0x4C, 20 | 1ull << 16}, {0x06, 0 | 1ull << 14 | 6ull << 26 | 6ull << 30 | 1ull << 34 | 1ull << 35}});
         gsWrite({{0x00, 6 | 1 << 4 | 1 << 8}, {0x03, 8 | 8 << 16}, {0x05, xyz(0, 0, 0)}, {0x03, (64 * 16 + 8) | (64 * 16 + 8) << 16}, {0x05, xyz(64, 64, 0)}});
         gsImage(std::vector<uint32_t>(pixels.begin() + 64 * 32 + 20, pixels.end()));
-        // Page 0 again as CT16: GS memory's way.
+        // Page 0 again as CT16: the mirror's way.
         gsUploadTo(0, 1, 0x02, 8, 8, 16, 16);
         gsImage(pseudoRandom(16 * 16 / 2, 22));
         // T8H, T4HL and T4HH into page 20's CT32 target; CT24 into page 40's.
@@ -6438,13 +6438,106 @@ TEST_CASE(gpu_writes_transfers_into_what_it_drew) {
     CHECK(finer > 100);   // the triangle, drawn at 2x around the pixels sent
 }
 
-// A transfer that writes whole pages the card drew in another layout needs
-// none of what it drew there: the pages become GS memory's with no read back.
-// One that writes part of a page, or part of each unit (CT24 keeps each
-// word's top byte), reads the page back first. GS memory ends up the
-// software's either way. A transfer stopped before its end leaves the rest
-// of such pages without what the card drew: reported.
-TEST_CASE(gpu_transfers_replace_whole_pages_without_a_read_back) {
+// A partial transfer over a page drawn in another layout merges into the
+// card's mirror: every format, including subword writes and overlapping
+// transfers, and a transfer stopped half way. A primitive between two IMAGE
+// packets samples the pixels sent so far. Nothing comes back to the CPU until
+// the final reads, which match the software renderer at 1x and 2x.
+TEST_CASE(gpu_merges_partial_transfers_on_card) {
+    struct Format {
+        uint32_t psm, bw, bits;
+    };
+    constexpr Format formats[] = {{0x00, 1, 32}, {0x01, 1, 24}, {0x02, 1, 16}, {0x0A, 1, 16}, {0x30, 1, 32}, {0x31, 1, 24},
+                                  {0x32, 1, 16}, {0x3A, 1, 16}, {0x13, 2, 8},  {0x14, 2, 4},  {0x1B, 1, 8},  {0x24, 1, 4},
+                                  {0x2C, 1, 4}};
+    Reports readBacks("pages read back: written in another layout");
+    auto upload = [](uint32_t page, const Format& f, int x, int y, int w, int h, uint32_t seed) {
+        gsUploadTo(page * 32, f.bw, f.psm, x, y, w, h);
+        gsImage(pseudoRandom((w * h * f.bits + 31) / 32, seed));
+    };
+    auto draw = [&] {
+        gs::init();
+        readBacks();
+        const int mode = std::fegetround();
+        std::fesetround(FE_TOWARDZERO);
+        gsWrite({{0x40, 127ull << 16 | 127ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
+        for (size_t i = 0; i < std::size(formats); ++i) {
+            const Format& f = formats[i];
+            const uint32_t page = 40 + 2 * static_cast<uint32_t>(i);
+            const bool target16 = f.psm != 0x02 && f.psm != 0x0A && f.psm != 0x32 && f.psm != 0x3A;
+            gsWrite({{0x4C, page | 1ull << 16 | (target16 ? 2ull : 0ull) << 24}});
+            gsRect(0, 0, 64, target16 ? 64 : 32, 0x80102030 + static_cast<uint32_t>(i));
+            gsShade(0, 0, 64, 7, 9, target16 ? 63 : 31, static_cast<uint32_t>(i));
+            upload(page, f, 3, 5, 19, 13, 100 + static_cast<uint32_t>(i));
+            upload(page, f, 11, 9, 7, 5, 130 + static_cast<uint32_t>(i));   // over the first transfer, still in the mirror
+        }
+        // Only half the first rectangle arrives. The next transfer ends it and
+        // overlaps it; pixels neither wrote keep what the target drew.
+        gsWrite({{0x4C, 90 | 1ull << 16 | 2ull << 24}});
+        gsRect(0, 0, 64, 64, 0x80F0E0D0);
+        gsShade(0, 0, 64, 9, 8, 63, 0);
+        gsUploadTo(90 * 32, 1, 0x00, 4, 4, 16, 16);
+        gsImage(pseudoRandom(16 * 8, 160));
+        gsUploadTo(90 * 32, 1, 0x00, 8, 4, 4, 16);
+        gsImage(pseudoRandom(4 * 16, 161));
+        // Page 94's CT16 target gives way to a CT32 upload. Pages 96 and 98
+        // sample it through the mirror after half and all of the upload.
+        gsWrite({{0x4C, 94 | 1ull << 16 | 2ull << 24}});
+        gsRect(0, 0, 64, 64, 0x80345678);
+        gsShade(0, 0, 64, 11, 12, 63, 0);
+        const std::vector<uint32_t> sent = pseudoRandom(16 * 16, 162);
+        gsUploadTo(94 * 32, 1, 0x00, 0, 0, 16, 16);
+        gsImage(std::vector<uint32_t>(sent.begin(), sent.begin() + 16 * 8));
+        for (uint32_t page : {96u, 98u}) {
+            gsWrite({{0x4C, page | 1ull << 16}, {0x06, 94 * 32 | 1ull << 14 | 4ull << 26 | 4ull << 30 | 1ull << 34 | 1ull << 35}});
+            gsWrite({{0x00, 6 | 1 << 4 | 1 << 8}, {0x03, 8 | 8 << 16}, {0x05, xyz(0, 0, 0)},
+                     {0x03, (16 * 16 + 8) | (16 * 16 + 8) << 16}, {0x05, xyz(16, 16, 0)}});
+            if (page == 96) gsImage(std::vector<uint32_t>(sent.begin() + 16 * 8, sent.end()));
+        }
+        std::fesetround(mode);
+    };
+    auto read = [&] {
+        std::vector<uint32_t> out;
+        for (size_t i = 0; i < std::size(formats); ++i) readArea(out, 40 + 2 * static_cast<uint32_t>(i), 1, 0x00, 64, 32);
+        for (uint32_t page : {90u, 94u, 96u, 98u}) readArea(out, page, 1, 0x00, 64, 32);
+        return out;
+    };
+    sameOnTheCard(draw, read, {1, 2}, [&](int) { CHECK_EQ(readBacks(), 0u); });
+}
+
+// The CPU's copy of a card-owned page is stale. A transfer that writes the
+// stale value again can still change the real page, so its CLUT slots must go
+// out of date even though the CPU word compares unchanged. Test both a target
+// of the transfer's layout and a cross-layout transfer merged in the mirror.
+TEST_CASE(gpu_stale_pages_keep_clut_transfer_reporting) {
+    GpuRun gpu(1);
+    Reports clut("CLUT buffer");
+    for (uint32_t targetPsm : {0x00u, 0x02u}) {
+        gs::init();
+        gsWrite({{0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
+        gsUpload(110 * 32, 1, 0x00, 64, 32, std::vector<uint32_t>(64 * 32, 0));
+        gsWrite({{0x4C, 110 | 1ull << 16 | uint64_t(targetPsm) << 24}});
+        gsRect(0, 0, 64, targetPsm == 0x02 ? 64 : 32, 0x80ABCDEF);
+        auto draw = [&](uint64_t cld) {
+            const uint64_t tex0 = 100ull * 32 | 1ull << 14 | 0x13ull << 20 | 2ull << 26 | 2ull << 30 |
+                                  (110ull * 32) << 37 | uint64_t(targetPsm) << 51 | cld << 61;
+            gsWrite({{0x4C, 120 | 1ull << 16}, {0x06, tex0}});
+            gsWrite({{0x00, 6 | 1 << 4 | 1 << 8}, {0x03, 0}, {0x05, xyz(0, 0, 0)}, {0x03, 4 | 4ull << 16}, {0x05, xyz(4, 4, 0)}});
+            return clut();
+        };
+        CHECK_EQ(draw(1), 0u);   // loads the CLUT from the target's page
+        gsUploadTo(110 * 32, 1, 0x00, 0, 0, 1, 1);
+        gsImage({0});            // the stale CPU word is already zero; the drawn word is not
+        CHECK_EQ(draw(0), 1u);
+    }
+}
+
+// Transfers over pages the card drew in another layout need no read back.
+// Whole pages become GS memory's as the transfer writes them. Partial pages,
+// including CT24's kept top bytes, stay in the mirror and merge there. GS
+// memory ends up the software's either way. A transfer stopped before its end
+// over a page it was to replace whole loses what the card drew: reported.
+TEST_CASE(gpu_transfers_over_drawn_pages_without_read_backs) {
     Reports readBacks("pages read back: written in another layout");
     auto draw = [&] {
         gs::init();
@@ -6457,11 +6550,11 @@ TEST_CASE(gpu_transfers_replace_whole_pages_without_a_read_back) {
         gsImage(pseudoRandom(64 * 64, 71));
         gsWrite({{0x4C, 70 | 1ull << 16 | 2ull << 24}});             // page 70 drawn as CT16
         gsRect(0, 0, 64, 64, 0x80123456);
-        gsUploadTo(70 * 32, 1, 0x00, 16, 0, 32, 32);                 // CT32 over its height, part of its width: read back
+        gsUploadTo(70 * 32, 1, 0x00, 16, 0, 32, 32);                 // CT32 over its height, part of its width: merged
         gsImage(pseudoRandom(32 * 32, 72));
         gsWrite({{0x4C, 74 | 1ull << 16 | 2ull << 24}});             // page 74 drawn as CT16
         gsRect(0, 0, 64, 64, 0x80345678);
-        gsUploadTo(74 * 32, 1, 0x00, 0, 8, 64, 16);                  // CT32 over its width, part of its height: read back
+        gsUploadTo(74 * 32, 1, 0x00, 0, 8, 64, 16);                  // CT32 over its width, part of its height: merged
         gsImage(pseudoRandom(64 * 16, 79));
         gsWrite({{0x4C, 80 | 2ull << 16}});                          // pages 80-83 drawn as CT32, 128 wide
         gsRect(0, 0, 128, 64, 0x80654321);
@@ -6469,7 +6562,7 @@ TEST_CASE(gpu_transfers_replace_whole_pages_without_a_read_back) {
         gsImage(pseudoRandom(128 * 64 / 4, 73));
         gsWrite({{0x4C, 90 | 1ull << 16 | 2ull << 24}});             // page 90 drawn as CT16
         gsRect(0, 0, 64, 64, 0x80ABCDEF);
-        gsUploadTo(90 * 32, 1, 0x01, 0, 0, 64, 32);                 // CT24 over page 90, whole but its top bytes kept: read back
+        gsUploadTo(90 * 32, 1, 0x01, 0, 0, 64, 32);                  // CT24 over page 90, its top bytes kept: merged
         gsImage(pseudoRandom(64 * 32 * 3 / 4, 74));
         gsWrite({{0x4C, 100 | 1ull << 16 | 2ull << 24}});            // page 100 drawn as CT16
         gsRect(0, 0, 64, 64, 0x80FEDCBA);
@@ -6486,7 +6579,7 @@ TEST_CASE(gpu_transfers_replace_whole_pages_without_a_read_back) {
         readArea(out, 100, 1, 0x00, 64, 32);
         return out;
     };
-    sameOnTheCard(draw, read, {1, 2}, [&](int) { CHECK_EQ(readBacks(), 3u); });
+    sameOnTheCard(draw, read, {1, 2}, [&](int) { CHECK_EQ(readBacks(), 0u); });
 
     // A page replaced whole is GS memory's: reading it needs nothing from the card.
     Reports cpuReads("pages read back: the CPU reads GS memory"), early("transfer ended early over drawn pages");

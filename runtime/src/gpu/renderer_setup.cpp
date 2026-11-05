@@ -189,7 +189,7 @@ void destroyAll() {
     vkDeviceWaitIdle(dev());
     if (g.cmds.ready()) g.cmds.shutdown();
     if (g.drawPipelines[1] == g.drawPipelines[0]) g.drawPipelines[1] = VK_NULL_HANDLE;
-    for (VkPipeline p : {g.drawPipelines[0], g.drawPipelines[1], g.resolve, g.expand, g.push, g.copy, g.display, g.deinterlace})
+    for (VkPipeline p : {g.drawPipelines[0], g.drawPipelines[1], g.resolve, g.expand, g.push, g.merge, g.copy, g.display, g.deinterlace})
         if (p) vkDestroyPipeline(dev(), p, nullptr);
     if (g.layout) vkDestroyPipelineLayout(dev(), g.layout, nullptr);
     if (g.pool) vkDestroyDescriptorPool(dev(), g.pool, nullptr);
@@ -255,10 +255,11 @@ bool start(int scale, std::string& why) {
     g.resolve = computePipeline(spirv::resolve_comp, sizeof spirv::resolve_comp);
     g.expand = computePipeline(spirv::expand_comp, sizeof spirv::expand_comp);
     g.push = computePipeline(spirv::push_comp, sizeof spirv::push_comp);
+    g.merge = computePipeline(spirv::merge_comp, sizeof spirv::merge_comp);
     g.copy = computePipeline(spirv::copy_comp, sizeof spirv::copy_comp);
     g.display = computePipeline(spirv::display_comp, sizeof spirv::display_comp);
     g.deinterlace = computePipeline(spirv::deinterlace_comp, sizeof spirv::deinterlace_comp);
-    if (!g.drawPipelines[0] || !g.resolve || !g.expand || !g.push || !g.copy || !g.display || !g.deinterlace) {
+    if (!g.drawPipelines[0] || !g.resolve || !g.expand || !g.push || !g.merge || !g.copy || !g.display || !g.deinterlace) {
         why = "cannot make the renderer's pipelines";
         destroyAll();
         return false;

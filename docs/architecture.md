@@ -472,32 +472,35 @@ above 1x (taking the card's own rule instead, floor(u N), shifts copies
 through centres half a pixel to the right). This is the ambiguity PCSX2's
 half-pixel offset settings settle game by game.
 
-**Pages.** GS memory is 512 pages of 8 KB. Each belongs to the CPU (the
-software's memory, which the EE's transfers write) or to one target: an
-image of one buffer layout (its first page, its width and its pixel family:
-CT32 and CT24, CT16, CT16S, Z32 and Z24, Z16, Z16S), N x N image pixels a GS
-pixel. A page has one owner, so no memory is held twice. The card also keeps
-a copy of GS memory at 1x, the mirror, which textures in any layout, CLUTs
-and the display read. Pages move exactly: from a target to the mirror as its
-pixels (N x, N y), from the mirror to a target as each unit N x N times,
-from the mirror to the CPU (a read back: the CPU waits for the card) and from
-the CPU to the mirror. A primitive's frame and depth pages become its
-targets'. A texture laid out as a target is read from the target at its
-scale in the pages the target holds, and from the mirror in the rest: a
-picture read as a texture is declared to the next power of two (640 x 448
-as 1024 x 512), which reaches into the buffer after it. Any other texture
-is read from the mirror. A transfer into a target's layout reaches
-the target as its pixels come, the rows sent and the start of the next, so a
-primitive between two IMAGE packets sees what has come so far; one in
-another layout gives the pages back to the CPU first, which is the read back
-games pay for (the exit summary counts them), unless it writes a page whole:
-then nothing of the card's is left in it, and the page is the CPU's as the
-transfer writes it (Agent Under Fire's driving missions upload 256 x 256
-textures over pages they drew in, about 20 a second in a scripted run). A primitive
-reading such a page before the transfer ends would see GS memory's old
-pixels there where the console has the card's; a transfer stopped before its
-end is reported. A local copy between targets
-of one layout runs on the card at scale. A pixel past a buffer's width is on
+**Pages.** GS memory is 512 pages of 8 KB. A page's current contents belong
+to the CPU (the software's memory, which the EE's transfers write), to one
+target or to the card's mirror. A target is an image of one buffer layout
+(its first page, its width and its pixel family: CT32 and CT24, CT16, CT16S,
+Z32 and Z24, Z16, Z16S), N x N image pixels a GS pixel. Only one of the three
+is authoritative; the others can hold exact or stale copies. The mirror is the card's
+copy of GS memory at 1x, which textures in any layout, CLUTs and the display
+read. Pages move exactly: from a target to the mirror as its pixels (N x,
+N y), from the mirror to a target as each unit N x N times, from the mirror
+to the CPU (a read back: the CPU waits for the card) and from the CPU to the
+mirror. A primitive's frame and depth pages become its targets'. A texture
+laid out as a target is read from the target at its scale in the pages the
+target holds, and from the mirror in the rest: a picture read as a texture is
+declared to the next power of two (640 x 448 as 1024 x 512), which reaches
+into the buffer after it. Any other texture is read from the mirror. A
+transfer into a target's layout reaches the target as its pixels come, the
+rows sent and the start of the next. One in another layout that writes every
+bit of a page needs none of the card's old contents: the page is the CPU's as
+the transfer writes it. A partial page instead resolves from its target to the
+mirror, where the transfer's units merge as they come, without a read back.
+The page then has no target owner and the CPU's copy is stale; only something
+on the CPU reading it waits for the card and takes it back. A primitive
+between two IMAGE packets sees what has come so far on any of these paths
+(Agent Under Fire's driving missions upload 256 x 256 textures over pages
+they drew in, about 20 a second in a scripted run). A transfer stopped before
+its end over pages it was to replace whole is reported: their unwritten rest
+lost what the card drew. A rectangle that wraps round its coordinates, its
+buffer or GS memory keeps the old CPU path and its read back. A local copy
+between targets of one layout runs on the card at scale. A pixel past a buffer's width is on
 the next row of pages, in GS memory and so in a target: a scissor wider than
 the buffer draws there (Code: Veronica X's is a pixel wider than its frame),
 and a texture wider than its buffer reads there (a 640-wide picture read as a

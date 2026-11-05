@@ -121,6 +121,7 @@ if(PS2N_WITH_VULKAN)
         "resolve_comp|resolve.comp|"
         "expand_comp|expand.comp|"
         "push_comp|push.comp|"
+        "merge_comp|merge.comp|"
         "copy_comp|copy.comp|"
         "display_comp|display.comp|"
         "deinterlace_comp|deinterlace.comp|")

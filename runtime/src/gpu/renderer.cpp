@@ -277,7 +277,8 @@ Pages wholePages(const Pages& pages, uint32_t dbp, uint32_t dbw, uint32_t dpsm, 
 // ---- Transfers ---------------------------------------------------------------------------------------
 
 // A transfer's destination: pages of targets of its layout take its pixels
-// at their scale as they come; other targets give theirs back to the CPU.
+// at their scale as they come. A partial transfer in another layout resolves
+// the old pixels to the mirror, where its own pixels are merged as they come.
 void beginDestination(uint32_t dir, uint32_t dbp, uint32_t dbw, uint32_t dpsm, uint32_t dsax, uint32_t dsay, uint32_t w, uint32_t h) {
     PendingTransfer& x = g.transfer;
     x = PendingTransfer{};
@@ -291,18 +292,22 @@ void beginDestination(uint32_t dir, uint32_t dbp, uint32_t dbw, uint32_t dpsm, u
     x.w = w;
     x.h = h;
     x.pages.add(footprint(dbp, dbw, dpsm, dsax + w, dsay + h));
-    // A rectangle that wraps round 2048 or its buffer's width takes the CPU's way.
+    // A rectangle that wraps round 2048, memory or its buffer's width takes the CPU's way.
+    const bool rectangular = dsax + w <= 2048 && dsay + h <= 2048 && dsax + w <= std::max(dbw, 1u) * 64 && !everyPage(x.pages);
     const int family = transferFamily(dpsm);
-    const bool plain = family >= 0 && dsax + w <= 2048 && dsay + h <= 2048 && dsax + w <= std::max(dbw, 1u) * 64 && !everyPage(x.pages);
+    const bool plain = family >= 0 && rectangular;
     Pages others;
     bool told = false;
     forEachPage(x.pages, [&](uint32_t page) {
-        const uint16_t id = g.pages[page].owner;
-        if (!id) return;
-        Target* t = targetById(id);
+        const PageState& p = g.pages[page];
+        if (!p.owner) {
+            if (!p.vramValid) addPage(others, page);   // the mirror holds what an earlier transfer left there
+            return;
+        }
+        Target* t = targetById(p.owner);
         uint32_t ox = 0, oy = 0;
         if (plain && t && sameLayout(*t, dbp, dbw, family, ox, oy)) {
-            if (std::find(x.targets.begin(), x.targets.end(), id) == x.targets.end()) x.targets.push_back(id);
+            if (std::find(x.targets.begin(), x.targets.end(), p.owner) == x.targets.end()) x.targets.push_back(p.owner);
         } else {
             if (!told && t)
                 PS2_DEBUG("gpu", "a transfer to block 0x%x (%u wide, format 0x%x, %ux%u at %u,%u) takes page %u from the target at page %u "
@@ -313,7 +318,7 @@ void beginDestination(uint32_t dir, uint32_t dbp, uint32_t dbw, uint32_t dpsm, u
     });
     // A page the rectangle writes whole needs nothing back: the transfer
     // replaces all of it, unless it ends early (reported then).
-    if (dir == 0 && dsax + w <= 2048 && dsay + h <= 2048 && dsax + w <= std::max(dbw, 1u) * 64 && !everyPage(x.pages)) {
+    if (dir == 0 && rectangular) {
         x.replaced = wholePages(others, dbp, dbw, dpsm, dsax, dsay, w, h);
         bool any = false;
         forEachPage(x.replaced, [&](uint32_t page) {
@@ -326,11 +331,20 @@ void beginDestination(uint32_t dir, uint32_t dbp, uint32_t dbw, uint32_t dpsm, u
             endRendering();
             drop(x.replaced);
         }
+        forEachPage(others, [&](uint32_t page) {
+            mirrorPage(page);
+            g.pages[page].vramValid = false;   // the merge changes the mirror, not the CPU's copy
+            addPage(x.merged, page);
+        });
+        drop(others);
+    } else {
+        download(others, "pages read back: written in another layout");
+        drop(others);
     }
-    release(others, "pages read back: written in another layout");
-    // The CPU's pages it writes: the mirror's copies go out of date.
+    // The CPU's pages it writes: the mirror's copies go out of date, except
+    // where the transfer's pixels are merged into the mirror below.
     forEachPage(x.pages, [&](uint32_t page) {
-        if (!g.pages[page].owner) g.pages[page].mirrorValid = false;
+        if (!g.pages[page].owner && !hasPage(x.merged, page)) g.pages[page].mirrorValid = false;
     });
     ++g.ownershipEpoch;
 }
@@ -478,7 +492,7 @@ void endRendering() {
 }
 
 void flushOps() {
-    if (g.uploadPagesQueued.empty() && g.resolveEntries.empty() && g.expandEntries.empty() && g.pushEntries.empty() &&
+    if (g.uploadPagesQueued.empty() && g.resolveEntries.empty() && g.expandEntries.empty() && g.pushEntries.empty() && g.mergeEntries.empty() &&
         g.snapshots.empty())
         return;
     endRendering();
@@ -496,9 +510,8 @@ void flushOps() {
     }
     const auto n = static_cast<uint32_t>(g.scale);
     // A transfer's pixels reach their targets before anything copies those
-    // targets' pages to the mirror: a page a target gives up, or one read
-    // back, holds them. (A push only goes into pages its target owns, and a
-    // page changes owner only through the mirror, so no expand waits for one.)
+    // targets' pages to the mirror. A cross-layout transfer then merges into
+    // the pages just resolved, before anything expands them into a new target.
     if (!g.pushEntries.empty()) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g.push);
         for (const auto& [e, w, h] : g.pushEntries) {
@@ -516,6 +529,15 @@ void flushOps() {
             vkCmdDispatch(cmd, 1, 1, 1);
         }
         fullBarrier(cmd);
+    }
+    if (!g.mergeEntries.empty()) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g.merge);
+        for (const auto& [e, w, h] : g.mergeEntries) {
+            const uint32_t push[1] = {e};
+            pushConstants(cmd, push, 1);
+            vkCmdDispatch(cmd, (w + 7) / 8, (h + 7) / 8, 1);
+            fullBarrier(cmd);   // transfers may overlap: keep their order
+        }
     }
     if (!g.expandEntries.empty()) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, g.expand);
@@ -536,6 +558,7 @@ void flushOps() {
     g.resolveEntries.clear();
     g.expandEntries.clear();
     g.pushEntries.clear();
+    g.mergeEntries.clear();
     g.snapshots.clear();
     g.drawnSinceCut = Pages{};
     g.sampledSinceCut = Pages{};
@@ -609,12 +632,14 @@ void flushTransfer() {
     const uint32_t total = x.w * x.h;
     const uint32_t upTo = x.dir == 0 && g_xfer.active ? std::min(total, g_xfer.y * x.w + g_xfer.x) : total;
     if (upTo <= x.pushed) return;
-    // The CPU's pages it wrote: the mirror's copies are out of date.
+    // The CPU's pages it wrote: the mirror's copies are out of date, except
+    // where this transfer's pixels are merged into the mirror below.
     forEachPage(x.pages, [&](uint32_t page) {
-        if (!g.pages[page].owner) g.pages[page].mirrorValid = false;
+        if (!g.pages[page].owner && !hasPage(x.merged, page)) g.pages[page].mirrorValid = false;
     });
-    if (!x.targets.empty()) {
-        // The pixels sent since the last push, and no others (the rest of a
+    const bool merges = std::any_of(x.merged.bits.begin(), x.merged.bits.end(), [](uint64_t b) { return b != 0; });
+    if (!x.targets.empty() || merges) {
+        // The pixels sent since the last flush, and no others (the rest of a
         // row is not in GS memory yet): the end of a row begun, whole rows,
         // and the start of a row not finished, as rectangles of the transfer's.
         struct Span {
@@ -635,7 +660,7 @@ void flushTransfer() {
         if (upTo > from) spans.push_back({0, from / x.w, upTo - from, 1});
         const int family = transferFamily(x.dpsm);
         for (const Span& sp : spans) {
-            reserve(sp.w * sp.h + static_cast<uint32_t>(x.targets.size()) * (PUSH_WORDS + 4) + 64);
+            reserve(sp.w * sp.h + static_cast<uint32_t>(x.targets.size()) * (PUSH_WORDS + 4) + (merges ? MERGE_WORDS : 0) + 64);
             const uint32_t src = uploadAlloc(sp.w * sp.h);
             uint32_t* units = uploadWords() + src;
             for (uint32_t r = 0; r < sp.h; ++r)
@@ -667,6 +692,20 @@ void flushTransfer() {
                 w[PUSH_ORIGIN] = ox;
                 w[PUSH_ORIGINY] = oy;
                 g.pushEntries.push_back({e, sp.w, sp.h});
+            }
+            if (merges) {
+                const uint32_t e = uploadAlloc(MERGE_WORDS);
+                uint32_t* m = uploadWords() + e;
+                m[MERGE_X] = x.dsax + sp.col;   // merge.comp wraps both coordinates at 2048
+                m[MERGE_Y] = x.dsay + sp.row;
+                m[MERGE_W] = sp.w;
+                m[MERGE_H] = sp.h;
+                m[MERGE_SRC] = src;
+                m[MERGE_DBP] = x.dbp;
+                m[MERGE_DBW] = x.dbw;
+                m[MERGE_PSM] = x.dpsm;
+                for (uint32_t i = 0; i < 16; ++i) m[MERGE_MASK + i] = static_cast<uint32_t>(x.merged.bits[i / 2] >> (32 * (i % 2)));
+                g.mergeEntries.push_back({e, sp.w, sp.h});
             }
         }
     }
@@ -1247,6 +1286,7 @@ void rescale(int scale) {
 }
 
 bool active() { return g.started; }
+bool cpuPageValid(uint32_t page) { return !g.started || g.pages[page].vramValid; }
 int scale() { return g.scale; }
 
 } // namespace ps2::gpu::renderer

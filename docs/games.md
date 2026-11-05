@@ -74,14 +74,14 @@ config lists the other executables under `[input] programs`, as in
 
 ### Known problems
 
-- With the Vulkan renderer, the game often sends pixels into GS memory the
-  card drew in another layout, and those pages come back from the card
-  first, each time a wait for it: 597 times in a real-time run of 180 s into
-  the first mission's building (`pages read back: written in another
-  layout`). Its drawing also puts depth buffers in the frame's memory, which
-  the card draws without the depth test (`frame and depth overlap`, 270
-  drawing states in that run); the title session's frames came out the same
-  as the software renderer's all the same.
+- The game often sends pixels into GS memory the card drew in another layout.
+  These used to read the pages back first, each time a wait for the card: 597
+  times in a real-time run of 180 s into the first mission's building. The
+  partial transfers now merge into the card's mirror without waiting; a run
+  after that change has not been measured. The drawing also puts depth buffers in the
+  frame's memory, which the card draws without the depth test (`frame and
+  depth overlap`, 270 drawing states in that run); the title session's frames
+  came out the same as the software renderer's all the same.
 - The driving missions read GS memory back through VIF1 about once a frame
   (reported as `VIF1 to-memory transfer`), which the runtime does not do yet:
   an 8x8 block of the depth buffer (`PSMZ32`) at a point that drifts with the

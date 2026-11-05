@@ -38,9 +38,9 @@ struct Target {
 };
 
 struct PageState {
-    uint16_t owner = 0;               // a target's id; 0: the CPU (g_vram)
+    uint16_t owner = 0;               // a target's id; 0: no target owns it
     bool vramValid = true;            // g_vram holds the page's content
-    bool mirrorValid = false;         // the mirror does
+    bool mirrorValid = false;         // the mirror does; with no owner and g_vram stale, it alone does
 };
 
 // Where a texture level is read: a target at its scale (its first page at
@@ -82,10 +82,11 @@ struct PendingTransfer {
     bool active = false;
     uint32_t dir = 0;
     uint32_t dbp = 0, dbw = 0, dpsm = 0, dsax = 0, dsay = 0, w = 0, h = 0;
-    uint32_t pushed = 0;              // pixels sent to the targets so far
+    uint32_t pushed = 0;              // pixels sent to the card so far
     std::vector<uint16_t> targets;    // targets of its layout it writes into
     gs::detail::Pages pages;          // the pages it writes
     gs::detail::Pages replaced;       // pages it writes whole, taken from targets without a read back
+    gs::detail::Pages merged;         // pages whose partial writes are merged into the mirror
 };
 
 // The field history at scale (renderer_display.cpp): 4 fields, the free
@@ -105,7 +106,7 @@ struct Renderer {
     VkDescriptorSet set = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
     std::array<VkPipeline, 2> drawPipelines{};   // [the guest rounds toward zero]
-    VkPipeline resolve = VK_NULL_HANDLE, expand = VK_NULL_HANDLE, push = VK_NULL_HANDLE, copy = VK_NULL_HANDLE;
+    VkPipeline resolve = VK_NULL_HANDLE, expand = VK_NULL_HANDLE, push = VK_NULL_HANDLE, merge = VK_NULL_HANDLE, copy = VK_NULL_HANDLE;
     VkPipeline display = VK_NULL_HANDLE, deinterlace = VK_NULL_HANDLE;
     Buffer mirror, tables, states, prims, upload, control, readback;
     float viewHalf = 16384.0f;
@@ -131,6 +132,7 @@ struct Renderer {
     std::vector<uint32_t> resolveEntries;      // upload words of PAGE_* entries
     std::vector<uint32_t> expandEntries;
     std::vector<std::array<uint32_t, 3>> pushEntries;   // upload word of a PUSH_* entry, its width and height
+    std::vector<std::array<uint32_t, 3>> mergeEntries;  // the same for MERGE_*
     std::vector<std::pair<Image*, Image*>> snapshots;
 
     StateInfo state;
