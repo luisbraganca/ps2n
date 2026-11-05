@@ -312,7 +312,7 @@ void transferWrite(uint32_t psm, uint32_t n, uint32_t v) {
 void writeTransferPixel(uint32_t v) {
     Transfer& t = g_xfer;
     if (!t.active) return;
-    transferWrite(t.dpsm, pixelUnit(t.dbp, t.dbw, t.dpsm, (t.dsax + t.x) & 2047, (t.dsay + t.y) & 2047), v);
+    transferWrite(t.dpsm, transferUnit(t.buffer, (t.dsax + t.x) & 2047, (t.dsay + t.y) & 2047), v);
     if (++t.x >= t.rrw) {
         t.x = 0;
         if (++t.y >= t.rrh) {
@@ -326,7 +326,7 @@ void transferData(uint64_t data) {
     Transfer& t = g_xfer;
     if (!t.active) return;
     if (drawingQueued()) finishDrawing();   // primitives sent in the middle of the transfer
-    const uint32_t bpp = bitsPerPixel(t.dpsm);
+    const uint32_t bpp = t.bpp;
     if (bpp == 24) {   // three bytes per pixel, packed across 64-bit words
         for (int i = 0; i < 8; ++i) {
             t.bitBuf |= ((data >> (8 * i)) & 0xFF) << t.bitCount;
@@ -341,6 +341,82 @@ void transferData(uint64_t data) {
     }
     const uint64_t mask = bpp == 32 ? 0xFFFFFFFFull : (1ull << bpp) - 1;
     for (uint32_t i = 0; i < 64 / bpp; ++i) writeTransferPixel(static_cast<uint32_t>((data >> (i * bpp)) & mask));
+}
+
+// `count` pixels of IMAGE data from pixel `first` of `data`, along the
+// transfer's current row: what writeTransferPixel does for each, with the
+// layout and the pixel size fixed.
+template <int Layout, uint32_t Bpp>
+void transferRow(Transfer& t, const uint64_t* data, size_t first, uint32_t count) {
+    const Buffer& b = t.buffer;
+    const uint32_t y = (t.dsay + t.y) & 2047;
+    uint32_t rowBase = 0;
+    const uint16_t* swizzle = nullptr;
+    if constexpr (Layout == 32) rowBase = b.base + (y >> 5) * b.rowOfPages, swizzle = g_swizzle.c32[b.table][y & 31];
+    else if constexpr (Layout == 16) rowBase = b.base + (y >> 6) * b.rowOfPages, swizzle = g_swizzle.c16[b.table][y & 63];
+    else if constexpr (Layout == 8) rowBase = b.base + (y >> 6) * b.rowOfPages, swizzle = g_swizzle.c8[y & 63];
+    else rowBase = b.base + (y >> 7) * b.rowOfPages, swizzle = g_swizzle.c4[y & 127];
+    const uint32_t x0 = t.dsax + t.x;
+    for (uint32_t i = 0; i < count; ++i) {
+        const size_t k = first + i;
+        const auto v = static_cast<uint32_t>((data[k * Bpp / 64] >> (k * Bpp % 64)) & ((uint64_t(1) << Bpp) - 1));
+        const uint32_t x = (x0 + i) & 2047;
+        uint32_t n;
+        if constexpr (Layout == 32) n = (rowBase + (x >> 6) * 2048 + swizzle[x & 63]) & 0xFFFFF;
+        else if constexpr (Layout == 16) n = (rowBase + (x >> 6) * 4096 + swizzle[x & 63]) & 0x1FFFFF;
+        else if constexpr (Layout == 8) n = (rowBase + (x >> 7) * 8192 + swizzle[x & 127]) & 0x3FFFFF;
+        else n = (rowBase + (x >> 7) * 16384 + swizzle[x & 127]) & 0x7FFFFF;
+        // The word it changes: one the CLUT buffer loaded from goes through
+        // transferWrite, which marks those slots out of date.
+        const uint32_t word = Layout == 32 ? n : Layout == 16 ? n >> 1 : Layout == 8 ? n >> 2 : n >> 3;
+        if (g_clut.columns[word >> 4]) transferWrite(t.dpsm, n, v);
+        else if constexpr (Layout == 32 && Bpp == 32) g_vram[n] = v;   // CT32, Z32
+        else if constexpr (Layout == 8) vramBytes()[n] = static_cast<uint8_t>(v);
+        else writeUnit(t.dpsm, n, v);
+    }
+}
+
+// IMAGE data in bulk, `qwords` quadwords: row by row in the formats whose
+// pixels fill whole bits of the data (not 24-bit), each pixel otherwise.
+// Pixels past the rectangle are dropped, as the console drops them.
+void transferImage(const uint64_t* q, size_t qwords) {
+    Transfer& t = g_xfer;
+    if (!t.active) return;
+    if (drawingQueued()) finishDrawing();   // primitives sent in the middle of the transfer
+    const Buffer& b = t.buffer;
+    if (t.bpp == 24 || b.layout == 0) {
+        for (size_t i = 0; i < 2 * qwords; ++i) transferData(q[i]);
+        return;
+    }
+    size_t at = 0;
+    const size_t pixels = qwords * 128 / t.bpp;
+    while (at < pixels && t.active) {
+        const auto run = static_cast<uint32_t>(std::min<size_t>(pixels - at, t.rrw - t.x));
+        switch (b.layout * 100 + t.bpp) {   // the layouts' own sizes, and T8H/T4HL/T4HH in the 32-bit layout
+        case 3232: transferRow<32, 32>(t, q, at, run); break;
+        case 3208: transferRow<32, 8>(t, q, at, run); break;
+        case 3204: transferRow<32, 4>(t, q, at, run); break;
+        case 1616: transferRow<16, 16>(t, q, at, run); break;
+        case 808: transferRow<8, 8>(t, q, at, run); break;
+        case 404: transferRow<4, 4>(t, q, at, run); break;
+        default:
+            for (uint32_t i = 0; i < run; ++i) {
+                const size_t k = at + i;
+                writeTransferPixel(static_cast<uint32_t>((q[k * t.bpp / 64] >> (k * t.bpp % 64)) & ((uint64_t(1) << t.bpp) - 1)));
+            }
+            at += run;
+            continue;
+        }
+        at += run;
+        t.x += run;
+        if (t.x >= t.rrw) {
+            t.x = 0;
+            if (++t.y >= t.rrh) {
+                t.active = false;
+                if (g_vulkan) gpu::renderer::transferEnded();   // the rectangle to the targets that hold it
+            }
+        }
+    }
 }
 
 void startTransfer(uint32_t dir) {
@@ -361,6 +437,8 @@ void startTransfer(uint32_t dir) {
         g_xfer.x = g_xfer.y = 0;
         g_xfer.bitBuf = 0;
         g_xfer.bitCount = 0;
+        g_xfer.bpp = bitsPerPixel(g_xfer.dpsm);
+        g_xfer.buffer = transferBufferOf(g_xfer.dbp, g_xfer.dbw, g_xfer.dpsm);
         if (!g_xfer.rrw || !g_xfer.rrh) g_xfer.active = false;
     } else if (dir == 2) {   // local -> local
         const auto sbp = static_cast<uint32_t>(field(bb, 0, 14)), sbw = static_cast<uint32_t>(field(bb, 16, 6));
@@ -1493,6 +1571,22 @@ void gifQword(GifPath& p, const uint64_t q[2]) {
     }
 }
 
+// `count` quadwords of one path in order: runs of IMAGE data go to the
+// transfer in bulk, the rest a quadword at a time.
+void gifQwords(GifPath& p, const uint64_t* q, size_t count) {
+    for (size_t i = 0; i < count;) {
+        if (p.nloop && p.flg >= 2) {   // IMAGE: what gifQword's default does, for many at once
+            const size_t n = std::min<size_t>(p.nloop, count - i);
+            transferImage(q + 2 * i, n);
+            p.nloop -= static_cast<uint32_t>(n);
+            i += n;
+            continue;
+        }
+        gifQword(p, q + 2 * i);
+        ++i;
+    }
+}
+
 void resetPaths() {
     for (auto& p : g_paths) p = GifPath{};
 }
@@ -1662,8 +1756,12 @@ private:
     void run(Kind kind, int path, uint64_t data, uint64_t qwords) {
         switch (kind) {
         case Gif:
-            for (uint64_t i = 0; i < qwords; ++i) gifQword(g_paths[path], &ring_[(data + 2 * i) & kMask]);
+        {   // the quadwords up to the ring's end, then any from its start
+            const uint64_t start = data & kMask, first = std::min<uint64_t>(qwords, (kWords - start) / 2);
+            gifQwords(g_paths[path], &ring_[start], first);
+            if (qwords > first) gifQwords(g_paths[path], &ring_[0], qwords - first);
             g_drawThreads.publish();
+        }
             break;
         case ResetPaths: resetPaths(); break;
         case ResetGs:
@@ -1930,8 +2028,7 @@ void gifFifoWrite(const uint64_t q[2]) {
 
 void gifTransfer(const uint64_t* qwords, size_t count, int path) {
     if (g_async) return g_gsThread.push(GsThread::Gif, path & 3, qwords, count);
-    GifPath& p = g_paths[path & 3];
-    for (size_t i = 0; i < count; ++i) gifQword(p, qwords + 2 * i);
+    gifQwords(g_paths[path & 3], qwords, count);
     g_drawThreads.publish();
 }
 

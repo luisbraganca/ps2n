@@ -185,7 +185,10 @@ resolution.
 
 The card keeps the pages of GS memory it drew in, at its resolution, and
 gives a page back to GS memory when something reads it in another way: a
-transfer or a copy in another pixel layout, the EE, a test. Each read back
+transfer or a copy in another pixel layout, the EE, a test. A transfer that
+writes a page whole, in a format that writes every bit of it (CT32, CT16,
+CT16S, the Z formats but Z24, T8, T4), needs nothing back: the page becomes
+GS memory's as the transfer writes it. Each read back
 waits for the card to finish, so the exit summary counts them, by why
 (`pages read back: written in another layout`, `... a local copy reads them
 in another layout`, `... the CPU reads GS memory`, `... the software
@@ -201,7 +204,9 @@ resolution` (the display shows pages the card drew in another layout),
 goes round the end of GS memory, or past what the card's images hold at its
 scale: the software rasterizer draws it in GS memory, which takes the pages
 it touches back from the card; games park the scissor past the end of memory
-to draw nothing, which is not reported).
+to draw nothing, which is not reported), `transfer ended early over drawn
+pages` (a transfer that was to write pages whole stopped before its end: the
+rest of those pages holds what GS memory held before the card drew there).
 
 With a window, the picture reaches it through Vulkan as well when the card
 can show pictures, filtered and scaled as `linear_present_mode` and

@@ -540,7 +540,31 @@ struct Transfer {
     uint32_t x = 0, y = 0;
     uint64_t bitBuf = 0;
     uint32_t bitCount = 0;
+    uint32_t bpp = 32;
+    Buffer buffer{};   // its destination's addressing (layout 32, 16, 8 or 4; 0 through pixelUnit)
 };
+
+// The destination's addressing for a transfer: bufferOf's sums, and the 8 and
+// 4-bit layouts' (pages of 128 x 64 and 128 x 128, half as many across).
+inline Buffer transferBufferOf(uint32_t bp, uint32_t bw, uint32_t psm) {
+    Buffer b = bufferOf(bp, bw, psm);
+    if (psm == PSMT8 || psm == PSMT4) {
+        b.layout = psm == PSMT8 ? 8 : 4;
+        b.base = bp * (psm == PSMT8 ? 256 : 512);
+        b.rowOfPages = std::max(bw >> 1, 1u) * (psm == PSMT8 ? 8192 : 16384);
+    }
+    return b;
+}
+// The unit pixel (x, y) of a transfer's destination is, as pixelUnit gives it.
+PS2_ALWAYS_INLINE uint32_t transferUnit(const Buffer& b, uint32_t x, uint32_t y) {
+    switch (b.layout) {
+    case 32: return (b.base + (y >> 5) * b.rowOfPages + (x >> 6) * 2048 + g_swizzle.c32[b.table][y & 31][x & 63]) & 0xFFFFF;
+    case 16: return (b.base + (y >> 6) * b.rowOfPages + (x >> 6) * 4096 + g_swizzle.c16[b.table][y & 63][x & 63]) & 0x1FFFFF;
+    case 8: return (b.base + (y >> 6) * b.rowOfPages + (x >> 7) * 8192 + g_swizzle.c8[y & 63][x & 127]) & 0x3FFFFF;
+    case 4: return (b.base + (y >> 7) * b.rowOfPages + (x >> 7) * 16384 + g_swizzle.c4[y & 127][x & 127]) & 0x7FFFFF;
+    default: return pixelUnit(b.bp, b.bw, b.psm, x, y);
+    }
+}
 extern Transfer g_xfer;
 
 } // namespace ps2::gs::detail

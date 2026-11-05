@@ -221,13 +221,9 @@ bool sameLayout(const Target& t, uint32_t bp, uint32_t bw, int family, uint32_t&
     return true;
 }
 
-// The pages become the CPU's: what targets drew in them read back first
-// (`why`: the read back's report).
-void release(const Pages& pages, const char* why) {
-    bool any = false;
-    forEachPage(pages, [&](uint32_t page) { any = any || g.pages[page].owner != 0; });
-    if (!any) return;
-    download(pages, why);
+// The pages become the CPU's, as GS memory holds them: what targets drew
+// there is dropped.
+void drop(const Pages& pages) {
     std::vector<Target*> losers;
     forEachPage(pages, [&](uint32_t page) {
         PageState& p = g.pages[page];
@@ -241,6 +237,41 @@ void release(const Pages& pages, const char* why) {
     for (Target* t : losers)
         if (targetById(t->id)) freeTargetIfEmpty(t);
     ++g.ownershipEpoch;
+}
+
+// The pages become the CPU's: what targets drew in them read back first
+// (`why`: the read back's report).
+void release(const Pages& pages, const char* why) {
+    bool any = false;
+    forEachPage(pages, [&](uint32_t page) { any = any || g.pages[page].owner != 0; });
+    if (!any) return;
+    download(pages, why);
+    drop(pages);
+}
+
+// Of `pages`, those a host-to-local rectangle overwrites whole: every unit
+// of the page is in it, in a format that writes whole units (CT24 keeps
+// each word's top byte, T8H and T4H keep the rest of the word). The
+// rectangle starts on a page and does not wrap.
+Pages wholePages(const Pages& pages, uint32_t dbp, uint32_t dbw, uint32_t dpsm, uint32_t dsax, uint32_t dsay, uint32_t w, uint32_t h) {
+    Pages whole;
+    uint32_t pw = 64, ph = 32, across = std::max(dbw, 1u);
+    switch (dpsm) {
+    case PSMCT32: case PSMZ32: break;
+    case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S: ph = 64; break;
+    case PSMT8: pw = 128, ph = 64, across = std::max(dbw >> 1, 1u); break;
+    case PSMT4: pw = 128, ph = 128, across = std::max(dbw >> 1, 1u); break;
+    default: return whole;
+    }
+    if (dbp % 32 || across * pw != std::max(dbw, 1u) * 64) return whole;   // pages that do not tile the buffer's width
+    const uint32_t firstX = (dsax + pw - 1) / pw, lastX = (dsax + w) / pw;   // pages [first, last) inside the rectangle
+    const uint32_t firstY = (dsay + ph - 1) / ph, lastY = (dsay + h) / ph;
+    for (uint32_t py = firstY; py < lastY; ++py)
+        for (uint32_t px = firstX; px < lastX && px < across; ++px) {
+            const uint32_t page = (dbp / 32 + py * across + px) & (kPages - 1);
+            if (hasPage(pages, page)) addPage(whole, page);
+        }
+    return whole;
 }
 
 // ---- Transfers ---------------------------------------------------------------------------------------
@@ -280,6 +311,22 @@ void beginDestination(uint32_t dir, uint32_t dbp, uint32_t dbw, uint32_t dpsm, u
             addPage(others, page);
         }
     });
+    // A page the rectangle writes whole needs nothing back: the transfer
+    // replaces all of it, unless it ends early (reported then).
+    if (dir == 0 && dsax + w <= 2048 && dsay + h <= 2048 && dsax + w <= std::max(dbw, 1u) * 64 && !everyPage(x.pages)) {
+        x.replaced = wholePages(others, dbp, dbw, dpsm, dsax, dsay, w, h);
+        bool any = false;
+        forEachPage(x.replaced, [&](uint32_t page) {
+            others.bits[page >> 6] &= ~(uint64_t(1) << (page & 63));
+            g.pages[page].vramValid = true;   // what the transfer writes is the page
+            any = true;
+        });
+        if (any) {   // what the card has queued for those targets goes first, as before a read back
+            flushOps();
+            endRendering();
+            drop(x.replaced);
+        }
+    }
     release(others, "pages read back: written in another layout");
     // The CPU's pages it writes: the mirror's copies go out of date.
     forEachPage(x.pages, [&](uint32_t page) {
@@ -1134,7 +1181,16 @@ void cpuDrew(const Draw& d) {
 
 bool transfer(uint32_t dir, uint64_t bb, uint64_t pos, uint64_t reg) {
     if (!g.started) return false;
-    if (g.transfer.active) transferEnded();
+    if (g.transfer.active) {   // the last host-to-local transfer stopped short of its rectangle
+        bool any = false;
+        forEachPage(g.transfer.replaced, [&](uint32_t) { any = true; });
+        if (any)
+            PS2_UNIMPL("gpu", "transfer ended early over drawn pages",
+                       "a transfer to block 0x%x (%ux%u) stopped before its end: the rest of the pages it was to replace whole lost "
+                       "what the card drew there",
+                       g.transfer.dbp, g.transfer.w, g.transfer.h);
+        transferEnded();
+    }
     const auto field = [](uint64_t v, int lo, int bits) { return static_cast<uint32_t>((v >> lo) & ((uint64_t(1) << bits) - 1)); };
     const uint32_t dbp = field(bb, 32, 14), dbw = field(bb, 48, 6), dpsm = field(bb, 56, 6);
     const uint32_t dsax = field(pos, 32, 11), dsay = field(pos, 48, 11);

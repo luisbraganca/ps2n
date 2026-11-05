@@ -490,7 +490,13 @@ is read from the mirror. A transfer into a target's layout reaches
 the target as its pixels come, the rows sent and the start of the next, so a
 primitive between two IMAGE packets sees what has come so far; one in
 another layout gives the pages back to the CPU first, which is the read back
-games pay for (the exit summary counts them). A local copy between targets
+games pay for (the exit summary counts them), unless it writes a page whole:
+then nothing of the card's is left in it, and the page is the CPU's as the
+transfer writes it (Agent Under Fire's driving missions upload 256 x 256
+textures over pages they drew in, about 20 a second in a scripted run). A primitive
+reading such a page before the transfer ends would see GS memory's old
+pixels there where the console has the card's; a transfer stopped before its
+end is reported. A local copy between targets
 of one layout runs on the card at scale. A pixel past a buffer's width is on
 the next row of pages, in GS memory and so in a target: a scissor wider than
 the buffer draws there (Code: Veronica X's is a pixel wider than its frame),

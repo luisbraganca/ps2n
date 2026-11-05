@@ -85,6 +85,7 @@ struct PendingTransfer {
     uint32_t pushed = 0;              // pixels sent to the targets so far
     std::vector<uint16_t> targets;    // targets of its layout it writes into
     gs::detail::Pages pages;          // the pages it writes
+    gs::detail::Pages replaced;       // pages it writes whole, taken from targets without a read back
 };
 
 // The field history at scale (renderer_display.cpp): 4 fields, the free

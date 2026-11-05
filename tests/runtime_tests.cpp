@@ -2885,6 +2885,57 @@ TEST_CASE(gs_textures_read_every_format) {
     CHECK_EQ(check(0x14, 4, 0x02ull << 51 | 21ull << 56, [&](uint32_t i) { return entry(0x02, 80 + i); }), size_t(0));
 }
 
+TEST_CASE(gs_transfers_in_runs_write_what_quadwords_one_at_a_time_write) {
+    // Image data arrives in runs of quadwords, which the GS writes a row at a
+    // time; a quadword on its own goes a pixel at a time. The same transfers,
+    // in every format, to buffers of every width, at places that wrap round
+    // 2048, with more data than the rectangle and one cut short, leave GS
+    // memory the same either way, however the runs are split.
+    std::vector<uint64_t> stream;
+    uint32_t seed = 1;
+    auto next = [&] { return seed = seed * 1103515245u + 12345u, seed >> 8; };
+    constexpr uint32_t kFormats[] = {0x00, 0x01, 0x02, 0x0A, 0x30, 0x31, 0x32, 0x3A, 0x13, 0x14, 0x1B, 0x24, 0x2C};
+    for (int n = 0; n < 60; ++n) {
+        const uint32_t psm = kFormats[next() % std::size(kFormats)], bw = 1 + next() % 10;
+        const uint32_t bits = psm == 0x01 || psm == 0x31 ? 24 : (psm & 0x0F) == 0x02 || (psm & 0x0F) == 0x0A ? 16
+                              : psm == 0x13 || psm == 0x1B                                                   ? 8
+                              : psm == 0x14 || psm == 0x24 || psm == 0x2C                                    ? 4
+                                                                                                             : 32;
+        const uint32_t x = next() % 4 ? next() % 256 : 1900 + next() % 148, y = next() % 4 ? next() % 256 : 1950 + next() % 98;
+        const uint32_t w = 1 + next() % 300, h = 1 + next() % 40;
+        const uint64_t bp = (next() % 16000) & ~uint64_t(n % 3 ? 0 : 31);
+        stream.insert(stream.end(), {4 | 1ull << 15 | 1ull << 60, 0xE, bp << 32 | uint64_t(bw) << 48 | uint64_t(psm) << 56, 0x50,
+                                     uint64_t(x) << 32 | uint64_t(y) << 48, 0x51, uint64_t(w) | uint64_t(h) << 32, 0x52, 0, 0x53});
+        uint64_t qwords = (uint64_t(w) * h * bits + 127) / 128 + next() % 3;   // more than it takes, now and then
+        if (n == 30) qwords /= 2;                                          // the transfer after this one ends it early
+        stream.insert(stream.end(), {qwords | 1ull << 15 | 2ull << 58, 0});
+        for (uint64_t i = 0; i < 2 * qwords; ++i) stream.push_back(uint64_t(next()) << 40 ^ uint64_t(next()) << 20 ^ next());
+    }
+    auto memory = [] {
+        std::vector<uint32_t> out(1024 * 1024);
+        for (int y = 0; y < 1024; ++y)
+            for (int x = 0; x < 1024; ++x) out[size_t(y) * 1024 + x] = gs::readPixel32(0, 16, 0x00, x, y);
+        return out;
+    };
+    gs::init();
+    for (size_t at = 0; at < stream.size() / 2;) {   // runs of 1 to 700 quadwords
+        const size_t n = std::min<size_t>(stream.size() / 2 - at, 1 + next() % 700);
+        gs::gifTransfer(stream.data() + 2 * at, n, 3);
+        at += n;
+    }
+    const std::vector<uint32_t> runs = memory();
+    gs::init();
+    for (size_t i = 0; i < stream.size() / 2; ++i) gs::gifFifoWrite(stream.data() + 2 * i);
+    const std::vector<uint32_t> one = memory();
+    size_t differ = 0, written = 0;
+    for (size_t i = 0; i < runs.size(); ++i) {
+        differ += runs[i] != one[i];
+        written += one[i] != 0;
+    }
+    CHECK_EQ(differ, size_t(0));
+    CHECK(written > 20000);   // the transfers wrote a good part of memory
+}
+
 TEST_CASE(gs_tex2_keeps_tex0s_texture) {
     // TEX2 replaces TEX0's format and CLUT fields and keeps the rest: TBP0,
     // all six bits of TBW, TW, TH, TCC and TFX, whatever TEX2's bits there
@@ -6385,6 +6436,79 @@ TEST_CASE(gpu_writes_transfers_into_what_it_drew) {
         }
     CHECK_EQ(blocky, size_t(32 * 32));
     CHECK(finer > 100);   // the triangle, drawn at 2x around the pixels sent
+}
+
+// A transfer that writes whole pages the card drew in another layout needs
+// none of what it drew there: the pages become GS memory's with no read back.
+// One that writes part of a page, or part of each unit (CT24 keeps each
+// word's top byte), reads the page back first. GS memory ends up the
+// software's either way. A transfer stopped before its end leaves the rest
+// of such pages without what the card drew: reported.
+TEST_CASE(gpu_transfers_replace_whole_pages_without_a_read_back) {
+    Reports readBacks("pages read back: written in another layout");
+    auto draw = [&] {
+        gs::init();
+        readBacks();   // those of the runs before
+        gsWrite({{0x40, 127ull << 16 | 127ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}});
+        gsWrite({{0x4C, 60 | 1ull << 16 | 2ull << 24}});             // pages 60-61 drawn as CT16
+        gsRect(0, 0, 64, 128, 0x80FF8000);
+        gsShade(0, 0, 64, 10, 10, 128, 0);
+        gsUploadTo(60 * 32, 1, 0x00, 0, 0, 64, 64);                  // CT32 over both, whole
+        gsImage(pseudoRandom(64 * 64, 71));
+        gsWrite({{0x4C, 70 | 1ull << 16 | 2ull << 24}});             // page 70 drawn as CT16
+        gsRect(0, 0, 64, 64, 0x80123456);
+        gsUploadTo(70 * 32, 1, 0x00, 16, 0, 32, 32);                 // CT32 over its height, part of its width: read back
+        gsImage(pseudoRandom(32 * 32, 72));
+        gsWrite({{0x4C, 74 | 1ull << 16 | 2ull << 24}});             // page 74 drawn as CT16
+        gsRect(0, 0, 64, 64, 0x80345678);
+        gsUploadTo(74 * 32, 1, 0x00, 0, 8, 64, 16);                  // CT32 over its width, part of its height: read back
+        gsImage(pseudoRandom(64 * 16, 79));
+        gsWrite({{0x4C, 80 | 2ull << 16}});                          // pages 80-83 drawn as CT32, 128 wide
+        gsRect(0, 0, 128, 64, 0x80654321);
+        gsUploadTo(80 * 32, 2, 0x13, 0, 0, 128, 64);                 // T8 over page 80, whole
+        gsImage(pseudoRandom(128 * 64 / 4, 73));
+        gsWrite({{0x4C, 90 | 1ull << 16 | 2ull << 24}});             // page 90 drawn as CT16
+        gsRect(0, 0, 64, 64, 0x80ABCDEF);
+        gsUploadTo(90 * 32, 1, 0x01, 0, 0, 64, 32);                 // CT24 over page 90, whole but its top bytes kept: read back
+        gsImage(pseudoRandom(64 * 32 * 3 / 4, 74));
+        gsWrite({{0x4C, 100 | 1ull << 16 | 2ull << 24}});            // page 100 drawn as CT16
+        gsRect(0, 0, 64, 64, 0x80FEDCBA);
+        gsUploadTo(100 * 32, 2, 0x14, 0, 0, 128, 128);               // T4 over page 100, whole
+        gsImage(pseudoRandom(128 * 128 / 8, 75));
+    };
+    auto read = [] {
+        std::vector<uint32_t> out;
+        readArea(out, 60, 1, 0x00, 64, 64);
+        readArea(out, 70, 1, 0x00, 64, 32);
+        readArea(out, 74, 1, 0x00, 64, 32);
+        readArea(out, 80, 2, 0x00, 128, 64);
+        readArea(out, 90, 1, 0x00, 64, 32);
+        readArea(out, 100, 1, 0x00, 64, 32);
+        return out;
+    };
+    sameOnTheCard(draw, read, {1, 2}, [&](int) { CHECK_EQ(readBacks(), 3u); });
+
+    // A page replaced whole is GS memory's: reading it needs nothing from the card.
+    Reports cpuReads("pages read back: the CPU reads GS memory"), early("transfer ended early over drawn pages");
+    GpuRun gpu(1);
+    gsWrite({{0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}, {0x4C, 60 | 1ull << 16 | 2ull << 24}});
+    gsRect(0, 0, 64, 64, 0x80FF8000);
+    gsUploadTo(60 * 32, 1, 0x00, 0, 0, 64, 32);
+    const std::vector<uint32_t> sent = pseudoRandom(64 * 32, 80);
+    gsImage(sent);
+    cpuReads();
+    CHECK_EQ(gs::readPixel32(60, 1, 0x00, 5, 7), sent[7 * 64 + 5]);
+    CHECK_EQ(cpuReads(), 0u);
+    gsRect(0, 0, 64, 64, 0x80FF8000);                                // the card's again
+    gsUploadTo(60 * 32, 1, 0x00, 0, 0, 64, 32);                      // page 60 whole, stopped half way
+    gsImage(pseudoRandom(64 * 16, 76));
+    CHECK_EQ(early(), 0u);
+    gsUploadTo(70 * 32, 1, 0x00, 0, 0, 8, 8);
+    CHECK_EQ(early(), 1u);
+    gsImage(pseudoRandom(8 * 8, 77));
+    gsUploadTo(70 * 32, 1, 0x00, 0, 0, 8, 8);                        // one that ended: nothing to report
+    CHECK_EQ(early(), 0u);
+    gsImage(pseudoRandom(8 * 8, 78));
 }
 
 // A page the EE wrote (a picture it sent) that the card then draws in comes

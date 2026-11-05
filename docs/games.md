@@ -108,11 +108,20 @@ config lists the other executables under `[input] programs`, as in
   `games/agent-under-fire/driving.toml` makes the game skip that reset
   always, as it does outside those seconds. The disc's read time is not
   modelled, so other waits a game times against loading may come out short.
-- A play test with the Vulkan renderer at 1x (2026-11-05) slowed down late in
-  the second mission's race: for about 15 seconds every other vblank came
-  40 to 62 ms late (25 to 28 vblanks a second), with no read-back from the
-  card and no VU1 program on the interpreter. Scripted runs of the race, with
-  the fire button held too, keep 48 to 50 vblanks a second. Not found yet.
+- A play test with the Vulkan renderer at 1x (2026-11-05) slowed down in the
+  second mission's race when the limo comes, whether on screen or not: for
+  10 to 15 seconds every other vblank came 40 to 62 ms late (25 to 28
+  vblanks a second). The guest waited up to 930 ms a second for the GS
+  thread, which spent half its time writing the game's texture uploads into
+  GS memory a pixel at a time, and about a fifth in the graphics driver,
+  most likely waiting for the card to give pages back before those uploads
+  (about 800 pages a second); the card itself was not the limit. Uploads now go a row at a time from runs of
+  quadwords (a 256 x 256 32-bit texture 8.6 -> about 4.5 ns a pixel, an 8-bit
+  one 4.7 -> 1.2), and an upload that writes a page whole needs nothing back
+  (a scripted run of the race: 2,386 -> 1,311 read-backs). Whether the limo
+  stretch now keeps up has not been played yet. Scripted runs of the race,
+  the fire button held too, show no such stretch: 48 to 50 vblanks a second
+  before the change.
 - The second mission has been played into its race; how far it can be
   played has not been tried.
 - With the widescreen patch, the race's camera takes 1.817 for its width
