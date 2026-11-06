@@ -446,6 +446,11 @@ DisplaySettings readDisplaySettings(const settings::Ini& ini, std::vector<std::s
             s.upscale = n;
         }
     }
+    if (const auto v = ini.value(kSection, "round_sprite")) {
+        const auto n = ps2n::parseInt(ps2n::trim(*v));
+        if (n && (*n == 0 || *n == 2)) s.roundSprite = static_cast<int>(*n);
+        else warn("round_sprite " + *v + " in the settings file is not 0 (Off) or 2 (Full); using 0");
+    }
     if (const auto v = ini.value(kSection, "linear_present_mode")) {
         const auto n = ps2n::parseInt(ps2n::trim(*v));
         if (n && *n >= 0 && *n < static_cast<int64_t>(BilinearMode::Count)) s.bilinear = static_cast<BilinearMode>(*n);
@@ -467,6 +472,7 @@ DisplaySettings readDisplaySettings(const settings::Ini& ini, std::vector<std::s
 void writeDisplaySettings(settings::Ini& ini, const DisplaySettings& s) {
     ini.set(kSection, "Renderer", std::to_string(static_cast<int>(s.renderer)));
     ini.set(kSection, "upscale_multiplier", std::to_string(s.upscale));
+    ini.set(kSection, "round_sprite", std::to_string(s.roundSprite));
     ini.set(kSection, "linear_present_mode", std::to_string(static_cast<int>(s.bilinear)));
     ini.set(kSection, "IntegerScaling", s.integerScaling ? "true" : "false");
     ini.set(kSection, "AspectRatio", aspectRatioName(s.aspect));
@@ -565,6 +571,14 @@ void setUpscaleSetting(int n) {
     g_saved.upscale = std::clamp(n, 1, kMaxUpscale);
     saveSetting("upscale_multiplier", std::to_string(g_saved.upscale));
     gs::requestScale(g_saved.upscale);   // the card draws at it from the next vsync
+}
+
+int roundSpriteSetting() { return g_saved.roundSprite; }
+
+void setRoundSpriteSetting(int mode) {
+    g_saved.roundSprite = mode == 2 ? 2 : 0;
+    saveSetting("round_sprite", std::to_string(g_saved.roundSprite));
+    gs::setRoundSprite(g_saved.roundSprite);
 }
 
 std::string rendererNote() {

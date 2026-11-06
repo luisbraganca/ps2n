@@ -294,10 +294,11 @@ Roughly in order:
    (conditions on memory the executable does not initialise, the increment,
    copy, pointer and bitwise codes, `dpatch`), and the files for the
    executables a game starts with `LoadExecPS2`. Higher internal resolution
-   works with the Vulkan renderer, 1x to 8x. Left: the problems PCSX2 fixes
-   game by game when it upscales (half-pixel offsets for copies through
-   texel edges, seams between sprites, effects that read the picture back at
-   its original size), none of which has been seen in the games here yet.
+   works with the Vulkan renderer, 1x to 8x. Round Sprite Full is an optional
+   fix for sprite-edge seams (Agent Under Fire's ammo panel), not a default
+   change to sampling. Left: the other per-game upscaling fixes PCSX2 offers,
+   including half-pixel offsets for copies through texel edges, and effects
+   that read the picture back at its original size.
 
 ## Getting started
 

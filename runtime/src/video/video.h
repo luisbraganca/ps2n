@@ -70,11 +70,13 @@ bool filmPlaying();   // any thread
 
 // The display settings in the settings file, [EmuCore/GS] as PCSX2 names
 // them: Renderer, upscale_multiplier, linear_present_mode, IntegerScaling,
-// AspectRatio, FMVAspectRatioSwitch. A value that cannot be used becomes the
-// default, or the nearest whole multiplier from 1 to 8, with a warning.
+// AspectRatio, FMVAspectRatioSwitch and round_sprite (Full, 2, is supported).
+// A value that cannot be used becomes the default, or the nearest whole
+// multiplier from 1 to 8, with a warning.
 struct DisplaySettings {
     Renderer renderer = Renderer::Auto;
     int upscale = 1;
+    int roundSprite = 0;
     BilinearMode bilinear = BilinearMode::Smooth;
     bool integerScaling = false;
     AspectRatio aspect = AspectRatio::Auto;
@@ -104,6 +106,8 @@ Renderer rendererSetting();
 void setRendererSetting(Renderer r);
 int upscaleSetting();
 void setUpscaleSetting(int n);
+int roundSpriteSetting();
+void setRoundSpriteSetting(int mode);
 
 // What becomes of one vsync's picture.
 struct Present {

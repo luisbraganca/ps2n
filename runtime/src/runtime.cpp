@@ -84,6 +84,8 @@ constexpr const char* kUsage =
     "                        software or vulkan, for this run\n"
     "  --upscale N           draw at N times the console's resolution (1 to 8)\n"
     "                        with Vulkan, for this run\n"
+    "  --round-sprite MODE   off (default) or full: keep textured sprites' edges\n"
+    "                        inside their source rectangles above 1x\n"
     "  --gpu-debug           check every Vulkan call with the validation layer\n"
     "                        (it comes with the Vulkan SDK)\n"
     "  --gs-threads N        threads that draw (default 0: half the host's, at\n"
@@ -161,6 +163,15 @@ bool parseOptions(int argc, char** argv) {
                 std::exit(2);
             }
             g_opt.upscale = static_cast<int>(*n);
+        }
+        else if (a == "--round-sprite") {
+            const std::string m = ps2n::toLower(value());
+            if (m == "off" || m == "0") g_opt.roundSprite = 0;
+            else if (m == "full" || m == "2") g_opt.roundSprite = 2;
+            else {
+                std::fprintf(stderr, "unknown round-sprite mode %s (off or full)\n", m.c_str());
+                std::exit(2);
+            }
         }
         else if (a == "--gpu-debug") g_opt.gpuDebug = true;
         else if (a == "--fpu-round") g_opt.fpuRoundToZero = value() != "nearest";
@@ -462,6 +473,7 @@ int run(int argc, char** argv, const GameInfo& game) {
     const video::DisplaySettings saved = video::readDisplaySettings(ini, &displayWarnings);
     video::Renderer renderer = g_opt.renderer ? static_cast<video::Renderer>(*g_opt.renderer) : saved.renderer;
     const int upscale = g_opt.upscale ? *g_opt.upscale : saved.upscale;
+    gs::setRoundSprite(g_opt.roundSprite ? *g_opt.roundSprite : saved.roundSprite);
     std::string noVulkan;
     if (renderer != video::Renderer::Software && !gpu::init({g_opt.window, g_opt.gpuDebug})) noVulkan = gpu::status().reason;
     const bool vulkan = renderer != video::Renderer::Software && gpu::available() && gs::useVulkan(upscale, noVulkan);

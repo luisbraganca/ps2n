@@ -88,8 +88,15 @@ config lists the other executables under `[input] programs`, as in
   came out the same as the software renderer's all the same. Partial uploads
   over pages the card drew in another layout used to cost a wait each; they
   now merge into the card's mirror (the race's measurements are under Speed).
-- At 3x, the menus and HUD can show thin lines at some primitive edges. Code:
-  Veronica X's item menu shows similar seams. The cause is not fixed yet.
+- At 3x, the ammo panel's tiled sprites can show a thin grid: the extra
+  pixels sample the transparent padding just beyond a tile. `--round-sprite full`
+  (`round_sprite = 2`) keeps those samples inside the source rectangle. It is
+  off by default and does not change 1x. The main menu's tall blue marks are
+  geometry in the software renderer's picture too, not this defect; the item
+  menu's fine grid in Code: Veronica X is already in its 1x picture as well.
+- The driving mission asks for dithering, GS edge antialiasing and a destination
+  alpha test, none of which is implemented. Their visible effects are not
+  established.
 - `DRIVING.ELF`'s VU1 programs run recompiled only as far as a play session
   recorded them: 23 programs, from the start of the second mission into its
   race. The mission uploads each wherever micro memory has room (400 places
@@ -393,8 +400,11 @@ interpreter. PCSX2 rates this release Perfect, with no game fixes.
 ### Known problems
 
 - Only the first areas have been played (2026-11-04).
-- At 3x, the item menu can show thin seams between its tiled primitives. The
-  cause is not fixed yet.
+- The item menu's fine grid is already in the software renderer's 1x picture,
+  byte-identical to Vulkan at 1x; 3x keeps every console-aligned pixel. It is
+  not the transparent-padding seam in Agent Under Fire's ammo panel. Round
+  Sprite Full does not remove this grid and changes many unrelated pixels. A
+  console or PCSX2 reference has not been compared.
 - The game's own code turns a centred left stick into UP in one of its input
   words (its test for an upward push compares the wrong way round), as it
   would on a console. Neither the menus nor play go by that word: with the

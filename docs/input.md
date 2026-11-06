@@ -24,9 +24,10 @@ Headless runs (`--no-window`, the tests) keep the default bindings, and
 - **Graphics Settings** has the settings of PCSX2's Rendering and Display
   tabs that the runtime has, with their labels: Renderer (Automatic
   (Default), Software or Vulkan) and Internal Resolution (1x Native (PS2) to
-  8x Native (~2880p/5K)), then Aspect Ratio, FMV Aspect Ratio Override, Bilinear
-  Filtering (Off, Bilinear (Smooth), Bilinear (Sharp)) and Integer Scaling
-  (see [runtime.md](runtime.md#rendering)). A choice is saved at once. The
+  8x Native (~2880p/5K)) and Round Sprite (Off, Full), then Aspect Ratio, FMV
+  Aspect Ratio Override, Bilinear Filtering (Off, Bilinear (Smooth), Bilinear
+  (Sharp)) and Integer Scaling (see [runtime.md](runtime.md#rendering)). Round
+  Sprite changes new drawing at once. A choice is saved at once. The
   internal resolution changes at the next vsync and the display settings at
   the next picture; the renderer changes when the game starts again, as a
   note under it says.

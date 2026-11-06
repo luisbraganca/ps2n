@@ -31,6 +31,7 @@ struct Options {
     bool vu1Thread = true;         // VU1 on a thread of its own beside the GS thread (--no-vu1-thread)
     std::optional<int> renderer;   // --renderer, as PCSX2's Renderer values (-1 auto, 13 software, 14 Vulkan)
     std::optional<int> upscale;    // --upscale: the Vulkan renderer's internal resolution, 1 to 8 times
+    std::optional<int> roundSprite;   // --round-sprite: 0 off, 2 Full
     bool gpuDebug = false;         // --gpu-debug: Vulkan's validation layer
     bool strict = false;           // stop at the first unimplemented path (PS2_UNIMPL)
     bool traceSyscalls = false;

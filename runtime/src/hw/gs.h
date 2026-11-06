@@ -33,6 +33,9 @@ int vulkanScale();   // 1 while the software rasterizer draws; any thread
 // The settings page's resolution, which the Vulkan renderer takes at the next
 // vsync (useVulkan again, on the guest thread). Any thread.
 void requestScale(int scale);
+// PCSX2's Round Sprite: 0 off, 2 Full. Off by default.
+void setRoundSprite(int mode);
+int roundSprite();
 
 uint64_t privRead(uint32_t addr);
 void privWrite(uint32_t addr, uint64_t value);

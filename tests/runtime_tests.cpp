@@ -5440,17 +5440,19 @@ TEST_CASE(window_display_settings_read_as_pcsx2_writes_them) {
     video::DisplaySettings s = video::readDisplaySettings(settings::Ini{}, &warnings);
     CHECK(s.renderer == Renderer::Auto);
     CHECK_EQ(s.upscale, 1);
+    CHECK_EQ(s.roundSprite, 0);
     CHECK(s.bilinear == BilinearMode::Smooth);
     CHECK(!s.integerScaling);
     CHECK(s.aspect == video::AspectRatio::Auto);
     CHECK(warnings.empty());
 
     settings::Ini ini;
-    ini.parse("[EmuCore/GS]\nRenderer = 14\nupscale_multiplier = 3.000000\nlinear_present_mode = 2\nIntegerScaling = true\n"
+    ini.parse("[EmuCore/GS]\nRenderer = 14\nupscale_multiplier = 3.000000\nround_sprite = 2\nlinear_present_mode = 2\nIntegerScaling = true\n"
               "AspectRatio = 16:9\nFMVAspectRatioSwitch = 4:3\n");
     s = video::readDisplaySettings(ini, &warnings);
     CHECK(s.renderer == Renderer::Vulkan);
     CHECK_EQ(s.upscale, 3);
+    CHECK_EQ(s.roundSprite, 2);
     CHECK(s.bilinear == BilinearMode::Sharp);
     CHECK(s.integerScaling);
     CHECK(s.aspect == video::AspectRatio::R16_9);
@@ -5461,10 +5463,11 @@ TEST_CASE(window_display_settings_read_as_pcsx2_writes_them) {
     settings::Ini out;
     video::writeDisplaySettings(out, s);
     const std::string text = out.text();
-    for (const char* line : {"Renderer = 14", "upscale_multiplier = 3", "linear_present_mode = 2", "IntegerScaling = true", "AspectRatio = 16:9"})
+    for (const char* line : {"Renderer = 14", "upscale_multiplier = 3", "round_sprite = 2", "linear_present_mode = 2", "IntegerScaling = true",
+                             "AspectRatio = 16:9"})
         CHECK(text.find(line) != std::string::npos);
     const video::DisplaySettings again = video::readDisplaySettings(out, &warnings);
-    CHECK(again.renderer == s.renderer && again.upscale == s.upscale && again.bilinear == s.bilinear &&
+    CHECK(again.renderer == s.renderer && again.upscale == s.upscale && again.roundSprite == s.roundSprite && again.bilinear == s.bilinear &&
           again.integerScaling == s.integerScaling && again.aspect == s.aspect && again.fmvAspect == s.fmvAspect);
     CHECK(warnings.empty());
 
@@ -5481,6 +5484,8 @@ TEST_CASE(window_display_settings_read_as_pcsx2_writes_them) {
         {"Renderer = 12", 1, Renderer::Auto, BilinearMode::Smooth},   // PCSX2's OpenGL
         {"linear_present_mode = 5", 1, Renderer::Auto, BilinearMode::Smooth},
         {"IntegerScaling = maybe", 1, Renderer::Auto, BilinearMode::Smooth},
+        {"round_sprite = 1", 1, Renderer::Auto, BilinearMode::Smooth},   // Half is not implemented
+        {"round_sprite = full", 1, Renderer::Auto, BilinearMode::Smooth},
     };
     for (const auto& b : bad) {
         settings::Ini one;
@@ -5492,6 +5497,7 @@ TEST_CASE(window_display_settings_read_as_pcsx2_writes_them) {
         CHECK(s.renderer == b.renderer);
         CHECK(s.bilinear == b.bilinear);
         CHECK(!s.integerScaling);
+        CHECK_EQ(s.roundSprite, 0);
     }
 
     CHECK(video::parseRendererOption("auto") == Renderer::Auto);
@@ -7109,6 +7115,78 @@ TEST_CASE(gpu_display_reads_depth_targets_at_scale) {
         CHECK(shownPicture(full));
         CHECK(full.pixels == software.pixels);
         CHECK_EQ(native(), 0u);
+    }
+}
+
+// Agent Under Fire's ammo panel: a 12 x 23 opaque tile, with transparent
+// padding immediately to its right and below, drawn by UV. At 3x the extra
+// pixels near the edge sample the padding and make a grid between the tiles.
+TEST_CASE(gpu_round_sprite_keeps_matching_sprite_edges_opaque) {
+    auto draw = [](bool rounded) {
+        gs::init();
+        gs::setRoundSprite(rounded ? 2 : 0);
+        const int mode = std::fegetround();
+        std::fesetround(FE_TOWARDZERO);
+        gs::privWrite(0x12000000, 0x6);
+        gs::privWrite(0x12000090, 1 << 9);
+        gs::privWrite(0x120000A0, 63ull << 32 | 63ull << 44);
+        std::vector<uint32_t> texture(16 * 32 / 4, 0), clut(256, 0);
+        for (int y = 1; y <= 23; ++y)
+            for (int x = 1; x <= 12; ++x) texture[(y * 16 + x) / 4] |= 1u << (x % 4 * 8);
+        clut[1] = 0x408B4A31;
+        gsUpload(64 * 32, 1, 0x13, 16, 32, texture);
+        gsUpload(72 * 32, 1, 0x00, 16, 16, clut);
+        const uint64_t tex8 = 64 * 32 | 1ull << 14 | 0x13ull << 20 | 4ull << 26 | 5ull << 30 | 1ull << 34 | 1ull << 35 | (72 * 32ull) << 37;
+        gsWrite({{0x40, 63ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x47, 0}, {0x42, 0x44}, {0x4C, 1ull << 16},
+                 {0x06, tex8}, {0x08, 5}, {0x14, 1ull << 5}});
+        gsRect(0, 0, 64, 64, 0x80000000);
+        const uint64_t colour = 0x7F7F7F7Full | bits64(1.0f) << 32;
+        const uint64_t st0 = bits64(1.5f / 16) | bits64(1.5f / 32) << 32, st1 = bits64(13.5f / 16) | bits64(24.5f / 32) << 32;
+        auto at = [](float x, float y) {
+            return static_cast<uint64_t>(std::lround(x * 16)) | static_cast<uint64_t>(std::lround(y * 16)) << 16;
+        };
+        for (int tile = 0; tile < 2; ++tile) {
+            const float x0 = 3.9375f + tile * 12, x1 = x0 + 12;
+            gsWrite({{0x00, 6 | 1 << 4 | 1 << 6}, {0x01, colour}, {0x02, st0}, {0x04, at(x0, 4.9375f)},
+                     {0x02, st1}, {0x04, at(x1, 27.9375f)}});
+        }
+        std::fesetround(mode);
+        gs::Frame f;
+        CHECK(gs::currentFrame(f));
+        return f;
+    };
+    const gs::Frame software = draw(false);
+    const uint32_t opaque = software.pixels[10 * 64 + 8];
+    CHECK_EQ(software.width, 64);
+    CHECK_EQ(software.height, 64);
+    CHECK(opaque != 0xFF000000u);
+    for (const int scale : {1, 3}) {
+        GpuRun gpu(scale);
+        const gs::Frame rounded = draw(true);
+        CHECK_EQ(rounded.width, 64 * scale);
+        CHECK_EQ(rounded.height, 64 * scale);
+        if (scale == 1) CHECK(rounded.pixels == software.pixels);
+        size_t wrong = 0;
+        for (int tile = 0; scale > 1 && tile < 2; ++tile) {
+            const int x0 = static_cast<int>(std::ceil((3.9375f + tile * 12) * scale)), x1 = static_cast<int>(std::ceil((15.9375f + tile * 12) * scale));
+            for (int y = static_cast<int>(std::ceil(4.9375f * scale)); y < static_cast<int>(std::ceil(27.9375f * scale)); ++y)
+                for (int x = x0; x < x1; ++x) {
+                    const uint32_t got = rounded.pixels[static_cast<size_t>(y) * rounded.width + x];
+                    if (got != opaque && wrong++ == 0)
+                        std::fprintf(stderr, "  at %dx, tile %d pixel (%d, %d) is 0x%08x, not the opaque tile's 0x%08x\n", scale, tile, x, y,
+                                     got, opaque);
+                }
+        }
+        CHECK_EQ(wrong, size_t(0));
+        const gs::Frame plain = draw(false);
+        for (size_t i = 0; i < plain.pixels.size(); ++i)
+            if (plain.pixels[i] != rounded.pixels[i]) {
+                std::fprintf(stderr, "  at %dx, default and rounded differ at %zu: 0x%08x against 0x%08x\n", scale, i, plain.pixels[i],
+                             rounded.pixels[i]);
+                break;
+            }
+        if (scale == 1) CHECK(plain.pixels == software.pixels);
+        else CHECK(plain.pixels != rounded.pixels);
     }
 }
 

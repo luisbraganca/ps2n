@@ -31,6 +31,7 @@ model.
 | `--deinterlace MODE` | How a game that shows interlaced fields becomes whole pictures: `adaptive` (default), `weave` or `bob`. See Video below. |
 | `--renderer MODE` | Who draws, for this run (not saved): `auto` (default: Vulkan where the graphics card can, the software renderer otherwise), `software` or `vulkan`. See [Rendering](#rendering). |
 | `--upscale N` | With Vulkan, draw at N times the console's resolution, 1 to 8, for this run (not saved). |
+| `--round-sprite MODE` | `off` (default) or `full`: keep textured sprites' edges inside their source rectangles above 1x. See the `round_sprite` setting below. |
 | `--gpu-debug` | Check every Vulkan call with the validation layer, which comes with the Vulkan SDK; what it reports goes to the log as `[warn:gpu] validation: ...`. |
 | `--gs-threads N` | Threads that draw with the software renderer: `0` (default) is half the host's threads, at most 8. They share every primitive, each drawing its own bands of four rows. In a real-time run the GS also has a thread of its own, which decodes what the game sends while the game runs on, up to two vsyncs behind it; with `--virtual-clock` or `--strict` the game's thread decodes it. `1` draws everything on the game's thread. The picture is the same either way. With Vulkan the card draws, and the GS's own thread records its work in real-time runs, whatever this says. |
 | `--no-vu1-thread` | Run VU1's micro programs on the game's thread. A real-time run otherwise gives VU1 a thread of its own beside the GS's, as PCSX2's MTVU does ([architecture.md](architecture.md#the-vu1-thread)); with `--virtual-clock`, `--strict`, or `--gs-threads 1` and the software renderer, VU1 runs on the game's thread anyway. What the game sees and draws is the same either way. |
@@ -79,6 +80,7 @@ menu's Graphics Settings:
 |---|---|---|
 | `Renderer` | `-1` | Who draws, by PCSX2's numbers: `-1` Automatic (Vulkan where the graphics card can, the software renderer otherwise), `13` Software, `14` Vulkan (the software renderer still draws where Vulkan cannot, with a warning). Another value counts as `-1`, with a warning. A change in the settings page takes effect when the game starts again. See [Rendering](#rendering). |
 | `upscale_multiplier` | `1` | With Vulkan, the internal resolution: `N` draws at N times the console's resolution, 1 to 8 ("1x Native (PS2)" to "8x Native (~2880p/5K)" in the settings page). PCSX2 writes a number such as `2.000000`: it is rounded to the nearest whole number and kept within 1 to 8, with a warning where it changes. A change in the settings page takes effect at the next vsync. |
+| `round_sprite` | `0` | `0` Off, `2` Full. Above 1x, a textured sprite with UV coordinates or one Q at both ends has the far end of its sampled rectangle pulled one texel towards its start on each axis, when the source span does not exceed the screen span by more than two texels. This can remove seams from transparent padding, but changes legitimate edge filtering too. It does not change 1x or primitive coverage. `1` (Half) is not implemented: it warns and becomes 0. |
 | `linear_present_mode` | `1` | How the picture is scaled to the window: `0` Off (nearest), `1` Bilinear (Smooth), `2` Bilinear (Sharp): each picture pixel stays flat over most of the window pixels it covers and blends only at its edges. |
 | `IntegerScaling` | `false` | The picture's height a whole multiple of its own, with black bars around it, so every picture pixel covers as many window pixels as the next. |
 | `AspectRatio` | `Auto 4:3/3:2` | `Auto 4:3/3:2`: 4:3, or what the game's patches ask for (their `gsaspectratio`, applied when the game was recompiled: see [config.md](config.md#pnach-pcsx2s-patch-files)). `4:3`, `16:9`, `10:7`: that shape. `Stretch`: the window's. |
@@ -223,8 +225,9 @@ Not covered: what the software renderer leaves out too (the destination
 alpha test, dithering, anti-aliasing, scan masks, the CLUT buffer, depth
 buffers sampled as textures, transfers back to the EE); scales that are not
 whole numbers; texture filtering beyond what the game asks (PCSX2's
-anisotropic and forced bilinear filtering); the per-game fixes PCSX2 applies
-when it upscales (half-pixel offsets, rounded sprites, merged sprites): a
+anisotropic and forced bilinear filtering); the other per-game fixes PCSX2
+applies when it upscales (half-pixel offsets, Round Sprite Half and merged
+sprites): a
 copy of a picture the card drew through texel edges, rather than texel
 centres, comes out half a console pixel to the left above 1x
 ([architecture.md](architecture.md#the-vulkan-renderer)); a

@@ -472,6 +472,18 @@ above 1x (taking the card's own rule instead, floor(u N), shifts copies
 through centres half a pixel to the right). This is the ambiguity PCSX2's
 half-pixel offset settings settle game by game.
 
+**Sprite edges.** Extra pixels can also expose padding beyond a sprite's opaque
+source tile. Agent Under Fire's ammo panel repeats 12 x 23 tiles with a
+transparent texel to their right and below: at 3x, samples near the far edge
+reach it and make a grid. Round Sprite Full (`round_sprite = 2`, or
+`--round-sprite full`) pulls the far end of the sampled rectangle one texel
+back towards its start on each axis. It applies only above 1x, to a textured
+sprite whose source span does not exceed its screen span by more than two
+texels, with UV coordinates or one Q at both ends. Position, blending and
+coverage do not change. It is off by default because legitimate edge filtering
+changes too; it does not fix Code: Veronica X's native-resolution menu grid.
+The other Round Sprite modes and half-pixel offsets are not implemented.
+
 **Pages.** GS memory is 512 pages of 8 KB. A page's current contents belong
 to the CPU (the software's memory, which the EE's transfers write), to one
 target or to the card's mirror. A target is an image of one buffer layout
@@ -540,9 +552,10 @@ to EE memory when it is complete, at a safepoint or a channel read. The GS
 thread never writes guest RAM or DMA registers itself.
 
 Not covered: what the software rasterizer leaves out too; a depth test
-whose buffer is in the frame's memory (drawn without it, reported); the
-per-game fixes PCSX2's upscaling needs; scales that are not whole numbers;
-cards without fragment shader interlock.
+whose buffer is in the frame's memory (drawn without it, reported); the other
+per-game fixes PCSX2's upscaling needs, including Round Sprite Half and
+half-pixel offsets; scales that are not whole numbers; cards without fragment
+shader interlock.
 
 ### The interpreter
 

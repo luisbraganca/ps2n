@@ -122,7 +122,9 @@ assets/                          branding/ (logo and icons; its README says whic
   and at N x its pixel (N x, N y) is the software's (x, y), except where a
   texture the card drew is read at its own resolution (texture coordinate
   u is position u - 1/2 there, so copies through texel centres copy every
-  pixel; see architecture.md). It computes each
+  pixel; see architecture.md). The optional Round Sprite Full setting can
+  shorten a sprite's sampled rectangle above 1x instead (round_sprite = 2);
+  it never changes 1x. The renderer computes each
   pixel's values from the vertices with the software's float steps, in the
   same order, rounded toward zero, never with the card's interpolation,
   blending or depth test; a change to how the software draws a pixel goes

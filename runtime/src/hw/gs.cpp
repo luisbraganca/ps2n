@@ -72,6 +72,7 @@ bool g_path3Masked = false;
 // consecutive fields apart), the two newest fields shown on even and on odd
 // lines, and the whole picture the last vsync showed.
 std::atomic<Deinterlace> g_deinterlace{Deinterlace::Adaptive};
+std::atomic<int> g_roundSprite{0};
 uint64_t g_fieldCount = 0;
 struct ShownField {
     std::vector<uint32_t> pixels;
@@ -1929,6 +1930,8 @@ void useSoftware() {
 bool vulkanDraws() { return g_vulkan; }
 int vulkanScale() { return g_vulkanScale; }
 void requestScale(int scale) { g_wantScale = std::clamp(scale, 1, 8); }
+void setRoundSprite(int mode) { g_roundSprite = mode == 2 ? 2 : 0; }
+int roundSprite() { return g_roundSprite; }
 
 void setOwnThread(bool on) {
     g_wantOwnThread = on;

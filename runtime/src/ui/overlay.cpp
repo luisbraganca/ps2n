@@ -804,6 +804,13 @@ void drawGraphics() {
         ImGui::SetNextItemWidth(combo);
         if (ImGui::Combo("##upscale", &upscale, [](void*, int i) { return video::upscaleName(i + 1); }, nullptr, video::kMaxUpscale))
             video::setUpscaleSetting(upscale + 1);
+        static constexpr const char* kRoundSprite[] = {"Off", "Full"};
+        int roundSprite = video::roundSpriteSetting() == 2 ? 1 : 0;
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Round Sprite:");
+        ImGui::SameLine(labels);
+        ImGui::SetNextItemWidth(combo);
+        if (ImGui::Combo("##roundSprite", &roundSprite, kRoundSprite, 2)) video::setRoundSpriteSetting(roundSprite ? 2 : 0);
         if (const std::string note = video::rendererNote(); !note.empty()) ImGui::TextDisabled("%s", note.c_str());
         ImGui::SeparatorText("Display");
         int aspect = static_cast<int>(video::aspectRatio());

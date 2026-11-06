@@ -1146,6 +1146,13 @@ bool draw(const Draw& d, uint64_t gen, Shape shape, const Vertex* v) {
         float ua = 0, va = 0, ub = 0, vb = 0;
         texCoord(d, v[0].s, v[0].t, v[0].q, v[0].u, v[0].v, ua, va);
         texCoord(d, v[1].s, v[1].t, v[1].q, v[1].u, v[1].v, ub, vb);
+        if (d.tex && g.scale > 1 && gs::roundSprite() == 2 && (d.fst || v[0].q == v[1].q)) {
+            auto edge = [](float a, float& b, float span) {
+                if (std::abs(b - a) > 1.0f && std::abs(b - a) <= std::abs(span) + 2.0f) b += b > a ? -1.0f : 1.0f;
+            };
+            edge(ua, ub, v[1].x - v[0].x);
+            edge(va, vb, v[1].y - v[0].y);
+        }
         p[P_UA] = std::bit_cast<uint32_t>(ua);
         p[P_VA] = std::bit_cast<uint32_t>(va);
         p[P_UB] = std::bit_cast<uint32_t>(ub);
