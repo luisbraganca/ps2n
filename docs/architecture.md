@@ -533,8 +533,8 @@ it queued primitives for the draw threads; on the virtual clock the guest
 thread does. A vsync's picture goes to a mailbox of three, from which the
 window's thread composes the newest into the swapchain with the overlay,
 waiting on the renderer's timeline semaphore for it; `--dump-frames` reads
-it back. The guest's reads of GS memory (`gs::readPixel32`, the tests) wait
-for the GS thread and read the pages back.
+it back. The guest's reads of GS memory (`gs::readPixel32`, the tests, and
+reverse VIF1 DMA) wait for the GS thread and read just the pages needed.
 
 Not covered: what the software rasterizer leaves out too; a depth test
 whose buffer is in the frame's memory (drawn without it, reported); the

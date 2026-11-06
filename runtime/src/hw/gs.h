@@ -5,8 +5,8 @@
 // points, lines, triangles (flat/Gouraud), sprites; textures in CT32/24/16
 // and T8/T4 with CSM1 CLUTs (nearest, bilinear or trilinear sampling and
 // mipmaps, as TEX1 asks); TFX modulate/decal/highlight; alpha test, Z test,
-// alpha blending, FBMSK; host->local and local->local image transfers. Not
-// modelled: dithering, destination alpha test, local->host readback.
+// alpha blending, FBMSK; host->local, local->local and local->host image
+// transfers. Not modelled: dithering and destination alpha test.
 #pragma once
 
 #include <cstddef>
@@ -110,6 +110,9 @@ void setDrawThreads(int n);
 // Direct access for tests and tools. readPixel32 waits for the GS thread and
 // the draw threads.
 uint32_t readPixel32(uint32_t fbp, uint32_t fbw, uint32_t psm, int x, int y);
+// Up to `count` 128-bit quadwords of the local-to-host transfer TRXDIR started.
+// The guest thread's first read waits for everything the GS had queued.
+size_t readTransfer(uint64_t* out, size_t count);
 // Primitives the draw threads did not share, drawn by the queuing thread
 // alone (they read memory they draw into, or in an unsupported format), since
 // start-up. Waits like readPixel32.

@@ -267,7 +267,19 @@ void start(int ch) {
     case hw::DMA_VIF1:
     case hw::DMA_GIF:
         if ((c.chcr & 1) == 0 && ch == hw::DMA_VIF1) {
-            PS2_UNIMPL("dmac", "VIF1 to-memory transfer", "VIF1 DMA in the GS->EE direction (image readback) is not implemented");
+            if (mode != 0) {
+                PS2_UNIMPL("dmac", "VIF1 to-memory chain", "VIF1 GS-to-memory DMA in chain mode is not implemented");
+                break;
+            }
+            std::vector<uint64_t> data(static_cast<size_t>(c.qwc) * 2);
+            const size_t moved = gs::readTransfer(data.data(), c.qwc);
+            for (size_t i = 0; i < moved; ++i) write128(memAddress(c.madr + static_cast<uint32_t>(i) * 16), data.data() + i * 2);
+            c.madr += static_cast<uint32_t>(moved) * 16;
+            c.qwc -= static_cast<uint32_t>(moved);
+            if (c.qwc) {
+                PS2_UNIMPL("dmac", "VIF1 read-back stopped short", "VIF1 GS-to-memory DMA stopped with %u quadwords left; is there no active local-to-host transfer?", c.qwc);
+                c.qwc = 0;
+            }
             break;
         }
         c.waiting = !(mode == 1 ? runChain(ch) : runNormal(ch));

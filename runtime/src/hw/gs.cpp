@@ -44,6 +44,15 @@ namespace {
 
 using namespace detail;
 
+struct Readback {
+    bool active = false, ready = false;
+    uint32_t sbp = 0, sbw = 0, spsm = 0, ssax = 0, ssay = 0;
+    uint32_t w = 0, h = 0, bpp = 32, x = 0, y = 0;
+    uint64_t bitBuf = 0, bitHi = 0;
+    uint32_t bitCount = 0;
+};
+Readback g_readback;
+
 // ===========================================================================
 // Registers and state
 // ===========================================================================
@@ -436,6 +445,7 @@ void transferImage(const uint64_t* q, size_t qwords) {
 }
 
 void startTransfer(uint32_t dir) {
+    g_readback = Readback{};
     finishDrawing();   // queued primitives may read what it writes, or write what it reads
     const uint64_t bb = g_regs[BITBLTBUF], pos = g_regs[TRXPOS], reg = g_regs[TRXREG];
     // The Vulkan renderer copies between its targets itself; otherwise it
@@ -468,8 +478,17 @@ void startTransfer(uint32_t dir) {
             for (uint32_t x = 0; x < w; ++x)
                 transferWrite(dpsm, pixelUnit(dbp, dbw, dpsm, dsax + x, dsay + y), readRaw(sbp, sbw, spsm, ssax + x, ssay + y));
         if (g_vulkan) gpu::renderer::transferEnded();
-    } else if (dir == 1) {
-        PS2_UNIMPL("gs", "local->host transfer", "GS local->host image transfer (readback) is not implemented");
+    } else if (dir == 1) {   // local -> host, drained by reverse VIF1 DMA
+        Readback& r = g_readback;
+        r.sbp = static_cast<uint32_t>(field(bb, 0, 14));
+        r.sbw = static_cast<uint32_t>(field(bb, 16, 6));
+        r.spsm = static_cast<uint32_t>(field(bb, 24, 6));
+        r.ssax = static_cast<uint32_t>(field(pos, 0, 11));
+        r.ssay = static_cast<uint32_t>(field(pos, 16, 11));
+        r.w = static_cast<uint32_t>(field(reg, 0, 12));
+        r.h = static_cast<uint32_t>(field(reg, 32, 12));
+        r.bpp = bitsPerPixel(r.spsm);
+        r.active = r.w != 0 && r.h != 0;
     }
 }
 
@@ -1858,6 +1877,7 @@ void init() {
     std::memset(g_vram, 0, sizeof g_vram);
     std::memset(g_regs, 0, sizeof g_regs);
     std::memset(g_priv, 0, sizeof g_priv);
+    g_readback = Readback{};
     g_csr = 0x551B4000ull;
     g_imr = 0x7F00;
     g_events = 0;
@@ -2315,6 +2335,53 @@ bool buildFrame(const Display& disp, Frame& out) {
 }
 
 } // namespace
+
+size_t readTransfer(uint64_t* out, size_t count) {
+    if (!count) return 0;
+    Readback& r = g_readback;
+    if (!r.ready) {
+        drawn(false);   // also reaches a TRXDIR still queued for the GS thread
+        if (g_vulkan && r.active) {
+            Pages pages;
+            for (uint32_t y = 0; y < r.h; ++y)
+                for (uint32_t x = 0; x < r.w; ++x) {
+                    const uint32_t unit = pixelUnit(r.sbp, r.sbw, r.spsm, (r.ssax + x) & 2047, (r.ssay + y) & 2047);
+                    const uint32_t word = unit / (32 / r.bpp);
+                    pages.add(Span{word, word + 1});
+                }
+            gpu::renderer::syncPages(pages);
+        }
+        r.ready = true;
+    }
+    if (!r.active && !r.bitCount) return 0;
+    size_t done = 0;
+    while (done < count && (r.active || r.bitCount)) {
+        for (size_t half = 0; half < 2; ++half) {
+            while (r.bitCount < 64 && r.active) {
+                const uint64_t pixel = readRaw(r.sbp, r.sbw, r.spsm, (r.ssax + r.x) & 2047, (r.ssay + r.y) & 2047);
+                r.bitBuf |= pixel << r.bitCount;
+                if (r.bitCount + r.bpp > 64) r.bitHi |= pixel >> (64 - r.bitCount);
+                r.bitCount += r.bpp;
+                if (++r.x >= r.w) {
+                    r.x = 0;
+                    if (++r.y >= r.h) r.active = false;
+                }
+            }
+            if (r.bitCount >= 64) {
+                out[done * 2 + half] = r.bitBuf;
+                r.bitBuf = r.bitHi;
+                r.bitHi = 0;
+                r.bitCount -= 64;
+            } else {
+                out[done * 2 + half] = r.bitBuf;   // the last quadword's unused bits are zero
+                r.bitBuf = r.bitHi = 0;
+                r.bitCount = 0;
+            }
+        }
+        ++done;
+    }
+    return done;
+}
 
 bool currentFrame(Frame& out) {
     if (g_vulkan) {   // the card's picture, at its scale; the GS thread waits meanwhile

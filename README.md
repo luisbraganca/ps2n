@@ -90,7 +90,7 @@ for the rest of the console:
 | Recompiler | `████████░░` 80% | 8 / 10 | overlays, relocatable modules |
 | EE kernel syscalls | `█████████░` 88% | 127 / 145 | event flags, `ExecPS2`, the TLB, CPU timers |
 | DMA, interrupts, timers | `█████░░░░░` 50% | 4 / 8 | MFIFO, stall control, transfer timing |
-| Graphics (GS) | `███████░░░` 68% | 15 / 22 | the CLUT buffer, reading back to the EE |
+| Graphics (GS) | `███████░░░` 73% | 16 / 22 | the CLUT buffer, scan masks |
 | Vector units | `█████████░` 88% | 7 / 8 | their timing |
 | Movies (IPU) | `████████░░` 83% | 5 / 6 | timing |
 | Sound (SPU2) | `███████░░░` 71% | 10 / 14 | the IOP's DMA channels for drivers without libsd, an audio settings page |
@@ -126,7 +126,7 @@ for the rest of the console:
 - [ ] Stall control and interleaved transfers
 - [ ] Transfer timing: a transfer ends the moment it starts
 
-**Graphics (GS)**: 15 of 22
+**Graphics (GS)**: 16 of 22
 - [x] Display: both circuits, their merging, interlaced frames and fields
 - [x] GIF: paths 1-3, PACKED, REGLIST and IMAGE, PATH3 masking
 - [x] Drawing alongside the EE, on the GS's own thread (real-time runs)
@@ -148,7 +148,7 @@ for the rest of the console:
 - [ ] Destination alpha test
 - [ ] Dithering
 - [ ] Anti-aliasing
-- [ ] Transfers from GS memory back to the EE
+- [x] Transfers from GS memory back to the EE
 
 **Vector units**: 7 of 8
 - [x] VU0 macro mode
@@ -271,8 +271,7 @@ has the measurements and what each change bought.
 Roughly in order:
 
 1. **Agent Under Fire to Playable**: the driving missions past the second
-   mission's race (with their read-back from GS memory), then what the game
-   reaches next.
+   mission's race, then what the game reaches next.
 2. **Linux**: building and playing there, with
    [GETTING_STARTED.md](GETTING_STARTED.md) as the way in.
 3. **Sound**: PCSX2's audio settings page, and the IOP's DMA channels 4 and

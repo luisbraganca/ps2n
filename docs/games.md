@@ -76,6 +76,9 @@ config lists the other executables under `[input] programs`, as in
   mirror made all 180 match. Reading Z32 targets directly when shown as CT32
   reduced the run's native-resolution display fallbacks from 106 to 74 without
   changing its 3x frames; the rest are 32-bit buffers shown as CT16.
+- The driving missions' 8x8 Z32 read-back through reverse VIF1 DMA works, in
+  software and on the card. Its sun glare appears in the dumped frame at
+  vblank 8,000; the other 179 frames of that comparison are unchanged.
 
 ### Known problems
 
@@ -85,11 +88,6 @@ config lists the other executables under `[input] programs`, as in
   came out the same as the software renderer's all the same. Partial uploads
   over pages the card drew in another layout used to cost a wait each; they
   now merge into the card's mirror (the race's measurements are under Speed).
-- The driving missions read GS memory back through VIF1 about once a frame
-  (reported as `VIF1 to-memory transfer`), which the runtime does not do yet:
-  an 8x8 block of the depth buffer (`PSMZ32`) at a point that drifts with the
-  view, most likely to tell whether the sun is hidden before its glare is
-  drawn. What the glare does without it has not been checked.
 - `DRIVING.ELF`'s VU1 programs run recompiled only as far as a play session
   recorded them: 23 programs, from the start of the second mission into its
   race. The mission uploads each wherever micro memory has room (400 places
@@ -292,6 +290,10 @@ In the order the changes were made:
   30 ms to none and three. At 3x there were no read-backs and three such gaps.
   Both runs held 50 vblanks a second; the normal, explosion and reloading
   windows measured drew 25 pictures a second.
+- **Depth read-back through reverse VIF1 DMA.** The driving mission's 8x8
+  depth reads now reach EE memory and restore the sun's glare. The final
+  real-time scripted run took 187.3 s for 9,000 vblanks, including loading,
+  against 180.8 s with the transfers unimplemented; it is correct but not free.
 
 ## Resident Evil Code: Veronica X
 

@@ -6297,6 +6297,62 @@ void gsShade(int x0, int y0, int x1, int y1, int x2, int y2, uint32_t z) {
 
 } // namespace
 
+// Reverse VIF1 DMA drains a local-to-host GS transfer: a depth block the card
+// just drew, and every transfer format round a rectangle that wraps at 2048.
+TEST_CASE(gpu_reads_gs_memory_through_vif1) {
+    constexpr uint32_t kD1 = 0x10009000, kDst = 0x01820000;
+    std::vector<uint32_t> result;
+    auto readback = [&](uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                        const std::vector<uint32_t>& expected) {
+        gsWrite({{0x50, static_cast<uint64_t>(bp) | static_cast<uint64_t>(bw) << 16 | static_cast<uint64_t>(psm) << 24},
+                 {0x51, static_cast<uint64_t>(x) | static_cast<uint64_t>(y) << 16},
+                 {0x52, static_cast<uint64_t>(w) | static_cast<uint64_t>(h) << 32}, {0x53, 1}});
+        const uint32_t qwc = static_cast<uint32_t>(expected.size() / 4);
+        write32(kDmaStat, 2);
+        write32(kD1 + 0x10, kDst);
+        write32(kD1 + 0x20, qwc);
+        write32(kD1, 0x100);   // normal mode, from the GS, STR
+        std::vector<uint32_t> actual(expected.size());
+        for (size_t i = 0; i < actual.size(); ++i) actual[i] = read32(kDst + static_cast<uint32_t>(i) * 4);
+        CHECK(actual == expected);
+        CHECK_EQ(read32(kD1 + 0x10), kDst + qwc * 16);
+        CHECK_EQ(read32(kD1 + 0x20), 0u);
+        CHECK_EQ(read32(kD1) & 0x100u, 0u);
+        CHECK(read32(kDmaStat) & 2);
+        result.insert(result.end(), actual.begin(), actual.end());
+    };
+    auto draw = [&] {
+        gs::init();
+        dmac::init();
+        result.clear();
+        // Page 100 is the depth target, not just memory the EE uploaded.
+        gsWrite({{0x4C, 2ull << 16}, {0x4E, 100}, {0x40, 7ull << 16 | 7ull << 48}, {0x18, 0}, {0x1A, 1},
+                 {0x47, 1ull << 16 | 1ull << 17}});
+        gsWrite({{0x00, 6}, {0x01, 0x80000000}, {0x05, xyz(0, 0, 0xDEADBEEF)}, {0x05, xyz(8, 8, 0xDEADBEEF)}});
+        readback(3200, 2, 0x30, 0, 0, 8, 8, std::vector<uint32_t>(64, 0xDEADBEEF));
+
+        const uint32_t formats[] = {0x00, 0x01, 0x02, 0x0A, 0x30, 0x31, 0x32, 0x3A, 0x13, 0x14, 0x1B, 0x24, 0x2C};
+        constexpr uint32_t w = 7, h = 3;
+        for (size_t i = 0; i < std::size(formats); ++i) {
+            const uint32_t psm = formats[i];
+            const uint32_t bits = psm == 0x01 || psm == 0x31 ? 24 : (psm & 0x0F) == 0x02 || (psm & 0x0F) == 0x0A ? 16
+                                  : psm == 0x13 || psm == 0x1B ? 8
+                                  : psm == 0x14 || psm == 0x24 || psm == 0x2C ? 4
+                                                                                : 32;
+            const uint32_t total = w * h * bits;
+            std::vector<uint32_t> words = pseudoRandom(total / 32 + 1, 100 + static_cast<uint32_t>(i));
+            gsUploadTo(4096 + static_cast<uint32_t>(i) * 128, 1, psm, 2046, 2047, w, h);
+            gsImage(words);
+            std::vector<uint32_t> expected((total + 127) / 128 * 4);
+            std::copy_n(words.begin(), std::min<size_t>((total + 31) / 32, expected.size()), expected.begin());
+            if (const uint32_t used = total & 31) expected[total / 32] &= (1u << used) - 1;
+            readback(4096 + static_cast<uint32_t>(i) * 128, 1, psm, 2046, 2047, w, h, expected);
+        }
+    };
+    auto read = [&] { return result; };
+    sameOnTheCard(draw, read, {1, 2});
+}
+
 // The scene the draw threads share, drawn by the card: textures it drew
 // itself, mipmap levels, a local copy over a texture in use, a page drawn in
 // two layouts, points and a line strip, on the guest thread and on the GS's.
