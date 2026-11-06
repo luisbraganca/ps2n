@@ -16,8 +16,8 @@ Playable or Perfect.
 
 | Game | Region | Serial | Stage | Last tested |
 |---|---|---|---|---|
-| [007: Agent Under Fire](#007-agent-under-fire) | Europe | SLES-50539 | In-game | 2026-11-04 |
-| [Resident Evil Code: Veronica X](#resident-evil-code-veronica-x) | USA | SLUS-20184 | In-game | 2026-11-04 |
+| [007: Agent Under Fire](#007-agent-under-fire) | Europe | SLES-50539 | In-game | 2026-11-06 |
+| [Resident Evil Code: Veronica X](#resident-evil-code-veronica-x) | USA | SLUS-20184 | In-game | 2026-11-06 |
 | [Secret Agent Clank](#secret-agent-clank) | USA | SCUS-97623 | Nothing | 2026-11-04 |
 
 To bring up another game, start with the README's
@@ -88,6 +88,8 @@ config lists the other executables under `[input] programs`, as in
   came out the same as the software renderer's all the same. Partial uploads
   over pages the card drew in another layout used to cost a wait each; they
   now merge into the card's mirror (the race's measurements are under Speed).
+- At 3x, the menus and HUD can show thin lines at some primitive edges. Code:
+  Veronica X's item menu shows similar seams. The cause is not fixed yet.
 - `DRIVING.ELF`'s VU1 programs run recompiled only as far as a play session
   recorded them: 23 programs, from the start of the second mission into its
   race. The mission uploads each wherever micro memory has room (400 places
@@ -294,6 +296,12 @@ In the order the changes were made:
   depth reads now reach EE memory and restore the sun's glare. The final
   real-time scripted run took 187.3 s for 9,000 vblanks, including loading,
   against 180.8 s with the transfers unimplemented; it is correct but not free.
+- **Reverse VIF1 DMA queued through the GS thread.** The GS thread fills a
+  host-side buffer; the guest publishes it at a safepoint or DMA-channel read.
+  The same real-time race then took 180.8 s instead of 187.3 s. With the same
+  picture probe, gaps over 30 ms fell from 557 to three. Late heavy windows
+  still drew fewer than 25 new pictures a second: one old 12 to 14 became 17
+  to 25. This reduces the stall, but does not eliminate every picture drop.
 
 ## Resident Evil Code: Veronica X
 
@@ -385,6 +393,8 @@ interpreter. PCSX2 rates this release Perfect, with no game fixes.
 ### Known problems
 
 - Only the first areas have been played (2026-11-04).
+- At 3x, the item menu can show thin seams between its tiled primitives. The
+  cause is not fixed yet.
 - The game's own code turns a centred left stick into UP in one of its input
   words (its test for an upward push compares the wrong way round), as it
   would on a console. Neither the menus nor play go by that word: with the

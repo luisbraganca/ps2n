@@ -9,6 +9,7 @@
 // transfers. Not modelled: dithering and destination alpha test.
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -113,6 +114,14 @@ uint32_t readPixel32(uint32_t fbp, uint32_t fbw, uint32_t psm, int x, int y);
 // Up to `count` 128-bit quadwords of the local-to-host transfer TRXDIR started.
 // The guest thread's first read waits for everything the GS had queued.
 size_t readTransfer(uint64_t* out, size_t count);
+// A host-side result buffer for reverse VIF1 DMA. The GS thread fills it;
+// the guest publishes it to RAM only after `done` is set.
+struct ReadbackJob {
+    std::vector<uint64_t> data;
+    uint32_t moved = 0;
+    std::atomic<bool> done{false};
+};
+void queueReadback(ReadbackJob* job);
 // Primitives the draw threads did not share, drawn by the queuing thread
 // alone (they read memory they draw into, or in an unsupported format), since
 // start-up. Waits like readPixel32.

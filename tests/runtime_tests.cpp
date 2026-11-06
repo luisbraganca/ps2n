@@ -6312,6 +6312,7 @@ TEST_CASE(gpu_reads_gs_memory_through_vif1) {
         write32(kD1 + 0x10, kDst);
         write32(kD1 + 0x20, qwc);
         write32(kD1, 0x100);   // normal mode, from the GS, STR
+        for (uint32_t spins = 0; (read32(kD1) & 0x100u) && spins < 100000; ++spins) std::this_thread::yield();
         std::vector<uint32_t> actual(expected.size());
         for (size_t i = 0; i < actual.size(); ++i) actual[i] = read32(kDst + static_cast<uint32_t>(i) * 4);
         CHECK(actual == expected);
@@ -6351,6 +6352,29 @@ TEST_CASE(gpu_reads_gs_memory_through_vif1) {
     };
     auto read = [&] { return result; };
     sameOnTheCard(draw, read, {1, 2});
+    gs::setOwnThread(true);
+    sameOnTheCard(draw, read, {1, 2});
+    gs::setOwnThread(false);
+}
+
+TEST_CASE(vif1_readback_stops_without_publishing) {
+    constexpr uint32_t kD1 = 0x10009000, kDst = 0x01860000;
+    gs::init();
+    dmac::init();
+    gs::setOwnThread(true);
+    gsUploadTo(2048, 1, 0, 0, 0, 16, 16);
+    gsImage(pseudoRandom(64, 77));
+    gsWrite({{0x50, 2048 | 1ull << 16}, {0x51, 0}, {0x52, 16 | 16ull << 32}, {0x53, 1}});
+    write32(kDst, 0xDEADBEEF);
+    write32(kD1 + 0x10, kDst);
+    write32(kD1 + 0x20, 16);
+    write32(kD1, 0x100);
+    write32(kD1, 0);
+    CHECK_EQ(read32(kDst), 0xDEADBEEFu);
+    CHECK_EQ(read32(kD1 + 0x10), kDst);
+    CHECK_EQ(read32(kD1 + 0x20), 0u);
+    CHECK_EQ(read32(kD1) & 0x100u, 0u);
+    gs::setOwnThread(false);
 }
 
 // The scene the draw threads share, drawn by the card: textures it drew

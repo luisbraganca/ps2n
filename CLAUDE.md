@@ -148,11 +148,12 @@ assets/                          branding/ (logo and icons; its README says whic
   `gs_threads_share_small_primitives_in_order` check this.
 - In real-time runs the GS has its own thread, up to two vsyncs behind the
   guest, which decodes the GIF data and queues the primitives. Whatever acts
-  on GIF state goes through its ring, in the guest's order; whatever reads GS
-  memory back waits for it and the draw threads (`flush`); a vsync's
-  picture uses the display registers as they were at that vsync. The GS
-  thread never touches guest state: `FINISH` and `SIGNAL` reach the guest
-  through `gs::pollEvents` at a safepoint. `--virtual-clock` and `--strict`
+  on GIF state goes through its ring, in the guest's order; direct reads of GS
+  memory wait for it and the draw threads (`flush`), while reverse VIF1 DMA
+  queues a host-side read on the GS thread. The guest publishes that result at
+  a safepoint or DMA-channel read. A vsync's picture uses the display registers
+  as they were at that vsync. The GS thread never touches guest state: `FINISH`,
+  `SIGNAL` and reverse DMA reach the guest through `gs::pollEvents`. `--virtual-clock` and `--strict`
   keep the decoding on the guest thread, and `--gs-threads 1` the drawing
   too with the software renderer. With Vulkan the GS thread records the
   card's work, whatever `--gs-threads` says.

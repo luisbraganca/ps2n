@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,7 @@ struct Channel {
     bool lastTag = false;   // toIPU chain: the current tag's data ends the transfer
     bool waiting = false;   // a VIF channel stopped by its stalled VIF, STR still set
     bool endAfterData = false;   // chain mode: the current tag ends the transfer once its data has gone
+    std::shared_ptr<gs::ReadbackJob> readback;
 };
 
 Channel g_ch[10];
@@ -271,6 +273,14 @@ void start(int ch) {
                 PS2_UNIMPL("dmac", "VIF1 to-memory chain", "VIF1 GS-to-memory DMA in chain mode is not implemented");
                 break;
             }
+            if (c.qwc && gs::ownThread()) {
+                auto job = std::make_shared<gs::ReadbackJob>();
+                job->data.resize(static_cast<size_t>(c.qwc) * 2);
+                c.readback = std::move(job);
+                c.running = true;
+                gs::queueReadback(c.readback.get());
+                return;
+            }
             std::vector<uint64_t> data(static_cast<size_t>(c.qwc) * 2);
             const size_t moved = gs::readTransfer(data.data(), c.qwc);
             for (size_t i = 0; i < moved; ++i) write128(memAddress(c.madr + static_cast<uint32_t>(i) * 16), data.data() + i * 2);
@@ -301,9 +311,47 @@ void start(int ch) {
     raise(ch);
 }
 
+// Publishes a reverse VIF1 job only on the guest thread. With `wait`, used
+// before a reset or shutdown; a stopped channel discards the result instead.
+void publishReadback(int ch, bool wait, bool discard = false) {
+    Channel& c = g_ch[ch];
+    gs::ReadbackJob* job = c.readback.get();
+    if (!job) return;
+    if (!job->done.load(std::memory_order_acquire)) {
+        if (!wait) return;
+        while (!job->done.load(std::memory_order_acquire)) job->done.wait(false);
+    }
+    if (discard) {
+        c.qwc = 0;
+        c.readback.reset();
+        return;
+    }
+    for (size_t i = 0; i < job->moved; ++i) write128(memAddress(c.madr + static_cast<uint32_t>(i) * 16), job->data.data() + i * 2);
+    c.madr += job->moved * 16;
+    c.qwc -= job->moved;
+    if (c.qwc) {
+        PS2_UNIMPL("dmac", "VIF1 read-back stopped short", "VIF1 GS-to-memory DMA stopped with %u quadwords left; is there no active local-to-host transfer?", c.qwc);
+        c.qwc = 0;
+    }
+    c.readback.reset();
+    finish(ch);
+}
+
 } // namespace
 
+void pollReadbacks() {
+    if (held()) return;
+    for (int ch = 0; ch < 10; ++ch)
+        if (g_ch[ch].readback) publishReadback(ch, false);
+}
+
+void finishReadbacks() {
+    for (int ch = 0; ch < 10; ++ch)
+        if (g_ch[ch].readback) publishReadback(ch, true, (g_ch[ch].chcr & 0x100u) == 0);
+}
+
 void init() {
+    finishReadbacks();
     for (auto& c : g_ch) c = Channel{};
     g_ctrl = g_stat = g_pcr = g_sqwc = g_rbsr = g_rbor = g_stadr = 0;
     g_enable = 0x1201;
@@ -312,6 +360,7 @@ void init() {
 void resetInterrupts() { g_stat = 0; }
 
 uint32_t regRead(uint32_t addr) {
+    pollReadbacks();
     switch (addr) {
     case 0x1000E000u: return g_ctrl;
     case 0x1000E010u: return g_stat;
@@ -359,6 +408,7 @@ void regWrite(uint32_t addr, uint32_t v) {
     case 0x00:
         c.chcr = (c.chcr & 0xFFFF0000u) | (v & 0xFFFFu);
         if (!(v & 0x100u)) {   // STR off stops an IPU transfer, or one waiting for its VIF
+            if (c.readback) publishReadback(ch, true, true);
             c.running = false;
             c.waiting = false;
             c.endAfterData = false;
@@ -385,6 +435,7 @@ void enableRegWrite(uint32_t, uint32_t v) {
     // on (one whose VIF is still stalled goes back to waiting); IPU transfers resume.
     for (int ch = 0; ch < 10; ++ch)
         if ((g_ch[ch].chcr & 0x100u) && !g_ch[ch].running) start(ch);
+    pollReadbacks();
     ipu::run();
 }
 

@@ -4,6 +4,7 @@
 #include "gpu/renderer.h"
 
 #include "clock.h"
+#include "hw/dmac.h"
 #include "hw/hw.h"
 #include "kernel/kernel.h"
 #include "log.h"
@@ -16,6 +17,7 @@
 #include <atomic>
 #include <bit>
 #include <cfenv>
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <cstdlib>
@@ -1635,6 +1637,7 @@ Display displayNow() {
 }
 bool buildFrame(const Display& d, Frame& out);
 void vulkanVsync(const Display& disp, const video::Present& how);
+size_t readTransferImpl(uint64_t* out, size_t count, bool onGsThread);
 
 // ---- PATH1 from the VU1 thread ----------------------------------------------------------
 // With VU1 on a thread of its own, its XGKICK packets come in a ring of their
@@ -1674,7 +1677,7 @@ void decodePath1(uint64_t program) {
 // packets the program kicks.
 class GsThread {
 public:
-    enum Kind : uint64_t { Gif, ResetPaths, ResetGs, Vsync, Finish, Path1 };
+    enum Kind : uint64_t { Gif, ResetPaths, ResetGs, Vsync, Finish, Path1, Readback };
 
     ~GsThread() { stop(false); }
 
@@ -1824,6 +1827,13 @@ private:
             if (g_vulkan && path) gpu::renderer::syncAll();   // what the card drew, back in GS memory
             break;
         case Path1: decodePath1(ring_[data & kMask]); break;
+        case Readback: {
+            ReadbackJob* job = reinterpret_cast<ReadbackJob*>(static_cast<uintptr_t>(ring_[data & kMask]));
+            job->moved = static_cast<uint32_t>(readTransferImpl(job->data.data(), job->data.size() / 2, true));
+            job->done.store(true, std::memory_order_release);
+            job->done.notify_one();
+            break;
+        }
         }
     }
 
@@ -1928,12 +1938,24 @@ void setOwnThread(bool on) {
 bool ownThread() { return g_async; }
 
 void shutdown() {
+    dmac::finishReadbacks();
     vu::updateOwnThread(false);
     g_gsThread.stop(true);
     if (g_vulkan) {
         gpu::renderer::stop(false);   // at exit nothing reads GS memory again
         g_vulkan = false;
     }
+}
+
+void queueReadback(ReadbackJob* job) {
+    if (g_async) {
+        const uint64_t q[2] = {static_cast<uint64_t>(reinterpret_cast<uintptr_t>(job)), 0};
+        g_gsThread.push(GsThread::Readback, 0, q, 1);
+        return;
+    }
+    job->moved = static_cast<uint32_t>(readTransfer(job->data.data(), job->data.size() / 2));
+    job->done.store(true, std::memory_order_release);
+    job->done.notify_one();
 }
 
 void path1Run(uint64_t program) {
@@ -1964,6 +1986,7 @@ uint64_t putImr(uint64_t v) {
 }
 
 void pollEvents() {
+    dmac::pollReadbacks();
     if (!g_events.load(std::memory_order_relaxed)) return;
     const uint64_t raised = g_events.exchange(0);
     if ((raised | g_csr.load()) & 0x1F & ~((g_imr >> 8) & 0x1F)) hw::raiseIntc(hw::INTC_GS);
@@ -2336,11 +2359,14 @@ bool buildFrame(const Display& disp, Frame& out) {
 
 } // namespace
 
-size_t readTransfer(uint64_t* out, size_t count) {
+namespace {
+
+size_t readTransferImpl(uint64_t* out, size_t count, bool onGsThread) {
     if (!count) return 0;
     Readback& r = g_readback;
     if (!r.ready) {
-        drawn(false);   // also reaches a TRXDIR still queued for the GS thread
+        if (onGsThread) g_drawThreads.finish();
+        else drawn(false);   // also reaches a TRXDIR still queued for the GS thread
         if (g_vulkan && r.active) {
             Pages pages;
             for (uint32_t y = 0; y < r.h; ++y)
@@ -2382,6 +2408,10 @@ size_t readTransfer(uint64_t* out, size_t count) {
     }
     return done;
 }
+
+} // namespace
+
+size_t readTransfer(uint64_t* out, size_t count) { return readTransferImpl(out, count, false); }
 
 bool currentFrame(Frame& out) {
     if (g_vulkan) {   // the card's picture, at its scale; the GS thread waits meanwhile

@@ -1,11 +1,9 @@
-// EE DMA controller. Transfers complete immediately when a channel is
-// started; completion is then signalled through D_STAT (and the DMAC
-// interrupt) exactly as on hardware, so code that polls or waits on
-// interrupts behaves. The IPU's channels are the exception: they move data
-// only as fast as the IPU's FIFOs take or give it, so a transfer stays in
-// progress until the IPU has consumed or produced its data. So does a VIF
-// channel whose VIF an i bit stalled: it stops after the quadword the VIF
-// stalled in, and goes on from there (MADR, QWC, TADR) when the stall ends.
+// EE DMA controller. Most transfers complete when a channel is started;
+// completion is then signalled through D_STAT (and the DMAC interrupt), so
+// code that polls or waits on interrupts behaves. The IPU's channels move data
+// only as fast as the IPU's FIFOs take or give it. A VIF channel stops at an i
+// bit and goes on when the stall ends. Reverse VIF1 DMA runs through the GS
+// thread: its completion reaches the EE at a safepoint or a channel read.
 #pragma once
 
 #include <cstdint>
@@ -13,6 +11,10 @@
 namespace ps2::dmac {
 
 void init();
+// Guest thread: publishes any reverse VIF1 results the GS thread has finished.
+void pollReadbacks();
+// At shutdown, before the GS thread stops: finishes every queued result.
+void finishReadbacks();
 uint32_t regRead(uint32_t addr);
 void regWrite(uint32_t addr, uint32_t value);
 uint32_t enableRegRead(uint32_t addr);
