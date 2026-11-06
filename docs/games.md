@@ -70,18 +70,21 @@ config lists the other executables under `[input] programs`, as in
   the game draws the character into a texture, which the card reads at its
   own resolution (reading every texture from GS memory at 1x instead gave
   the same frames). Above 1x edges come out finer, the menus' figures and
-  lines too.
+  lines too. The driving race's 180 dumped frames to vblank 9,000 also match
+  at 1x. At 3x, 74 differ at the console's pixels because the card reads
+  textures it drew at their resolution; forcing those reads through the 1x
+  mirror made all 180 match. Reading Z32 targets directly when shown as CT32
+  reduced the run's native-resolution display fallbacks from 106 to 74 without
+  changing its 3x frames; the rest are 32-bit buffers shown as CT16.
 
 ### Known problems
 
-- The game often sends pixels into GS memory the card drew in another layout.
-  These used to read the pages back first, each time a wait for the card: 597
-  times in a real-time run of 180 s into the first mission's building. The
-  partial transfers now merge into the card's mirror without waiting; a run
-  after that change has not been measured. The drawing also puts depth buffers in the
-  frame's memory, which the card draws without the depth test (`frame and
-  depth overlap`, 270 drawing states in that run); the title session's frames
-  came out the same as the software renderer's all the same.
+- The drawing puts depth buffers in the frame's memory, which the card draws
+  without the depth test (`frame and depth overlap`, 270 drawing states in a
+  180 s run into the first mission's building); the title session's frames
+  came out the same as the software renderer's all the same. Partial uploads
+  over pages the card drew in another layout used to cost a wait each; they
+  now merge into the card's mirror (the race's measurements are under Speed).
 - The driving missions read GS memory back through VIF1 about once a frame
   (reported as `VIF1 to-memory transfer`), which the runtime does not do yet:
   an 8x8 block of the depth buffer (`PSMZ32`) at a point that drifts with the
@@ -283,6 +286,12 @@ In the order the changes were made:
   second); with the widescreen patch, 292 ms. A deterministic run of the
   race draws the same frames as with the programs interpreted (180 of 180
   compared).
+- **Cross-layout uploads merged into the card's mirror.** In a real-time
+  scripted race with the fire button held through parts, vblanks 5,400 to
+  9,000 at 1x went from 3,864 read-backs (8.8 s waiting) and 191 gaps over
+  30 ms to none and three. At 3x there were no read-backs and three such gaps.
+  Both runs held 50 vblanks a second; the normal, explosion and reloading
+  windows measured drew 25 pictures a second.
 
 ## Resident Evil Code: Veronica X
 

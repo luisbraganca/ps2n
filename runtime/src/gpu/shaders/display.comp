@@ -29,8 +29,13 @@ uint circuitColour(uint e, uint x, uint y, uint subX, uint subY) {
     const uint at = upload[e + CIRCUIT_PAGES + ((upload[e + CIRCUIT_FBP] + page) & 511u)];
     uint raw;
     if ((at & CIRCUIT_PAGE_AT) != 0u) {
-        const uint sc = pc.p[0];
-        const uint tx = (at & 63u) * 64u + (x & 63u), ty = ((at >> 6) & 511u) * pageH + (y & (pageH - 1u));
+        const uint sc = pc.p[0], kind = (at >> CIRCUIT_PAGE_KIND_SHIFT) & 0xFu;
+        uvec2 pixel = uvec2(x & 63u, y & (pageH - 1u));
+        if (wide && kind != 0u) {
+            const uint w = tables[T_INV32 + kind * 2048u + c32(0u, y & 31u, x & 63u)];
+            pixel = uvec2(w & 63u, w >> 6);
+        }
+        const uint tx = (at & 63u) * 64u + pixel.x, ty = ((at >> 6) & 511u) * pageH + pixel.y;
         raw = imageLoad(images[nonuniformEXT((at >> 15) & 0xFFFu)], ivec2(tx * sc + subX, ty * sc + subY)).r;
         raw &= wide ? 0xFFFFFFFFu : 0xFFFFu;
     } else if (wide) {   // readRaw(fbp * 32, fbw, psm, x, y) in GS memory

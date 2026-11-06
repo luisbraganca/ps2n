@@ -521,9 +521,10 @@ it: the console reads its own new pixels, which cannot be ordered on the
 card, so it is reported.
 
 **The display.** Each circuit reads each page from the target that holds
-it, at scale, or from the mirror at 1x, and the circuits merge as
-`buildFrame` merges them, picture pixel (X, Y) being (X / N, Y / N) and its
-sub-pixel. FIELD mode's deinterlacer runs on the card over fields at scale,
+it, at scale, or from the mirror at 1x. A Z32 target shown as 32-bit colour
+stays at scale too: the display's colour address goes through the target's
+inverse swizzle. The circuits merge as `buildFrame` merges them, picture pixel
+(X, Y) being (X / N, Y / N) and its sub-pixel. FIELD mode's deinterlacer runs on the card over fields at scale,
 and takes its decisions there too (whether a field is the last one again,
 which fields are recent), so the picture needs nothing read back.
 

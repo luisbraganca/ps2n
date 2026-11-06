@@ -37,6 +37,18 @@ struct Target {
     uint32_t owned = 0;               // pages it owns
 };
 
+// PAGE_KIND: the 32-bit layouts by Z, the 16-bit ones as S | Z << 1, after 2.
+inline uint32_t pageKindOf(int family) {
+    switch (family) {
+    case 3: return 1;
+    case 1: return 2;
+    case 2: return 3;
+    case 4: return 4;
+    case 5: return 5;
+    default: return 0;
+    }
+}
+
 struct PageState {
     uint16_t owner = 0;               // a target's id; 0: no target owns it
     bool vramValid = true;            // g_vram holds the page's content

@@ -6993,4 +6993,43 @@ TEST_CASE(gpu_display_shows_each_page_from_where_it_is) {
     }
 }
 
+// A Z32 buffer shown as CT32: the display's colour layout picks the depth
+// target's pixels through its own swizzle, keeping their finer triangle edge.
+TEST_CASE(gpu_display_reads_depth_targets_at_scale) {
+    auto draw = [] {
+        gs::init();
+        gs::privWrite(0x12000000, 0x6);                              // PMODE: circuit 2
+        gs::privWrite(0x12000090, 2 << 9);                           // DISPFB2: page 0, 128 wide, CT32
+        gs::privWrite(0x120000A0, 127ull << 32 | 63ull << 44);       // DISPLAY2: 128 clocks, 64 lines
+        gsWrite({{0x40, 127ull << 16 | 63ull << 48}, {0x18, 0}, {0x1A, 1}, {0x4C, 20 | 2ull << 16},
+                 {0x4E, 0}, {0x47, 1ull << 16 | 1ull << 17}});       // ZBUF_1: page 0, Z32; depth ALWAYS, written
+        gsWrite({{0x00, 6}, {0x01, 0x80000000}, {0x05, xyz(0, 0, 0x00112233)}, {0x05, xyz(128, 64, 0x00112233)}});
+        gsWrite({{0x00, 3}, {0x01, 0x80000000}, {0x05, xyz(0, 0, 0x00445566)}, {0x05, xyz(125, 0, 0x00445566)},
+                 {0x05, xyz(0, 61, 0x00445566)}});
+        gs::Frame f;
+        CHECK(gs::currentFrame(f));
+        return f;
+    };
+    const gs::Frame software = draw();
+    CHECK_EQ(software.pixels.size(), size_t(128 * 64));
+    for (const int scale : {1, 2, 3}) {
+        Reports native("picture shown at the console's resolution");
+        GpuRun gpu(scale);
+        gs::Frame full = draw();
+        if (scale > 1) {
+            size_t finer = 0;
+            for (int y = 0; y + scale <= full.height; y += scale)
+                for (int x = 0; x + scale <= full.width; x += scale) {
+                    const uint32_t a = full.pixels[static_cast<size_t>(y) * full.width + x];
+                    for (int dy = 0; dy < scale; ++dy)
+                        for (int dx = 0; dx < scale; ++dx) finer += full.pixels[static_cast<size_t>(y + dy) * full.width + x + dx] != a;
+                }
+            CHECK(finer > 0);
+        }
+        CHECK(shownPicture(full));
+        CHECK(full.pixels == software.pixels);
+        CHECK_EQ(native(), 0u);
+    }
+}
+
 int main(int argc, char** argv) { return ::testing::runAll(argc, argv); }

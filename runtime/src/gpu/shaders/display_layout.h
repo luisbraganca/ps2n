@@ -4,9 +4,10 @@
 #define PS2N_GPU_DISPLAY_LAYOUT_H
 
 // A display circuit (gs::detail::Circuit) and where each page of its buffer
-// is read: CIRCUIT_PAGES + page holds CIRCUIT_PAGE_AT | the target image
-// (binding 0) << 15 | the page's row in it << 6 | its column, for a page a
-// target of the buffer's pixel family holds; 0 for one read from the mirror.
+// is read: CIRCUIT_PAGES + page holds CIRCUIT_PAGE_AT | the target's PAGE_KIND
+// << 27 | image (binding 0) << 15 | the page's row in it << 6 | its column,
+// for a page a target of the same unit size and page height holds; 0 for one
+// read from the mirror. For Z32 shown as colour, the shader translates swizzles.
 #define CIRCUIT_PSM 0
 #define CIRCUIT_FBP 1      // pages
 #define CIRCUIT_FBW 2
@@ -21,6 +22,7 @@
 #define CIRCUIT_PAGES 16
 #define CIRCUIT_WORDS (16 + 512)
 #define CIRCUIT_PAGE_AT 0x80000000u
+#define CIRCUIT_PAGE_KIND_SHIFT 27
 
 #define DISPLAY_EN1 1u
 #define DISPLAY_EN2 2u

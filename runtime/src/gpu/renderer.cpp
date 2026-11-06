@@ -33,18 +33,6 @@ int transferFamily(uint32_t psm) { return bufferFamily(psm) >= 0 ? bufferFamily(
 
 uint32_t pageHeightOf(int family) { return family == 1 || family == 2 || family == 4 || family == 5 ? 64 : 32; }
 
-// PAGE_KIND: the 32-bit layouts by Z, the 16-bit ones as S | Z << 1, after 2.
-uint32_t pageKindOf(int family) {
-    switch (family) {
-    case 3: return 1;
-    case 1: return 2;
-    case 2: return 3;
-    case 4: return 4;
-    case 5: return 5;
-    default: return 0;
-    }
-}
-
 // What a transfer's unit writes of a target's word (PUSH_UNIT_*).
 uint32_t pushUnitOf(uint32_t psm) {
     switch (psm) {
