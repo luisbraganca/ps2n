@@ -293,6 +293,14 @@ assets/                          branding/ (logo and icons; its README says whic
 
 ## Keeping the docs in step
 
+- docs/ is also the GitHub Pages source. `_config.yml`, `_layouts/` and
+  `assets/` build the website; index.md is its homepage. Internal guide links
+  stay relative so jekyll-relative-links can translate them. Links from a
+  guide to files outside docs/ use the repository's absolute `blob/main` or
+  `tree/main` URL, because Pages does not publish the rest of the tree. Keep
+  the README's progress bars there; the homepage links to the guides instead
+  of duplicating those tables. Website motion must respect reduced-motion
+  settings, and the site must not depend on a browser framework or CDN.
 - docs/games.md holds each game's stage, what runs, its known problems and its
   speed. A game's speed measurements go in its Speed section there: where it
   stands, then what each change bought, before and after. The README keeps a

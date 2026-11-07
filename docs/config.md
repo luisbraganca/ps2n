@@ -29,7 +29,7 @@ General rules:
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `elf` | path | required | The EE executable (`SLUS_123.45`, `SCES_...`, a homebrew `.elf`). IRX modules are rejected: they are IOP code (see `ps2n irx`). |
-| `ghidra_map` | path | none | A function map, usually written by [tools/ghidra/ExportPs2nFunctions.java](../tools/ghidra/ExportPs2nFunctions.java). |
+| `ghidra_map` | path | none | A function map, usually written by [tools/ghidra/ExportPs2nFunctions.java](https://github.com/luisbraganca/ps2n/blob/main/tools/ghidra/ExportPs2nFunctions.java). |
 | `map_files` | array of paths | `[]` | More function maps, same format. |
 | `programs` | array of paths | `[]` | The game's other executables, which it starts with `LoadExecPS2`: each an ELF, or a config file (`.toml`) for that ELF. See [Games with several executables](#games-with-several-executables). |
 

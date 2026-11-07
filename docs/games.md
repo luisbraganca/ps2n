@@ -2,7 +2,7 @@
 
 How far each game gets, what still goes wrong and how fast it runs. A game is
 listed once it has been tried. Stages follow PCSX2's compatibility scale, and
-the README's [Games playable](../README.md#by-area) bar counts the games at
+the README's [Games playable](https://github.com/luisbraganca/ps2n/blob/main/README.md#by-area) bar counts the games at
 Playable or Perfect.
 
 | Stage | The game |
@@ -21,9 +21,9 @@ Playable or Perfect.
 | [Secret Agent Clank](#secret-agent-clank) | USA | SCUS-97623 | Menus | 2026-11-07 |
 
 To bring up another game, start with the README's
-[Porting a game](../README.md#porting-a-game). Then give the game a section
+[Porting a game](https://github.com/luisbraganca/ps2n/blob/main/README.md#porting-a-game). Then give the game a section
 here, with the same parts as the one below, and its config a folder in
-[games](../games/README.md).
+[games](https://github.com/luisbraganca/ps2n/blob/main/games/README.md).
 
 ## 007: Agent Under Fire
 
@@ -33,7 +33,7 @@ executable per language (`ACTION.UK` is the English one), and the driving
 missions (`DRIVING.ELF`). The loader is the program the disc boots, so its
 config lists the other executables under `[input] programs`, as in
 [config.md](config.md#games-with-several-executables). The configs are in
-[games/agent-under-fire](../games/agent-under-fire).
+[games/agent-under-fire](https://github.com/luisbraganca/ps2n/tree/main/games/agent-under-fire).
 
 ### What runs
 
@@ -321,7 +321,7 @@ In the order the changes were made:
 
 The USA release, an NTSC game: it needs no `--region`. It is one executable,
 `SLUS_201.84`, built with Metrowerks CodeWarrior and with its symbols, so its
-config ([games/code-veronica-x/cvx.toml](../games/code-veronica-x/cvx.toml))
+config ([games/code-veronica-x/cvx.toml](https://github.com/luisbraganca/ps2n/blob/main/games/code-veronica-x/cvx.toml))
 names little more than the ELF. Code and data share the
 executable's one section, which the recompiler splits at the first data
 object ([config.md](config.md#where-the-code-is)). The game reboots the IOP
@@ -462,7 +462,7 @@ whose CLUT lies in the depth buffer's memory.
 
 The USA release, an NTSC game: it needs no `--region`. It is one executable,
 `SCUS_976.23`, without symbols, so its config
-([games/secret-agent-clank/sac.toml](../games/secret-agent-clank/sac.toml))
+([games/secret-agent-clank/sac.toml](https://github.com/luisbraganca/ps2n/blob/main/games/secret-agent-clank/sac.toml))
 names little more than the ELF and a few entry points. The front end and the levels are relocatable
 modules that the game loads itself (`BIN/FE.REL` and `BIN/LEVEL*.REL`, in a
 format whose files start with `SNR2`). The recompiler does not read them, so

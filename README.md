@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <a href="https://luisbraganca.github.io/ps2n/">Website</a> ·
   <a href="GETTING_STARTED.md">Get started</a> ·
   <a href="#game-compatibility">Compatibility</a> ·
   <a href="#how-it-works">How it works</a> ·
@@ -515,7 +516,7 @@ games/        release-specific configs and entry points; no game data
 tools/ghidra/ function-map exporter for Ghidra
 examples/     the end-to-end example
 tests/        unit tests and end-to-end programs
-docs/         user and developer documentation
+docs/         project website, user and developer documentation
 assets/       branding and Windows executable icons
 third_party/  toml++ (MIT), Dear ImGui 1.92.9b (MIT), Vulkan headers 1.4.363 (Apache-2.0 or MIT)
 ```

@@ -40,6 +40,10 @@ room.
   icon.
 - The social preview is set on GitHub (Settings, General, Social preview),
   not from a file in the repository.
+- The website in `docs/` uses copies of the dark horizontal logo, blue icon,
+  favicon and social preview under `docs/assets/brand/`. Keep those copies
+  when changing the branding; the site cannot load images outside the Pages
+  source directory.
 
 ## Rules
 

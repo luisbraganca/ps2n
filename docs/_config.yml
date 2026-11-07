@@ -1,0 +1,28 @@
+title: PS2Native
+tagline: Old silicon. New instructions.
+description: >-
+  PlayStation 2 Emotion Engine executables, statically recompiled into readable
+  C++ and linked with a native runtime.
+url: "https://luisbraganca.github.io"
+baseurl: "/ps2n"
+repository: luisbraganca/ps2n
+
+markdown: kramdown
+kramdown:
+  input: GFM
+  parse_block_html: true
+  syntax_highlighter: rouge
+
+plugins:
+  - jekyll-relative-links
+  - jekyll-seo-tag
+  - jekyll-titles-from-headings
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+
+exclude:
+  - README.md
