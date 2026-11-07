@@ -193,6 +193,12 @@ real kernel does. If a handler wakes a higher-priority thread, the switch
 happens right after the handler returns, at the same safepoint; the loop
 header is a resume point, so the preempted thread later continues there.
 
+INTC handler delivery does not acknowledge `I_STAT`. Each event calls its
+handlers once and leaves the bit latched for the guest to clear, including a
+thread polling the register with that interrupt enabled. A later event calls
+the handlers again even if the old bit is still set. Simply leaving the bit
+set without recording the delivery would instead call the handler forever.
+
 An event runs at the first safepoint after its time, usually some cycles
 late, so it acts on what happened since it was scheduled rather than on the
 state it finds: a timer's compare interrupt comes because the counter passed

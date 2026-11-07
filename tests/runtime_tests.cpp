@@ -3823,6 +3823,15 @@ TEST_CASE(iop_sif_rpc_fileio_and_loadfile) {
     CHECK_EQ(sreg[2], 0x80000001u);                 // SET_SREG
     CHECK_EQ(sreg[5], 1u);                          // SIF_SREG_RPCINIT = 1
 
+    // An empty command slot is ignored, as in sifcmd's dispatch. Secret Agent
+    // Clank sends command 4 twice a frame without registering a handler.
+    const bool wasStrict = g_opt.strict;
+    g_opt.strict = true;
+    ee.send(0x80000004u, {});
+    CHECK(!g_exitRequested);
+    CHECK_EQ(read32(EeSif::kPktBuf), 0u);
+    g_opt.strict = wasStrict;
+
     // Bind FILEIO (0x80000001).
     const uint32_t cd = 0x00400400;
     ee.send(0x80000009u, {0x1 | 4, 0x00400800, 7, cd, 0x80000001u});

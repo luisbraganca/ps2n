@@ -1119,7 +1119,7 @@ void serviceInterrupts() {
     for (int guard = 0; interruptsEnabled() && guard < 64; ++guard) {
         if (const uint32_t intc = hw::intcPending()) {
             const int cause = std::countr_zero(intc);
-            hw::ackIntc(cause);
+            hw::markIntcHandled(cause);
             {
                 const InterruptScope scope;
                 runHandlers(g_intcHandlers[cause], static_cast<uint32_t>(cause));

@@ -106,6 +106,16 @@ vblank_handler:
         move    $v0, $zero
         .end vblank_handler
 
+        .ent poll_vblank_handler
+poll_vblank_handler:                    # deliberately does not acknowledge I_STAT
+        la      $t0, poll_handler_calls
+        lw      $t1, 0($t0)
+        addiu   $t1, $t1, 1
+        sw      $t1, 0($t0)
+        jr      $ra
+        move    $v0, $zero
+        .end poll_vblank_handler
+
         .ent alarm_callback
 alarm_callback:                         # (alarm id, time, arg = thread to wake)
         sw      $gp, alarm_gp
@@ -400,7 +410,44 @@ main:   addiu   $sp, $sp, -32
         jal     printf
         nop
 
-        # 10. ERET with Status.ERL set returns to ErrorEPC (libkernel's SetT2).
+        # 10. A handler that does not acknowledge I_STAT runs once for the
+        #    vblank, and the bit stays latched for a thread polling the register.
+        li      $a0, 2
+        la      $a1, poll_vblank_handler
+        move    $a2, $zero
+        move    $a3, $zero
+        li      $v1, 0x10               # AddIntcHandler
+        syscall
+        sw      $v0, poll_handler_id
+        lui     $t1, 0x1000
+        ori     $t1, $t1, 0xf000
+        li      $t2, 4
+        sw      $t2, 0($t1)             # VBLANK_START: write 1 to clear
+        li      $a0, 2
+        li      $v1, 0x14               # _EnableIntc
+        syscall
+        li      $t0, 5000000
+3:      lw      $t3, 0($t1)
+        andi    $t3, $t3, 4
+        bnez    $t3, 1f
+        addiu   $t0, $t0, -1
+        bnez    $t0, 3b
+        nop
+1:      sltu    $s0, $zero, $t3
+        li      $a0, 2
+        li      $v1, 0x15               # _DisableIntc
+        syscall
+        li      $a0, 2
+        lw      $a1, poll_handler_id
+        li      $v1, 0x11               # RemoveIntcHandler
+        syscall
+        la      $a0, s_intc_poll
+        move    $a1, $s0
+        lw      $a2, poll_handler_calls
+        jal     printf
+        nop
+
+        # 11. ERET with Status.ERL set returns to ErrorEPC (libkernel's SetT2).
         jal     set_t2_comp
         li      $a0, 0x1234
         lui     $t0, 0x1000
@@ -434,10 +481,13 @@ s_e_status:     .asciz "E status after exit: %d\n"
 s_f_result:     .asciz "F wait result %d\n"
 s_timer:        .asciz "timer advanced: %d\n"
 s_vsync_flag:   .asciz "vsync flag after two more vblanks: %d\n"
+s_intc_poll:    .asciz "polled vblank start: %d, handler calls: %d\n"
 s_set_t2:       .asciz "returned through ErrorEPC: T2_COMP 0x%x, ERL %d\n"
 
         .data
         .align 2
+poll_handler_id: .word 0
+poll_handler_calls: .word 0
 next_stack:     .word thread_stacks
 main_tid:       .word 0
 tid_a:          .word 0

@@ -463,7 +463,7 @@ enters the code (function pointers, a resumed thread).
 
 | Unit | Covered |
 |---|---|
-| INTC | `I_STAT`, `I_MASK`; the sources raised so far are GS, VBLANK start/end, VIF0 and VIF1 (a VIF code's i bit), timers 0-3 and the IPU (DMA completion goes through the DMAC interrupt) |
+| INTC | `I_STAT`, `I_MASK`; the sources raised so far are GS, VBLANK start/end, VIF0 and VIF1 (a VIF code's i bit), timers 0-3 and the IPU (DMA completion goes through the DMAC interrupt). Each event runs its handlers once without clearing `I_STAT`, so the guest can poll the latched bit and acknowledge it explicitly; a later event runs them again |
 | Timers | all four: count, mode, compare, hold; compare and overflow interrupts |
 | Vsync | NTSC or PAL timing from `SetGsCrt`; VBLANK start/end interrupts, GS `CSR.VSINT`; in real time a vblank waits until the threads have had half a frame over the last two frames, so interrupt handlers that keep overrunning frames (drawing through the vector units, which a console does beside the CPU) slow the game down instead of starving its threads |
 | SIO | the debug TX register (`0x1000F180`) prints to stdout |
@@ -532,7 +532,8 @@ modules are host code:
   serves gets no server, as on the console, so the game retries while a
   module that is still starting may register it; after five seconds of
   emulated time a null service answers (reported), so a missing module does
-  not hang the game.
+  not hang the game. A command with no registered handler is ignored, as in
+  `sifcmd`, and reported as a fallback rather than an unimplemented path.
 - **Module releases**: games built with SDK 2.x reboot the IOP with a
   replacement image (`rom0:UDNL cdrom0:\MODULES\IOPRP214.IMG;1`), and their EE
   libraries refuse to use FILEIO and LOADFILE unless these report the image's

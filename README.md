@@ -56,8 +56,8 @@ L_001001a4:
 Two are In-game on PCSX2's scale: 007: Agent Under Fire runs its menus, its
 whole first mission and its second mission's race, with sound, and Resident
 Evil Code: Veronica X runs its menus and movies at full speed, and its first
-areas play with a controller. Secret Agent Clank gets through its start-up
-and waits at its first loading screen.
+areas play with a controller. Secret Agent Clank reaches its main menu, with
+its front end running on the interpreter; no level has been tested.
 [docs/games.md](docs/games.md) has what runs, the known problems and the
 speed, game by game.
 
@@ -85,7 +85,7 @@ for the rest of the console:
 
 | Area | Progress | Count | Biggest gaps |
 |---|---|--:|---|
-| [Games playable](docs/games.md) | `░░░░░░░░░░` 0% | 0 / 3 | Agent Under Fire played into its second mission and Code: Veronica X through its first areas, neither tried further; Secret Agent Clank waits at its first loading screen |
+| [Games playable](docs/games.md) | `░░░░░░░░░░` 0% | 0 / 3 | Agent Under Fire played into its second mission and Code: Veronica X through its first areas, neither tried further; Secret Agent Clank has reached only its menu |
 | EE instructions | `██████████` 100% | 359 / 359 | |
 | Recompiler | `████████░░` 80% | 8 / 10 | overlays, relocatable modules |
 | EE kernel syscalls | `█████████░` 88% | 127 / 145 | event flags, `ExecPS2`, the TLB, CPU timers |
@@ -284,8 +284,8 @@ Roughly in order:
    little to spare for slower machines.
 5. **More games**: FILEIO's asynchronous protocol, `mcman`, event flags,
    `ExecPS2`, dual-layer discs, code overlays and relocatable modules,
-   Code: Veronica X past its first areas, and Secret Agent Clank past its
-   first loading screen.
+   Code: Veronica X past its first areas, and Secret Agent Clank into its
+   first level.
 6. **Vector units**: their timing (a program takes no emulated time).
 7. **Widescreen and higher resolutions**, the way PCSX2 does them. 16:9
    works: Agent Under Fire and Code: Veronica X play in 16:9 with PCSX2's

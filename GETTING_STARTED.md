@@ -44,7 +44,7 @@ not been tried, and how yours copes is worth reporting.
 |---|---|---|---|
 | 007: Agent Under Fire | Europe (PAL) | SLES-50539 | the menus, the first mission and the second mission's race |
 | Resident Evil Code: Veronica X | USA (NTSC) | SLUS-20184 | the menus, the movies and the first areas |
-| Secret Agent Clank | USA (NTSC) | SCUS-97623 | nothing yet: it shows its loading sign and goes no further |
+| Secret Agent Clank | USA (NTSC) | SCUS-97623 | the main menu; no level has been tested |
 
 The serial is printed on the disc and on the back of the case. Another
 release of these games (another region, or a reprint with another serial)
@@ -333,10 +333,10 @@ From now on, start the game with:
 ~/ps2/secret-agent-clank/play.sh
 ```
 
-For now the game shows only its loading sign, a turning blue arrow in the
-bottom-right corner, and goes no further
-([docs/games.md](docs/games.md#secret-agent-clank) says why). Close the
-window to quit.
+The game reaches its main menu. Press Start when it asks. The menu has Load
+Game, New Game and Options. Its front end runs on the interpreter; no level or
+sound has been tested yet ([docs/games.md](docs/games.md#secret-agent-clank)
+has the details).
 
 ### Another game
 

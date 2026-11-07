@@ -18,4 +18,5 @@ E status after exit: 16
 F wait result -425
 timer advanced: 1
 vsync flag after two more vblanks: 0
+polled vblank start: 1, handler calls: 1
 returned through ErrorEPC: T2_COMP 0x1234, ERL 0

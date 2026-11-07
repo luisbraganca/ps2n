@@ -33,7 +33,8 @@ void write16(uint32_t phys, uint16_t value);
 
 // INTC
 void raiseIntc(int cause);
-uint32_t intcPending();       // I_STAT & I_MASK
+uint32_t intcPending();       // new interrupts whose guest handlers have not run
+void markIntcHandled(int cause);   // run the handlers without clearing I_STAT
 void ackIntc(int cause);
 void setIntcMask(int cause, bool enabled);
 // Clears the INTC and DMAC interrupt status and masks (a new program starts).

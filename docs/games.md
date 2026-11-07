@@ -18,7 +18,7 @@ Playable or Perfect.
 |---|---|---|---|---|
 | [007: Agent Under Fire](#007-agent-under-fire) | Europe | SLES-50539 | In-game | 2026-11-06 |
 | [Resident Evil Code: Veronica X](#resident-evil-code-veronica-x) | USA | SLUS-20184 | In-game | 2026-11-06 |
-| [Secret Agent Clank](#secret-agent-clank) | USA | SCUS-97623 | Nothing | 2026-11-07 |
+| [Secret Agent Clank](#secret-agent-clank) | USA | SCUS-97623 | Menus | 2026-11-07 |
 
 To bring up another game, start with the README's
 [Porting a game](../README.md#porting-a-game). Then give the game a section
@@ -478,10 +478,13 @@ two sprites in GS memory.
 
 On 2026-11-07, FILEIO release 3100 support let the game read and close all of
 `BIN/FE.REL` and run the relocated front end on the interpreter. It went on to
-load the global asset archive, GUI assets and controller support. A strict,
-deterministic software-renderer run reached 1,800 vblanks with no
-unimplemented path, but the picture was still the loading arrow. The run
-recorded 121 interpreted entry points. No menu or level has been reached.
+load the global asset archive, GUI assets and controller support. The INTC and
+SIF changes below then got it past the loading arrow. A strict, deterministic
+software-renderer run reached the "Press the START button" scene at 1,800
+vblanks with no unimplemented path and 201 interpreted entry points. A scripted
+Start press opens the main menu, with Load Game, New Game and Options. That
+strict run reached 2,400 vblanks with no unimplemented path and recorded 294
+interpreted entry points. No level has been loaded.
 
 ### What it took
 
@@ -500,17 +503,25 @@ recorded 121 interpreted entry points. No menu or level has been reached.
   client request. The runtime now speaks that protocol as well as releases
   1000 and 2100. Sending only the notification opened `FE.REL` but left the
   library's RPC request active, so the loader made no read.
+- Each INTC event runs its guest handlers once without acknowledging `I_STAT`.
+  The front end waits for the vblank-start bit with that interrupt enabled;
+  acknowledging it before the handler ran hid every vblank from the polling
+  thread. Merely never acknowledging it instead delivered the same handler
+  repeatedly and stopped start-up. A later event runs the handler again even
+  when the guest has not cleared the old bit yet.
+- `sifcmd` ignores a command whose handler slot is empty. Clank sends command
+  `0x80000004` without registering a handler. The runtime now ignores these
+  commands too, reporting them as a fallback rather than an unimplemented path.
 
 ### Known problems
 
-- The front end runs and loads assets, but the game remains on its loading
-  arrow. No later, concrete loader failure has been isolated yet.
-- The SNR2 front end is not recompiled; its 121 observed entry points run on
-  the interpreter. Levels and FMOD Ex's sound have not been tested.
+- The SNR2 front end is not recompiled; the menu run recorded 294 interpreted
+  entry points. No level has been loaded, and FMOD Ex's sound has not been
+  tested.
 - The executable's `.data` section is marked executable, and with no symbols
   the analysis takes it for code: `report.txt` lists 6,224 unknown
   instructions, most likely that data.
 
 ### Speed
 
-Not measured: the game does not get far enough.
+Not measured: the game has only reached its menu.

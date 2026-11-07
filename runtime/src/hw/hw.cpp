@@ -24,6 +24,7 @@ namespace {
 
 // ---- INTC ---------------------------------------------------------------------
 uint32_t g_istat = 0, g_imask = 0;
+uint32_t g_intcHandled = 0;
 
 // ---- timers --------------------------------------------------------------------
 struct Timer {
@@ -242,7 +243,7 @@ bool isGsPriv(uint32_t a) { return a >= 0x12000000u && a < 0x12002000u; }
 } // namespace
 
 void init() {
-    g_istat = g_imask = 0;
+    g_istat = g_imask = g_intcHandled = 0;
     for (auto& t : g_timers) t = Timer{};
     g_misc.clear();
     g_vsyncs = 0;
@@ -273,12 +274,14 @@ void startVsync() {
 // ---- INTC ----------------------------------------------------------------------------
 void raiseIntc(int cause) {
     g_istat |= 1u << cause;
+    g_intcHandled &= ~(1u << cause);
     if (g_imask & (1u << cause)) kernel::kickInterrupts();
 }
 uint32_t intcPending() {
     gs::pollEvents();
-    return g_istat & g_imask;
+    return g_istat & g_imask & ~g_intcHandled;
 }
+void markIntcHandled(int cause) { g_intcHandled |= 1u << cause; }
 void ackIntc(int cause) { g_istat &= ~(1u << cause); }
 void setIntcMask(int cause, bool enabled) {
     if (cause < 0 || cause > 14) return;
@@ -287,7 +290,7 @@ void setIntcMask(int cause, bool enabled) {
     if (g_istat & g_imask) kernel::kickInterrupts();
 }
 void resetInterrupts() {
-    g_istat = g_imask = 0;
+    g_istat = g_imask = g_intcHandled = 0;
     dmac::resetInterrupts();
 }
 

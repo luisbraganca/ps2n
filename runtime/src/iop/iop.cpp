@@ -311,7 +311,7 @@ void handleCommand(uint32_t pktAddr) {
         kernel::callHandler(it->second.fn, pktAddr, it->second.gp, it->second.arg);
         return;
     }
-    PS2_UNIMPL("iop", "SIF command", "unhandled SIF command 0x%08x", cid);
+    PS2_FALLBACK("iop", "SIF command without a handler", "SIF command 0x%08x has no handler; ignoring it", cid);
 }
 
 void registerBuiltinServers() {
