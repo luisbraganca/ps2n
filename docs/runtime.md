@@ -223,7 +223,7 @@ when a picture looks wrong, and `--gpu-debug` checks every Vulkan call.
 
 Not covered: what the software renderer leaves out too (the destination
 alpha test, dithering, anti-aliasing, scan masks, the CLUT buffer, depth
-buffers sampled as textures, transfers back to the EE); scales that are not
+buffers sampled as textures); scales that are not
 whole numbers; texture filtering beyond what the game asks (PCSX2's
 anisotropic and forced bilinear filtering); the other per-game fixes PCSX2
 applies when it upscales (half-pixel offsets, Round Sprite Half and merged

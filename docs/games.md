@@ -122,20 +122,15 @@ config lists the other executables under `[input] programs`, as in
   `games/agent-under-fire/driving.toml` makes the game skip that reset
   always, as it does outside those seconds. The disc's read time is not
   modelled, so other waits a game times against loading may come out short.
-- A play test with the Vulkan renderer at 1x (2026-11-05) slowed down in the
-  second mission's race when the limo comes, whether on screen or not: for
-  10 to 15 seconds every other vblank came 40 to 62 ms late (25 to 28
-  vblanks a second). The guest waited up to 930 ms a second for the GS
-  thread, which spent half its time writing the game's texture uploads into
-  GS memory a pixel at a time, and about a fifth in the graphics driver,
-  most likely waiting for the card to give pages back before those uploads
-  (about 800 pages a second); the card itself was not the limit. Uploads now go a row at a time from runs of
-  quadwords (a 256 x 256 32-bit texture 8.6 -> about 4.5 ns a pixel, an 8-bit
-  one 4.7 -> 1.2), and an upload that writes a page whole needs nothing back
-  (a scripted run of the race: 2,386 -> 1,311 read-backs). Whether the limo
-  stretch now keeps up has not been played yet. Scripted runs of the race,
-  the fire button held too, show no such stretch: 48 to 50 vblanks a second
-  before the change.
+- Heavy parts of the second mission's race can still drop pictures with
+  Vulkan. A play test at 1x (2026-11-05) slowed for 10 to 15 seconds when the
+  limo came, whether on screen or not: every other vblank came 40 to 62 ms
+  late (25 to 28 vblanks a second). The guest waited up to 930 ms a second
+  for the GS thread, which spent half its time writing texture uploads a
+  pixel at a time and about a fifth in the graphics driver. Faster uploads
+  and the card's mirror have removed the measured read-back stalls in
+  scripted runs (see [Speed](#speed)), but a later live test at 3x still
+  slowed at the explosion. The remaining cause has not been established.
 - The second mission has been played into its race; how far it can be
   played has not been tried.
 - With the widescreen patch, the race's camera takes 1.817 for its width
@@ -297,12 +292,20 @@ In the order the changes were made:
   second); with the widescreen patch, 292 ms. A deterministic run of the
   race draws the same frames as with the programs interpreted (180 of 180
   compared).
+- **Faster texture uploads and whole-page writes.** Uploads changed from
+  writing a pixel at a time to writing a row at a time from runs of quadwords:
+  a 256 x 256 32-bit texture went from 8.6 to about 4.5 ns a pixel, and an
+  8-bit one from 4.7 to 1.2. An upload that wrote every bit of a page no
+  longer needed that page read back first, reducing a scripted race's
+  read-backs from 2,386 to 1,311. These measurements precede the mirror
+  change below and used a different scripted session.
 - **Cross-layout uploads merged into the card's mirror.** In a real-time
   scripted race with the fire button held through parts, vblanks 5,400 to
   9,000 at 1x went from 3,864 read-backs (8.8 s waiting) and 191 gaps over
   30 ms to none and three. At 3x there were no read-backs and three such gaps.
   Both runs held 50 vblanks a second; the normal, explosion and reloading
-  windows measured drew 25 pictures a second.
+  windows measured drew 25 pictures a second. These scripted results do not
+  rule out the slowdown seen in live play, listed under Known problems.
 - **Depth read-back through reverse VIF1 DMA.** The driving mission's 8x8
   depth reads now reach EE memory and restore the sun's glare. The final
   real-time scripted run took 187.3 s for 9,000 vblanks, including loading,
@@ -413,14 +416,12 @@ interpreter. PCSX2 rates this release Perfect, with no game fixes.
   words (its test for an upward push compares the wrong way round), as it
   would on a console. Neither the menus nor play go by that word: with the
   stick untouched, Claire stands still.
-- With the Vulkan renderer, the game keeps its CLUTs in the depth buffer's
-  memory past the picture, and every CLUT it sends there brings that page
-  back from the card first, a wait for it (`pages read back: written in
-  another layout`, 5,471 times in a deterministic run to vblank 20,000).
-  Its in-game picture is blended into the buffer it shows through a texture
-  declared 512 lines high, which reaches into that buffer: the card handles
-  each such sprite on its own (`primitive reads what it writes`, 41,676
-  times in that run), reading the texels it draws over as they were before.
+- The in-game picture is blended into the buffer it shows through a texture
+  declared 512 lines high, which reaches into that buffer. The card handles
+  each such sprite on its own, reading the texels it draws over as they were
+  before the primitive rather than reading its own new pixels as the console
+  does (`primitive reads what it writes`, 41,676 times in a deterministic run
+  to vblank 20,000).
 
 ### Speed
 
@@ -433,11 +434,15 @@ about three minutes from start-up to the first moments in the game proper,
 21,000 vblanks.
 
 With the Vulkan renderer at 3x (an NVIDIA GeForce RTX 4070 SUPER), the same
-7,200 vblanks take 120.7 s in real time (59.7 a second), against 120.5 s
-with the software renderer, the card reading GS memory back 3,954 times on
-the way (the CLUTs it sends into the depth buffer's memory). A
-deterministic run to vblank 20,000 takes 84 s at 1x and 89 s at 3x, against
-151 s with the software renderer.
+7,200 vblanks took 120.7 s in real time (59.7 a second), against 120.5 s
+with the software renderer. A deterministic run to vblank 20,000 took 84 s
+at 1x and 89 s at 3x, against 151 s with the software renderer. These
+measurements predate cross-layout uploads merging into the card's mirror. At
+the time, the game kept its CLUTs in the depth buffer's memory past the
+picture and each upload into those pages waited to read them back: 3,954
+times in the real-time run and 5,471 times in the deterministic run. Those
+uploads now merge into the mirror without a read back; the same runs have
+not been measured again.
 
 The explosion in the graveyard, before the first zombies, slowed real-time
 play down (2026-11-04). The game draws a picture every second vblank; there

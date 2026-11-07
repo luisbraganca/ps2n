@@ -286,11 +286,13 @@ recompile stops with `patch at 0x00100abc expects 0x0c040000 but the ELF has
 
 ## `[pnach]`: PCSX2's patch files
 
-PCSX2's per-game patches (`.pnach` files: widescreen, no-interlacing and
-fixes) carry over, because a recompiled game keeps every guest address. The
-files are read from wherever the config says: PCSX2 bundles them in
-`resources/patches.zip` (copy the game's file out) and keeps the user's own
-in its `patches/` folder. ps2n does not ship any.
+PCSX2's per-game `.pnach` files can patch a recompiled game because it keeps
+every guest address. Support is partial: the widescreen groups used by the two
+games in [games.md](games.md) work, while no-interlacing patches and some
+patch operations do not (see the limitations below). The files are read from
+wherever the config says: PCSX2 bundles them in `resources/patches.zip` (copy
+the game's file out) and keeps the user's own in its `patches/` folder. ps2n
+does not ship any.
 
 ```toml
 [pnach]

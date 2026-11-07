@@ -422,8 +422,11 @@ And these keys work while you play:
 
 To quit, close the window, choose Quit Game in the pause menu, or press
 Ctrl+C in the terminal. The terminal then prints a list of what the game
-asked for that PS2Native does not do yet. The game saves to memory cards,
-which are folders in the game folder's `memcards/`.
+asked for that PS2Native does not do yet. The game saves to memory cards in
+`memcards/mc0` and `memcards/mc1` under the game folder. To reuse existing
+cards, pass their parent directory explicitly, for example
+`~/ps2/code-veronica-x/play.sh --memcards /path/to/memcards`; that directory
+must contain `mc0` and, if you use a second card, `mc1`.
 
 While the game runs, the terminal fills with PS2Native's messages. Warnings
 are normal: each is something the game asked for that PS2Native does not do
@@ -618,27 +621,50 @@ Add-Content -Encoding ascii "$env:APPDATA\PS2Native\ps2n.ini" "`r`n[Axiom]`r`nTo
 image with a disc imaging program (ImgBurn's "Create image file from disc",
 for example) and save it in the game's folder under the name the commands
 use, such as `C:\ps2\code-veronica-x\cvx.iso`. Windows' own `tar` takes
-files out of it, as `bsdtar` does on Linux:
+files out of it, as `bsdtar` does on Linux. For Code: Veronica X:
 
 ```powershell
+New-Item -ItemType Directory -Force C:\ps2\code-veronica-x | Out-Null
 cd C:\ps2\code-veronica-x
 tar -xOf cvx.iso SYSTEM.CNF
 mkdir disc
 tar -xf cvx.iso -C disc SLUS_201.84
-```
-
-Then copy the game's configs, recompile and build:
-
-```powershell
 Copy-Item C:\ps2\ps2n\games\code-veronica-x\*.toml .
 C:\ps2\ps2n\build\recompiler\ps2n.exe recompile cvx.toml
 cmake -S out/cvx -B out/cvx/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DSDL2_DIR=C:/ps2/deps/SDL2-2.32.10/cmake
 cmake --build out/cvx/build
 ```
 
-The launcher is a `play.cmd` that keeps the log in `logs\`; double-click it
-to play. For Agent Under Fire, write `out\auf\build\auf.exe --cdrom auf.iso
---region europe` in its last line:
+For Agent Under Fire (check that `SYSTEM.CNF` names `SLES_505.39`):
+
+```powershell
+New-Item -ItemType Directory -Force C:\ps2\agent-under-fire | Out-Null
+cd C:\ps2\agent-under-fire
+tar -xOf auf.iso SYSTEM.CNF
+mkdir disc
+tar -xf auf.iso -C disc SLES_505.39 MOVIE.ELF ACTION.UK DRIVING.ELF
+Copy-Item C:\ps2\ps2n\games\agent-under-fire\*.toml .
+C:\ps2\ps2n\build\recompiler\ps2n.exe recompile auf.toml
+cmake -S out/auf -B out/auf/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DSDL2_DIR=C:/ps2/deps/SDL2-2.32.10/cmake
+cmake --build out/auf/build
+```
+
+For Secret Agent Clank (check that `SYSTEM.CNF` names `SCUS_976.23`):
+
+```powershell
+New-Item -ItemType Directory -Force C:\ps2\secret-agent-clank | Out-Null
+cd C:\ps2\secret-agent-clank
+tar -xOf sac.iso SYSTEM.CNF
+mkdir disc
+tar -xf sac.iso -C disc SCUS_976.23
+Copy-Item C:\ps2\ps2n\games\secret-agent-clank\*.toml .
+C:\ps2\ps2n\build\recompiler\ps2n.exe recompile sac.toml
+cmake -S out/sac -B out/sac/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DSDL2_DIR=C:/ps2/deps/SDL2-2.32.10/cmake
+cmake --build out/sac/build
+```
+
+The launcher is a `play.cmd` that keeps the game's output and the runtime's
+messages in `logs\`; double-click it to play:
 
 ```powershell
 @'
@@ -647,9 +673,17 @@ rem Starts the game, keeping its log in logs\.
 cd /d "%~dp0"
 if not exist logs mkdir logs
 for /f %%t in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HH-mm-ss"') do set T=%%t
-out\cvx\build\cvx.exe --cdrom cvx.iso %* 2> "logs\%T%.log"
+out\cvx\build\cvx.exe --cdrom cvx.iso %* > "logs\%T%.log" 2>&1
 '@ | Set-Content -Encoding ascii play.cmd
 ```
 
-**When it freezes**, run `taskkill /F /IM cvx.exe` (or `auf.exe`) in
-another window.
+That example is Code: Veronica X's launcher. For another game, change its
+last line (and create it in that game's folder):
+
+| Game | Last line |
+|---|---|
+| Agent Under Fire | `out\auf\build\auf.exe --cdrom auf.iso --region europe %* > "logs\%T%.log" 2>&1` |
+| Secret Agent Clank | `out\sac\build\sac.exe --cdrom sac.iso %* > "logs\%T%.log" 2>&1` |
+
+**When it freezes**, run `taskkill /F /IM cvx.exe` (or `auf.exe`, `sac.exe`
+or `game.exe`) in another window.

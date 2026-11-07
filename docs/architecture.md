@@ -319,9 +319,9 @@ program's end. So PATH1 keeps its place among the PATH2 and PATH3 data
 around it, as when the guest thread ran the program, and a program that
 kicks more than the ring holds streams through it. That is also why the VU1
 thread runs only while the GS has one: it stops first, once it has carried
-out what is queued, and starts last. With `--virtual-clock`, `--strict` or
-`--gs-threads 1` VU1 runs on the guest thread, and `--no-vu1-thread` keeps
-it there in real-time runs too.
+out what is queued, and starts last. With `--virtual-clock`, `--strict`, or
+`--gs-threads 1` with the software renderer, VU1 runs on the guest thread;
+`--no-vu1-thread` keeps it there in real-time runs too.
 
 What changes is when things happen, not what: the GS thread may reach a
 program's packets later than it would have, so `FINISH` and `SIGNAL` from
