@@ -16,6 +16,7 @@
 #include "ps2n/util.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <set>
@@ -64,18 +65,32 @@ void writeEeStat(uint32_t addr, const hostfs::Stat& st) {
 // ---- FILEIO (sid 0x80000001) ----------------------------------------------------------
 class FileIoServer final : public RpcServer {
 public:
-    FileIoServer() : RpcServer("FILEIO") {}
+    FileIoServer() : RpcServer("FILEIO") {
+        completionPacket_ = kernel::allocMemory(16);
+        mem::fill(completionPacket_, 0, 16);
+    }
 
-    void call(uint32_t fno, const uint8_t* d, uint32_t, uint32_t recvSize, Reply reply) override {
+    void call(uint32_t fno, const uint8_t* d, uint32_t size, uint32_t recvSize, Reply reply) override {
         const uint32_t release = moduleVersion("fileio");
+        if (release >= 2200) {
+            if (fno == 255) {
+                if (size >= 8) {
+                    resultBuffers_[0] = u32(d, 0);
+                    resultBuffers_[1] = u32(d, 4);
+                }
+                return reply(versionReply(release, recvSize));
+            }
+            asyncCall(fno, d);
+            return reply(words({1}));
+        }
         if (fno == 255) return reply(versionReply(release, recvSize));
         // The requests follow the module's release. 1000 is the BIOS's (and
         // ps2sdk's) layout. From 2100 (SDK 2.1) open carries a mode and a name
         // of up to 1024 bytes, while close, read, write and lseek are unchanged
         // (checked against SDK 2.1.4's EE library); its other calls are not
-        // known yet. Releases from 2200 on reply asynchronously.
+        // known yet.
         const bool sdk21 = release >= 2100;
-        if (release >= 2200 || (sdk21 && fno > 4)) {
+        if (sdk21 && fno > 4) {
             PS2_UNIMPL("fileio", "FILEIO " + std::to_string(release) + " function " + std::to_string(fno),
                        "FILEIO function %u of release %u is not implemented", fno, release);
             return reply(words({-1}));
@@ -113,7 +128,7 @@ private:
     static int32_t write(int32_t fd, uint32_t ptr, int32_t size) {
         if (size < 0) return hostfs::E_INVAL;
         std::vector<uint8_t> buf(static_cast<size_t>(size));
-        readBytes(ptr, buf.data(), static_cast<uint32_t>(size));
+        readBytes(ptr, buf.data(), static_cast<size_t>(size));
         return hostfs::write(fd, buf.data(), size);
     }
 
@@ -135,6 +150,91 @@ private:
         if (r == 0) writeEeStat(buf, st);
         return r;
     }
+
+    // Release 2200 writes a result block at the address supplied by the version
+    // query, then sends a command to the EE's FILEIO handler. The ordinary RPC
+    // reply carries 1 and releases the request. Requests start with
+    // {semaphore, result, result size}.
+    std::vector<uint8_t> asyncReply(const uint8_t* d, uint32_t fno, size_t size) {
+        std::vector<uint8_t> out(size, 0);
+        std::memcpy(out.data(), d, 4);
+        const uint32_t command = fno;
+        std::memcpy(out.data() + 4, &command, 4);
+        std::memcpy(out.data() + 8, d + 4, 8);
+        return out;
+    }
+
+    void sendAsync(std::vector<uint8_t> out) {
+        if (resultBuffers_[0]) writeBytes(resultBuffers_[0], out.data(), static_cast<uint32_t>(out.size()));
+        sendCommandToEe(0x80000011u, completionPacket_, 16, 0, 0, 0);
+    }
+
+    void asyncCall(uint32_t fno, const uint8_t* d) {
+        auto out = asyncReply(d, fno, 32);
+        auto result = [&](int32_t value) {
+            std::memcpy(out.data() + 16, &value, 4);
+            sendAsync(std::move(out));
+        };
+        switch (fno) {
+        case 0: return result(hostfs::open(cstr(d, 20, 256), i32(d, 12)));
+        case 1: return result(hostfs::close(i32(d, 12)));
+        case 2: return result(read(i32(d, 12), u32(d, 16), i32(d, 20), 0));
+        case 3: {
+            const int32_t size = i32(d, 20);
+            const uint32_t prefix = u32(d, 24);
+            if (size < 0 || prefix > 64 || prefix > static_cast<uint32_t>(size)) return result(hostfs::E_INVAL);
+            const int first = hostfs::write(i32(d, 12), d + 28, static_cast<int>(prefix));
+            if (first < 0 || static_cast<uint32_t>(first) != prefix) return result(first);
+            const int rest = write(i32(d, 12), u32(d, 16) + prefix, size - static_cast<int32_t>(prefix));
+            return result(rest < 0 ? rest : first + rest);
+        }
+        case 4: return result(static_cast<int32_t>(hostfs::lseek(i32(d, 12), i32(d, 16), i32(d, 20))));
+        case 6: return result(hostfs::remove(cstr(d, 12, 256)));
+        case 7: return result(hostfs::mkdir(cstr(d, 16, 256)));
+        case 8: return result(hostfs::rmdir(cstr(d, 12, 256)));
+        case 9: return result(hostfs::dopen(cstr(d, 12, 256)));
+        case 10: return result(hostfs::close(i32(d, 12)));
+        case 11: {
+            std::string name;
+            hostfs::Stat st;
+            const int r = hostfs::dread(i32(d, 12), name, st);
+            out = asyncReply(d, fno, 0x158);
+            std::memcpy(out.data() + 20, d + 16, 4);
+            if (r > 0) {
+                const uint32_t mode = st.dir ? 0x0027u : 0x0017u;
+                const uint32_t lo = static_cast<uint32_t>(st.size), hi = static_cast<uint32_t>(st.size >> 32);
+                std::memcpy(out.data() + 24, &mode, 4);
+                std::memcpy(out.data() + 32, &lo, 4);
+                std::memcpy(out.data() + 60, &hi, 4);
+                name = name.substr(0, 255);
+                std::memcpy(out.data() + 88, name.c_str(), name.size());
+            }
+            return result(r);
+        }
+        case 12: {
+            hostfs::Stat st;
+            const int r = hostfs::getstat(cstr(d, 16, 256), st);
+            out = asyncReply(d, fno, 64);
+            std::memcpy(out.data() + 20, d + 12, 4);
+            if (r == 0) {
+                const uint32_t mode = st.dir ? 0x0027u : 0x0017u;
+                const uint32_t lo = static_cast<uint32_t>(st.size), hi = static_cast<uint32_t>(st.size >> 32);
+                std::memcpy(out.data() + 24, &mode, 4);
+                std::memcpy(out.data() + 32, &lo, 4);
+                std::memcpy(out.data() + 60, &hi, 4);
+            }
+            return result(r);
+        }
+        case 13: return result(0);   // chstat
+        default:
+            PS2_UNIMPL("fileio", "FILEIO " + std::to_string(moduleVersion("fileio")) + " function " + std::to_string(fno),
+                       "FILEIO function %u of release %u is not implemented", fno, moduleVersion("fileio"));
+            return result(-1);
+        }
+    }
+
+    std::array<uint32_t, 2> resultBuffers_{};
+    uint32_t completionPacket_ = 0;
 };
 
 // ---- IOP heap (sid 0x80000003) --------------------------------------------------------

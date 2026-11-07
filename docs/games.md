@@ -18,7 +18,7 @@ Playable or Perfect.
 |---|---|---|---|---|
 | [007: Agent Under Fire](#007-agent-under-fire) | Europe | SLES-50539 | In-game | 2026-11-06 |
 | [Resident Evil Code: Veronica X](#resident-evil-code-veronica-x) | USA | SLUS-20184 | In-game | 2026-11-06 |
-| [Secret Agent Clank](#secret-agent-clank) | USA | SCUS-97623 | Nothing | 2026-11-04 |
+| [Secret Agent Clank](#secret-agent-clank) | USA | SCUS-97623 | Nothing | 2026-11-07 |
 
 To bring up another game, start with the README's
 [Porting a game](../README.md#porting-a-game). Then give the game a section
@@ -470,12 +470,18 @@ The executable runs recompiled. Sony's start-up code runs: it finds the
 kernel's syscall table, installs its patches for the kernel and starts its
 timers. The IOP restarts with the game's own image, and FMOD Ex's module
 loads. The game then draws its loading sign, a turning blue arrow in the
-bottom-right corner, and stays there (2026-11-04): see the first known
-problem. The Vulkan renderer draws it as the software renderer does, at 1x
-and at the console's pixels at 2x (15 frames to vblank 1,500). At start-up
-the game clears all of GS memory with a scissor a pixel past its end, which
-the card's targets cannot hold: the software rasterizer draws those two
-sprites in GS memory.
+bottom-right corner. The Vulkan renderer draws it as the software renderer
+does, at 1x and at the console's pixels at 2x (15 frames to vblank 1,500).
+At start-up the game clears all of GS memory with a scissor a pixel past its
+end, which the card's targets cannot hold: the software rasterizer draws those
+two sprites in GS memory.
+
+On 2026-11-07, FILEIO release 3100 support let the game read and close all of
+`BIN/FE.REL` and run the relocated front end on the interpreter. It went on to
+load the global asset archive, GUI assets and controller support. A strict,
+deterministic software-renderer run reached 1,800 vblanks with no
+unimplemented path, but the picture was still the loading arrow. The run
+recorded 121 interpreted entry points. No menu or level has been reached.
 
 ### What it took
 
@@ -489,15 +495,18 @@ sprites in GS memory.
   functions (`SetT2`, which `InitTimer` uses at start-up) set ERL to write a
   timer register in kernel mode, then return that way. The runtime went to
   EPC, which was 0, and ran kernel memory as code.
+- FILEIO releases from 2200 put each operation's result in an EE buffer and
+  notify its FILEIO command handler, then complete the RPC to release the
+  client request. The runtime now speaks that protocol as well as releases
+  1000 and 2100. Sending only the notification opened `FE.REL` but left the
+  library's RPC request active, so the loader made no read.
 
 ### Known problems
 
-- The game prints that it is loading its front end (`BIN/FE.REL`) and makes
-  its first FILEIO request (function 0), which goes unanswered. Its IOP
-  image, from SDK 3.1, carries FILEIO release 3100, whose replies are
-  asynchronous, and the runtime speaks only releases 1000 and 2100: it
-  reports the request, and the game keeps waiting on its loading screen.
-- Not reached yet: the relocatable modules, and FMOD Ex's sound.
+- The front end runs and loads assets, but the game remains on its loading
+  arrow. No later, concrete loader failure has been isolated yet.
+- The SNR2 front end is not recompiled; its 121 observed entry points run on
+  the interpreter. Levels and FMOD Ex's sound have not been tested.
 - The executable's `.data` section is marked executable, and with no symbols
   the analysis takes it for code: `report.txt` lists 6,224 unknown
   instructions, most likely that data.

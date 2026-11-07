@@ -3932,6 +3932,9 @@ TEST_CASE(iop_reset_with_a_replacement_image) {
     image.replace(0x200, 16, "PsIIloadfile2140");
     std::ofstream(dir / "IOPRP214.IMG", std::ios::binary) << image;
     std::ofstream(dir / "IOPRP23.IMG", std::ios::binary) << std::string(0x40, '\0');   // no ids: its name tells
+    std::string image3100(0x400, '\0');
+    image3100.replace(0x100, 16, "PsIIfileio  3100");
+    std::ofstream(dir / "IOPRP310.IMG", std::ios::binary) << image3100;
     std::ofstream(dir / "data.txt") << "hello from the host";
     g_opt.host0Dir = dir;
     dmac::init();
@@ -4007,6 +4010,92 @@ TEST_CASE(iop_reset_with_a_replacement_image) {
     bind(0x80000006u, lfSd, lfBuf);
     call(lfSd, lfBuf, 255, 0, 4);
     CHECK(std::memcmp(ram + recv, "2140", 4) == 0);
+
+    // Release 2200 and later: a result block in EE memory and SIF command
+    // 0x80000011, then the RPC_END that releases the client's request.
+    resetIop("rom0:UDNL host0:IOPRP310.IMG");
+    CHECK_EQ(iop::moduleVersion("fileio"), 3100u);
+    bind(0x80000001u, sd, buf);
+    constexpr uint32_t answer = 0x00404000, resultPtr = 0x00405000;
+    fillBytes(send, 0, 0x500);
+    write32(send, answer);
+    write32(send + 4, 0x00404800);
+    call(sd, buf, 255, 8, 4);
+    CHECK(std::memcmp(ram + recv, "3100", 4) == 0);
+    auto asyncCall = [&](uint32_t fno, uint32_t ssize, int32_t expected = INT32_MIN) {
+        fillBytes(recv, 0xA5, 16);
+        ee.send(0x8000000Au, {4, 0x00400800, rpcId++, cd, fno, ssize, recv, 4, 1, sd}, send, buf, ssize);
+        const auto r = ee.receive();
+        CHECK_EQ(r[0] & 0xFF, 16u);
+        CHECK_EQ(r[2], 0x80000011u);
+        const auto end = ee.receive();
+        CHECK_EQ(end[2], 0x80000008u);
+        CHECK_EQ(end[8], 0x8000000Au);
+        CHECK_EQ(read32(recv), 1u);
+        CHECK_EQ(read32(answer + 0), 0x12345678u);
+        CHECK_EQ(read32(answer + 4), fno);
+        CHECK_EQ(read32(answer + 8), resultPtr);
+        CHECK_EQ(read32(answer + 12), 4u);
+        if (expected != INT32_MIN) CHECK_EQ(static_cast<int32_t>(read32(answer + 16)), expected);
+        if (fno != 11 && fno != 12) {
+            CHECK_EQ(read32(answer + 20), 0u);
+            CHECK_EQ(read32(answer + 24), 0u);
+            CHECK_EQ(read32(answer + 28), 0u);
+        }
+    };
+    fillBytes(send, 0, 276);
+    write32(send + 0, 0x12345678);   // the EE semaphore the handler signals
+    write32(send + 4, resultPtr);
+    write32(send + 8, 4);
+    write32(send + 12, 1);           // O_RDONLY
+    writeBytes(send + 20, path, static_cast<uint32_t>(std::strlen(path)));
+    asyncCall(0, 276);
+    const int asyncFd = static_cast<int32_t>(read32(answer + 16));
+    CHECK(asyncFd >= 3);
+
+    fillBytes(send + 12, 0, 12);
+    write32(send + 12, static_cast<uint32_t>(asyncFd));
+    write32(send + 16, dest);
+    write32(send + 20, 5);
+    asyncCall(2, 24, 5);
+    CHECK(std::memcmp(ram + dest, "hello", 5) == 0);
+    write32(send + 16, 2);           // offset, from the start
+    write32(send + 20, 0);
+    asyncCall(4, 24, 2);
+    write32(send + 16, dest);
+    write32(send + 20, 5);
+    asyncCall(2, 24, 5);
+    CHECK(std::memcmp(ram + dest, "llo f", 5) == 0);
+
+    // getstat carries its own copy of the structure, not a pointer to it.
+    fillBytes(send + 12, 0, 260);
+    write32(send + 12, resultPtr);
+    writeBytes(send + 16, path, static_cast<uint32_t>(std::strlen(path)));
+    asyncCall(12, 272, 0);
+    CHECK_EQ(read32(answer + 20), resultPtr);
+    CHECK_EQ(read32(answer + 24), 0x17u);
+    CHECK_EQ(read32(answer + 32), 19u);
+
+    // A directory result has the extended 64-byte stat and its name at 88.
+    fillBytes(send + 12, 0, 260);
+    const char* hostRoot = "host0:.";
+    writeBytes(send + 12, hostRoot, static_cast<uint32_t>(std::strlen(hostRoot)));
+    asyncCall(9, 268);
+    const int dirFd = static_cast<int32_t>(read32(answer + 16));
+    CHECK(dirFd >= 3);
+    fillBytes(answer, 0xEE, 0x158);
+    write32(send + 12, static_cast<uint32_t>(dirFd));
+    write32(send + 16, resultPtr);
+    asyncCall(11, 20, 1);
+    CHECK_EQ(read32(answer + 20), resultPtr);
+    CHECK_EQ(read32(answer + 24), 0x17u);
+    CHECK_EQ(read32(answer + 32), 1024u);   // IOPRP214.IMG, the first entry
+    CHECK_EQ(read32(answer + 64), 0u);
+    CHECK(std::memcmp(ram + answer + 88, "IOPRP214.IMG", 13) == 0);
+    write32(send + 16, 0);
+    asyncCall(10, 16, 0);
+    write32(send + 12, static_cast<uint32_t>(asyncFd));
+    asyncCall(1, 16, 0);
 
     resetIop("rom0:UDNL host0:IOPRP23.IMG");
     CHECK_EQ(iop::moduleVersion("fileio"), 2300u);
