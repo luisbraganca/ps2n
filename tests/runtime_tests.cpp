@@ -7075,7 +7075,7 @@ TEST_CASE(gpu_display_shows_each_page_from_where_it_is) {
         Reports native("picture shown at the console's resolution");
         GpuRun gpu(scale);
         CHECK(picture() == software);
-        CHECK_EQ(native(), scale > 1 ? 1u : 0u);   // page 2, drawn as CT16 and shown as CT32
+        CHECK_EQ(native(), 0u);   // page 2's CT16 target also supplies its CT32 display words
     }
 }
 
@@ -7116,6 +7116,51 @@ TEST_CASE(gpu_display_reads_depth_targets_at_scale) {
         CHECK(full.pixels == software.pixels);
         CHECK_EQ(native(), 0u);
     }
+}
+
+// A CT16 or CT16S target shown as CT32 or CT24: every display word joins the
+// target's two swizzled halfwords, across an offset buffer's page boundaries.
+// The triangle over the varied uploaded pixels keeps its finer edge at scale.
+TEST_CASE(gpu_display_reads_16bit_colour_targets_at_scale) {
+    auto draw = [](uint32_t psm, uint32_t shown) {
+        gs::init();
+        gs::privWrite(0x12000000, 0x6);                                      // PMODE: circuit 2
+        gs::privWrite(0x12000090, 32 | 4ull << 9 | static_cast<uint64_t>(shown) << 15);
+        gs::privWrite(0x120000A0, 255ull << 32 | 127ull << 44);               // DISPLAY2: 256 clocks, 128 lines
+        gsWrite({{0x40, 255ull << 16 | 127ull << 48}, {0x18, 0}, {0x1A, 1}, {0x4C, 32 | 4ull << 16 | static_cast<uint64_t>(psm) << 24},
+                 {0x4E, 80}, {0x47, 0}});
+        gsUpload(32 * 32, 4, psm, 256, 128, pseudoRandom(256 * 128 / 2, 70 + psm));
+        gsWrite({{0x00, 3}, {0x01, 0x80FFFFFF}, {0x05, xyz(0, 0, 0)}, {0x05, xyz(253, 3, 0)}, {0x05, xyz(20, 125, 0)}});
+        CHECK_EQ(gs::readPixel32(32, 4, psm, 50, 50), 0x80F8F8F8u);
+        gs::Frame f;
+        CHECK(gs::currentFrame(f));
+        return f;
+    };
+    for (const uint32_t psm : {0x02u, 0x0Au})
+        for (const uint32_t shown : {0x00u, 0x01u}) {
+            const gs::Frame software = draw(psm, shown);
+            CHECK_EQ(software.pixels.size(), size_t(256 * 128));
+            CHECK(std::set<uint32_t>(software.pixels.begin(), software.pixels.end()).size() > 1000);
+            for (const int scale : {1, 2, 3}) {
+                Reports native("picture shown at the console's resolution");
+                GpuRun gpu(scale);
+                gs::Frame full = draw(psm, shown);
+                if (scale > 1) {
+                    size_t finer = 0;
+                    for (int y = 0; y + scale <= full.height; y += scale)
+                        for (int x = 0; x + scale <= full.width; x += scale) {
+                            const uint32_t a = full.pixels[static_cast<size_t>(y) * full.width + x];
+                            for (int dy = 0; dy < scale; ++dy)
+                                for (int dx = 0; dx < scale; ++dx)
+                                    finer += full.pixels[static_cast<size_t>(y + dy) * full.width + x + dx] != a;
+                        }
+                    CHECK(finer > 0);
+                }
+                CHECK(shownPicture(full));
+                CHECK(full.pixels == software.pixels);
+                CHECK_EQ(native(), 0u);
+            }
+        }
 }
 
 // Agent Under Fire's ammo panel: a 12 x 23 opaque tile, with transparent

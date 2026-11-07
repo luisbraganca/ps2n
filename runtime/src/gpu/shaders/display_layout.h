@@ -6,8 +6,9 @@
 // A display circuit (gs::detail::Circuit) and where each page of its buffer
 // is read: CIRCUIT_PAGES + page holds CIRCUIT_PAGE_AT | the target's PAGE_KIND
 // << 27 | image (binding 0) << 15 | the page's row in it << 6 | its column,
-// for a page a target of the same unit size and page height holds; 0 for one
-// read from the mirror. For Z32 shown as colour, the shader translates swizzles.
+// for a page a target can supply; 0 for one read from the mirror. For Z32
+// shown as colour the shader translates swizzles; for CT16/CT16S it joins the
+// two target halfwords of each displayed word.
 #define CIRCUIT_PSM 0
 #define CIRCUIT_FBP 1      // pages
 #define CIRCUIT_FBW 2

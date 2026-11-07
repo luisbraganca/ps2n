@@ -535,10 +535,14 @@ card, so it is reported.
 **The display.** Each circuit reads each page from the target that holds
 it, at scale, or from the mirror at 1x. A Z32 target shown as 32-bit colour
 stays at scale too: the display's colour address goes through the target's
-inverse swizzle. The circuits merge as `buildFrame` merges them, picture pixel
-(X, Y) being (X / N, Y / N) and its sub-pixel. FIELD mode's deinterlacer runs on the card over fields at scale,
-and takes its decisions there too (whether a field is the last one again,
-which fields are recent), so the picture needs nothing read back.
+inverse swizzle. A CT16 or CT16S target shown as CT32 or CT24 also stays at
+scale: the display finds the two target halfwords of each raw display word
+through the inverse 16-bit swizzle, then joins them. Other cross-layout
+displays use the mirror at 1x. The circuits merge as `buildFrame` merges them,
+picture pixel (X, Y) being (X / N, Y / N) and its sub-pixel. FIELD mode's
+deinterlacer runs on the card over fields at scale, and takes its decisions
+there too (whether a field is the last one again, which fields are recent), so
+the picture needs nothing read back.
 
 **Threads.** In real-time runs the GS thread records the card's work where
 it queued primitives for the draw threads; on the virtual clock the guest

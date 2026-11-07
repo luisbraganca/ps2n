@@ -69,8 +69,12 @@ config lists the other executables under `[input] programs`, as in
   same but in 9 frames of the cutscene at its door (26 to 64 pixels each):
   the game draws the character into a texture, which the card reads at its
   own resolution (reading every texture from GS memory at 1x instead gave
-  the same frames). Above 1x edges come out finer, the menus' figures and
-  lines too. The driving race's 180 dumped frames to vblank 9,000 also match
+  the same frames). The first-mission sequence has no native-resolution
+  display fallbacks and does not exercise the CT16/CT16S-to-CT32/CT24 display
+  reads: its 180 1x frames remain byte-identical after they were added, and
+  20 sampled 3x frames are unchanged. Above 1x edges come out finer, the
+  menus' figures and lines too. The driving race's 180 dumped frames to
+  vblank 9,000 also match
   at 1x. At 3x, 74 differ at the console's pixels because the card reads
   textures it drew at their resolution; forcing those reads through the 1x
   mirror made all 180 match. Reading Z32 targets directly when shown as CT32

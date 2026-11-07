@@ -30,14 +30,25 @@ uint circuitColour(uint e, uint x, uint y, uint subX, uint subY) {
     uint raw;
     if ((at & CIRCUIT_PAGE_AT) != 0u) {
         const uint sc = pc.p[0], kind = (at >> CIRCUIT_PAGE_KIND_SHIFT) & 0xFu;
-        uvec2 pixel = uvec2(x & 63u, y & (pageH - 1u));
-        if (wide && kind != 0u) {
-            const uint w = tables[T_INV32 + kind * 2048u + c32(0u, y & 31u, x & 63u)];
-            pixel = uvec2(w & 63u, w >> 6);
+        const uint image = (at >> 15) & 0xFFFu, tx = (at & 63u) * 64u;
+        if (wide && (kind == 2u || kind == 3u)) {
+            const uint w = bp * 64u + page * 2048u + c32(0u, y & 31u, x & 63u);
+            const uint lo = tables[T_INV16 + (kind - 2u) * 4096u + (w & 2047u) * 2u];
+            const uint hi = tables[T_INV16 + (kind - 2u) * 4096u + (w & 2047u) * 2u + 1u];
+            const uint ty = ((at >> 6) & 511u) * 64u;
+            const uint a = imageLoad(images[nonuniformEXT(image)], ivec2((tx + (lo & 63u)) * sc + subX, (ty + (lo >> 6)) * sc + subY)).r;
+            const uint b = imageLoad(images[nonuniformEXT(image)], ivec2((tx + (hi & 63u)) * sc + subX, (ty + (hi >> 6)) * sc + subY)).r;
+            raw = (a & 0xFFFFu) | (b << 16);
+        } else {
+            uvec2 pixel = uvec2(x & 63u, y & (pageH - 1u));
+            if (wide && kind != 0u) {
+                const uint w = tables[T_INV32 + kind * 2048u + c32(0u, y & 31u, x & 63u)];
+                pixel = uvec2(w & 63u, w >> 6);
+            }
+            const uint ty = ((at >> 6) & 511u) * pageH + pixel.y;
+            raw = imageLoad(images[nonuniformEXT(image)], ivec2((tx + pixel.x) * sc + subX, ty * sc + subY)).r;
+            raw &= wide ? 0xFFFFFFFFu : 0xFFFFu;
         }
-        const uint tx = (at & 63u) * 64u + pixel.x, ty = ((at >> 6) & 511u) * pageH + pixel.y;
-        raw = imageLoad(images[nonuniformEXT((at >> 15) & 0xFFFu)], ivec2(tx * sc + subX, ty * sc + subY)).r;
-        raw &= wide ? 0xFFFFFFFFu : 0xFFFFu;
     } else if (wide) {   // readRaw(fbp * 32, fbw, psm, x, y) in GS memory
         raw = vram[(bp * 64u + page * 2048u + c32(0u, y & 31u, x & 63u)) & 0xFFFFFu];
     } else {

@@ -79,13 +79,14 @@ bool historyFor(uint32_t width, uint32_t lines, uint32_t height) {
 }
 
 // Where the display reads a page of a buffer of pixel family `family`: the
-// target that holds it, when its units and page height are the buffer's, at
-// scale (CIRCUIT_PAGES' word). The shader translates Z32's swizzle when shown
-// as 32-bit colour. Any width fits: a page is a page. Else GS memory, at 1x.
+// target that holds it, at scale (CIRCUIT_PAGES' word), when its layout is the
+// buffer's, or its 32 or 16-bit units can reconstruct a 32-bit display word.
+// The shader translates Z32's swizzle and joins CT16/CT16S's halfwords. Any
+// width fits: a page is a page. Else GS memory, at 1x.
 uint32_t pageAt(uint32_t page, int family) {
     const PageState& p = g.pages[page];
     const Target* t = p.owner ? targetById(p.owner) : nullptr;
-    if (!t || family < 0 || (t->family != family && !(family == 0 && t->family == 3))) return 0;
+    if (!t || family < 0 || (t->family != family && !(family == 0 && t->family >= 1 && t->family <= 3))) return 0;
     const uint32_t rel = page - t->basePage;
     return CIRCUIT_PAGE_AT | pageKindOf(t->family) << CIRCUIT_PAGE_KIND_SHIFT | t->slot << 15 | (rel / t->fbw) << 6 | rel % t->fbw;
 }

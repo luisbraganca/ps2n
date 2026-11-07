@@ -203,8 +203,8 @@ primitive, where the console reads its own new pixels), `transfer reads what
 it writes` (the same for a local copy down or right over itself), `frame and
 depth overlap` (a depth buffer in the frame's memory: the card draws those
 primitives without their depth test), `picture shown at the console's
-resolution` (the display shows pages the card drew in another layout),
-`drawn by the software rasterizer` (a primitive whose frame or depth buffer
+resolution` (the display has to read pages from the 1x mirror because the
+card's target has a layout it cannot translate), `drawn by the software rasterizer` (a primitive whose frame or depth buffer
 goes round the end of GS memory, or past what the card's images hold at its
 scale: the software rasterizer draws it in GS memory, which takes the pages
 it touches back from the card; games park the scissor past the end of memory
