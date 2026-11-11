@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -53,7 +54,13 @@ void usage() {
         "\n"
         "  ps2n-recomp assemble <file.s> --out <file.elf>\n"
         "      Assembles a test program written for PS2Native's own small R5900\n"
-        "      assembler (core/include/ps2n/assembler.h) into an EE executable.");
+        "      assembler (core/include/ps2n/assembler.h) into an EE executable.\n"
+        "\n"
+        "  ps2n-recomp disasm <file> --at <address> [--count <n>] [--base <address>]\n"
+        "      Prints the instructions at an address: the address, the word, what\n"
+        "      it is counted as costing in eighths of a cycle, the instruction.\n"
+        "      The file is an executable, or with --base any image whose first\n"
+        "      byte belongs at that address (a BIOS image: --base 0xBFC00000).");
 }
 
 struct Args {
@@ -65,6 +72,8 @@ struct Args {
     bool symbols = true;
     bool comments = true;
     unsigned parts = 1;
+    std::optional<uint32_t> at, base;
+    unsigned count = 32;
 };
 
 Args parse(int argc, char** argv) {
@@ -87,6 +96,14 @@ Args parse(int argc, char** argv) {
             const auto n = parseInt(text);
             if (!n || *n < 1 || *n > 999) throw Error("--parts takes a number from 1 to 999, not '" + text + "'");
             a.parts = static_cast<unsigned>(*n);
+        }
+        else if (arg == "--at" || arg == "--base" || arg == "--count") {
+            const std::string text = value();
+            const auto n = parseInt(text);
+            if (!n || *n < 0 || *n > 0xFFFFFFFFll) throw Error(arg + " takes a number, not '" + text + "'");
+            if (arg == "--at") a.at = static_cast<uint32_t>(*n);
+            else if (arg == "--base") a.base = static_cast<uint32_t>(*n);
+            else a.count = static_cast<unsigned>(*n);
         }
         else if (startsWith(arg, "--")) throw Error("unknown option " + arg);
         else a.positional.push_back(arg);
@@ -164,8 +181,9 @@ int info(const Args& a) {
     std::printf("  %zu functions run on into the next (%zu instructions compiled twice)\n", stats.tails, stats.tailInstructions);
     std::printf("  %zu places where the rest of a block is left to the interpreter\n", stats.leaves);
     std::printf("  %zu likely branches left to the interpreter when taken, for what is in their delay slot\n", stats.guards);
-    std::printf("  %zu branches that close an idle loop\n", stats.idleLoops);
-    std::printf("  %zu timeout loops, whose time passes without them being run\n", stats.timeoutLoops);
+    std::printf("  %zu COP2 instructions, which the runtime carries out whole\n", stats.cop2);
+    std::printf("  %zu DI compiled in one piece with the instruction after them\n", stats.delayedDisables);
+    std::printf("  %zu branches that may close an idle loop\n", stats.idleLoops);
     return 0;
 }
 
@@ -207,6 +225,38 @@ int assemble(const Args& a) {
     return 0;
 }
 
+int disasm(const Args& a) {
+    if (a.positional.size() != 1) throw Error("disasm takes one file");
+    if (!a.at) throw Error("disasm needs --at <address>");
+
+    // The word at an address, from an executable's loaded image or from a raw
+    // image that begins at --base.
+    std::vector<uint8_t> raw;
+    std::optional<ElfFile> elf;
+    if (a.base) raw = readFile(a.positional[0]);
+    else elf = ElfFile::load(a.positional[0]);
+    const auto word = [&](uint32_t address, uint32_t& out) {
+        if (elf) return elf->read32(address, out);
+        const uint32_t offset = address - *a.base;
+        if (address < *a.base || static_cast<size_t>(offset) + 4 > raw.size()) return false;
+        out = static_cast<uint32_t>(raw[offset]) | static_cast<uint32_t>(raw[offset + 1]) << 8 | static_cast<uint32_t>(raw[offset + 2]) << 16 |
+              static_cast<uint32_t>(raw[offset + 3]) << 24;
+        return true;
+    };
+
+    for (unsigned i = 0; i < a.count; ++i) {
+        const uint32_t address = *a.at + i * 4;
+        uint32_t w = 0;
+        if (!word(address, w)) {
+            std::printf("%08X  (not in the file)\n", address);
+            break;
+        }
+        const r5900::Insn in(w, address);
+        std::printf("%08X  %08X  %3u  %s\n", address, w, static_cast<unsigned>(r5900::cycles(in.op)), r5900::disassemble(in).c_str());
+    }
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -221,6 +271,7 @@ int main(int argc, char** argv) {
         if (a.command == "capture") return capture(a);
         if (a.command == "registry") return registry(a);
         if (a.command == "assemble") return assemble(a);
+        if (a.command == "disasm") return disasm(a);
         throw Error("unknown command '" + a.command + "'");
     } catch (const std::exception& e) {
         std::fprintf(stderr, "ps2n-recomp: %s\n", e.what());

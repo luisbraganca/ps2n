@@ -13,12 +13,15 @@ add_library(ps2n-runtime STATIC
 	"${CMAKE_CURRENT_LIST_DIR}/ee_provider.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ee_memory.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ee_state.h"
+	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ops_cop0.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ops_cop2.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ops_fpu.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ops_int.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ops_mmi.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/recomp.h"
 	"${CMAKE_CURRENT_LIST_DIR}/ops_cop2.cpp"
+	"${CMAKE_CURRENT_LIST_DIR}/rec_blocks.cpp"
+	"${CMAKE_CURRENT_LIST_DIR}/rec_blocks.h"
 
 	# The instruction decoder, shared with the build-time tools (core/). Only
 	# the parts that use no C++ exceptions are compiled here: PCSX2's build

@@ -916,13 +916,27 @@ Still open:
      in the meantime, as the first entry in its patch queue. Recommended:
      no, as before. It would be the first place where the machine is not
      stock PCSX2.
+   - Decided on 2026-11-11
+     ([ADR 0010](adr/0010-pcsx2-fix-goes-upstream-through-the-maintainer.md)):
+     the maintainer offers the correction to PCSX2 themselves; PS2Native
+     carries it in its patch queue only if that stalls.
 
 ### Timing against PCSX2's recompiler
 
-- The timeout loop skip is reproduced since 2026-11-11 ("Timeout loops").
-- The other differences are listed in the execution model, "Blocks and
-  time". Each is at most a cycle per occurrence. A race between the EE and
-  the IOP can turn on that (`mc`).
+Closed on 2026-11-11, in Phase 3
+([ADR 0011](adr/0011-time-is-counted-as-pcsx2s-recompiler-counts-it.md),
+[game-log.md](game-log.md), "The timing difference: found and removed").
+PS2Native now counts time exactly as PCSX2's recompiler does, by the blocks
+it would have formed, so what the sections "When the same output comes at
+another time", "Timeout loops", "Idle loops" and "Where blocks end, against
+PCSX2's recompiler" above describe as differences is history:
+
+- every test program but four runs as under stock PCSX2 at every moment the
+  core lets the IOP catch up with the EE, `mc` included (its race now falls
+  the way it does under stock PCSX2); the four are listed with their causes
+  in `tests/same-as-stock-known-differences.cmake`;
+- the execution model's list of what is not reproduced is down to things
+  no run has been seen to depend on.
 
 ### Design points
 
@@ -938,9 +952,8 @@ Still open:
 - **More than one image at a time.** The provider picks one image, by the
   checksum of the executable being started. A translated BIOS (ADR 0007),
   and a game's overlays, need several to be in use together.
-- **COP0 and the rest of COP2** are still PCSX2's interpreter functions:
-  what they do is PCSX2's interpreter's behavior, not its recompiler's. Two
-  differences are known and not yet dealt with: the count register read
-  twice in one block (execution model, "Blocks and time"), and when VU0 is
-  brought up to date before a COP2 instruction, which PCSX2's recompiler
-  decides from an analysis of the block.
+- **COP0 and the rest of COP2.** Since 2026-11-11 the COP0 transfers and the
+  transfers to and from VU0 are PS2Native's own, and when VU0 is brought up
+  to date before a COP2 instruction is decided as PCSX2's recompiler decides
+  it. The VU0 instructions themselves, the TLB instructions, `ERET` and `EI`
+  are still PCSX2's interpreter functions.

@@ -10,9 +10,11 @@
 # Usage:
 #   PS2N_BIOS=/path/to/bios.bin scripts/linux/game.sh <disc image> [options]
 #
-#   --config <name>    stock-jit, stock-interp, ps2n-ee, ps2n-static (default) or
+#   --config <name>    stock-jit, stock-interp, ps2n-ee, ps2n-static (default),
 #                      lockstep (ps2n-ee, then ps2n-static compared with it at
-#                      every event test)
+#                      every event test) or same-as-stock (stock-jit, then
+#                      ps2n-static compared with it at every sync point and at
+#                      every frame fingerprinted)
 #   --frames <n>       stop after this many frames (default 900)
 #   --renderer <name>  null, sw (default), vulkan or opengl
 #   --frame-every <n>  also fingerprint and save the frame on display every n
@@ -76,7 +78,7 @@ case "$config" in
 	stock-jit) ee=jit; iop=jit; vu=jit; static=on ;;
 	stock-interp) ee=interp; iop=interp; vu=interp; static=on ;;
 	ps2n-ee) ee=ps2n; iop=jit; vu=jit; static=off ;;
-	ps2n-static|lockstep) ee=ps2n; iop=jit; vu=jit; static=on ;;
+	ps2n-static|lockstep|same-as-stock) ee=ps2n; iop=jit; vu=jit; static=on ;;
 	*) echo "Unknown configuration: $config" >&2; exit 1 ;;
 esac
 
@@ -96,16 +98,23 @@ if [ -n "$pad" ]; then
 fi
 if [ "$config" = "lockstep" ]; then
 	arguments+=(-DLOCKSTEP=1)
+elif [ "$config" = "same-as-stock" ]; then
+	arguments+=(-DSAME_AS_STOCK=1)
 elif [ "$ee" = "ps2n" ]; then
 	arguments+=(-DCAPTURE=1)
 fi
 
 output="$(cmake "${arguments[@]}" -P "$root/tests/guest_test.cmake" 2>&1)"
 code=$?
-printf '%s\n' "$output" | grep -E '^(ps2n-host:|---|The compiled run|First difference|  recorded:|  this run:|CMake Error|  )'
+# The lines for the frames fingerprinted along the way are left out when there
+# are very many of them (--frame-every 1); the driver compares them.
+frame_lines="$(printf '%s\n' "$output" | grep -cE '^ps2n-host: frame [0-9]+:')"
+printf '%s\n' "$output" | grep -E '^(ps2n-host:|---|The compiled run|First difference|  recorded:|  this run:|  stock:|  compiled:|CMake Error|  )' |
+	if [ "$frame_lines" -gt 60 ]; then grep -vE '^ps2n-host: frame [0-9]+:'; else cat; fi
 echo "$config: files in $work"
 
-if ! printf '%s\n' "$output" | grep -q 'stopped at frame limit' || { [ "$config" = "lockstep" ] && [ "$code" -ne 0 ]; }; then
+if ! printf '%s\n' "$output" | grep -q 'stopped at frame limit' ||
+	{ { [ "$config" = "lockstep" ] || [ "$config" = "same-as-stock" ]; } && [ "$code" -ne 0 ]; }; then
 	echo "The run did not end as expected (driver exit code $code)."
 	exit 1
 fi

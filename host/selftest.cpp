@@ -21,6 +21,7 @@
 #include "runtime/ee_provider.h"
 
 #include "ps2n/r5900.h"
+#include "ps2n/rec_rules.h"
 
 #include "pcsx2/PrecompiledHeader.h"
 
@@ -125,10 +126,20 @@ namespace
 		u32 acc;
 		u32 fcr31;
 		u32 vi[32]; // VU0's integer registers (0 to 15) and control registers (16 to 31)
+		u32 vf[32][4]; // VU0's floating-point registers: x, y, z, w. The first is constant
 		u32 clip_copy; // the copy of the clip flag that PCSX2's VU interpreter works on
 		u32 micro_status[4]; // the copies of the status flags that PCSX2's VU recompiler works on
+		// COP0. The count register is kept as what a read of it would have given
+		// at the moment the state was put into the machine: the core brings the
+		// register itself up to date only now and then.
+		u32 cp0[32];
+		u32 count_age; // cycles since the count register was last brought up to date
+		u32 pccr, pcr0, pcr1; // the performance counters: control register, the two counters
 		u8 scratch[kScratchSize];
 	};
+
+	// The cycle count when a state was last put into the machine.
+	u64 s_apply_cycle = 0;
 
 	void Apply(const State& s)
 	{
@@ -142,8 +153,18 @@ namespace
 		fpuRegs.fprc[31] = s.fcr31;
 		for (u32 i = 0; i < 32; i++)
 			VU0.VI[i].UL = s.vi[i];
+		for (u32 i = 0; i < 32; i++)
+			std::memcpy(VU0.VF[i].UL, s.vf[i], sizeof(s.vf[i]));
 		VU0.clipflag = s.clip_copy;
 		std::memcpy(VU0.micro_statusflags, s.micro_status, sizeof(s.micro_status));
+		std::memcpy(cpuRegs.CP0.r, s.cp0, sizeof(s.cp0));
+		s_apply_cycle = cpuRegs.cycle;
+		cpuRegs.lastCOP0Cycle = cpuRegs.cycle - s.count_age;
+		cpuRegs.CP0.n.Count = s.cp0[9] - s.count_age;
+		cpuRegs.PERF.n.pccr.val = s.pccr;
+		cpuRegs.PERF.n.pcr0 = s.pcr0;
+		cpuRegs.PERF.n.pcr1 = s.pcr1;
+		cpuRegs.lastPERFCycle[0] = cpuRegs.lastPERFCycle[1] = cpuRegs.cycle;
 		std::memcpy(PSM(kScratchAddr), s.scratch, kScratchSize);
 	}
 
@@ -159,8 +180,18 @@ namespace
 		s->fcr31 = fpuRegs.fprc[31];
 		for (u32 i = 0; i < 32; i++)
 			s->vi[i] = VU0.VI[i].UL;
+		for (u32 i = 0; i < 32; i++)
+			std::memcpy(s->vf[i], VU0.VF[i].UL, sizeof(s->vf[i]));
 		s->clip_copy = VU0.clipflag;
 		std::memcpy(s->micro_status, VU0.micro_statusflags, sizeof(s->micro_status));
+		std::memcpy(s->cp0, cpuRegs.CP0.r, sizeof(s->cp0));
+		// What a read would have given when the state was put in: the register
+		// counts cycles, and each oracle has let a different number pass since.
+		s->cp0[9] = cpuRegs.CP0.n.Count - static_cast<u32>(cpuRegs.lastCOP0Cycle - s_apply_cycle);
+		s->count_age = 0;
+		s->pccr = cpuRegs.PERF.n.pccr.val;
+		s->pcr0 = cpuRegs.PERF.n.pcr0;
+		s->pcr1 = cpuRegs.PERF.n.pcr1;
 		std::memcpy(s->scratch, PSM(kScratchAddr), kScratchSize);
 	}
 
@@ -233,6 +264,15 @@ namespace
 				out += buf;
 			}
 		}
+		for (u32 i = 0; i < 32; i++)
+		{
+			if (std::memcmp(want.vf[i], got.vf[i], sizeof(want.vf[i])) != 0)
+			{
+				std::snprintf(buf, sizeof(buf), "      $vf%u (x y z w): oracle %08x %08x %08x %08x, PS2Native %08x %08x %08x %08x\n", i, want.vf[i][0],
+					want.vf[i][1], want.vf[i][2], want.vf[i][3], got.vf[i][0], got.vf[i][1], got.vf[i][2], got.vf[i][3]);
+				out += buf;
+			}
+		}
 		if (!tolerance.clip_copy_ignored && want.clip_copy != got.clip_copy)
 		{
 			std::snprintf(buf, sizeof(buf), "      the VU interpreter's clip flag: oracle %08x, PS2Native %08x\n", want.clip_copy,
@@ -244,6 +284,22 @@ namespace
 			std::snprintf(buf, sizeof(buf), "      the VU recompiler's status flags: oracle %08x %08x %08x %08x, PS2Native %08x %08x %08x %08x\n",
 				want.micro_status[0], want.micro_status[1], want.micro_status[2], want.micro_status[3], got.micro_status[0],
 				got.micro_status[1], got.micro_status[2], got.micro_status[3]);
+			out += buf;
+		}
+		for (u32 i = 0; i < 32; i++)
+		{
+			if (want.cp0[i] != got.cp0[i])
+			{
+				const char* name = r5900::cop0Name(i);
+				std::snprintf(buf, sizeof(buf), "      COP0 register %u (%s): oracle %08x, PS2Native %08x\n", i, name ? name : "?", want.cp0[i],
+					got.cp0[i]);
+				out += buf;
+			}
+		}
+		if (want.pccr != got.pccr || want.pcr0 != got.pcr0 || want.pcr1 != got.pcr1)
+		{
+			std::snprintf(buf, sizeof(buf), "      performance counters (control, 0, 1): oracle %08x %08x %08x, PS2Native %08x %08x %08x\n",
+				want.pccr, want.pcr0, want.pcr1, got.pccr, got.pcr0, got.pcr1);
 			out += buf;
 		}
 		for (u32 i = 0; i < kScratchSize; i++)
@@ -277,6 +333,12 @@ namespace
 				case 'S': case 'g': mask |= 0x0000F800u; break; // fs, or an FPU control register
 				case 'T': mask |= 0x001F0000u; break; // ft
 				case 'E': mask |= 0x0000F800u; break; // a VU0 integer or control register
+				case 'X': mask |= 0x0000F800u; break; // a VU0 floating-point register, where rd is
+				case 'Y': mask |= 0x001F0000u; break; // and where rt is
+				case 'G': mask |= 0x0000F800u; break; // a COP0 register
+				case 'r': mask |= 0x0000003Eu; break; // a performance counter
+				case 'k': case 'h': mask |= 0x001F0000u; break; // the operation of CACHE, the hint of PREF
+				case 'P': mask |= 0x000007C0u; break; // the kind of SYNC
 				default: break; // punctuation; other families are not tested yet
 			}
 		}
@@ -323,6 +385,12 @@ namespace
 		// recording contradicts (cpu/ee_simd/muldiv, PMADDW of -2147483648 and
 		// -1). Its recompiler computes the plain 64-bit result, as here.
 		if (op == Op::PMADDW || op == Op::PMSUBW)
+			return true;
+
+		// PCSX2's interpreter works on a model of the processor's cache here,
+		// and loads COP0's TagLo register from it. Its recompiler does nothing
+		// (ops_cop0.h).
+		if (op == Op::CACHE)
 			return true;
 
 		// The FPU follows the recompiler, whose arithmetic, comparisons,
@@ -400,16 +468,35 @@ namespace
 		if (op == Op::CFC2 && oracle == Oracle::Interpreter && fs == REG_R)
 			return true;
 
+		// COP0 (ops_cop0.h). `fs` is the number of the COP0 register here.
+		// PCSX2's interpreter clears bits of the status register as it is read.
+		if (op == Op::MFC0 && oracle == Oracle::Interpreter && fs == 12)
+			return true;
+		// Its interpreter never lets a read of the count register find it
+		// unchanged, and does not carry the register's overflow into EntryHi as
+		// its recompiler does.
+		if (op == Op::MFC0 && oracle == Oracle::Interpreter && fs == 9)
+			return true;
+
 		return false;
 	}
 
 	// Runs `word` through PCSX2's EE recompiler: a block of this instruction
-	// and a jump, entered and left once.
-	void RunRecompiler(u32 word)
+	// and a jump, entered and left once. `then_nop`: with a nop between the
+	// two, for DI, which the recompiler lets take effect after the instruction
+	// that follows it and not at all when that is a branch.
+	void RunRecompiler(u32 word, bool then_nop)
 	{
-		memWrite32(kCodeAddr, word);
-		memWrite32(kCodeAddr + 4, 0x08000000u | ((kIdleAddr & 0x0FFFFFFFu) >> 2)); // j kIdleAddr
-		memWrite32(kCodeAddr + 8, 0);
+		u32 addr = kCodeAddr;
+		memWrite32(addr, word);
+		addr += 4;
+		if (then_nop)
+		{
+			memWrite32(addr, 0);
+			addr += 4;
+		}
+		memWrite32(addr, 0x08000000u | ((kIdleAddr & 0x0FFFFFFFu) >> 2)); // j kIdleAddr
+		memWrite32(addr + 4, 0);
 		memWrite32(kIdleAddr, 0x08000000u | ((kIdleAddr & 0x0FFFFFFFu) >> 2)); // j kIdleAddr
 		memWrite32(kIdleAddr + 4, 0);
 		recCpu.Clear(kCodeAddr, 0x20);
@@ -436,7 +523,18 @@ namespace
 		const r5900::OpInfo& oi = r5900::info(op);
 		const u32 mask = OperandMask(oi);
 		const bool memory = (oi.flags & (r5900::F_LOAD | r5900::F_STORE)) != 0;
+		const bool cop0_op = (oi.flags & r5900::F_COP0) != 0;
+
+		// COP0 as it stands, to put back after every run: an instruction under
+		// test may write the status or the configuration register.
 		const CP0regs cp0 = cpuRegs.CP0;
+		const PERFregs perf = cpuRegs.PERF;
+		const auto restore_cop0 = [&cp0, &perf]() {
+			cpuRegs.CP0 = cp0;
+			cpuRegs.PERF = perf;
+			cpuRegs.lastCOP0Cycle = cpuRegs.cycle;
+			cpuRegs.lastPERFCycle[0] = cpuRegs.lastPERFCycle[1] = cpuRegs.cycle;
+		};
 
 		for (u32 trial = 0; trial < trials; trial++)
 		{
@@ -485,11 +583,59 @@ namespace
 			for (u32 i = 16; i < 32; i++)
 				start.vi[i] = rng.Interesting32();
 			start.vi[REG_VPU_STAT] = 0;
+			// Its floating-point registers: any bits, they are only moved here. The
+			// first stays what the machine has it as (0, 0, 0, 1).
+			std::memcpy(start.vf[0], VU0.VF[0].UL, sizeof(start.vf[0]));
+			for (u32 i = 1; i < 32; i++)
+			{
+				for (u32& component : start.vf[i])
+					component = rng.Interesting32();
+			}
 			start.clip_copy = rng.Next32();
 			for (u32& copy : start.micro_status)
 				copy = rng.Next32();
 			for (u8& b : start.scratch)
 				b = static_cast<u8>(rng.Next32());
+
+			// COP0 as it stands, except for an instruction that reads or writes it.
+			// Then every register holds something else, but nothing that would let
+			// the recompiler's run take an interrupt at the event test its block
+			// ends with: the status register keeps its low bits and gets the bits
+			// the console does not implement; the configuration register stays; no
+			// performance counter counts.
+			std::memcpy(start.cp0, cp0.r, sizeof(start.cp0));
+			start.count_age = 0;
+			start.pccr = perf.n.pccr.val;
+			start.pcr0 = perf.n.pcr0;
+			start.pcr1 = perf.n.pcr1;
+			if (cop0_op)
+			{
+				for (u32 i = 0; i < 32; i++)
+				{
+					if (i == 12)
+						start.cp0[i] = ((cp0.r[i] & 0xF0C79C1Fu) | (rng.Next32() & ~0xF0C79C1Fu)) & ~0x8000u;
+					else if (i != 16)
+						start.cp0[i] = rng.Interesting32();
+				}
+				start.count_age = rng.Below(3);
+				start.pccr = rng.Next32() & 0x7FFFFFFFu;
+				start.pcr0 = rng.Interesting32();
+				start.pcr1 = rng.Interesting32();
+
+				const u32 rt = (word >> 16) & 31;
+				const u32 rd = (word >> 11) & 31;
+				// A value written to the status register leaves interrupts off.
+				if (op == Op::MTC0 && rd == 12 && rt != 0)
+					start.gpr[rt].UL[0] = (start.gpr[rt].UL[0] | 0x4u) & ~0x8000u;
+				// One written to the performance control register leaves counting off.
+				if (op == Op::MTPS && rt != 0)
+					start.gpr[rt].UL[0] &= 0x7FFFFFFFu;
+				// DI looks at the processor's mode and at EXL, ERL and EDI, and
+				// clears EIE: any of those, which can only leave fewer interrupts
+				// enabled than the status register as it stands does.
+				if (op == Op::DI)
+					start.cp0[12] = (start.cp0[12] & ~0x3001Eu) | (rng.Next32() & 0x3001Eu);
+			}
 
 			if (memory)
 			{
@@ -507,13 +653,24 @@ namespace
 			// PS2Native.
 			State ours;
 			Apply(start);
+			if (oracle == Oracle::Recompiler && r5900::flushesCycles(r5900::Insn(word, kCodeAddr)))
+			{
+				// Before such an instruction PCSX2's recompiler adds the cycles of
+				// the block so far to the cycle count, here those of a block of
+				// this one instruction. PS2Native's function leaves that to its
+				// caller (PS2N_FLUSH).
+				const u32 eighths = r5900::cycles(op) * (2 - ((cpuRegs.CP0.n.Config >> 18) & 1));
+				cpuRegs.cycle += ps2n::ee::blockCycles(eighths);
+			}
 			if (!ps2n::ee::ExecuteOwn(word, kCodeAddr))
 			{
 				std::fprintf(stderr, "  %s: PS2Native has no semantics for %08x\n", oi.mnemonic, word);
 				tally.failed++;
+				restore_cop0();
 				return tally;
 			}
 			Capture(&ours);
+			restore_cop0();
 
 			// The oracle.
 			State theirs;
@@ -525,19 +682,19 @@ namespace
 				cpuRegs.branch = 0;
 				R5900::GetInstruction(word).interpret();
 
-				const bool raised = (cpuRegs.pc != kCodeAddr + 4);
-				cpuRegs.CP0 = cp0;
-				if (raised)
+				if (cpuRegs.pc != kCodeAddr + 4)
 				{
+					restore_cop0();
 					tally.oracle_raised++;
 					continue;
 				}
 			}
 			else
 			{
-				RunRecompiler(word);
+				RunRecompiler(word, op == Op::DI);
 			}
 			Capture(&theirs);
+			restore_cop0();
 
 			tally.run++;
 			Tolerance tolerance;
@@ -589,6 +746,7 @@ namespace
 #include "ps2n/r5900_sem_cop1.inc"
 #include "ps2n/r5900_sem_mmi.inc"
 #include "ps2n/r5900_sem_cop2_ctl.inc"
+#include "ps2n/r5900_sem_cop0.inc"
 #undef S
 	};
 

@@ -8,6 +8,7 @@
 #
 #   ctest --test-dir <build> -R ps2autotests/stock-jit -j 8
 #   ctest --test-dir <build> -R /lockstep/
+#   ctest --test-dir <build> -R /same-as-stock/
 #   ctest --test-dir <build> -R /never-further/
 #
 # Every test needs a BIOS image, named by the PS2N_BIOS environment variable,
@@ -110,11 +111,16 @@ function(ps2n_add_guest_test test timeout labels)
 	)
 endfunction()
 
+# Programs whose compiled run is known not to be the stock run, and why.
+include("${PS2N_ROOT}/tests/same-as-stock-known-differences.cmake")
+
 # ps2n_add_program_tests(<suite> <name> <elf> <expected output> <image id>
 #                        [<arguments for guest_test.cmake>...])
 # Registers <suite>/<configuration>/<name> for every configuration, and the
-# lockstep comparison. Programs named in <SUITE>_DIFFERS_<configuration> are
-# expected to print something else than <expected output>.
+# lockstep and same-as-stock comparisons. Programs named in
+# <SUITE>_DIFFERS_<configuration> are expected to print something else than
+# <expected output>; those in <SUITE>_DIFFERS_same-as-stock, to part from the
+# stock run.
 function(ps2n_add_program_tests suite name elf expected image)
 	string(TOUPPER "${suite}" suite_upper)
 	foreach(config_entry IN LISTS PS2N_TEST_CONFIGS)
@@ -143,6 +149,17 @@ function(ps2n_add_program_tests suite name elf expected image)
 	# compared with the first at every event test.
 	ps2n_add_guest_test("${suite}/lockstep/${name}" 240 "${suite};lockstep"
 		"-DELF=${elf}" -DIOP=jit -DVU=jit "-DIMAGE=${image}" -DLOCKSTEP=1 ${ARGN})
+
+	# Same as stock: the program run under stock PCSX2 with its recompilers and
+	# then compiled, the second run compared with the first at every sync point
+	# (ADR 0011). Together with lockstep that holds the interpreted run to the
+	# stock run as well.
+	set(test "${suite}/same-as-stock/${name}")
+	ps2n_add_guest_test("${test}" 240 "${suite};same-as-stock"
+		"-DELF=${elf}" -DIOP=jit -DVU=jit "-DIMAGE=${image}" -DSAME_AS_STOCK=1 ${ARGN})
+	if(name IN_LIST ${suite_upper}_DIFFERS_same-as-stock)
+		set_tests_properties("${test}" PROPERTIES WILL_FAIL TRUE)
+	endif()
 endfunction()
 
 # The host's self-test: PS2Native's decoder, cycle table and instruction

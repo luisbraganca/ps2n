@@ -18,6 +18,9 @@ The configurations:
                 time (build it in first: scripts\windows\build.ps1 -Game <elf>)
   lockstep      ps2n-ee and then ps2n-static, the second compared with the
                 first at every event test
+  same-as-stock stock-jit and then ps2n-static, the second compared with the
+                first at every sync point (where the EE is, its cycle count,
+                its registers) and at every frame fingerprinted
 
 The disc image is read where it is and nothing is written beside it. The
 run's files (the game's console output, the core's log, the last frame as a
@@ -32,11 +35,12 @@ With -Capture, what the run reports for the recompiler is added to that file
 scripts\windows\game.ps1 -Image "C:\ps2\killzone\Killzone (Europe) (En,Fr,De,Es,It,Nl).iso" -Config stock-jit
 scripts\windows\game.ps1 -Image <iso> -Config ps2n-static -Capture build\game\killzone\capture.toml
 scripts\windows\game.ps1 -Image <iso> -Config lockstep -Frames 900
+scripts\windows\game.ps1 -Image <iso> -Config same-as-stock -Frames 4200 -FrameEvery 1 -Pad tests\games\killzone\start.pad
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Image,
     [string]$Bios = $env:PS2N_BIOS,
-    [ValidateSet('stock-jit', 'stock-interp', 'ps2n-ee', 'ps2n-static', 'lockstep')][string]$Config = 'ps2n-static',
+    [ValidateSet('stock-jit', 'stock-interp', 'ps2n-ee', 'ps2n-static', 'lockstep', 'same-as-stock')][string]$Config = 'ps2n-static',
     [int]$Frames = 900,
     # null (nothing drawn, fastest), sw (PCSX2's software renderer: the picture to compare), vulkan, opengl, dx11, dx12
     [string]$Renderer = 'sw',
@@ -82,6 +86,7 @@ $providers = @{
     'ps2n-ee'      = @('ps2n', 'jit', 'jit', 'off')
     'ps2n-static'  = @('ps2n', 'jit', 'jit', 'on')
     'lockstep'     = @('ps2n', 'jit', 'jit', 'on')
+    'same-as-stock' = @('ps2n', 'jit', 'jit', 'on')
 }
 $p = $providers[$Config]
 $work = Join-Path $build "ps2n\tests\game\$Name\$Config"
@@ -95,6 +100,7 @@ $arguments = @(
 if ($Renderer -ne 'null') { $arguments += @("-DRENDERER=$Renderer", "-DUPSCALE=$Upscale", "-DFRAME_EVERY=$FrameEvery") }
 if ($Pad) { $arguments += "-DPAD=$(ForCMake (Resolve-Path -LiteralPath $Pad).Path)" }
 if ($Config -eq 'lockstep') { $arguments += '-DLOCKSTEP=1' }
+elseif ($Config -eq 'same-as-stock') { $arguments += '-DSAME_AS_STOCK=1' }
 elseif ($p[0] -eq 'ps2n') { $arguments += '-DCAPTURE=1' }
 $arguments += @('-P', (Join-Path $root 'tests\guest_test.cmake'))
 
@@ -107,13 +113,19 @@ $code = $LASTEXITCODE
 $ErrorActionPreference = 'Stop'
 $watch.Stop()
 
-$output | Where-Object { $_ -match '^(ps2n-host:|---|The compiled run|First difference|  recorded:|  this run:|CMake Error|  )' } | ForEach-Object { Write-Host $_ }
+# The lines for the frames fingerprinted along the way are left out when
+# there are very many of them (-FrameEvery 1); the driver compares them.
+$frameLines = @($output | Where-Object { $_ -match '^ps2n-host: frame \d+:' }).Count
+$output | Where-Object {
+    $_ -match '^(ps2n-host:|---|The compiled run|First difference|  recorded:|  this run:|  stock:|  compiled:|CMake Error|  )' -and
+    ($frameLines -le 60 -or $_ -notmatch '^ps2n-host: frame \d+:')
+} | ForEach-Object { Write-Host $_ }
 Write-Host ("{0}: {1:N1} s; files in {2}" -f $Config, $watch.Elapsed.TotalSeconds, $work)
 
 # The comparison of whole outputs is for test programs; a run that ended at
 # the frame limit as expected has done what was asked.
 $ended = $output | Where-Object { $_ -match 'stopped at frame limit' }
-if (-not $ended -or ($Config -eq 'lockstep' -and $code -ne 0)) {
+if (-not $ended -or (($Config -eq 'lockstep' -or $Config -eq 'same-as-stock') -and $code -ne 0)) {
     Write-Host "The run did not end as expected (driver exit code $code)."
     exit 1
 }

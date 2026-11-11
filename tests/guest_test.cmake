@@ -12,6 +12,13 @@
 # ahead of time, compared event test by event test with that record. The test
 # passes if the two runs never differ.
 #
+# With -DSAME_AS_STOCK=1 it runs the program twice as well: on stock PCSX2
+# with its recompilers, recording every sync point (the moments the core lets
+# the IOP catch up with the EE), and then on PS2Native's EE provider with the
+# code compiled ahead of time, compared sync point by sync point with that
+# record: where the EE is, its cycle count, its registers. The test passes if
+# the two runs never differ (ADR 0011).
+#
 # Variables:
 #   HOST       ps2n-host executable
 #   ELF        the program to boot
@@ -19,6 +26,7 @@
 #   SELFTEST_TRIALS  with SELFTEST: random cases per instruction against PCSX2's
 #              recompiler (ten times as many against its interpreter)
 #   LOCKSTEP   compare a compiled run with an interpreted one
+#   SAME_AS_STOCK  compare a compiled run with a run of stock PCSX2
 #   WORK_DIR   scratch directory for this test; emptied first
 #   EXPECTED   file the output must equal (a console recording)
 #   EE         jit, interp or ps2n (default jit)
@@ -55,6 +63,14 @@
 #   TIMES      also write times.txt in the scratch directory: the program's
 #              output with the frame and EE cycle count at which each line was
 #              printed (ps2n-host -times), to see where two runs part in time
+#   SYNC       also write sync.txt in the scratch directory: the run's record of
+#              sync points (ps2n-host -sync), which a stock run can write too
+#   SYNC_AGAINST  the sync.txt of an earlier run, to compare this run with; what
+#              differs first is reported, and does not fail the run
+#   SYNC_DETAIL  with SYNC: the sync point from which the registers are written
+#   TRACE      with EE=ps2n: also write run.trace in the scratch directory, the
+#              record of event tests (ps2n-host -trace)
+#   TRACE_DETAIL  with TRACE: the event test from which the registers are written
 #   FRAME_EXPECTED  a file holding the size and fingerprint of the frame the
 #              run must end on, as ps2n-host prints them ("640x448, fingerprint
 #              0123456789ABCDEF")
@@ -78,7 +94,7 @@ foreach(required IN ITEMS HOST WORK_DIR)
 		message(FATAL_ERROR "guest_test.cmake: ${required} is not set")
 	endif()
 endforeach()
-foreach(flag IN ITEMS SELFTEST LOCKSTEP)
+foreach(flag IN ITEMS SELFTEST LOCKSTEP SAME_AS_STOCK)
 	if(NOT DEFINED ${flag})
 		set(${flag} 0)
 	endif()
@@ -239,6 +255,16 @@ if(DEFINED TIMES AND TIMES)
 	list(APPEND limits -times "${WORK_DIR}/times.txt")
 endif()
 
+if(DEFINED SYNC AND SYNC)
+	list(APPEND limits -sync "${WORK_DIR}/sync.txt")
+endif()
+if(DEFINED SYNC_AGAINST AND NOT "${SYNC_AGAINST}" STREQUAL "")
+	list(APPEND limits -sync-against "${SYNC_AGAINST}")
+endif()
+if(DEFINED SYNC_DETAIL AND NOT "${SYNC_DETAIL}" STREQUAL "")
+	list(APPEND limits -sync-detail ${SYNC_DETAIL})
+endif()
+
 if(LOCKSTEP)
 	message("--- interpreted ---")
 	ps2n_run("-interpreted"
@@ -281,11 +307,82 @@ if(LOCKSTEP)
 	return()
 endif()
 
+if(SAME_AS_STOCK)
+	message("--- stock PCSX2 ---")
+	ps2n_run("-stock"
+		-out "${WORK_DIR}/guest-stock.txt"
+		-ee jit -iop ${IOP} -vu ${VU}
+		-sync "${WORK_DIR}/stock.sync"
+		${limits} "${ELF}")
+	if(NOT exit_code STREQUAL "${EXPECT_EXIT}")
+		message(FATAL_ERROR "The stock run ended with ${exit_code}, not ${EXPECT_EXIT} (0 marker seen, 1 error, 2 frame limit, 3 time limit). Log: ${WORK_DIR}/core-stock.log")
+	endif()
+	set(stock_report "${host_report}")
+
+	message("--- PS2Native, compiled ---")
+	ps2n_run(""
+		-out "${WORK_DIR}/guest.txt"
+		-ee ps2n -iop ${IOP} -vu ${VU} -static on ${image}
+		-sync-against "${WORK_DIR}/stock.sync"
+		${limits} "${ELF}")
+	if(NOT exit_code STREQUAL "${EXPECT_EXIT}")
+		message(FATAL_ERROR "The compiled run ended with ${exit_code}, not ${EXPECT_EXIT} (0 marker seen, 1 error, 2 frame limit, 3 time limit). "
+			"The stock run's record: ${WORK_DIR}/stock.sync. Log: ${WORK_DIR}/core.log")
+	endif()
+	if(NOT host_report MATCHES "ps2n-host: sync: the same as the reference run at every sync point")
+		message(FATAL_ERROR "The compiled run is not the stock run (see \"ps2n-host: sync:\" above). The stock run's record: "
+			"${WORK_DIR}/stock.sync; to see the registers, run both again with SYNC and SYNC_DETAIL. Log: ${WORK_DIR}/core.log")
+	endif()
+
+	# Megabytes, and equal.
+	file(REMOVE "${WORK_DIR}/stock.sync")
+	message("The compiled run and the stock run are the same, sync point by sync point")
+
+	# With a renderer that draws: the frame each run ended on, and those
+	# fingerprinted along the way (FRAME_EVERY), by what the host printed of
+	# them. The pictures in the scratch directory are the compiled run's.
+	string(REGEX MATCHALL "ps2n-host: frame[^\n]*fingerprint [0-9A-F]+" stock_frames "${stock_report}")
+	string(REGEX MATCHALL "ps2n-host: frame[^\n]*fingerprint [0-9A-F]+" compiled_frames "${host_report}")
+	list(LENGTH stock_frames stock_frame_count)
+	list(LENGTH compiled_frames compiled_frame_count)
+	if(NOT stock_frames STREQUAL compiled_frames)
+		set(first_stock "(none)")
+		set(first_compiled "(none)")
+		set(index 0)
+		while(index LESS stock_frame_count OR index LESS compiled_frame_count)
+			set(first_stock "(none)")
+			set(first_compiled "(none)")
+			if(index LESS stock_frame_count)
+				list(GET stock_frames ${index} first_stock)
+			endif()
+			if(index LESS compiled_frame_count)
+				list(GET compiled_frames ${index} first_compiled)
+			endif()
+			if(NOT first_stock STREQUAL first_compiled)
+				break()
+			endif()
+			math(EXPR index "${index} + 1")
+		endwhile()
+		message(FATAL_ERROR "The compiled run does not show the pictures the stock run shows. The first that differs:\n"
+			"  stock:    ${first_stock}\n  compiled: ${first_compiled}")
+	endif()
+	if(stock_frame_count GREATER 0)
+		message("The compiled run and the stock run show the same picture at each of the ${stock_frame_count} frames fingerprinted")
+	endif()
+	return()
+endif()
+
 set(static "")
 if(EE STREQUAL "ps2n")
 	set(static -static ${STATIC} ${image})
 	if(DEFINED CAPTURE_EXPECTED OR (DEFINED CAPTURE AND CAPTURE))
 		list(APPEND static -capture "${WORK_DIR}/capture.toml")
+	endif()
+	if(DEFINED TRACE AND TRACE)
+		list(APPEND static -trace "${WORK_DIR}/run.trace")
+		if(DEFINED TRACE_DETAIL AND NOT "${TRACE_DETAIL}" STREQUAL "")
+			list(APPEND static -trace-detail ${TRACE_DETAIL})
+		endif()
 	endif()
 endif()
 

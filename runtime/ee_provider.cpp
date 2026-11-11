@@ -6,36 +6,42 @@
 // docs/execution-model.md describes the model; runtime/include/ps2n/recomp.h
 // defines the contract with compiled code.
 //
-// The interpreter decodes with PS2Native's decoder and carries out an
-// instruction with PS2Native's own semantics where those exist
-// (runtime/include/ps2n/ops_*.h). Every other instruction is carried out by
-// PCSX2's interpreter function for it, reached through PCSX2's opcode table,
-// and counted as delegated.
+// Both count time, and test for events, exactly as PCSX2's EE recompiler
+// does: by the blocks it would have formed, which rec_blocks.h keeps. The
+// interpreter carries those blocks out instruction by instruction; compiled
+// code asks at every label where the block it is in ends. Each function here
+// that stands for a part of the recompiler's generated code names it (PCSX2
+// v2.9.170, pcsx2/x86, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+).
 //
-// The boot hooks follow pcsx2/Interpreter.cpp and pcsx2/x86/ix86-32/iR5900.cpp
-// of PCSX2 v2.9.170, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+.
+// An instruction is carried out with PS2Native's own semantics where those
+// exist (runtime/include/ps2n/ops_*.h). Every other instruction is carried
+// out by PCSX2's interpreter function for it, reached through PCSX2's opcode
+// table, and counted as delegated.
 //
-// Not implemented, and so different from PCSX2's own providers (the list of
-// what differs about time is in docs/execution-model.md):
+// Not implemented, and so different from PCSX2's recompiler (the list is in
+// docs/execution-model.md):
 //  - the EE cycle rate setting (counted as its default, 0);
 //  - GoemonTlbHack (a game fix PCSX2 applies at JAL and JR);
-//  - pattern patches PCSX2 applies when its recompiler compiles a block.
+//  - its throwing away of every block when it runs out of room for code.
 
 #include "ee_provider.h"
+#include "rec_blocks.h"
 
 #include "ps2n/codehash.h"
 #include "ps2n/ops_int.h"
 #include "ps2n/r5900.h"
+#include "ps2n/rec_rules.h"
 #include "ps2n/recomp.h"
-#include "ps2n/waitloop.h"
 
 #include "pcsx2/PrecompiledHeader.h"
 
 #include "pcsx2/Common.h"
 #include "pcsx2/Dmac.h"
+#include "pcsx2/R3000A.h"
 #include "pcsx2/R5900OpcodeTables.h"
 #include "pcsx2/VMManager.h"
 #include "pcsx2/VU.h"
+#include "pcsx2/VUmicro.h"
 
 #include "common/FastJmp.h"
 
@@ -45,22 +51,31 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <unordered_map>
+
+// Defined in pcsx2/VU0.cpp; PCSX2 declares it in no header.
+void _vu0WaitMicro(); // runs VU0's micro program until it ends or stops at an M bit
 
 using ps2n::ee::FunctionInfo;
 using ps2n::ee::ImageInfo;
-using ps2n::ee::kInvalid;
-using ps2n::ee::kTrusted;
-using ps2n::ee::kUnverified;
 using ps2n::ee::kUnwind;
 using ps2n::ee::StaticFn;
+using ps2n::ee::blocks::Block;
+using ps2n::ee::blocks::Step;
 using ps2n::r5900::Insn;
 using ps2n::r5900::Op;
+namespace blocks = ps2n::ee::blocks;
 
 namespace
 {
 	ps2n::ee::Stats s_stats;
+
+	// What the interpreter has counted, in eighths of a cycle: everything, and
+	// inside the compiled executable's code. Where the block being carried out
+	// belongs.
 	u64 s_interpreted_eighths = 0;
 	u64 s_interpreted_eighths_in_image = 0;
+	bool s_interpreting_image = false;
 
 	// Where Execute() returns to when execution is to stop (value 1) or the
 	// current instruction is abandoned (value 0).
@@ -71,21 +86,9 @@ namespace
 	bool s_cycle_rate_reported = false;
 	bool s_full_clamp_reported = false;
 
-	// ---- interpreter state ---------------------------------------------------
-	// The cost of the instructions interpreted since the last block end, in
-	// eighths of a cycle.
-	u32 s_block_eighths = 0;
-	// Above zero while a delay slot is being executed.
-	u32 s_delay_depth = 0;
-
-	// Where the block being interpreted began (or an impossible address when
-	// it began in compiled code), whether everything in it so far is what an
-	// idle loop may hold, and whether its branch went back to its start: an
-	// idle loop, whose time is skipped (ps2n/waitloop.h).
-	constexpr u32 kNoBlockStart = 0xFFFFFFFFu;
-	u32 s_block_start = kNoBlockStart;
-	ps2n::r5900::WaitLoopScan s_block_scan;
-	bool s_block_is_idle_loop = false;
+	// Every block is to be thrown away before the next one is formed (the
+	// recompiler's eeRecNeedsReset).
+	bool s_blocks_need_reset = false;
 
 	// ---- compiled code -------------------------------------------------------
 	const ImageInfo* const* s_images = nullptr;
@@ -97,26 +100,9 @@ namespace
 	const ImageInfo* s_image = nullptr;
 	bool s_dispatching = false;
 
-	// Set when code memory was written: every compiled frame has to be left,
-	// since any of them may be executing what was overwritten.
+	// Set when another executable has started: every compiled frame has to be
+	// left, since it belongs to the one before.
 	bool s_unwind_requested = false;
-
-	// How often each function of the image has been compared with RAM.
-	std::vector<u8> s_verify_counts;
-	// A function that keeps having to be verified shares its pages with data
-	// the program writes. Past this count its pages are no longer
-	// write-protected, and it is verified on every entry instead.
-	constexpr u8 kMaxProtections = 16;
-
-	// For each function of the image: one past the last address any of its
-	// compiled forms (the function, its variants) was compiled from.
-	std::vector<u32> s_extents;
-
-	// For each function of the image, the highest such address of it and of
-	// those before it, as a physical address. A function's compiled range can
-	// reach past the start of the next, so the ranges are not sorted by their
-	// ends; this is what Clear() searches instead.
-	std::vector<u32> s_extent_max;
 
 	// The code found in memory in the place of a function, when nothing
 	// compiled matched it.
@@ -125,6 +111,12 @@ namespace
 	// One bit per instruction of the image's code range: a block had to be
 	// interpreted from there.
 	std::vector<u64> s_missing;
+
+	// Where compiled code handed over to the interpreter, and how often: the
+	// rest of a block (by the instruction it left at), a whole block (by its
+	// label).
+	std::unordered_map<u32, u64> s_left_at;
+	std::unordered_map<u32, u64> s_interpreted_at;
 
 	// The host stack: where Execute() was entered, and how far below that
 	// compiled code may go before its frames are abandoned.
@@ -149,7 +141,10 @@ namespace
 	constexpr u32 kCacheSize = 1u << 14;
 	CacheEntry s_cache[kCacheSize];
 
-	constexpr u32 kPhysicalMask = 0x1FFFFFFFu;
+	// Which of a function's compiled forms a block's code is (Block::body).
+	constexpr u8 kBodyFunction = 0; // the function as the executable has it; 1 + n: its variant n
+	constexpr u8 kBodyNone = blocks::kBodyNone;
+	constexpr u8 kBodyUnknown = blocks::kBodyUnknown;
 
 	void FlushCache()
 	{
@@ -160,12 +155,6 @@ namespace
 	bool InImage(u32 pc)
 	{
 		return s_image && (pc - s_image->text_start) < (s_image->text_end - s_image->text_start);
-	}
-
-	void FlagAllUnverified()
-	{
-		if (s_image)
-			std::memset(s_image->state, kUnverified, s_image->function_count);
 	}
 
 	// Chooses the image of the executable that has just reached its entry
@@ -190,91 +179,67 @@ namespace
 		if (!s_image)
 		{
 			Console.WriteLn(Color_StrongOrange, "ps2n: no compiled code for the executable with CRC %08X; it is interpreted", crc);
-			s_verify_counts.clear();
-			s_extents.clear();
-			s_extent_max.clear();
 			s_missing.clear();
 			return;
 		}
 
-		FlagAllUnverified();
-		s_verify_counts.assign(s_image->function_count, 0);
-		s_extents.resize(s_image->function_count);
-		s_extent_max.resize(s_image->function_count);
-		u32 highest = 0;
-		for (u32 i = 0; i < s_image->function_count; i++)
-		{
-			const FunctionInfo& f = s_image->functions[i];
-			u32 extent = f.extent;
-			for (u32 v = 0; v < f.variant_count; v++)
-				extent = std::max(extent, s_image->variants[f.first_variant + v].extent);
-			s_extents[i] = extent;
-
-			highest = std::max(highest, extent & kPhysicalMask);
-			s_extent_max[i] = highest;
-		}
+		// Nothing is known of any of its blocks yet.
+		std::memset(s_image->blocks, 0, s_image->leader_count * sizeof(u32));
 		s_missing.assign(((s_image->text_end - s_image->text_start) / 4 + 63) / 64, 0);
 		Console.WriteLn(Color_StrongGreen, "ps2n: %s compiled code of %s (CRC %08X): %u functions at %08X-%08X, by %s",
-			s_dispatching ? "using" : "NOT using (switched off)", s_image->name, crc, s_image->function_count,
-			s_image->text_start, s_image->text_end, s_image->generator);
+			s_dispatching ? "using" : "NOT using (switched off)", s_image->name, crc, s_image->function_count, s_image->text_start,
+			s_image->text_end, s_image->generator);
 	}
 
-	// The function of the image that can be entered at `pc`, or -1.
-	s32 FindEntry(const ImageInfo& image, u32 pc)
+	// The function of `image` that holds `pc`, or null.
+	const FunctionInfo* FunctionOf(const ImageInfo& image, u32 pc)
 	{
 		if ((pc - image.text_start) >= (image.text_end - image.text_start))
-			return -1;
+			return nullptr;
 
 		const FunctionInfo* begin = image.functions;
 		const FunctionInfo* end = begin + image.function_count;
 		const FunctionInfo* it = std::upper_bound(begin, end, pc, [](u32 a, const FunctionInfo& f) { return a < f.start; });
 		if (it == begin)
-			return -1;
+			return nullptr;
 		--it;
-		if (pc >= it->end)
-			return -1;
-
-		if (pc != it->start)
-		{
-			const u32* resume = image.resume_points + it->first_resume;
-			if (!std::binary_search(resume, resume + it->resume_count, pc))
-				return -1;
-		}
-		return static_cast<s32>(it - begin);
+		return pc < it->end ? it : nullptr;
 	}
 
-	// The index of the compiled function to run at `pc`, or -1. Compiled code
-	// assumes the EE issues two instructions at a time, as the BIOS sets it up
-	// (COP0 Config, bit 18); if a program switches that off, it is interpreted.
-	__fi s32 LookupIndex(u32 pc)
+	// The index of `pc` among the leaders of `image`, or -1 when it is not one.
+	s32 LeaderIndex(const ImageInfo& image, u32 pc)
 	{
-		if (!s_dispatching || !(cpuRegs.CP0.n.Config & (1u << 18)) || EmuConfig.Cpu.Recompiler.fpuFullMode)
+		const u32* begin = image.leaders;
+		const u32* end = begin + image.leader_count;
+		const u32* it = std::lower_bound(begin, end, pc);
+		return (it != end && *it == pc) ? static_cast<s32>(it - begin) : -1;
+	}
+
+	// The function of the image that can be entered at `pc`, or -1.
+	s32 FindEntry(const ImageInfo& image, u32 pc)
+	{
+		const FunctionInfo* f = FunctionOf(image, pc);
+		if (!f)
 			return -1;
+
+		const u32* leaders = image.leaders + f->first_leader;
+		if (!std::binary_search(leaders, leaders + f->leader_count, pc))
+			return -1;
+		return static_cast<s32>(f - image.functions);
+	}
+
+	// The compiled function to enter at `pc`, or null. PCSX2's fourth clamp
+	// mode for the EE's FPU is not implemented, and compiled code has the FPU
+	// semantics built in: with it set, nothing compiled runs.
+	__fi StaticFn Lookup(u32 pc)
+	{
+		if (!s_dispatching || EmuConfig.Cpu.Recompiler.fpuFullMode)
+			return nullptr;
 
 		CacheEntry& e = s_cache[(pc >> 2) & (kCacheSize - 1)];
 		if (e.pc != pc)
 			e = {pc, FindEntry(*s_image, pc)};
-
-		if (e.index < 0 || s_image->state[e.index] == kInvalid)
-			return -1;
-		return e.index;
-	}
-
-	// The compiled code to run in the place of function `index` in state
-	// `state`: the function, or the variant that is in memory. (Unverified,
-	// the function's own entry check finds out which.)
-	__fi StaticFn CodeFor(const ImageInfo& image, u32 index, u8 state)
-	{
-		const FunctionInfo& f = image.functions[index];
-		if (state >= ps2n::ee::kFirstVariant)
-			return image.variants[f.first_variant + (state - ps2n::ee::kFirstVariant)].fn;
-		return f.fn;
-	}
-
-	__fi StaticFn Lookup(u32 pc)
-	{
-		const s32 index = LookupIndex(pc);
-		return index < 0 ? nullptr : CodeFor(*s_image, static_cast<u32>(index), s_image->state[index]);
+		return e.index < 0 ? nullptr : s_image->functions[e.index].fn;
 	}
 
 	void RecordMissing(u32 pc)
@@ -309,38 +274,10 @@ namespace
 		return hash.value;
 	}
 
-	// Which compiled form of function `index` the code in memory is: kTrusted
-	// for the function as the executable has it, kFirstVariant + n for its
-	// variant n, kInvalid for none.
-	u8 IdentifyCode(const ImageInfo& image, u32 index)
+	// Keeps the words in memory in the place of function `f`, for the host to
+	// hand to the recompiler.
+	void CaptureCode(const FunctionInfo& f)
 	{
-		const FunctionInfo& f = image.functions[index];
-
-		u32 hashed_extent = f.extent;
-		u64 hash = HashOfMemory(f.start, hashed_extent);
-		if (hash == f.hash)
-			return kTrusted;
-
-		for (u32 v = 0; v < f.variant_count; v++)
-		{
-			const ps2n::ee::VariantInfo& variant = image.variants[f.first_variant + v];
-			if (variant.extent != hashed_extent)
-			{
-				hashed_extent = variant.extent;
-				hash = HashOfMemory(f.start, hashed_extent);
-			}
-			if (hash == variant.hash)
-				return static_cast<u8>(ps2n::ee::kFirstVariant + v);
-		}
-		return kInvalid;
-	}
-
-	// Keeps the words in memory in the place of function `index`, for the
-	// host to hand to the recompiler.
-	void CaptureCode(const ImageInfo& image, u32 index)
-	{
-		const FunctionInfo& f = image.functions[index];
-
 		ps2n::ee::CapturedCode code;
 		code.start = f.start;
 		for (u32 addr = f.start; addr < f.end; addr += 4)
@@ -360,17 +297,6 @@ namespace
 				return;
 		}
 		s_captured.push_back(std::move(code));
-	}
-
-	// Write-protects the pages of [start, end) through the core, which then
-	// reports a write to any of them through the provider's Clear.
-	void ProtectPages(u32 start, u32 end)
-	{
-		for (u32 page = start & ~0xFFFu; page < end; page += 0x1000)
-		{
-			if ((page & 0x1FFFFFFFu) < Ps2MemSize::ExposedRam)
-				mmap_MarkCountedRamPage(page);
-		}
 	}
 
 	// ---- time and events -----------------------------------------------------
@@ -454,6 +380,10 @@ namespace
 	// Runs the core's event test. cpuRegs.pc is the next instruction.
 	void RunEventTest()
 	{
+		// No block is being carried out here: those thrown away since the last
+		// time can go for good.
+		blocks::Collect();
+
 		s_stats.event_tests++;
 		RecordEventTest();
 		_cpuEventTest_Shared();
@@ -466,9 +396,9 @@ namespace
 	}
 
 	// After an event test reached from compiled code: whether its frames have
-	// to be left. Either code memory was written, or the host stack has grown
-	// too deep, which guest code can cause without growing its own stack (a
-	// function that is called, and jumps back into its caller instead of
+	// to be left. Either another executable has started, or the host stack has
+	// grown too deep, which guest code can cause without growing its own stack
+	// (a function that is called, and jumps back into its caller instead of
 	// returning). No frame holds guest state, so leaving them is always safe.
 	bool MustUnwind()
 	{
@@ -488,192 +418,11 @@ namespace
 		return false;
 	}
 
-	// The end of an interpreted block: counts its cycles and, when an event is
-	// due, lets the core handle it. cpuRegs.pc is the next instruction, so an
-	// interrupt taken here returns to it.
-	void EndBlock()
-	{
-		// A delay slot does not end a block; the branch it belongs to does, once
-		// the PC is the branch's target.
-		if (s_delay_depth != 0 || s_block_eighths == 0)
-			return;
-
-		cpuRegs.cycle += ps2n::ee::blockCycles(s_block_eighths);
-		s_block_eighths = 0;
-
-		if (s_block_is_idle_loop)
-		{
-			s_block_is_idle_loop = false;
-			ps2n::ee::skipIdleTime();
-		}
-
-		if (ps2n::ee::eventDue())
-			RunEventTest();
-	}
-
 	// Counts a SYSCALL about to be carried out, by its number.
 	__fi void CountSyscall()
 	{
 		const s32 number = cpuRegs.GPR.n.v1.SL[0];
 		s_stats.syscalls[static_cast<u8>(number < 0 ? -number : number)]++;
-	}
-
-	// One entry into the block of a timeout loop (ps2n/waitloop.h), as PCSX2's
-	// recompiler compiles it (recSkipTimeoutLoop, x86/ix86-32/iR5900.cpp). Eight
-	// cycles pass for each count left in `reg`, but time goes no further than
-	// the next event; the count comes down by the cycles that passed, divided
-	// by eight. Returns true when the count has reached zero: the loop is over,
-	// and execution continues after it without an event test. Otherwise an event
-	// test is due with cpuRegs.pc at the loop's first instruction, after which
-	// the block is entered again. The interpreter and compiled code both go
-	// through here, so that they do the same.
-	bool AdvanceTimeoutLoop(u32 reg)
-	{
-		// The recompiler tests this first, before it lets any time pass.
-		if (ps2n::ee::eventDue())
-			return false;
-
-		const u64 before = cpuRegs.cycle;
-		const u64 count = cpuRegs.GPR.r[reg].UL[0];
-		u64 after = before + count * 8;
-		if (cpuRegs.nextEventCycle < after)
-			after = cpuRegs.nextEventCycle;
-		cpuRegs.cycle = after;
-		s_stats.timeout_loop_cycles += after - before;
-
-		// The recompiler writes bits 0 to 31 of the register and leaves the rest.
-		const u32 left = static_cast<u32>(count - ((after - before) >> 3));
-		cpuRegs.GPR.r[reg].UL[0] = left;
-		return left == 0;
-	}
-
-	// At the start of an interpreted block: when a timeout loop begins at
-	// cpuRegs.pc, does what PCSX2's recompiler does in its place and returns
-	// true. Compiled code makes the same test ahead of time, at every label
-	// (emitTimeoutLoop in recompiler/src/codegen.cpp); the two must agree.
-	bool SkipTimeoutLoop()
-	{
-		if (!EmuConfig.Speedhacks.WaitLoop || s_block_eighths != 0 || s_delay_depth != 0)
-			return false;
-
-		const u32 start = cpuRegs.pc;
-		const ps2n::r5900::TimeoutLoop loop = ps2n::r5900::findTimeoutLoop(start, [](u32 address) { return ps2n::ee::read32(address); });
-		if (!loop.found)
-			return false;
-
-		if (AdvanceTimeoutLoop(loop.reg))
-			cpuRegs.pc = loop.end;
-		else
-			RunEventTest();
-		return true;
-	}
-
-	bool StepInstruction();
-
-	void SetLink(u32 reg)
-	{
-		// cpuRegs.pc is the delay slot here; the return address is the
-		// instruction after it.
-		cpuRegs.GPR.r[reg].UD[0] = cpuRegs.pc + 4;
-	}
-
-	// A taken branch: the delay slot runs, then control goes to `target`.
-	// `fixed`: the target is in the instruction, not in a register.
-	void TakeBranch(u32 target, bool fixed)
-	{
-		cpuRegs.branch = 1;
-		s_delay_depth++;
-		StepInstruction();
-		s_delay_depth--;
-
-		// cpuRegs.branch is cleared when the delay slot raised an exception, or
-		// was itself a taken branch; the PC is then already where it must be.
-		if (cpuRegs.branch != 0)
-		{
-			cpuRegs.pc = target;
-			cpuRegs.branch = 0;
-
-			// Back to where this block began, having done nothing that lasts.
-			if (fixed && s_delay_depth == 0 && target == s_block_start && s_block_scan.idle)
-				s_block_is_idle_loop = true;
-		}
-
-		EndBlock();
-	}
-
-	// Carries out a branch or a jump. cpuRegs.pc is the address of its delay
-	// slot.
-	void ExecuteBranch(const Insn& in)
-	{
-		const s64 s = cpuRegs.GPR.r[in.rs()].SD[0];
-		const s64 t = cpuRegs.GPR.r[in.rt()].SD[0];
-
-		u32 target = in.is(ps2n::r5900::F_BRANCH) ? in.branchTarget() : 0;
-		bool taken = false;
-
-		switch (in.op)
-		{
-			case Op::J:
-				target = in.jumpTarget();
-				taken = true;
-				break;
-			case Op::JAL:
-				SetLink(31);
-				target = in.jumpTarget();
-				taken = true;
-				break;
-			case Op::JR:
-				target = cpuRegs.GPR.r[in.rs()].UL[0];
-				taken = true;
-				break;
-			case Op::JALR:
-				target = cpuRegs.GPR.r[in.rs()].UL[0];
-				if (in.rd())
-					SetLink(in.rd());
-				taken = true;
-				break;
-
-			case Op::BEQ: case Op::BEQL: taken = (s == t); break;
-			case Op::BNE: case Op::BNEL: taken = (s != t); break;
-			case Op::BLEZ: case Op::BLEZL: taken = (s <= 0); break;
-			case Op::BGTZ: case Op::BGTZL: taken = (s > 0); break;
-			case Op::BLTZ: case Op::BLTZL: taken = (s < 0); break;
-			case Op::BGEZ: case Op::BGEZL: taken = (s >= 0); break;
-			case Op::BLTZAL: case Op::BLTZALL: SetLink(31); taken = (s < 0); break;
-			case Op::BGEZAL: case Op::BGEZALL: SetLink(31); taken = (s >= 0); break;
-
-			case Op::BC0F: case Op::BC0FL: taken = !ps2n::ee::cop0Condition(); break;
-			case Op::BC0T: case Op::BC0TL: taken = ps2n::ee::cop0Condition(); break;
-
-			case Op::BC1F: case Op::BC1FL: taken = !ps2n::ee::fpuCondition(); break;
-			case Op::BC1T: case Op::BC1TL: taken = ps2n::ee::fpuCondition(); break;
-
-			case Op::BC2F: case Op::BC2FL: taken = !ps2n::ee::cop2Condition(); break;
-			case Op::BC2T: case Op::BC2TL: taken = ps2n::ee::cop2Condition(); break;
-
-			default:
-				pxFailRel("ps2n: ExecuteBranch() was given an instruction that is not a branch");
-				return;
-		}
-
-		if (taken)
-		{
-			TakeBranch(target, in.is(ps2n::r5900::F_BRANCH | ps2n::r5900::F_JUMP));
-		}
-		else if (in.isLikely())
-		{
-			// A branch-likely that is not taken skips its delay slot.
-			cpuRegs.pc += 4;
-			EndBlock();
-		}
-		else
-		{
-			// Not taken: the delay slot runs all the same, as a delay slot, and
-			// the block ends after it, exactly as when the branch is taken.
-			// (PCSX2's interpreter tests for events before the delay slot here;
-			// its recompiler, like this, after it.)
-			TakeBranch(cpuRegs.pc + 4, false);
-		}
 	}
 
 	// PCSX2's fourth clamp mode for the EE's FPU, "Full", is a recompiler of
@@ -703,7 +452,8 @@ namespace
 #define FD in.fd()
 #define FS in.fs()
 #define FT in.ft()
-#define INTERLOCK in.interlock()
+#define PERF in.perfReg()
+#define CREG in.rd()
 #define S(op, fn, args) \
 	case Op::op: \
 		fn args; \
@@ -715,12 +465,14 @@ namespace
 #include "ps2n/r5900_sem_cop1.inc"
 #include "ps2n/r5900_sem_mmi.inc"
 #include "ps2n/r5900_sem_cop2_ctl.inc"
+#include "ps2n/r5900_sem_cop0.inc"
 			default:
 				return false;
 		}
 
 #undef S
-#undef INTERLOCK
+#undef CREG
+#undef PERF
 #undef FT
 #undef FS
 #undef FD
@@ -732,130 +484,584 @@ namespace
 #undef RD
 	}
 
-	// Interprets the instruction at cpuRegs.pc: a branch together with its
-	// delay slot, or one other instruction. Returns true when that ended the
-	// block. What ends a block is defined in ps2n/r5900.h, for the recompiler
-	// and for this interpreter alike.
-	bool StepInstruction()
+	// ---- carrying out the recompiler's blocks ------------------------------------
+	// recSafeExitExecution(): execution is to stop at an event test, and one is
+	// to come at the end of the block being carried out. Inside an event test,
+	// the IOP is stopped short instead.
+	void SafeExitExecution()
 	{
-		const u32 pc = cpuRegs.pc;
-
-		// Advanced before the fetch: an exception expects the PC past it.
-		cpuRegs.pc += 4;
-		cpuRegs.code = ps2n::ee::read32(pc);
-
-		const Insn in(cpuRegs.code, pc);
-
-		// A block begins with the first instruction counted after the end of
-		// the one before. What it holds, its final branch aside, decides
-		// whether it is an idle loop.
-		if (s_block_eighths == 0 && s_delay_depth == 0)
+		s_exit_requested = true;
+		if (!eeEventTestIsActive)
 		{
-			s_block_start = pc;
-			s_block_scan = {};
+			cpuRegs.nextEventCycle = 0;
 		}
-		if (!in.isControlFlow())
-			s_block_scan.add(cpuRegs.code);
-
-		// An encoding PS2Native's decoder does not know is still counted, and
-		// below carried out, as PCSX2 would.
-		const u32 eighths = (in.valid() ? ps2n::r5900::cycles(in.op) : R5900::GetInstruction(cpuRegs.code).cycles) *
-							(2 - ((cpuRegs.CP0.n.Config >> 18) & 0x1));
-		s_block_eighths += eighths;
-		s_interpreted_eighths += eighths;
-		s_stats.interpreted++;
-		if (InImage(pc))
+		else if (psxRegs.iopCycleEE > 0)
 		{
-			s_interpreted_eighths_in_image += eighths;
-			s_stats.interpreted_in_image++;
+			psxRegs.iopBreak += psxRegs.iopCycleEE;
+			psxRegs.iopCycleEE = 0;
 		}
-		else if (pc >= 0x80000000u)
-			s_stats.interpreted_kernel++;
-		else if (pc < 0x00100000u)
-			s_stats.interpreted_loader++;
+	}
+
+	// recRecompile(), the part before the block itself: the executable's
+	// entry point is noticed when its block is formed, and a reset asked for
+	// while executing is carried out here.
+	Block* FormRecBlock(u32 pc)
+	{
+		if (blocks::Physical(pc) == VMManager::Internal::GetCurrentELFEntryPoint())
+		{
+			const bool booted = VMManager::Internal::HasBootedELF();
+			VMManager::Internal::EntryPointCompilingOnCPUThread();
+			if (!booted)
+				SelectImage();
+		}
+
+		if (s_blocks_need_reset)
+		{
+			s_blocks_need_reset = false;
+			blocks::Reset();
+		}
+
+		Block* block = blocks::Form(pc);
+		if (!block) [[unlikely]]
+		{
+			Console.Error("ps2n: execution reached %08X, which is neither RAM nor ROM", pc);
+			pxFailRel("ps2n: execution left RAM and ROM");
+		}
+		return block;
+	}
+
+	// recSkipTimeoutLoop(): one entry into the block of a timeout loop
+	// (ps2n/waitloop.h). Eight cycles pass for each count left in `reg`, but
+	// time goes no further than the next event; the count comes down by the
+	// cycles that passed, divided by eight. Returns true when the count has
+	// reached zero: the loop is over, and execution continues after it without
+	// an event test. Otherwise an event test is due with cpuRegs.pc at the
+	// loop's first instruction, after which the block is entered again.
+	bool AdvanceTimeoutLoop(u32 reg)
+	{
+		// The recompiler tests this first, before it lets any time pass.
+		if (ps2n::ee::eventDue())
+			return false;
+
+		const u64 before = cpuRegs.cycle;
+		const u64 count = cpuRegs.GPR.r[reg].UL[0];
+		u64 after = before + count * 8;
+		if (cpuRegs.nextEventCycle < after)
+			after = cpuRegs.nextEventCycle;
+		cpuRegs.cycle = after;
+		s_stats.timeout_loop_cycles += after - before;
+
+		// The recompiler writes bits 0 to 31 of the register and leaves the rest.
+		const u32 left = static_cast<u32>(count - ((after - before) >> 3));
+		cpuRegs.GPR.r[reg].UL[0] = left;
+		return left == 0;
+	}
+
+	// What the recompiler's code does about VU0 before a COP2 instruction it
+	// has marked (COP2_Interlock, mVUSyncVU0, mVUFinishVU0 in
+	// x86/microVU_Macro.inl). The cycles of the block so far have been added
+	// already where it adds them.
+	void Cop2Prologue(const Step& step)
+	{
+		if (!(VU0.VI[REG_VPU_STAT].UL & 1))
+			return; // VU0 is not running a micro program
+
+		const u32 code = step.insn.raw;
+		const u32 rs = (code >> 21) & 31;
+		const bool transfer = (code >> 26) == 022 && rs < 020;
+
+		// How far the EE is ahead of VU0.
+		const auto ahead = []() {
+			s64 cycles = static_cast<s64>(cpuRegs.cycle - VU0.cycle);
+			if (EmuConfig.Gamefixes.VUSyncHack || EmuConfig.Gamefixes.FullVU0SyncHack)
+				cycles -= VU0.nextBlockCycles;
+			return cycles;
+		};
+
+		if (transfer && (code & 1))
+		{
+			// An interlocked transfer, which only waits where it is marked for a
+			// sync. CTC2 and QMTC2 let the micro program run as far as an M bit;
+			// CFC2 and QMFC2 to its end.
+			if (!(step.info & blocks::kCop2Sync))
+				return;
+			if (rs == 006 || rs == 005)
+			{
+				if (ahead() >= 4)
+					BaseVUmicroCPU::ExecuteBlockJIT(CpuVU0, true);
+				_vu0WaitMicro();
+			}
+			else
+			{
+				_vu0FinishMicro();
+			}
+		}
+		else if (step.info & blocks::kCop2Sync)
+		{
+			if (ahead() >= 4)
+				BaseVUmicroCPU::ExecuteBlockJIT(CpuVU0, (step.info & blocks::kCop2Interlocked) != 0);
+		}
 		else
-			s_stats.interpreted_elsewhere++;
-
-		if (in.isControlFlow())
 		{
-			ExecuteBranch(in);
-			return true;
+			_vu0FinishMicro();
+		}
+	}
+
+	// A COP2 instruction, LQC2 or SQC2 itself, with nothing more done about
+	// VU0: PCSX2's interpreter functions wait for VU0 by rules of their own.
+	void Cop2Operation(const Insn& in)
+	{
+		using namespace ps2n::ee::ops;
+		const u32 code = in.raw;
+		const u32 opcode = code >> 26, rs = in.rs();
+
+		if (opcode == 066)
+		{
+			LQC2(in.rt(), rs, in.simm());
+		}
+		else if (opcode == 076)
+		{
+			SQC2(in.rt(), rs, in.simm());
+		}
+		else if (rs == 001)
+		{
+			QMFC2(in.rt(), in.rd());
+		}
+		else if (rs == 002)
+		{
+			CFC2(in.rt(), in.rd());
+		}
+		else if (rs == 005)
+		{
+			QMTC2(in.rt(), in.rd());
+		}
+		else if (rs == 006)
+		{
+			CTC2(in.rt(), in.rd());
+		}
+		else
+		{
+			// A VU0 instruction: PCSX2's function for it, reached past the one
+			// that would run VU0's micro program to its end first. VCALLMS and
+			// VCALLMSR are the same function in the recompiler.
+			cpuRegs.code = code;
+			cpuRegs.pc = in.addr + 4;
+			s_stats.delegated++;
+			s_stats.delegated_by_op[static_cast<size_t>(in.op)]++;
+			if (rs >= 020)
+				Int_COP2SPECIAL1PrintTable[code & 63]();
+			else
+				R5900::GetInstruction(code).interpret();
+		}
+	}
+
+	// A load or store the recompiler compiled as a direct access to host
+	// memory has hit memory that is not plain: its code would fault, be
+	// patched, and its block be thrown away (vtlb_BackpatchLoadStore in
+	// pcsx2/vtlb.cpp). Once for each such piece of code.
+	void FastmemFault(Step& step)
+	{
+		// The address vtlb's code generator knows the instruction by: the one
+		// after it, or its own in a delay slot.
+		step.info &= ~blocks::kFastmem;
+		blocks::MemoryFault((step.info & blocks::kDelaySlot) ? step.insn.addr : step.insn.addr + 4);
+	}
+
+	// Carries out a step that is not a branch. `eighths`: the cost of the
+	// block so far.
+	void RunRecStep(Step& step, u32& eighths)
+	{
+		const Insn& in = step.insn;
+		const u32 info = step.info;
+
+		eighths += step.eighths;
+		s_interpreted_eighths += step.eighths;
+		if (s_interpreting_image)
+			s_interpreted_eighths_in_image += step.eighths;
+		if (info & blocks::kCostOnly)
+			return;
+
+		if (info & blocks::kDisableInterrupts)
+		{
+			// recDI: where the recompiler put the instruction's effect.
+			ps2n::ee::ops::DI();
+			return;
+		}
+
+		if (info & blocks::kSkippedSyscall)
+		{
+			// recSYSCALL: what the BIOS's routine is taken to cost.
+			eighths += ps2n::r5900::kSkippedSyscallEighths;
+			s_stats.syscalls_skipped++;
+			return;
+		}
+
+		// scaleblockcycles_clear()
+		if (info & blocks::kFlush)
+		{
+			cpuRegs.cycle += ps2n::ee::blockCycles(eighths);
+			eighths &= 7;
+		}
+
+		if (info & (blocks::kCop2Sync | blocks::kCop2Finish | blocks::kFastmem | blocks::kForcesEventTest | blocks::kEndsBlock)) [[unlikely]]
+		{
+			if (info & (blocks::kCop2Sync | blocks::kCop2Finish))
+				Cop2Prologue(step);
+			if ((info & blocks::kFastmem) && EmuConfig.Cpu.Recompiler.EnableFastmem &&
+				ps2n::ee::notPlainMemory(cpuRegs.GPR.r[in.rs()].UL[0] + static_cast<u32>(in.simm())))
+			{
+				FastmemFault(step);
+			}
+			// recBranchCall
+			if (info & blocks::kForcesEventTest)
+				cpuRegs.nextEventCycle = cpuRegs.cycle;
+			// Where execution continues, unless the instruction says otherwise.
+			if (info & blocks::kEndsBlock)
+				cpuRegs.pc = in.addr + 4;
+		}
+
+		const u32 opcode = in.raw >> 26;
+		if (opcode == 022 || opcode == 066 || opcode == 076)
+		{
+			Cop2Operation(in);
+			return;
 		}
 
 		if (ExecuteOwn(in))
-			return false;
+			return;
 
 		s_stats.delegated++;
 		s_stats.delegated_by_op[static_cast<size_t>(in.op)]++;
-
-		if (ps2n::r5900::isSystem(in))
-		{
-			if (ps2n::r5900::forcesEventTest(in))
-				cpuRegs.nextEventCycle = cpuRegs.cycle;
-			if (in.op == Op::SYSCALL)
-				CountSyscall();
-			R5900::GetInstruction(cpuRegs.code).interpret();
-			EndBlock();
-			return true;
-		}
-
-		R5900::GetInstruction(cpuRegs.code).interpret();
-		return false;
+		if (in.op == Op::SYSCALL)
+			CountSyscall();
+		cpuRegs.code = in.raw;
+		cpuRegs.pc = in.addr + 4;
+		cpuRegs.branch = 0;
+		R5900::GetInstruction(in.raw).interpret();
 	}
 
-	// What PCSX2 does when certain addresses of the BIOS's program loader are
-	// reached: it learns which executable is being started, and starts it
-	// directly when fast boot is on. PCSX2's recompiler checks these at every
-	// block it compiles, its interpreter after every instruction; here they
-	// are checked at the start of every interpreted block.
-	void BootHooks()
+	// iBranchTest(): the end of a block. The idle loop's way of ending is in
+	// RunRecBranch().
+	__fi void EndRecBlock(u32 eighths, bool test)
 	{
-		const u32 pc = cpuRegs.pc;
+		cpuRegs.cycle += ps2n::ee::blockCycles(eighths);
+		if (test && ps2n::ee::eventDue())
+			RunEventTest();
+	}
 
-		if (pc == EELOAD_START)
+	// Carries out the branch or jump that ends a block, with its delay slot
+	// (`delay`, or null when the recompiler dropped it), and ends the block.
+	void RunRecBranch(const Block& block, Step& step, Step* delay, u32 eighths)
+	{
+		const Insn& in = step.insn;
+		const u32 next = in.addr + 8;
+		eighths += step.eighths;
+		s_interpreted_eighths += step.eighths;
+		if (s_interpreting_image)
+			s_interpreted_eighths_in_image += step.eighths;
+
+		// The link is written first, and for the conditional ones before the
+		// register is compared.
+		switch (in.op)
 		{
-			// The EELOAD _start function is the same across all BIOS versions.
-			const u32 mainjump = memRead32(EELOAD_START + 0x9c);
-			if (mainjump >> 26 == 3) // JAL
-				g_eeloadMain = ((EELOAD_START + 0xa0) & 0xf0000000U) | (mainjump << 2 & 0x0fffffffU);
+			case Op::JAL:
+			case Op::BLTZAL: case Op::BLTZALL: case Op::BGEZAL: case Op::BGEZALL:
+				cpuRegs.GPR.r[31].UD[0] = next;
+				break;
+			default:
+				break;
 		}
-		else if (g_eeloadMain && pc == g_eeloadMain)
+
+		const s64 s = cpuRegs.GPR.r[in.rs()].SD[0];
+		const s64 t = cpuRegs.GPR.r[in.rt()].SD[0];
+
+		u32 target = in.is(ps2n::r5900::F_BRANCH) ? in.branchTarget() : 0;
+		bool taken = false;
+		bool fixed = true; // the target is in the instruction
+
+		switch (in.op)
 		{
-			eeloadHook();
-			if (VMManager::Internal::IsFastBootInProgress())
+			case Op::J:
+			case Op::JAL:
+				target = in.jumpTarget();
+				taken = true;
+				break;
+			case Op::JR:
+				target = cpuRegs.GPR.r[in.rs()].UL[0];
+				taken = true;
+				fixed = false;
+				break;
+			case Op::JALR:
+				target = cpuRegs.GPR.r[in.rs()].UL[0];
+				if (in.rd())
+					cpuRegs.GPR.r[in.rd()].UD[0] = next;
+				taken = true;
+				fixed = false;
+				break;
+
+			case Op::BEQ: case Op::BEQL: taken = (s == t); break;
+			case Op::BNE: case Op::BNEL: taken = (s != t); break;
+			case Op::BLEZ: case Op::BLEZL: taken = (s <= 0); break;
+			case Op::BGTZ: case Op::BGTZL: taken = (s > 0); break;
+			case Op::BLTZ: case Op::BLTZL: case Op::BLTZAL: case Op::BLTZALL: taken = (s < 0); break;
+			case Op::BGEZ: case Op::BGEZL: case Op::BGEZAL: case Op::BGEZALL: taken = (s >= 0); break;
+
+			case Op::BC0F: case Op::BC0FL: taken = !ps2n::ee::cop0Condition(); break;
+			case Op::BC0T: case Op::BC0TL: taken = ps2n::ee::cop0Condition(); break;
+			case Op::BC1F: case Op::BC1FL: taken = !ps2n::ee::fpuCondition(); break;
+			case Op::BC1T: case Op::BC1TL: taken = ps2n::ee::fpuCondition(); break;
+			case Op::BC2F: case Op::BC2FL: taken = !ps2n::ee::cop2Condition(); break;
+			case Op::BC2T: case Op::BC2TL: taken = ps2n::ee::cop2Condition(); break;
+
+			default:
+				pxFailRel("ps2n: RunRecBranch() was given an instruction that is not a branch");
+				return;
+		}
+
+		// A likely branch that is not taken has no delay slot.
+		if (delay && (taken || !in.isLikely()))
+			RunRecStep(*delay, eighths);
+
+		// Whatever the delay slot did to the PC, the branch decides it.
+		cpuRegs.pc = taken ? target : next;
+
+		if (taken && fixed && (block.flags & blocks::kIdleLoop) && target == block.start && EmuConfig.Speedhacks.WaitLoop)
+		{
+			// An idle loop: time moves on to the next event, which is then
+			// handled whatever the time.
+			cpuRegs.cycle += ps2n::ee::blockCycles(eighths);
+			if (!ps2n::ee::eventDue())
+				cpuRegs.cycle = cpuRegs.nextEventCycle;
+			RunEventTest();
+		}
+		else
+		{
+			EndRecBlock(eighths, true);
+		}
+	}
+
+	// Counts `steps` interpreted instructions of a block that starts at `pc`.
+	__fi void CountRecSteps(u32 pc, u64 steps)
+	{
+		s_stats.interpreted += steps;
+		if (InImage(pc))
+			s_stats.interpreted_in_image += steps;
+		else if (pc >= 0x80000000u)
+			s_stats.interpreted_kernel += steps;
+		else if (pc < 0x00100000u)
+			s_stats.interpreted_loader += steps;
+		else
+			s_stats.interpreted_elsewhere += steps;
+	}
+
+	// Carries out the steps of `block` from step `first` on, with `eighths`
+	// counted so far, and ends the block.
+	void RunRecSteps(Block& block, size_t first, u32 eighths)
+	{
+		bool ended = false; // by an instruction that ends a block without being a branch
+		const size_t count = block.steps.size();
+		CountRecSteps(block.start, count - first);
+		s_interpreting_image = InImage(block.start);
+
+		for (size_t i = first; i < count; i++)
+		{
+			Step& step = block.steps[i];
+			if (step.info & blocks::kBranch)
 			{
-				const u32 typeAexecjump = memRead32(EELOAD_START + 0x470);
-				const u32 typeBexecjump = memRead32(EELOAD_START + 0x5B0);
-				const u32 typeCexecjump = memRead32(EELOAD_START + 0x618);
-				const u32 typeDexecjump = memRead32(EELOAD_START + 0x600);
-				if ((typeBexecjump >> 26 == 3) || (typeCexecjump >> 26 == 3) || (typeDexecjump >> 26 == 3)) // JAL to 0x822B8
-					g_eeloadExec = EELOAD_START + 0x2B8;
-				else if (typeAexecjump >> 26 == 3) // JAL to 0x82170
-					g_eeloadExec = EELOAD_START + 0x170;
-				else
-					Console.WriteLn("ps2n: could not enable launch arguments for fast boot; unidentified BIOS version");
+				Step* delay = (i + 1 < count && (block.steps[i + 1].info & blocks::kDelaySlot)) ? &block.steps[i + 1] : nullptr;
+				RunRecBranch(block, step, delay, eighths);
+				return;
 			}
+
+			RunRecStep(step, eighths);
+			ended |= (step.info & blocks::kEndsBlock) != 0;
 		}
-		else if (g_eeloadExec && pc == g_eeloadExec)
+
+		if (ended)
 		{
-			eeloadHook2();
+			// Where the instruction left the PC: after itself, or at an
+			// exception's handler.
+			EndRecBlock(eighths, true);
 		}
-		else if (pc == VMManager::Internal::GetCurrentELFEntryPoint() && !VMManager::Internal::HasBootedELF())
+		else
 		{
-			VMManager::Internal::EntryPointCompilingOnCPUThread();
-			SelectImage();
+			// The block was cut short (a page boundary, another block, the
+			// target of its own branch, a FlushCache call that is not made). A
+			// short one links to the next without an event test.
+			cpuRegs.pc = block.start + block.size * 4;
+			EndRecBlock(eighths, block.size > 6);
 		}
 	}
 
-	// Interprets from cpuRegs.pc to the end of the block.
-	void InterpretBlock()
+	// Carries out one block, as the code the recompiler would have compiled
+	// for it does. A block that is thrown away while it runs stays good until
+	// the next event test (blocks::Collect).
+	void RunRecBlock(Block& block)
 	{
-		BootHooks();
-		if (SkipTimeoutLoop())
-			return;
-		while (!StepInstruction())
+		if (cpuRegs.pc != block.start) [[unlikely]]
+			s_stats.other_mirror++;
+
+		// What the BIOS's program loader is hooked for.
+		if (block.flags & (blocks::kHookMain | blocks::kHookExec)) [[unlikely]]
 		{
+			if (block.flags & blocks::kHookMain)
+				eeloadHook();
+			if (block.flags & blocks::kHookExec)
+				eeloadHook2();
 		}
+
+		// A block in a page that is not write-protected checks itself first.
+		if ((block.flags & blocks::kManual) && !blocks::EnterManual(block))
+			return;
+
+		if (block.flags & blocks::kTimeoutLoop)
+		{
+			if (AdvanceTimeoutLoop(block.timeout_reg))
+				cpuRegs.pc = block.nominal_end;
+			else
+				RunEventTest();
+			return;
+		}
+
+		RunRecSteps(block, 0, 0);
+	}
+
+	// The block at cpuRegs.pc, formed if there is none yet, carried out.
+	void InterpretRecBlock()
+	{
+		Block* block = blocks::Find(cpuRegs.pc);
+		if (!block)
+			block = FormRecBlock(cpuRegs.pc);
+		RunRecBlock(*block);
+	}
+
+	// ---- compiled code and the recompiler's blocks ---------------------------------
+	// Which compiled code the words of `block`, which begins at leader `index`
+	// of `image`, are: the function's own, one of its variants', or none.
+	// Compared by the leader segments the block lies in; a block that reaches
+	// outside the image's code, or begins where no leader is, is nobody's.
+	u8 IdentifyBody(const ImageInfo& image, const Block& block, u32 index)
+	{
+		const FunctionInfo* first = FunctionOf(image, block.start);
+		if (!first)
+			return kBodyNone;
+
+		const u32 stop = std::max(block.nominal_end, block.start + block.size * 4);
+
+		struct Segment
+		{
+			u32 index;
+			u64 hash;
+			bool in_first;
+		};
+		std::vector<Segment> segments;
+
+		const FunctionInfo* f = first;
+		u32 i = index;
+		for (u32 a = block.start; a < stop;)
+		{
+			if (a >= f->end)
+			{
+				// On into the function that follows, if one does.
+				f++;
+				if (f == image.functions + image.function_count || f->start != a)
+					return kBodyNone;
+			}
+			if (i >= image.leader_count || image.leaders[i] != a)
+				return kBodyNone;
+
+			const u32 end = (i + 1 < f->first_leader + f->leader_count) ? image.leaders[i + 1] : f->end;
+			segments.push_back({i, HashOfMemory(a, end), f == first});
+			a = end;
+			i++;
+		}
+
+		const auto matches = [&](const u64* variant_hashes) {
+			for (const Segment& s : segments)
+			{
+				const u64 expected =
+					(variant_hashes && s.in_first) ? variant_hashes[s.index - first->first_leader] : image.segment_hashes[s.index];
+				if (s.hash == 0 || s.hash != expected)
+					return false;
+			}
+			return true;
+		};
+
+		if (matches(nullptr))
+			return kBodyFunction;
+		for (u32 v = 0; v < first->variant_count; v++)
+		{
+			if (matches(image.variants[first->first_variant + v].segment_hashes))
+				return static_cast<u8>(1 + v);
+		}
+		return kBodyNone;
+	}
+
+	// Whether compiled code can carry out `block` as the recompiler's code
+	// would. Not: a block whose instructions count double (formed while the EE
+	// issued one instruction a cycle; compiled code counts single); one that
+	// is not run at all or runs a hook; one cut short where compiled code has
+	// no label to notice it; one that ends after a load that compiled code
+	// does not expect to end a block.
+	bool CompiledCodeCanRun(const ImageInfo& image, const Block& block)
+	{
+		if (block.factor != 1 || (block.flags & (blocks::kTimeoutLoop | blocks::kHookMain | blocks::kHookExec)))
+			return false;
+		if ((block.flags & blocks::kCutShort) && LeaderIndex(image, block.nominal_end) < 0)
+			return false;
+		for (const Step& step : block.steps)
+		{
+			if ((step.info & blocks::kEndsBlock) && ps2n::r5900::isNarrowLoad(step.insn) && LeaderIndex(image, step.insn.addr + 4) < 0)
+				return false;
+		}
+		return true;
+	}
+
+	// What compiled code is told of `block` (recomp.h).
+	u32 PackBlock(const Block& block)
+	{
+		u32 word = block.nominal_end & ps2n::ee::kBlockEndMask;
+		if (block.size > 6)
+			word |= ps2n::ee::kBlockTestsAtSplit;
+		if ((block.flags & blocks::kIdleLoop) && EmuConfig.Speedhacks.WaitLoop)
+			word |= ps2n::ee::kBlockIdleLoop;
+		return word;
+	}
+
+	// The step of the block that began at `start` which is the instruction at
+	// `pc`: its position among the block's steps, or -1. Compiled code only
+	// knows where its block began; the block may have been thrown away since.
+	struct StepRef
+	{
+		Block* block;
+		s64 index;
+	};
+	StepRef FindStep(u32 start, u32 pc)
+	{
+		Block* block = blocks::FindRunning(start);
+		if (!block) [[unlikely]]
+			return {nullptr, -1};
+
+		// Usually there is a step an instruction; then it is at this one.
+		const size_t count = block->steps.size();
+		size_t guess = (pc - block->start) / 4;
+		if (guess < count && block->steps[guess].insn.addr == pc && !(block->steps[guess].info & blocks::kDisableInterrupts))
+			return {block, static_cast<s64>(guess)};
+		for (size_t i = 0; i < count; i++)
+		{
+			// DI has two steps; the first is the one that stands for the instruction.
+			if (block->steps[i].insn.addr == pc)
+				return {block, static_cast<s64>(i)};
+		}
+		return {block, -1};
+	}
+
+	[[noreturn]] void NoSuchStep(u32 start, u32 pc)
+	{
+		Console.Error("ps2n: compiled code is at %08X in a block that began at %08X, and the runtime has no such instruction in it",
+			pc, start);
+		pxFailRel("ps2n: compiled code and the runtime disagree about a block");
+		std::abort();
 	}
 
 	void ProviderReserve()
@@ -868,26 +1074,29 @@ namespace
 
 	// "Forget what you know about the code in memory." The core calls this
 	// when an executable starts and when CPU settings change, also while
-	// Execute() is running.
+	// Execute() is running (recResetEE): then every block is thrown away
+	// before the next one is formed, and execution is left as soon as it can
+	// be.
 	void ProviderReset()
 	{
-		// The core has just lifted every write protection.
-		FlagAllUnverified();
-		s_unwind_requested = true;
-
-		if (!s_executing)
+		if (s_executing)
 		{
-			s_block_eighths = 0;
-			s_delay_depth = 0;
+			s_blocks_need_reset = true;
+			SafeExitExecution();
+		}
+		else
+		{
+			s_blocks_need_reset = false;
+			blocks::Reset();
 			s_exit_requested = false;
 		}
 	}
 
 	void ProviderStep()
 	{
-		StepInstruction();
 	}
 
+	// recExecute(), and the dispatcher the recompiler's blocks return to.
 	void ProviderExecute()
 	{
 		// Zero the first time and when an instruction is cancelled; non-zero
@@ -899,7 +1108,6 @@ namespace
 		}
 
 		s_executing = true;
-		s_delay_depth = 0;
 
 		char here;
 		s_stack_base = reinterpret_cast<uptr>(&here);
@@ -917,50 +1125,46 @@ namespace
 							" interpreter functions, and no code compiled ahead of time is used.");
 		}
 
+		if (s_blocks_need_reset)
+		{
+			s_blocks_need_reset = false;
+			blocks::Reset();
+		}
+
 		for (;;)
 		{
-			// Before an executable has started, its entry point has to be
-			// noticed here: compiled code will be what runs it.
-			if (!VMManager::Internal::HasBootedELF() && cpuRegs.pc == VMManager::Internal::GetCurrentELFEntryPoint())
-				BootHooks();
-
 			s_unwind_requested = false;
 
 			const u32 pc = cpuRegs.pc;
 			if (const StaticFn fn = Lookup(pc))
 			{
 				s_stats.static_entries++;
-				const auto cycle = cpuRegs.cycle;
 				const u32 next = fn(pc);
-				if (next == kUnwind)
-					continue;
+				if (next != kUnwind)
+					cpuRegs.pc = next;
+				continue;
+			}
 
-				cpuRegs.pc = next;
-				if (next == pc && cpuRegs.cycle == cycle) [[unlikely]]
-				{
-					// No block ended, so nothing was executed: the function has
-					// no code for an entry its table lists. Interpreting is
-					// always right, and makes the address show up in the report.
-					s_stats.no_progress++;
-					RecordMissing(pc);
-					InterpretBlock();
-				}
-			}
-			else
+			Block* block = blocks::Find(pc);
+			if (!block)
 			{
-				RecordMissing(pc);
-				InterpretBlock();
+				block = FormRecBlock(pc);
+				// Forming the block at an executable's entry point is what
+				// chooses its image: its compiled code runs from this very
+				// block on.
+				if (Lookup(pc))
+					continue;
 			}
+			RecordMissing(pc);
+			RunRecBlock(*block);
 		}
 	}
 
 	// Stops execution at the next event test, where the machine's state is
-	// whole. Forces one at the end of the current block.
+	// whole.
 	void ProviderExitExecution()
 	{
-		s_exit_requested = true;
-		if (!eeEventTestIsActive)
-			cpuRegs.nextEventCycle = cpuRegs.cycle;
+		SafeExitExecution();
 	}
 
 	// PCSX2's interpreter functions abandon an instruction this way, for
@@ -972,45 +1176,11 @@ namespace
 
 	// The core reports that guest memory holding code may have changed: a
 	// write hit a page that was write-protected, or the address mapping
-	// changed. `size` is in words. This can be called from the handler of the
-	// write's page fault, so it only marks.
+	// changed. `size` is in words. The blocks over it are thrown away
+	// (recClear); compiled code finds out at its next label.
 	void ProviderClear(u32 addr, u32 size)
 	{
-		const ImageInfo* image = s_image;
-		if (!image)
-			return;
-
-		const u32 lo = addr & kPhysicalMask;
-		const u32 hi = lo + size * 4;
-
-		// The first function whose compiled range, or that of one before it,
-		// reaches past `lo`.
-		const size_t first = std::upper_bound(s_extent_max.begin(), s_extent_max.end(), lo) - s_extent_max.begin();
-
-		bool any = false;
-		for (size_t i = first; i < image->function_count && (image->functions[i].start & kPhysicalMask) < hi; i++)
-		{
-			if ((s_extents[i] & kPhysicalMask) <= lo)
-				continue;
-
-			u8& state = image->state[i];
-			if (state != kUnverified)
-			{
-				state = kUnverified;
-				any = true;
-			}
-		}
-
-		// A flagged function is compared with memory again the next time it is
-		// entered. Frames that are already inside one are left at the next
-		// event test. No event test is forced for it: the core runs the IOP
-		// and its counters from event tests, so an extra one would make a
-		// compiled run differ from an interpreted one. Until then such a frame
-		// can still run the old code, which is what the EE's instruction cache
-		// does to a program that changes code without flushing it; the flush
-		// is a system call, and every system call leaves compiled code.
-		if (any)
-			s_unwind_requested = true;
+		blocks::Clear(addr, size);
 	}
 
 	R5900cpu s_provider = {
@@ -1134,12 +1304,107 @@ const std::vector<ps2n::ee::CapturedCode>& ps2n::ee::GetCapturedCode()
 	return s_captured;
 }
 
+std::vector<ps2n::ee::Handover> ps2n::ee::GetHandovers()
+{
+	std::vector<Handover> handovers;
+	for (const auto& [pc, count] : s_left_at)
+		handovers.push_back({pc, count, false});
+	for (const auto& [pc, count] : s_interpreted_at)
+		handovers.push_back({pc, count, true});
+	std::sort(handovers.begin(), handovers.end(), [](const Handover& a, const Handover& b) {
+		return a.count != b.count ? a.count > b.count : a.pc < b.pc;
+	});
+	return handovers;
+}
+
 bool ps2n::ee::ExecuteOwn(uint32_t code, uint32_t pc)
 {
 	return ::ExecuteOwn(Insn(code, pc));
 }
 
 // ---- for compiled code -----------------------------------------------------------
+
+uint32_t ps2n::ee::blockStart(const ImageInfo& image, uint32_t index, uint32_t body, uint32_t* out)
+{
+	*out = 0;
+	const u32 addr = image.leaders[index];
+
+	for (;;)
+	{
+		cpuRegs.pc = addr;
+
+		// Only the image of the executable in memory is ever dispatched to.
+		if (&image != s_image || !s_dispatching) [[unlikely]]
+			return kUnwind;
+
+		Block* block = blocks::Find(addr);
+		if (!block)
+		{
+			block = FormRecBlock(addr);
+			// Forming it may have been what started another executable.
+			if (&image != s_image || !s_dispatching)
+				return kUnwind;
+		}
+
+		if (block->body == kBodyUnknown)
+		{
+			block->body = (block->start == addr) ? IdentifyBody(image, *block, index) : kBodyNone;
+			s_stats.blocks_checked++;
+			if (block->body == kBodyNone && block->start == addr)
+			{
+				// Memory holds code nothing was compiled from: kept for the recompiler.
+				s_stats.blocks_unknown++;
+				if (const FunctionInfo* f = FunctionOf(image, addr))
+					CaptureCode(*f);
+				RecordMissing(addr);
+			}
+		}
+
+		if (block->body != kBodyNone && CompiledCodeCanRun(image, *block))
+		{
+			if (block->body != body)
+			{
+				// Other compiled code is in this function's place: its variant
+				// when the function itself was entered, or the reverse. That
+				// runs; its own label will ask here again.
+				s_stats.redirected++;
+				const FunctionInfo& f = *FunctionOf(image, addr);
+				const StaticFn other = (block->body == kBodyFunction) ? f.fn : image.variants[f.first_variant + block->body - 1].fn;
+				return other(addr);
+			}
+
+			// A block in a page that is not write-protected checks itself at
+			// every execution, and is formed anew when it has changed.
+			if ((block->flags & blocks::kManual) && !blocks::EnterManual(*block))
+				continue;
+
+			*out = PackBlock(*block);
+			if (body == kBodyFunction && !(block->flags & blocks::kManual))
+			{
+				// From now on the function's label need not ask, until the
+				// block is thrown away.
+				image.blocks[index] = *out;
+				block->cache = &image.blocks[index];
+			}
+			s_stats.blocks_compiled++;
+			return addr;
+		}
+
+		// Not one compiled code can carry out: the interpreter does. (A
+		// timeout loop is not run by anything.)
+		if (block->flags & blocks::kTimeoutLoop)
+		{
+			s_stats.timeout_loop_entries++;
+		}
+		else
+		{
+			s_stats.blocks_interpreted_at_labels++;
+			s_interpreted_at[addr]++;
+		}
+		RunRecBlock(*block);
+		return MustUnwind() ? kUnwind : cpuRegs.pc;
+	}
+}
 
 uint32_t ps2n::ee::eventTest(uint32_t next)
 {
@@ -1148,44 +1413,85 @@ uint32_t ps2n::ee::eventTest(uint32_t next)
 	return MustUnwind() ? kUnwind : cpuRegs.pc;
 }
 
-uint32_t ps2n::ee::timeoutLoop(uint32_t reg, uint32_t start, uint32_t end)
-{
-	if (!EmuConfig.Speedhacks.WaitLoop)
-		return start;
-
-	// What the interpreter does over as many blocks (SkipTimeoutLoop), here in
-	// one call: the same steps and the same event tests at the same moments.
-	for (;;)
-	{
-		if (AdvanceTimeoutLoop(reg))
-			return end;
-
-		const uint32_t next = eventTest(start);
-		if (next != start)
-			return next;
-	}
-}
-
 uint32_t ps2n::ee::systemInstruction(uint32_t pc, uint32_t code, uint32_t eighths)
 {
 	const Insn in(code, pc);
 
-	// As StepInstruction() does it.
+	// recBranchCall: ERET, EI and the traps are followed by an event test
+	// whatever the time. BREAK (recBREAK) is not.
+	if (ps2n::r5900::forcesEventTest(in))
+		cpuRegs.nextEventCycle = cpuRegs.cycle;
+
+	// The core's function reads the instruction word and the PC.
 	cpuRegs.code = code;
 	cpuRegs.pc = pc + 4;
 	cpuRegs.branch = 0;
-	if (ps2n::r5900::forcesEventTest(in))
-		cpuRegs.nextEventCycle = cpuRegs.cycle;
-	if (in.op == Op::SYSCALL)
-		CountSyscall();
-
 	R5900::GetInstruction(code).interpret();
 
-	cpuRegs.cycle += blockCycles(eighths);
-	if (eventDue())
-		RunEventTest();
-
+	EndRecBlock(eighths, true);
 	return MustUnwind() ? kUnwind : cpuRegs.pc;
+}
+
+uint32_t ps2n::ee::syscallInstruction(uint32_t pc, uint32_t code, uint32_t start, uint32_t eighths)
+{
+	const StepRef ref = FindStep(start, pc);
+	if (ref.index < 0) [[unlikely]]
+		NoSuchStep(start, pc);
+
+	if (ref.block->steps[ref.index].info & blocks::kSkippedSyscall)
+	{
+		// recSYSCALL: a FlushCache call is not made. Its block is cut short
+		// after it, as RunRecSteps() ends one.
+		s_stats.syscalls_skipped++;
+		cpuRegs.pc = pc + 4;
+		EndRecBlock(eighths + ps2n::r5900::kSkippedSyscallEighths, ref.block->size > 6);
+		return MustUnwind() ? kUnwind : cpuRegs.pc;
+	}
+
+	CountSyscall();
+	cpuRegs.code = code;
+	cpuRegs.pc = pc + 4;
+	cpuRegs.branch = 0;
+	R5900::GetInstruction(code).interpret();
+
+	EndRecBlock(eighths, true);
+	return MustUnwind() ? kUnwind : cpuRegs.pc;
+}
+
+uint32_t ps2n::ee::cop2Instruction(uint32_t pc, uint32_t start, uint32_t eighths)
+{
+	const StepRef ref = FindStep(start, pc);
+	if (ref.index < 0) [[unlikely]]
+		NoSuchStep(start, pc);
+	Step& step = ref.block->steps[ref.index];
+
+	// As RunRecStep() does it; the instruction's own count is in `eighths`.
+	if (step.info & blocks::kFlush)
+	{
+		cpuRegs.cycle += blockCycles(eighths);
+		eighths &= 7;
+	}
+	if (step.info & (blocks::kCop2Sync | blocks::kCop2Finish))
+		Cop2Prologue(step);
+	if ((step.info & blocks::kFastmem) && EmuConfig.Cpu.Recompiler.EnableFastmem &&
+		notPlainMemory(cpuRegs.GPR.r[step.insn.rs()].UL[0] + static_cast<u32>(step.insn.simm())))
+	{
+		FastmemFault(step);
+	}
+	Cop2Operation(step.insn);
+	return eighths;
+}
+
+bool ps2n::ee::memoryFault(uint32_t pc, uint32_t start)
+{
+	const StepRef ref = FindStep(start, pc);
+	if (ref.index < 0) [[unlikely]]
+		NoSuchStep(start, pc);
+	Step& step = ref.block->steps[ref.index];
+
+	if ((step.info & blocks::kFastmem) && EmuConfig.Cpu.Recompiler.EnableFastmem)
+		FastmemFault(step);
+	return (step.info & blocks::kEndsBlock) != 0;
 }
 
 namespace
@@ -1218,7 +1524,9 @@ void ps2n::ee::delegate(uint32_t pc, uint32_t code)
 
 void ps2n::ee::delegateInDelaySlot(uint32_t pc, uint32_t code)
 {
-	Delegate(pc, code, 1);
+	// PCSX2's recompiler does not tell its interpreter functions that an
+	// instruction is in a delay slot.
+	Delegate(pc, code, 0);
 }
 
 uint32_t ps2n::ee::dispatch(uint32_t pc)
@@ -1232,7 +1540,7 @@ uint32_t ps2n::ee::dispatch(uint32_t pc)
 	do
 	{
 		RecordMissing(cpuRegs.pc);
-		InterpretBlock();
+		InterpretRecBlock();
 
 		if (MustUnwind())
 			return kUnwind;
@@ -1246,9 +1554,12 @@ uint32_t ps2n::ee::jump(uint32_t pc)
 	// To the start of a compiled function: a call that will not come back
 	// here (a tail call). The function runs on top of this frame's caller,
 	// and what it returns is for that caller to judge.
-	const s32 index = LookupIndex(pc);
-	if (index >= 0 && s_image->functions[index].start == pc)
-		return CodeFor(*s_image, static_cast<u32>(index), s_image->state[index])(pc);
+	if (const StaticFn fn = Lookup(pc))
+	{
+		const FunctionInfo* f = FunctionOf(*s_image, pc);
+		if (f && f->start == pc)
+			return fn(pc);
+	}
 
 	// Anything else is perhaps a return through a register other than $ra, in
 	// which case a caller is waiting for exactly this PC; or it goes back to
@@ -1256,90 +1567,24 @@ uint32_t ps2n::ee::jump(uint32_t pc)
 	return pc;
 }
 
-uint32_t ps2n::ee::leave(uint32_t pc, uint32_t eighths)
+uint32_t ps2n::ee::leave(uint32_t pc, uint32_t eighths, uint32_t start)
 {
 	s_stats.left++;
+	s_left_at[pc]++;
 
-	// The interpreter continues the block compiled code began. If compiled
-	// code began it here, with nothing counted yet, the interpreter's own rule
-	// makes this its start; otherwise where it began is not known, and it
-	// cannot be an idle loop's block.
-	s_block_eighths = eighths;
-	s_block_start = kNoBlockStart;
-	s_block_scan.idle = false;
-	s_delay_depth = 0;
-	cpuRegs.pc = pc;
-	cpuRegs.branch = 0;
-	InterpretBlock();
+	// The interpreter carries out the rest of the block compiled code began.
+	const StepRef ref = FindStep(start, pc);
+	if (ref.index < 0) [[unlikely]]
+		NoSuchStep(start, pc);
+	RunRecSteps(*ref.block, static_cast<size_t>(ref.index), eighths);
 
 	return MustUnwind() ? kUnwind : cpuRegs.pc;
 }
 
-bool ps2n::ee::enterSlow(const ImageInfo& image, uint32_t index, uint32_t mine, uint32_t pc, uint32_t* result)
+void ps2n::ee::badEntry(const ImageInfo& image, uint32_t function, uint32_t pc)
 {
-	// Unless something compiled runs below: leave compiled code, and continue
-	// at `pc`, interpreted.
-	*result = kUnwind;
-	cpuRegs.pc = pc;
-
-	// Only the image of the executable in memory is ever dispatched to.
-	if (&image != s_image)
-		return false;
-
-	u8& state = image.state[index];
-	if (state == kInvalid)
-		return false;
-
-	// Which of the function's compiled forms is the code in memory.
-	u8 found = state;
-	if (state == kUnverified)
-	{
-		found = IdentifyCode(image, index);
-
-		// Protected whatever was found: the next write to this memory is then
-		// reported, and the memory compared again.
-		u8& count = s_verify_counts[index];
-		const bool protect = (count < kMaxProtections);
-		if (protect)
-		{
-			count++;
-			ProtectPages(image.functions[index].start, s_extents[index]);
-		}
-		else if (count == kMaxProtections)
-		{
-			count++;
-			s_stats.unprotected++;
-		}
-
-		if (found == kInvalid)
-		{
-			// Without the protection nothing will say when this memory changes
-			// again, so the function then stays unused until the next reset.
-			s_stats.verify_failed++;
-			state = kInvalid;
-			CaptureCode(image, index);
-			return false;
-		}
-
-		s_stats.verified++;
-		if (protect)
-			state = found;
-	}
-
-	if (found == mine)
-		return true;
-
-	// Other compiled code is in this function's place: its variant when the
-	// function itself was called, or the reverse. Run that.
-	s_stats.redirected++;
-	*result = CodeFor(image, index, found)(pc);
-	return false;
-}
-
-void ps2n::ee::badEntry(const ImageInfo& image, uint32_t index, uint32_t pc)
-{
-	Console.Error("ps2n: compiled function %08X-%08X of %s was entered at %08X, where it has no label", image.functions[index].start,
-		image.functions[index].end, image.name, pc);
+	Console.Error("ps2n: compiled function %08X-%08X of %s was entered at %08X, where it has no label", image.functions[function].start,
+		image.functions[function].end, image.name, pc);
 	pxFailRel("ps2n: a compiled function was entered at an address it has no label for");
 	std::abort();
 }

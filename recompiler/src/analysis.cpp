@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "analysis.h"
 
+#include "ps2n/rec_rules.h"
 #include "ps2n/util.h"
 
 #include <algorithm>
@@ -75,8 +76,9 @@ namespace {
 constexpr uint32_t kJrRa = 0x03E00008u;
 constexpr uint32_t kSp = 29;
 
-// How many variants the runtime can tell apart: a function's state is a byte,
-// with three values taken (FunctionState in runtime/include/ps2n/recomp.h).
+// How many variants the runtime can tell apart: which compiled code a block's
+// words are is a byte, with one value for the function itself and two more
+// taken (Block::body in runtime/rec_blocks.h).
 constexpr size_t kMaxVariants = 253;
 
 // A symbol or the entry point says where a function is; the other sources
@@ -326,10 +328,11 @@ private:
     }
 
     // ---- blocks -----------------------------------------------------------------
-    // A block begins: at a function's start; at the target of a branch or
+    // A block can begin: at a function's start; at the target of a branch or
     // jump; after a branch's or jump's delay slot (where a branch not taken
-    // continues, and where a call returns); after a system instruction; at any
-    // code address found in data; and wherever an earlier run had to start
+    // continues, and where a call returns); after a system instruction; at a
+    // 4 KB page boundary; after a read of an EE timer register; at any code
+    // address found in data; and wherever an earlier run had to start
     // interpreting. A function and its variants have the same leaders: those
     // of any of them.
     void findLeaders() {
@@ -360,6 +363,40 @@ private:
             scan(f, -1);
             for (size_t v = 0; v < f.variants.size(); ++v) scan(f, static_cast<int>(v));
         }
+
+        // PCSX2's recompiler, whose blocks the runtime reproduces
+        // (runtime/rec_blocks.h), never lets a block cross a 4 KB page
+        // boundary, and ends one after a read of an EE timer register when it
+        // knows the address. The next block begins there, so those places are
+        // leaders too. What it knows is followed from the earliest place its
+        // block can have begun: after the last instruction that always ends
+        // one. A block that began later knows less, never more.
+        for (const Function& f : prog_.functions) {
+            for (uint32_t a = (f.start + 0x1000u) & ~0xFFFu; a < f.end; a += 0x1000u) requests.push_back(a);
+        }
+        {
+            RecConsts consts;
+            uint32_t previous = ~0u;
+            for (const Function& f : prog_.functions) {
+                // Code that does not follow on from the function before it.
+                if (f.start != previous) consts.forget();
+                previous = f.end;
+                for (uint32_t a = f.start; a < f.end; a += 4) {
+                    if ((a & 0xFFFu) == 0) consts.forget();
+                    const Insn in = prog_.insn(a);
+                    if (!in.valid() || in.hasDelaySlot() || isSystem(in)) {
+                        // Its delay slot, if it has one, is the block's last instruction.
+                        if (in.valid() && in.hasDelaySlot()) a += 4;
+                        consts.forget();
+                        continue;
+                    }
+                    uint32_t address = 0;
+                    if (isNarrowLoad(in) && consts.address(in, &address) && isTimerAddress(address)) requests.push_back(a + 4);
+                    consts.step(in);
+                }
+            }
+        }
+
         requests.insert(requests.end(), labelRefs_.begin(), labelRefs_.end());
         requests.insert(requests.end(), absorbed_.begin(), absorbed_.end());
 

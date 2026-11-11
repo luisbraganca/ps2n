@@ -60,31 +60,29 @@ set(PS2AUTOTESTS_DIFFERS_stock-interp
 
 # PS2Native's EE provider, with the IOP and the VUs on PCSX2's recompilers,
 # same BIOS and date. Stage: the provider carries out the integer
-# instructions, loads and stores, the FPU and the multimedia instructions
-# itself; the COP0 and VU0 macro instructions call PCSX2's interpreter
-# functions.
-# Since 2026-11-11 CFC2 and CTC2 are PS2Native's own as well (ops_cop2.h).
+# instructions, loads and stores, the FPU, the multimedia instructions, the
+# COP0 transfers and the transfers to and from VU0 itself; the VU0
+# instructions and the rest of COP0 call PCSX2's interpreter functions.
 # 40 of 55 programs match the console: more than either stock configuration.
 #
-# Against stock-jit (the output differs on four of the 54 programs it
-# completes):
+# Against stock-jit (the output differs on three of the 54 programs it
+# completes; tests/same-as-stock-known-differences.cmake has the same three):
 #  - cpu/ee/lsu matches the console here and not there;
 #  - cpu/ee_fpu/arithmetic differs from the console on fewer lines here:
 #    ABS.S, NEG.S, MAX.S and MIN.S are the console's, the rest is identical
 #    to stock-jit's;
 #  - cpu/vu0_macro/transfer differs on 7 lines here and 8 there: FBRST reads
-#    back as on the console here;
-#  - cpu/ee/branchdelay differs from the console in both, in different ways.
-# The other FPU programs (compare, fcr, muldiv, sqrt) print exactly what
-# stock-jit prints, and so do the programs below marked "the core": what
-# differs there is PCSX2's hardware model or its VU recompiler, which run
-# them here as well.
+#    back as on the console here.
+# Every other program below prints exactly what stock-jit prints. For those
+# marked "the core", what differs from the console is PCSX2's hardware model
+# or its VU recompiler, which run them here as well.
 #
 # ADR 0005: on no line of any of these is this further from the console than
 # stock-jit. The ps2autotests/never-further/* tests check that.
 set(PS2AUTOTESTS_DIFFERS_ps2n-ee
-	cpu/ee/branchdelay          # a branch in a branch's delay slot; not what the console does either
-	cpu/ee_cop0/performance     # as stock-jit: performance counter control register bits (COP0 is PCSX2's functions)
+	cpu/ee/branchdelay          # as stock-jit since 2026-11-11: a branch in a delay slot is dropped, as PCSX2's
+	                            # recompiler drops it (ADR 0011). Not what the console does
+	cpu/ee_cop0/performance     # as stock-jit: performance counter control register bits
 	cpu/ee_fpu/arithmetic       # ADD.S and SUB.S of values the host takes for NaN or infinity, as stock-jit
 	cpu/ee_fpu/branchdelay      # an FPU branch in an FPU branch's delay slot; stock-jit crashes on it
 	cpu/ee_fpu/compare          # as stock-jit: comparisons of NaN operands

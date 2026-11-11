@@ -10,8 +10,10 @@
 
 #include "host_state.h"
 #include "selftest.h"
+#include "sync_trace.h"
 
 #include "runtime/ee_provider.h"
+#include "runtime/rec_blocks.h"
 
 #include <algorithm>
 #include <atomic>
@@ -114,6 +116,9 @@ namespace
 		std::string trace_path; // where the record of event tests is written
 		std::string trace_against_path; // an earlier run's record, to compare this run with
 		std::optional<u64> trace_detail_from; // the event test from which the record includes the registers
+		std::string sync_path; // where the record of sync points is written (sync_trace.h)
+		std::string sync_against_path; // an earlier run's record of them, to compare this run with
+		std::optional<u64> sync_detail_from; // the sync point from which the record includes the registers
 		std::optional<u64> stack_budget; // host stack compiled code may use, when not the default
 		std::string image_id; // the one compiled image to use, when not all of them
 		bool host_fs = false; // let the guest open files beside its executable ("host:")
@@ -214,6 +219,14 @@ namespace
 			"                     the file an earlier run wrote with -trace, and stop with\n"
 			"                     an error at the first that differs.\n"
 			"  -trace-detail <n>  With -trace: from event test n on, write the registers too.\n"
+			"  -sync <file>       With any -ee: write one line for every moment the core lets\n"
+			"                     the IOP catch up with the EE (a sync point): where the EE\n"
+			"                     is, its cycle count, its registers folded. A stock run can\n"
+			"                     write it too, so it is what compares a run with stock.\n"
+			"  -sync-against <file>  Compare this run's sync points with the file an\n"
+			"                     earlier run wrote with -sync, and report the first that\n"
+			"                     differs in place or time and the first in registers.\n"
+			"  -sync-detail <n>   With -sync: from sync point n on, write the registers too.\n"
 			"  -stack-budget <n>  With -ee ps2n: bytes of host stack compiled code may use\n"
 			"                     before its frames are abandoned (default: most of the\n"
 			"                     CPU thread's stack). 0 abandons them at every event test,\n"
@@ -298,6 +311,19 @@ namespace
 				o.trace_path = argv[++i];
 			else if (is("-trace-against") && has_value)
 				o.trace_against_path = argv[++i];
+			else if (is("-sync") && has_value)
+				o.sync_path = argv[++i];
+			else if (is("-sync-against") && has_value)
+				o.sync_against_path = argv[++i];
+			else if (is("-sync-detail") && has_value)
+			{
+				o.sync_detail_from = StringUtil::FromChars<u64>(argv[++i]);
+				if (!o.sync_detail_from)
+				{
+					std::fputs("ps2n-host: -sync-detail takes the number of a sync point\n", stderr);
+					return false;
+				}
+			}
 			else if (is("-stack-budget") && has_value)
 			{
 				o.stack_budget = StringUtil::FromChars<u64>(argv[++i]);
@@ -478,7 +504,7 @@ namespace
 		// (FileSystem::GetWin32Path in common/FileSystem.cpp). Build tools pass
 		// forward slashes, so every path is put in the platform's form here.
 		for (std::string* path : {&o.boot_path, &o.bios_path, &o.data_dir, &o.out_path, &o.times_path, &o.log_path, &o.capture_path,
-				 &o.trace_path, &o.trace_against_path, &o.frame_path, &o.pad_path})
+				 &o.trace_path, &o.trace_against_path, &o.sync_path, &o.sync_against_path, &o.frame_path, &o.pad_path})
 			Path::ToNativePath(path);
 		return true;
 	}
@@ -852,13 +878,30 @@ namespace
 		if (stats.image)
 		{
 			std::fprintf(stderr,
-				"ps2n-host: compiled code of %s: %s; %llu dispatcher entries; functions verified against memory %llu, found"
-				" different %llu, no longer write-protected %llu; calls passed on to a variant %llu; frames abandoned: %llu after"
-				" writes to code, %llu for stack depth; blocks finished by the interpreter %llu; entries without code %llu\n",
+				"ps2n-host: compiled code of %s: %s; %llu dispatcher entries; blocks compared with what was compiled %llu, found to be"
+				" code nothing was compiled from %llu; times compiled code was told to run a block %llu, times the interpreter"
+				" carried one out at a label instead %llu, times it was a timeout loop's turn %llu; calls passed on to a variant"
+				" %llu; frames abandoned: %llu for another executable, %llu for stack depth; blocks finished by the interpreter"
+				" %llu\n",
 				stats.image->name, s_options.static_code ? "in use" : "switched off", static_cast<ull>(stats.static_entries),
-				static_cast<ull>(stats.verified), static_cast<ull>(stats.verify_failed), static_cast<ull>(stats.unprotected),
+				static_cast<ull>(stats.blocks_checked), static_cast<ull>(stats.blocks_unknown), static_cast<ull>(stats.blocks_compiled),
+				static_cast<ull>(stats.blocks_interpreted_at_labels), static_cast<ull>(stats.timeout_loop_entries),
 				static_cast<ull>(stats.redirected), static_cast<ull>(stats.forced_unwinds), static_cast<ull>(stats.stack_unwinds),
-				static_cast<ull>(stats.left), static_cast<ull>(stats.no_progress));
+				static_cast<ull>(stats.left));
+
+			// Where compiled code handed over to the interpreter most often.
+			const std::vector<ps2n::ee::Handover> handovers = ps2n::ee::GetHandovers();
+			if (!handovers.empty())
+			{
+				std::string places;
+				for (size_t i = 0; i < handovers.size() && i < 8; i++)
+				{
+					places += fmt::format("{}{:08X} {} times{}", i ? ", " : "", handovers[i].pc, handovers[i].count,
+						handovers[i].whole_block ? " (the block at this label)" : " (the rest of a block from here)");
+				}
+				std::fprintf(stderr, "ps2n-host: compiled code handed over to the interpreter in %zu places, most often: %s\n",
+					handovers.size(), places.c_str());
+			}
 		}
 		else
 		{
@@ -884,6 +927,23 @@ namespace
 			" 00100000 (the BIOS's program loader), %llu elsewhere in user memory (code the executable does not hold)\n",
 			static_cast<ull>(stats.interpreted_kernel), static_cast<ull>(stats.interpreted_loader),
 			static_cast<ull>(stats.interpreted_elsewhere));
+		{
+			const ps2n::ee::blocks::Stats& blocks = ps2n::ee::blocks::GetStats();
+			std::fprintf(stderr,
+				"ps2n-host: time counted as PCSX2's recompiler counts it: %llu blocks formed (%llu in pages that are not"
+				" write-protected); every block thrown away %llu times; %llu requests to clear a range threw away %llu blocks;"
+				" blocks found changed at execution %llu, pages put back under write protection %llu, older blocks found"
+				" changed when a new one was formed %llu\n",
+				static_cast<ull>(blocks.formed), static_cast<ull>(blocks.manual), static_cast<ull>(blocks.resets),
+				static_cast<ull>(blocks.clears), static_cast<ull>(blocks.cleared), static_cast<ull>(blocks.discarded),
+				static_cast<ull>(blocks.page_resets), static_cast<ull>(blocks.stale));
+			std::fprintf(stderr,
+				"ps2n-host: FlushCache calls not made %llu; loads and stores that hit memory that is not plain, each once, %llu;"
+				" blocks carried out at another address than they were formed at %llu; branches dropped from delay slots %llu;"
+				" other things in delay slots that are not reproduced %llu\n",
+				static_cast<ull>(stats.syscalls_skipped), static_cast<ull>(blocks.fastmem_faults), static_cast<ull>(stats.other_mirror),
+				static_cast<ull>(blocks.delay_slot_branches), static_cast<ull>(blocks.delay_slot_oddities));
+		}
 		if (stats.timeout_loop_cycles)
 		{
 			std::fprintf(stderr, "ps2n-host: %llu EE cycles passed in timeout loops that were not run\n",
@@ -1053,6 +1113,22 @@ namespace
 					Cpu->Reset();
 				}
 
+				// The record of sync points, in any configuration.
+				if (!s_options.sync_path.empty() || !s_options.sync_against_path.empty())
+				{
+					if (ps2n::host::StartSyncTrace(s_options.sync_path.empty() ? nullptr : s_options.sync_path.c_str(),
+							s_options.sync_against_path.empty() ? nullptr : s_options.sync_against_path.c_str(),
+							s_options.sync_detail_from.value_or(~0ull)))
+					{
+						ps2n::host::InstallSyncTrace();
+					}
+					else
+					{
+						std::fputs("ps2n-host: cannot open the files of the record of sync points\n", stderr);
+						trace_ok = false;
+					}
+				}
+
 				// As fast as the host goes: the core otherwise holds the machine to
 				// the console's speed, however little work a frame is.
 				VMManager::SetState(VMState::Running);
@@ -1062,6 +1138,7 @@ namespace
 
 				if (s_options.ee == EEProvider::Ps2n)
 					ps2n::ee::StopTrace();
+				ps2n::host::StopSyncTrace();
 
 				int code = EXIT_FRAME_LIMIT;
 				const char* reason = "frame limit";
@@ -1099,6 +1176,21 @@ namespace
 					static_cast<int>(EmuConfig.Speedhacks.EECycleRate));
 				if (s_options.ee == EEProvider::Ps2n)
 					ReportProvider();
+				if (!s_options.sync_path.empty() || !s_options.sync_against_path.empty())
+				{
+					std::fprintf(stderr, "ps2n-host: %llu sync points\n", static_cast<unsigned long long>(ps2n::host::GetSyncPointCount()));
+					if (!s_options.sync_against_path.empty())
+					{
+						const char* time = ps2n::host::GetSyncTimeMismatch();
+						const char* state = ps2n::host::GetSyncStateMismatch();
+						if (!time && !state)
+							std::fputs("ps2n-host: sync: the same as the reference run at every sync point\n", stderr);
+						if (state)
+							std::fprintf(stderr, "ps2n-host: sync: registers first differ %s\n", state);
+						if (time)
+							std::fprintf(stderr, "ps2n-host: sync: place or time first differs %s\n", time);
+					}
+				}
 				for (const std::string& line : s_bench_lines)
 					std::fprintf(stderr, "%s\n", line.c_str());
 				for (const std::string& line : s_frame_lines)
@@ -1222,7 +1314,7 @@ void ps2n::host::OnGuestFrame()
 	}
 
 	// Never run on with a provider other than the one that was asked for.
-	if (s_options.ee == EEProvider::Ps2n && Cpu != ps2n::ee::Provider())
+	if ((s_options.ee == EEProvider::Ps2n && Cpu != ps2n::ee::Provider()) || !ps2n::host::SyncTraceInstalled())
 		s_provider_replaced = true;
 
 	// A run that has parted from the one it is compared with has nothing more to

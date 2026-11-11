@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// CFC2 and CTC2. ps2n/ops_cop2.h says which behavior each case reproduces and
-// why; the comments here only name the side followed.
+// The COP2 transfers. ps2n/ops_cop2.h says which behavior each case reproduces
+// and why; the comments here only name the side followed.
 
 #include "ps2n/ops_cop2.h"
 
+#include "ps2n/ee_memory.h"
 #include "ps2n/ee_state.h"
 
 #include "pcsx2/PrecompiledHeader.h"
@@ -12,16 +13,42 @@
 #include "pcsx2/Common.h"
 #include "pcsx2/VUmicro.h"
 
-// Defined in pcsx2/VU0.cpp; PCSX2 declares them in no header.
-void vu0Sync(); // runs VU0 until it has caught up with the EE
-void _vu0WaitMicro(); // runs VU0's micro program until it ends or stops at an M bit
-
-void ps2n::ee::ops::CFC2(uint32_t rt, uint32_t fs, bool interlock)
+void ps2n::ee::ops::QMFC2(uint32_t rt, uint32_t fs)
 {
-	vu0Sync();
-	if (interlock)
-		_vu0FinishMicro();
+	if (rt == 0)
+		return;
+	cpuRegs.GPR.r[rt].UD[0] = VU0.VF[fs].UD[0];
+	cpuRegs.GPR.r[rt].UD[1] = VU0.VF[fs].UD[1];
+}
 
+void ps2n::ee::ops::QMTC2(uint32_t rt, uint32_t fs)
+{
+	if (fs == 0)
+		return;
+	VU0.VF[fs].UD[0] = cpuRegs.GPR.r[rt].UD[0];
+	VU0.VF[fs].UD[1] = cpuRegs.GPR.r[rt].UD[1];
+}
+
+void ps2n::ee::ops::LQC2(uint32_t ft, uint32_t rs, int32_t imm)
+{
+	// Read even when it goes nowhere: the address may be a device's.
+	uint64_t value[2];
+	read128(cpuRegs.GPR.r[rs].UL[0] + static_cast<uint32_t>(imm), value);
+	if (ft)
+	{
+		VU0.VF[ft].UD[0] = value[0];
+		VU0.VF[ft].UD[1] = value[1];
+	}
+}
+
+void ps2n::ee::ops::SQC2(uint32_t ft, uint32_t rs, int32_t imm)
+{
+	const uint64_t value[2] = {VU0.VF[ft].UD[0], VU0.VF[ft].UD[1]};
+	write128(cpuRegs.GPR.r[rs].UL[0] + static_cast<uint32_t>(imm), value);
+}
+
+void ps2n::ee::ops::CFC2(uint32_t rt, uint32_t fs)
+{
 	if (rt == 0)
 		return;
 
@@ -37,12 +64,8 @@ void ps2n::ee::ops::CFC2(uint32_t rt, uint32_t fs, bool interlock)
 		reg.UD[0] = VU0.VI[fs].US[0]; // the recompiler and the console
 }
 
-void ps2n::ee::ops::CTC2(uint32_t rt, uint32_t fs, bool interlock)
+void ps2n::ee::ops::CTC2(uint32_t rt, uint32_t fs)
 {
-	vu0Sync();
-	if (interlock)
-		_vu0WaitMicro();
-
 	if (fs == 0)
 		return;
 

@@ -9,6 +9,7 @@
 
 #include "ps2n/ee_memory.h"
 #include "ps2n/ee_state.h"
+#include "ps2n/ops_cop0.h"
 #include "ps2n/ops_cop2.h"
 #include "ps2n/ops_fpu.h"
 #include "ps2n/ops_int.h"
@@ -37,37 +38,22 @@ namespace ps2n::ee
 	{
 		uint32_t start; // guest address of its first instruction
 		uint32_t end; // one past the last instruction it owns; its entries are in [start, end)
-		uint32_t extent; // one past the last instruction it was compiled from: beyond `end`
-		                 // when it runs on into the code that follows it
 		StaticFn fn;
-		uint64_t hash; // of the instruction words in [start, extent) (ps2n::CodeHash)
-		uint32_t first_resume; // its slice of ImageInfo::resume_points
-		uint32_t resume_count;
+		uint32_t first_leader; // its slice of ImageInfo::leaders; the first is `start`
+		uint32_t leader_count;
 		uint32_t first_variant; // its slice of ImageInfo::variants
 		uint32_t variant_count;
 	};
 
 	// Other code that an earlier run found in a function's place in memory (a
 	// program that rewrites itself, a patch), compiled as well. It has the
-	// function's range and entries; which of them runs is decided by what is
-	// in memory.
+	// function's range and leaders; which of them runs a block is decided by
+	// what is in memory when the block is formed.
 	struct VariantInfo
 	{
 		StaticFn fn;
-		uint64_t hash; // of the instruction words in [start, extent)
-		uint32_t extent;
+		const uint64_t* segment_hashes; // one for each leader of its function, as ImageInfo::segment_hashes
 	};
-
-	// Which compiled code may run in a function's place. A function's state
-	// starts as zero.
-	enum FunctionState : uint8_t
-	{
-		kUnverified = 0, // RAM must be compared before anything runs
-		kTrusted = 1, // RAM holds the function as the executable has it, and its pages are write-protected since
-		kInvalid = 2, // RAM holds code nothing was compiled from; interpreted until that memory changes
-		kFirstVariant = 3, // kFirstVariant + n: RAM holds the function's variant n, write-protected
-	};
-	inline constexpr uint32_t kMaxVariants = 256 - kFirstVariant;
 
 	// The code of one executable, compiled ahead of time.
 	struct ImageInfo
@@ -79,69 +65,110 @@ namespace ps2n::ee
 		uint32_t text_end; // one past the highest
 		const FunctionInfo* functions; // sorted by start
 		uint32_t function_count;
-		const uint32_t* resume_points; // every entry that is not a function start, sorted
-		uint32_t resume_count;
+		const uint32_t* leaders; // every address at which a block of compiled code can begin, sorted
+		const uint64_t* segment_hashes; // for each: of the words from it to the next leader or to its function's end
+		                                // (ps2n::CodeHash). The image holds these fingerprints, not the code.
+		uint32_t leader_count;
 		const VariantInfo* variants;
 		uint32_t variant_count;
-		uint8_t* state; // a FunctionState per function
+		uint32_t* blocks; // for each leader: zero, or what compiled code needs to know of the block that begins there
 		const char* generator; // the recompiler that wrote it
 	};
 
 	// ---- time ---------------------------------------------------------------
 	// The core keeps time in EE cycles and schedules everything else against
-	// them. Code is counted in blocks: a block ends after a branch or jump and
-	// its delay slot (taken or not), and after SYSCALL, BREAK, ERET, EI and the
-	// trap instructions (ps2n::r5900::isSystem). Its cost is the sum of its
-	// instructions' cycle counts (ps2n::r5900::cycles, in eighths of a cycle),
-	// divided by eight and rounded down, and never less than one: what PCSX2's
-	// EE recompiler adds for a block (scaleblockcycles in
-	// x86/ix86-32/iR5900.cpp, at its default cycle rate). Where a block starts
-	// is decided by execution, not by the recompiler: at whatever instruction
-	// follows the end of the block before. Compiled code and the fallback
-	// interpreter count exactly alike, so a run is the same whichever of them
-	// executes a block.
+	// them. PS2Native counts them exactly as PCSX2's EE recompiler does: by
+	// the blocks that recompiler would have formed (runtime/rec_blocks.h).
+	// Where a block begins is decided by execution, and where it ends by what
+	// existed when it first ran, so compiled code learns both at run time:
+	//
+	//  - a block can only begin at a label (a leader). There the function
+	//    looks up what the runtime knows of the block (PS2N_BLOCK_START): its
+	//    end, and two things about how it ends;
+	//  - reaching a label from the instruction before it, in the middle of a
+	//    block, the function compares the label with that end. If they are
+	//    equal the block is over there (PS2N_SPLIT_END) and another begins;
+	//  - a block's cost is the sum of its instructions' counts
+	//    (ps2n::r5900::cycles, in eighths of a cycle) divided by eight and
+	//    rounded down, never less than one. At some instructions the count so
+	//    far is added before the block ends (PS2N_FLUSH); the remainder stays.
+	//
+	// The function keeps three things in locals: `acc`, the eighths counted
+	// since the block began or since the last PS2N_FLUSH, apart from those the
+	// recompiler has folded into the macros' arguments; `ps2n_start`, the
+	// address the block began at; `ps2n_end`, the word described below.
 	inline uint32_t blockCycles(uint32_t eighths)
 	{
 		const uint32_t cycles = eighths >> 3;
 		return cycles ? cycles : 1;
 	}
 
-	// Whether the core has an event to handle. Tested at the end of every block.
+	// What compiled code knows of a block (ImageInfo::blocks, `ps2n_end`): the
+	// address at which it ends, and in the two low bits how. Zero in the
+	// table: nothing is known, or the block is not one compiled code may run
+	// without asking; blockStart() says.
+	inline constexpr uint32_t kBlockTestsAtSplit = 1; // cut short at its end address, it tests for events there
+	inline constexpr uint32_t kBlockIdleLoop = 2; // its branch back to its own start skips to the next event
+	inline constexpr uint32_t kBlockEndMask = ~3u;
+
+	// Whether the core has an event to handle.
 	inline bool eventDue()
 	{
 		return static_cast<int64_t>(cpuRegs.cycle - cpuRegs.nextEventCycle) >= 0;
 	}
 
-	// At the end of an idle loop's block (ps2n/waitloop.h): nothing will change
-	// until the next event, so time moves on to it. PCSX2's WaitLoop setting
-	// switches this off, as it does in its recompiler.
-	inline void skipIdleTime()
+	// Whether `address` is anything other than plain memory: a device's
+	// registers, or nothing at all.
+	inline bool notPlainMemory(uint32_t address)
 	{
-		if (EmuConfig.Speedhacks.WaitLoop && !eventDue())
-			cpuRegs.cycle = cpuRegs.nextEventCycle;
+		return vtlb_private::vtlbdata.vmap[address >> vtlb_private::VTLB_PAGE_BITS].isHandler(address);
 	}
 
 	// ---- runtime entry points for compiled code ------------------------------
+	// A block begins at leader `index` of `image`, in the function's own code
+	// (`body` 0) or in its variant n (`body` 1 + n), and the image's table
+	// says nothing of it. Forms the block if there is none yet, and checks
+	// that the code it was formed from is the code this body was compiled
+	// from. If compiled code is to run it, *block is what PS2N_BLOCK_START
+	// needs. If not, *block is zero and the runtime has dealt with it some
+	// other way (interpreted it, run the body that does match, let its time
+	// pass): the caller returns the value returned, a PC or kUnwind.
+	uint32_t blockStart(const ImageInfo& image, uint32_t index, uint32_t body, uint32_t* block);
+
 	// Lets the core handle its events: interrupts, timers, DMA, the IOP, the
 	// VUs. `next` is the instruction execution continues at. Returns the PC to
 	// continue at: `next`, unless an exception was taken; or kUnwind.
 	uint32_t eventTest(uint32_t next);
 
-	// SYSCALL, BREAK, ERET, EI or a trap at `pc`, carried out by the core's own
+	// BREAK, ERET, EI or a trap at `pc`, carried out by the core's own
 	// function for it. `eighths` is the cost of the block this instruction
 	// ends. Returns the PC to continue at (pc + 4 when nothing was raised), or
 	// kUnwind.
 	uint32_t systemInstruction(uint32_t pc, uint32_t code, uint32_t eighths);
 
-	// A block begins at `start`, the first instruction of a timeout loop that
-	// counts register `reg` down and whose code ends before `end`
-	// (ps2n/waitloop.h). Lets the time pass that PCSX2's recompiler lets pass
-	// for it, instead of running it. Returns `end` when the count has reached
-	// zero: execution continues there, with nothing more counted and no event
-	// test. Returns `start` when timeout loops are not skipped (PCSX2's WaitLoop
-	// setting is off): the loop's code is to be run. Returns anything else as
-	// eventTest() does: the PC to continue at after an exception, or kUnwind.
-	uint32_t timeoutLoop(uint32_t reg, uint32_t start, uint32_t end);
+	// SYSCALL at `pc`, in the block that began at `start` and that it ends.
+	// `eighths`: the cost of the block up to and including it. PCSX2's
+	// recompiler does not make a FlushCache call whose number the block has
+	// made a constant; it counts a fixed cost instead, and the runtime knows
+	// which those are. Either way the block has ended when this returns, its
+	// cost counted. Returns the PC to continue at (pc + 4 when no exception was
+	// raised: a call not made, or one the core answers itself), or kUnwind.
+	uint32_t syscallInstruction(uint32_t pc, uint32_t code, uint32_t start, uint32_t eighths);
+
+	// A COP2 instruction, LQC2 or SQC2 at `pc`, in the block that began at
+	// `start`, with `eighths` counted up to and including it. Whether VU0 has
+	// to be brought up to date first, and whether the cycles so far are added
+	// before that, PCSX2's recompiler decides from the whole block, so the
+	// runtime does it all. Returns the eighths that remain counted.
+	uint32_t cop2Instruction(uint32_t pc, uint32_t start, uint32_t eighths);
+
+	// The load or store at `pc`, in the block that began at `start`, is about
+	// to touch memory that is not plain. The code PCSX2's recompiler makes for
+	// one whose address it did not know faults there the first time, and its
+	// block is compiled again; the runtime keeps count of that. Returns true
+	// when the block ends after this instruction: a read of an EE timer
+	// register through an address the recompiler knew.
+	bool memoryFault(uint32_t pc, uint32_t start);
 
 	// An instruction PS2Native has no semantics of its own for yet, carried out
 	// by the core's interpreter function for it. The second form is for an
@@ -158,23 +185,17 @@ namespace ps2n::ee
 	// jumping function's own blocks. Returns the PC to continue at, or kUnwind.
 	uint32_t jump(uint32_t pc);
 
-	// Leaves compiled code in the middle of a block: the interpreter carries
-	// out the rest of it, from `pc`, with `eighths` already counted. For what
-	// the recompiler does not translate: an unknown encoding, a branch in a
-	// delay slot. Returns the PC to continue at, or kUnwind.
-	uint32_t leave(uint32_t pc, uint32_t eighths);
-
-	// Called at the entry of a function, or of one of its variants, when the
-	// function's state is not `mine`, the state in which that code is the one
-	// to run. Returns true when it turns out to be, after comparing RAM.
-	// Otherwise the caller must return *result at once: the PC to continue at
-	// after the right code ran in its place, or kUnwind when RAM holds code
-	// nothing was compiled from, which is then interpreted from `pc`.
-	bool enterSlow(const ImageInfo& image, uint32_t index, uint32_t mine, uint32_t pc, uint32_t* result);
+	// Leaves compiled code in the middle of the block that began at `start`:
+	// the interpreter carries out the rest of it, from `pc`, with `eighths`
+	// counted so far. For what the recompiler does not translate: an unknown
+	// encoding; a branch whose delay slot holds what cannot be compiled there;
+	// DI before a branch or before an instruction at which a block can begin.
+	// Returns the PC to continue at, or kUnwind.
+	uint32_t leave(uint32_t pc, uint32_t eighths, uint32_t start);
 
 	// A function was entered at an address it has no label for. This cannot
 	// happen unless the recompiler and the runtime disagree; it stops the run.
-	[[noreturn]] void badEntry(const ImageInfo& image, uint32_t index, uint32_t pc);
+	[[noreturn]] void badEntry(const ImageInfo& image, uint32_t function, uint32_t pc);
 
 	// The conditions of BC0x, BC1x and BC2x.
 	bool cop0Condition();
@@ -193,8 +214,8 @@ namespace ps2n::ee
 
 // ---- what generated code is written with --------------------------------------
 // These are macros only so that the `return` inside them leaves the generated
-// function. `acc_` is the function's count of eighths of a cycle since the
-// last end of a block.
+// function, and so that they can use its locals `ps2n_start` and `ps2n_end`.
+// `acc_` is the function's `acc`.
 
 // A jump to another compiled function. Without the attribute it still works,
 // but may leave a host frame behind for each such jump.
@@ -206,21 +227,49 @@ namespace ps2n::ee
 #define PS2N_MUSTTAIL
 #endif
 
-// At the top of a generated function. `mine_` is the state in which this is
-// the code to run: kTrusted for a function, kFirstVariant + n for its variant n.
-#define PS2N_ENTER(state_, image_, index_, mine_, pc_) \
+// At a label, where a block begins: leader `index_` of the image, address
+// `addr_`. `blocks` is the image's table.
+#define PS2N_BLOCK_START(index_, addr_) \
 	do \
 	{ \
-		if ((state_)[index_] != (mine_)) [[unlikely]] \
+		ps2n_start = (addr_); \
+		ps2n_end = blocks[index_]; \
+		if (ps2n_end == 0) [[unlikely]] \
 		{ \
-			uint32_t ps2n_pc; \
-			if (!::ps2n::ee::enterSlow(image_, index_, mine_, pc_, &ps2n_pc)) \
+			const uint32_t ps2n_pc = ::ps2n::ee::blockStart(image, index_, 0, &ps2n_end); \
+			if (ps2n_end == 0) \
 				return ps2n_pc; \
 		} \
 	} while (0)
 
-// The end of a block whose instructions since `acc_` was last brought up to
-// date cost `eighths_`, with execution continuing at `next_`.
+// The same in variant `variant_` of a function, which always asks.
+#define PS2N_BLOCK_START_VARIANT(index_, addr_, variant_) \
+	do \
+	{ \
+		ps2n_start = (addr_); \
+		const uint32_t ps2n_pc = ::ps2n::ee::blockStart(image, index_, 1 + (variant_), &ps2n_end); \
+		if (ps2n_end == 0) \
+			return ps2n_pc; \
+	} while (0)
+
+// The block was cut short at `next_`, a label reached from the instruction
+// before it: its cost is counted, and events are tested for if it is long
+// enough for PCSX2's recompiler to do so.
+#define PS2N_SPLIT_END(acc_, eighths_, next_) \
+	do \
+	{ \
+		cpuRegs.cycle += ::ps2n::ee::blockCycles((acc_) + (eighths_)); \
+		(acc_) = 0; \
+		if ((ps2n_end & ::ps2n::ee::kBlockTestsAtSplit) && ::ps2n::ee::eventDue()) [[unlikely]] \
+		{ \
+			const uint32_t ps2n_next = ::ps2n::ee::eventTest(next_); \
+			if (ps2n_next != (next_)) \
+				return ps2n_next; \
+		} \
+	} while (0)
+
+// The end of a block at a branch, a jump or an instruction that ends one,
+// with execution continuing at `next_`.
 #define PS2N_BLOCK_END(acc_, eighths_, next_) \
 	do \
 	{ \
@@ -235,25 +284,39 @@ namespace ps2n::ee
 		} \
 	} while (0)
 
-// The end of a block whose branch goes back to a place from which the code up
-// to the branch is an idle loop (ps2n/waitloop.h). `back_`: the branch is
-// taken. `whole_`: what the block costs when it began at that place, which is
-// how compiled code tells that it did; only then is it the loop's block.
-#define PS2N_BLOCK_END_LOOP(acc_, eighths_, next_, back_, whole_) \
+// The same at a branch that may close an idle loop (ps2n/waitloop.h): taken
+// (`back_`), in a block the runtime found to be one, time moves on to the
+// next event, which is then handled whatever the time.
+#define PS2N_BLOCK_END_LOOP(acc_, eighths_, next_, back_) \
 	do \
 	{ \
 		const uint32_t ps2n_expected = (next_); \
-		const uint32_t ps2n_eighths = (acc_) + (eighths_); \
-		cpuRegs.cycle += ::ps2n::ee::blockCycles(ps2n_eighths); \
+		cpuRegs.cycle += ::ps2n::ee::blockCycles((acc_) + (eighths_)); \
 		(acc_) = 0; \
-		if ((back_) && ps2n_eighths == (whole_)) \
-			::ps2n::ee::skipIdleTime(); \
-		if (::ps2n::ee::eventDue()) [[unlikely]] \
+		bool ps2n_test = ::ps2n::ee::eventDue(); \
+		if ((back_) && (ps2n_end & ::ps2n::ee::kBlockIdleLoop)) \
+		{ \
+			if (!ps2n_test) \
+				cpuRegs.cycle = cpuRegs.nextEventCycle; \
+			ps2n_test = true; \
+		} \
+		if (ps2n_test) [[unlikely]] \
 		{ \
 			const uint32_t ps2n_next = ::ps2n::ee::eventTest(ps2n_expected); \
 			if (ps2n_next != ps2n_expected) \
 				return ps2n_next; \
 		} \
+	} while (0)
+
+// Before an instruction at which PCSX2's recompiler adds the cycles of the
+// block so far to the cycle count (ps2n::r5900::flushesCycles). `eighths_`
+// includes the instruction.
+#define PS2N_FLUSH(acc_, eighths_) \
+	do \
+	{ \
+		const uint32_t ps2n_eighths = (acc_) + (eighths_); \
+		cpuRegs.cycle += ::ps2n::ee::blockCycles(ps2n_eighths); \
+		(acc_) = ps2n_eighths & 7u; \
 	} while (0)
 
 // A call of a compiled function that is expected to return to `ret_`.
@@ -277,7 +340,7 @@ namespace ps2n::ee
 // A jump to an entry of another compiled function.
 #define PS2N_JUMP(fn_, target_) PS2N_MUSTTAIL return fn_(target_)
 
-// SYSCALL, BREAK, ERET, EI or a trap at `pc_`, which ends the block.
+// BREAK, ERET, EI or a trap at `pc_`, which ends the block.
 #define PS2N_SYSTEM(acc_, eighths_, pc_, code_) \
 	do \
 	{ \
@@ -286,3 +349,28 @@ namespace ps2n::ee
 		if (ps2n_pc != (pc_) + 4) \
 			return ps2n_pc; \
 	} while (0)
+
+// SYSCALL at `pc_`, which ends the block whether the call is made or not.
+#define PS2N_SYSCALL(acc_, eighths_, pc_, code_) \
+	do \
+	{ \
+		const uint32_t ps2n_pc = ::ps2n::ee::syscallInstruction(pc_, code_, ps2n_start, (acc_) + (eighths_)); \
+		(acc_) = 0; \
+		if (ps2n_pc != (pc_) + 4) \
+			return ps2n_pc; \
+	} while (0)
+
+// A COP2 instruction, LQC2 or SQC2 at `pc_`.
+#define PS2N_COP2(acc_, eighths_, pc_) (acc_) = ::ps2n::ee::cop2Instruction(pc_, ps2n_start, (acc_) + (eighths_))
+
+// Before the load or store at `pc_` of the address in general register
+// `base_` plus `offset_`. The second form is an expression, for a load after
+// which the block may end: true when it does.
+#define PS2N_MEMORY(base_, offset_, pc_) \
+	do \
+	{ \
+		if (::ps2n::ee::notPlainMemory(::ps2n::ee::ru32(base_) + static_cast<uint32_t>(offset_))) [[unlikely]] \
+			::ps2n::ee::memoryFault(pc_, ps2n_start); \
+	} while (0)
+#define PS2N_MEMORY_ENDS(base_, offset_, pc_) \
+	(::ps2n::ee::notPlainMemory(::ps2n::ee::ru32(base_) + static_cast<uint32_t>(offset_)) && ::ps2n::ee::memoryFault(pc_, ps2n_start))

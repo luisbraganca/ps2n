@@ -2,6 +2,7 @@
 #include "codegen.h"
 
 #include "ps2n/codehash.h"
+#include "ps2n/rec_rules.h"
 #include "ps2n/util.h"
 #include "ps2n/waitloop.h"
 
@@ -13,7 +14,7 @@ namespace ps2n::recomp {
 
 using namespace r5900;
 
-const char* const kGeneratorName = "ps2n-recomp 0.2.2";
+const char* const kGeneratorName = "ps2n-recomp 0.3.0";
 
 namespace {
 
@@ -29,6 +30,7 @@ constexpr int kMaxTail = 64;
 
 std::string hex(uint32_t v) { return strprintf("0x%08Xu", v); }
 std::string label(uint32_t a) { return strprintf("L_%08X", a); }
+std::string midLabel(uint32_t a) { return strprintf("M_%08X", a); }
 std::string fnName(uint32_t start) { return strprintf("fn_%08X", start); }
 
 std::string cstring(const std::string& s) {
@@ -46,10 +48,10 @@ std::string cstring(const std::string& s) {
 
 // ---- calls of PS2Native's own semantics ------------------------------------------
 // The families that have them so far: r5900_sem_int.inc, r5900_sem_cop1.inc,
-// r5900_sem_mmi.inc and r5900_sem_cop2_ctl.inc. The same tables are what
-// ExecuteOwn() in runtime/ee_provider.cpp includes; an instruction of any
-// other family is delegated by both.
-enum class Arg { RD, RS, RT, SA, SIMM, UIMM, FD, FS, FT, INTERLOCK };
+// r5900_sem_mmi.inc, r5900_sem_cop2_ctl.inc and r5900_sem_cop0.inc. The same
+// tables are what ExecuteOwn() in runtime/ee_provider.cpp includes; an
+// instruction of any other family is delegated by both.
+enum class Arg { RD, RS, RT, SA, SIMM, UIMM, FD, FS, FT, PERF, CREG };
 
 std::string argText(const Insn& in, Arg a) {
     switch (a) {
@@ -62,7 +64,8 @@ std::string argText(const Insn& in, Arg a) {
     case Arg::FD: return std::to_string(in.fd());
     case Arg::FS: return std::to_string(in.fs());
     case Arg::FT: return std::to_string(in.ft());
-    case Arg::INTERLOCK: return in.interlock() ? "true" : "false";
+    case Arg::PERF: return std::to_string(in.perfReg());
+    case Arg::CREG: return std::to_string(in.rd());
     }
     return "?";
 }
@@ -91,7 +94,8 @@ std::string semanticCall(const Insn& in) {
 #define FD Arg::FD
 #define FS Arg::FS
 #define FT Arg::FT
-#define INTERLOCK Arg::INTERLOCK
+#define PERF Arg::PERF
+#define CREG Arg::CREG
 #define PS2N_EXPAND(...) __VA_ARGS__
 #define S(op, fn, args) \
     case Op::op:        \
@@ -101,11 +105,13 @@ std::string semanticCall(const Insn& in) {
 #include "ps2n/r5900_sem_cop1.inc"
 #include "ps2n/r5900_sem_mmi.inc"
 #include "ps2n/r5900_sem_cop2_ctl.inc"
+#include "ps2n/r5900_sem_cop0.inc"
     default: return {};
     }
 #undef S
 #undef PS2N_EXPAND
-#undef INTERLOCK
+#undef CREG
+#undef PERF
 #undef RD
 #undef RS
 #undef RT
@@ -121,7 +127,7 @@ std::string semanticCall(const Insn& in) {
 std::string gprU64(uint32_t r) { return r ? strprintf("ru64(%s)", kRegNames[r]) : "uint64_t{0}"; }
 std::string gprS64(uint32_t r) { return r ? strprintf("rs64(%s)", kRegNames[r]) : "int64_t{0}"; }
 
-// Whether the branch `in` is taken. The same conditions as ExecuteBranch() in
+// Whether the branch `in` is taken. The same conditions as RunRecBranch() in
 // runtime/ee_provider.cpp.
 std::string branchCondition(const Insn& in) {
     switch (in.op) {
@@ -141,17 +147,55 @@ std::string branchCondition(const Insn& in) {
     }
 }
 
+// A COP2 instruction, LQC2 or SQC2: what the runtime carries out whole,
+// because when VU0 is brought up to date first depends on the block.
+bool isCop2(const Insn& in) {
+    const uint32_t opcode = in.opcode();
+    return (opcode == 022 && !in.isControlFlow()) || opcode == 066 || opcode == 076;
+}
+
+// What the generated code does not carry out in a delay slot, so that the
+// branch before it is left to the interpreter: a system instruction, an
+// unknown encoding, and the coprocessor branches (the other branches PCSX2's
+// recompiler drops from a delay slot, and so does this). DI is carried out
+// there, where it takes effect at once.
+bool compilableInSlot(const Insn& in) {
+    if (!in.valid()) return false;
+    if (in.isControlFlow()) return droppedFromDelaySlot(in.raw);
+    return !isSystem(in);
+}
+
 // The name of the C++ function for `f`, or for its variant `variant` (-1: itself).
 std::string fnName(const Function& f, int variant) {
     return variant < 0 ? fnName(f.start) : fnName(f.start) + strprintf("_v%d", variant);
 }
 
+// Where each function's leaders begin in the image's list of all of them.
+struct LeaderIndex {
+    std::vector<uint32_t> first;   // by function
+
+    explicit LeaderIndex(const Program& p) {
+        uint32_t n = 0;
+        for (const Function& f : p.functions) {
+            first.push_back(n);
+            n += static_cast<uint32_t>(f.leaders.size());
+        }
+    }
+
+    // The index of leader `addr` of `f`.
+    uint32_t of(const Program& p, const Function& f, uint32_t addr) const {
+        const auto it = std::lower_bound(f.leaders.begin(), f.leaders.end(), addr);
+        return first[p.indexOf(f)] + static_cast<uint32_t>(it - f.leaders.begin());
+    }
+};
+
 class FunctionEmitter {
 public:
     // `variant`: which of the function's variants to compile, or -1 for the
     // function as the executable has it.
-    FunctionEmitter(const Program& p, const Function& f, int variant, const GenerateOptions& o, GenerateStats& s)
-        : p_(p), f_(f), variant_(variant), opt_(o), stats_(s), index_(p.indexOf(f)), extent_(f.end) {}
+    FunctionEmitter(const Program& p, const LeaderIndex& leaders, const Function& f, int variant, const GenerateOptions& o,
+                    GenerateStats& s)
+        : p_(p), leaders_(leaders), f_(f), variant_(variant), opt_(o), stats_(s), index_(p.indexOf(f)) {}
 
     std::string emit() {
         emitBody();
@@ -165,10 +209,11 @@ public:
                             variant_);
         // Local to the translation unit when there is only one.
         out += std::string(opt_.parts > 1 ? "" : "static ") + "uint32_t " + fnName(f_, variant_) + "(uint32_t pc)\n{\n";
-        // The state in which this is the code to run (FunctionState).
-        const std::string mine = variant_ < 0 ? "kTrusted" : strprintf("kFirstVariant + %d", variant_);
-        out += strprintf("\tPS2N_ENTER(state, image, %u, %s, pc);\n", index_, mine.c_str());
+        // The eighths of a cycle counted in the block so far; where the block
+        // began; what the runtime said of it (recomp.h).
         out += "\tuint32_t acc = 0;\n";
+        out += "\t[[maybe_unused]] uint32_t ps2n_start = 0;\n";
+        out += "\tuint32_t ps2n_end = 0;\n";
         if (needsDispatch_) out += "ps2n_dispatch:\n";
         out += "\tswitch (pc)\n\t{\n";
         for (uint32_t a : f_.leaders) out += "\t\tcase " + hex(a) + ": goto " + label(a) + ";\n";
@@ -180,11 +225,9 @@ public:
         return out;
     }
 
-    // One past the last instruction the function was compiled from.
-    uint32_t extent() const { return extent_; }
-
 private:
     const Program& p_;
+    const LeaderIndex& leaders_;
     const Function& f_;
     int variant_;
     const GenerateOptions& opt_;
@@ -202,11 +245,11 @@ private:
     uint32_t pending_ = 0;
     // Whether the code being emitted can be reached from the code before it.
     bool reachable_ = false;
-    // No instruction has been emitted since the last end of a block: `acc`
-    // and pending_ are both zero here, on every path.
+    // Reached from the code before it, this place is where a block has just
+    // ended: `acc` and pending_ are both zero, and the next instruction
+    // begins a block.
     bool blockStart_ = true;
     bool needsDispatch_ = false;
-    uint32_t extent_;
 
     // ---- text ---------------------------------------------------------------
     void line(const std::string& code, const Insn* in = nullptr, const char* note = nullptr) {
@@ -235,88 +278,115 @@ private:
     }
 
     // ---- pieces -------------------------------------------------------------
-    // An instruction that is neither control flow nor a system instruction.
-    void emitPlain(const Insn& in, bool delaySlot) {
+    // An instruction that is neither control flow nor one that ends a block,
+    // after `before` eighths not yet in `acc`. Returns the eighths not in
+    // `acc` after it: those and its own, or none if it had them added.
+    uint32_t emitPlain(const Insn& in, uint32_t before, bool delaySlot) {
         const char* note = delaySlot ? "delay slot" : nullptr;
-        if (in.raw == 0) {
+        const uint32_t cost = before + cycles(in.op);
+
+        // A nop, or a hint to the processor's cache or pipeline: nothing to do.
+        if (in.raw == 0 || in.is(F_HINT)) {
             line("", &in, note);
-            return;
+            return cost;
         }
+
+        // The runtime does all of it: when VU0 is brought up to date first,
+        // and whether the cycles so far are added before that, depend on the
+        // block the instruction is in.
+        if (isCop2(in)) {
+            line(strprintf("PS2N_COP2(acc, %uu, %s);", cost, hex(in.addr).c_str()), &in, note);
+            stats_.cop2++;
+            return 0;
+        }
+
+        uint32_t after = cost;
+        if (flushesCycles(in)) {
+            line(strprintf("PS2N_FLUSH(acc, %uu);", cost));
+            after = 0;
+        }
+
         const std::string call = semanticCall(in);
-        if (!call.empty()) {
-            line(call + ";", &in, note);
-            return;
+        if (call.empty()) {
+            line(strprintf("%s(%s, %s);", delaySlot ? "delegateInDelaySlot" : "delegate", hex(in.addr).c_str(), hex(in.raw).c_str()), &in, note);
+            stats_.delegated++;
+            stats_.delegatedByOp[in.op]++;
+            return after;
         }
-        line(strprintf("%s(%s, %s);", delaySlot ? "delegateInDelaySlot" : "delegate", hex(in.addr).c_str(), hex(in.raw).c_str()), &in, note);
-        stats_.delegated++;
-        stats_.delegatedByOp[in.op]++;
+
+        if (in.is(F_LOAD | F_STORE)) {
+            // The runtime is told when the access is about to touch memory
+            // that is not plain. After a read that may be of an EE timer
+            // register the block may end; such a read is followed by a leader.
+            const std::string access = strprintf("%s, %d, %s", kRegNames[in.rs()], in.simm(), hex(in.addr).c_str());
+            if (!delaySlot && isNarrowLoad(in) && p_.entryAt(in.addr + 4)) {
+                open();
+                line("const bool ends = PS2N_MEMORY_ENDS(" + access + ");");
+                line(call + ";", &in, note);
+                line("if (ends) [[unlikely]]");
+                open();
+                line(strprintf("PS2N_BLOCK_END(acc, %uu, %s);", after, hex(in.addr + 4).c_str()));
+                transfer(in.addr + 4);
+                close();
+                close();
+                return after;
+            }
+            line("PS2N_MEMORY(" + access + ");");
+        }
+        line(call + ";", &in, note);
+        return after;
     }
 
     // The interpreter carries out the rest of the block, from `at`.
     void leave(uint32_t at, const Insn* in, const char* why) {
-        line(strprintf("return leave(%s, acc + %uu);", hex(at).c_str(), pending_), in, why);
+        line(strprintf("return leave(%s, acc + %uu, ps2n_start);", hex(at).c_str(), pending_), in, why);
         stats_.leaves++;
         pending_ = 0;
         reachable_ = false;
         blockStart_ = false;
     }
 
-    // The end of a block. `whole`, when not zero: the branch ending it goes
-    // back (when `back` holds) to a place from which the code up to here is an
-    // idle loop, and this is what the block costs when it began there.
-    void blockEnd(uint32_t eighths, const std::string& next, const char* back = "true", uint32_t whole = 0) {
-        if (whole) line(strprintf("PS2N_BLOCK_END_LOOP(acc, %uu, %s, %s, %uu);", eighths, next.c_str(), back, whole));
+    // The end of a block. `loop`: the branch ending it goes back (when `back`
+    // holds) to a place from which the code up to here may be an idle loop.
+    void blockEnd(uint32_t eighths, const std::string& next, const char* back = "true", bool loop = false) {
+        if (loop) line(strprintf("PS2N_BLOCK_END_LOOP(acc, %uu, %s, %s);", eighths, next.c_str(), back));
         else line(strprintf("PS2N_BLOCK_END(acc, %uu, %s);", eighths, next.c_str()));
     }
 
-    // If the code from the target of `branch` up to it, with its delay slot
-    // `ds`, is an idle loop (ps2n/waitloop.h): the cost of that code as one
-    // block. Otherwise zero. The runtime's interpreter decides the same thing
-    // as it goes (TakeBranch in runtime/ee_provider.cpp); the two must agree.
-    uint32_t idleLoopCost(const Insn& branch, const Insn& ds) const {
-        if (!branch.is(F_BRANCH | F_JUMP)) return 0;
+    // Whether the code from the target of `branch` up to it, with its delay
+    // slot `ds`, may be an idle loop (ps2n/waitloop.h). The runtime decides
+    // whether the block that is running is one (rec_blocks.cpp): it must
+    // have begun at the target and not been cut short. This only spares the
+    // test where it could never hold.
+    bool mayCloseIdleLoop(const Insn& branch, const Insn& ds) const {
+        if (!branch.is(F_BRANCH | F_JUMP)) return false;
         const uint32_t target = branch.staticTarget();
-        if (target > branch.addr || target < f_.start || target >= f_.end || !f_.isLeader(target)) return 0;
+        if (target > branch.addr || target < f_.start || target >= f_.end || !f_.isLeader(target)) return false;
 
         WaitLoopScan scan;
-        uint32_t cost = 0;
         for (uint32_t a = target; a < branch.addr; a += 4) {
             const Insn in = insn(a);
             // Only code that runs straight through from the target to the branch.
-            if (!in.valid() || in.hasDelaySlot() || isSystem(in) || writesConfig(in)) return 0;
+            if (!in.valid() || in.hasDelaySlot() || isSystem(in)) return false;
             scan.add(in.raw);
-            cost += cycles(in.op);
         }
         scan.add(ds.raw);
-        return scan.idle ? cost + cycles(branch.op) + cycles(ds.op) : 0;
+        return scan.idle;
     }
 
-    // If a block that begins at the label `a` is a timeout loop
-    // (ps2n/waitloop.h), what the runtime does in its place comes first, when
-    // a block does begin here: `acc` is zero then, and only then. The
-    // runtime's interpreter makes the same test at the start of every block
-    // (SkipTimeoutLoop in runtime/ee_provider.cpp); the two must agree.
-    void emitTimeoutLoop(uint32_t a) {
-        const TimeoutLoop loop = findTimeoutLoop(a, [this](uint32_t addr) { return p_.inCode(addr) ? insn(addr).raw : 0xFFFFFFFFu; });
-        if (!loop.found) return;
-        stats_.timeoutLoops++;
-
-        if (opt_.comments) line("// A block that begins here is a timeout loop: its time passes without it being run.");
-        line("if (acc == 0)");
-        open();
-        line(strprintf("const uint32_t next = timeoutLoop(%s, %s, %s);", kRegNames[loop.reg], hex(a).c_str(), hex(loop.end).c_str()));
-        line("if (next == " + hex(loop.end) + ")");
-        open();
-        transfer(loop.end);
-        close();
-        line("if (next != " + hex(a) + ")");
-        ++depth_;
-        line("return next;");
-        --depth_;
-        close();
+    // Whether `after`, the instruction that follows a DI, can be compiled in
+    // one piece with it: it is in the code, nothing enters at it, and it is
+    // an instruction emitPlain() emits whole (after a load that may end its
+    // block, DI's effect would be skipped).
+    bool followsDisable(const Insn& after, bool tail) const {
+        const uint32_t a = after.addr;
+        if (tail ? (!p_.inCode(a) || p_.entryAt(a) != nullptr) : (a >= f_.end || f_.isLeader(a))) return false;
+        if (!after.valid() || after.hasDelaySlot() || isSystem(after) || after.op == Op::DI) return false;
+        if (isNarrowLoad(after) && p_.entryAt(a + 4)) return false;
+        return true;
     }
 
-    // A jump to `target`, after the end of a block.
+    // A jump to `target`, where a block begins.
     void transfer(uint32_t target) {
         if (target >= f_.start && target < f_.end && f_.isLeader(target)) {
             line("goto " + label(target) + ";");
@@ -336,12 +406,18 @@ private:
         else line("PS2N_CALL_DYNAMIC(" + hex(target) + ", " + hex(ret) + ");");
     }
 
+    // What a block does when it begins at leader `a` of this function.
+    void blockStart(uint32_t a) {
+        const uint32_t index = leaders_.of(p_, f_, a);
+        if (variant_ < 0) line(strprintf("PS2N_BLOCK_START(%u, %s);", index, hex(a).c_str()));
+        else line(strprintf("PS2N_BLOCK_START_VARIANT(%u, %s, %d);", index, hex(a).c_str(), variant_));
+    }
+
     // ---- instructions ---------------------------------------------------------
     // Emits the instruction at `a` and returns the address of the next one to
     // emit. `tail`: `a` is past the function's own instructions.
     uint32_t emitAt(uint32_t a, bool tail) {
         const Insn in = insn(a);
-        extent_ = std::max(extent_, a + 4);
 
         if (!in.valid()) {
             leave(a, &in, "unknown encoding");
@@ -349,19 +425,42 @@ private:
         }
         if (in.hasDelaySlot()) return emitControl(in, tail);
 
+        if (in.op == Op::SYSCALL) {
+            // The call is made and the block ends; or it is one PCSX2's
+            // recompiler does not make, and the block ends all the same, cut
+            // short after it with a fixed cost counted. The runtime does
+            // either.
+            line(strprintf("PS2N_SYSCALL(acc, %uu, %s, %s);", pending_ + cycles(in.op), hex(a).c_str(), hex(in.raw).c_str()), &in);
+            pending_ = 0;
+            blockStart_ = true;
+            return a + 4;
+        }
         if (isSystem(in)) {
             line(strprintf("PS2N_SYSTEM(acc, %uu, %s, %s);", pending_ + cycles(in.op), hex(a).c_str(), hex(in.raw).c_str()), &in);
             pending_ = 0;
             blockStart_ = true;
             return a + 4;
         }
+        if (in.op == Op::DI) {
+            // PCSX2's recompiler lets the instruction after it run first, as
+            // part of DI's block wherever that block was to end. So the two
+            // are compiled as one piece when nothing can separate them: the
+            // instruction after is plain and no block begins at it.
+            const Insn after = insn(a + 4);
+            if (followsDisable(after, tail)) {
+                line("", &in, "takes effect after the next instruction");
+                pending_ = emitPlain(after, pending_ + cycles(in.op), false);
+                line("DI();");
+                stats_.delayedDisables++;
+                blockStart_ = false;
+                return a + 8;
+            }
+            leave(a, &in, "DI takes effect an instruction late");
+            return a + 4;
+        }
 
-        emitPlain(in, false);
-        pending_ += cycles(in.op);
+        pending_ = emitPlain(in, pending_, false);
         blockStart_ = false;
-        // Compiled code counts time as the EE's Config register stands when it
-        // is entered. Once that register is written, the interpreter takes over.
-        if (writesConfig(in)) leave(a + 4, nullptr, nullptr);
         return a + 4;
     }
 
@@ -370,16 +469,14 @@ private:
     uint32_t emitControl(const Insn& in, bool tail) {
         const uint32_t a = in.addr, next = a + 8;
         const Insn ds = insn(a + 4);
-        extent_ = std::max(extent_, next);
 
         const uint32_t cost = pending_ + cycles(in.op);         // up to and including the branch
-        const uint32_t costWithSlot = cost + cycles(ds.op);
         // Something enters at the delay slot: it then runs as an ordinary
         // instruction, from its own label, after this construct.
         const bool slotIsLeader = !tail && a + 4 < f_.end && f_.isLeader(a + 4);
         bool falls = true;   // whether execution can continue at `next`
 
-        if (!p_.inCode(a + 4) || !compilableInDelaySlot(ds)) {
+        if (!p_.inCode(a + 4) || !compilableInSlot(ds)) {
             if (!in.isLikely() || in.isUnconditionalBranch()) {
                 // The interpreter carries out the branch together with what follows it.
                 leave(a, &in, "its delay slot is not compiled");
@@ -389,12 +486,12 @@ private:
             // only then is it left to the interpreter. This is what GCC makes
             // of a division: "beql divisor, $zero, 1f; break 7; 1:".
             open();
+            if (in.isCall()) line("setLink(RA, " + hex(next) + ");");
             line("const bool taken = " + branchCondition(in) + ";", &in);
             line("if (taken)");
             ++depth_;
-            line(strprintf("return leave(%s, acc + %uu);", hex(a).c_str(), pending_), &ds, "delay slot, not compiled");
+            line(strprintf("return leave(%s, acc + %uu, ps2n_start);", hex(a).c_str(), pending_), &ds, "delay slot, not compiled");
             --depth_;
-            if (in.isCall()) line("setLink(RA, " + hex(next) + ");");
             blockEnd(cost, hex(next));
             close();
             stats_.guards++;
@@ -408,6 +505,9 @@ private:
             reachable_ = true;
             return next;
         }
+        // PCSX2's recompiler drops a branch from a delay slot: the branch
+        // before it then has none.
+        const bool noSlot = ds.isControlFlow();
 
         if (opt_.comments) {
             std::string l(static_cast<size_t>(depth_), '\t');
@@ -416,27 +516,39 @@ private:
             body_ += l + "\n";
         }
 
-        const uint32_t idle = idleLoopCost(in, ds);
-        if (idle) stats_.idleLoops++;
+        // The delay slot, after the branch's `cost`. Returns what the end of
+        // the block has left to count.
+        const auto slot = [&]() -> uint32_t {
+            if (noSlot) {
+                line("", &ds, "a branch in a delay slot: dropped");
+                return cost;
+            }
+            return emitPlain(ds, cost, true);
+        };
+
+        const bool loop = mayCloseIdleLoop(in, ds);
+        if (loop) stats_.idleLoops++;
 
         switch (in.op) {
-        case Op::J:
-            emitPlain(ds, true);
-            blockEnd(costWithSlot, hex(in.jumpTarget()), "true", idle);
+        case Op::J: {
+            const uint32_t rest = slot();
+            blockEnd(rest, hex(in.jumpTarget()), "true", loop);
             transfer(in.jumpTarget());
             falls = false;
             break;
-        case Op::JAL:
+        }
+        case Op::JAL: {
             line("setLink(RA, " + hex(next) + ");");
-            emitPlain(ds, true);
-            blockEnd(costWithSlot, hex(in.jumpTarget()), "true", idle);
+            const uint32_t rest = slot();
+            blockEnd(rest, hex(in.jumpTarget()), "true", loop);
             call(in.jumpTarget(), next);
             break;
-        case Op::JR:
+        }
+        case Op::JR: {
             open();
             line(strprintf("const uint32_t target = ru32(%s);", kRegNames[in.rs()]));
-            emitPlain(ds, true);
-            blockEnd(costWithSlot, "target");
+            const uint32_t rest = slot();
+            blockEnd(rest, "target");
             if (in.rs() == 31) {
                 line("return target;");
             } else {
@@ -449,22 +561,26 @@ private:
             close();
             falls = false;
             break;
-        case Op::JALR:
+        }
+        case Op::JALR: {
             open();
             line(strprintf("const uint32_t target = ru32(%s);", kRegNames[in.rs()]));
             if (in.rd()) line(strprintf("setLink(%s, %s);", kRegNames[in.rd()], hex(next).c_str()));
-            emitPlain(ds, true);
-            blockEnd(costWithSlot, "target");
+            const uint32_t rest = slot();
+            blockEnd(rest, "target");
             line("PS2N_CALL_DYNAMIC(target, " + hex(next) + ");");
             close();
             break;
+        }
         default: {   // the conditional branches
             const uint32_t target = in.branchTarget();
             const bool link = in.isCall();
+            // The link is written before the register is compared, as PCSX2's
+            // recompiler does it.
             if (in.isUnconditionalBranch()) {
                 if (link) line("setLink(RA, " + hex(next) + ");");
-                emitPlain(ds, true);
-                blockEnd(costWithSlot, hex(target), "true", idle);
+                const uint32_t rest = slot();
+                blockEnd(rest, hex(target), "true", loop);
                 if (link) {
                     call(target, next);
                 } else {
@@ -474,12 +590,12 @@ private:
             } else if (in.isLikely()) {
                 // The delay slot only runs, and only counts, when the branch is taken.
                 open();
-                line("const bool taken = " + branchCondition(in) + ";");
                 if (link) line("setLink(RA, " + hex(next) + ");");
+                line("const bool taken = " + branchCondition(in) + ";");
                 line("if (taken)");
                 open();
-                emitPlain(ds, true);
-                blockEnd(costWithSlot, hex(target), "true", idle);
+                const uint32_t rest = slot();
+                blockEnd(rest, hex(target), "true", loop);
                 if (link) call(target, next);
                 else transfer(target);
                 close();
@@ -490,10 +606,10 @@ private:
                 close();
             } else {
                 open();
-                line("const bool taken = " + branchCondition(in) + ";");
                 if (link) line("setLink(RA, " + hex(next) + ");");
-                emitPlain(ds, true);
-                blockEnd(costWithSlot, "taken ? " + hex(target) + " : " + hex(next), "taken", idle);
+                line("const bool taken = " + branchCondition(in) + ";");
+                const uint32_t rest = slot();
+                blockEnd(rest, "taken ? " + hex(target) + " : " + hex(next), "taken", loop);
                 line("if (taken)");
                 open();
                 if (link) call(target, next);
@@ -530,13 +646,26 @@ private:
         uint32_t a = f_.start;
         while (a < f_.end) {
             if (f_.isLeader(a)) {
-                if (reachable_ && pending_) line(strprintf("acc += %uu;", pending_));
-                // Entered through the label, `acc` is zero: a block has just ended.
-                blockStart_ = !reachable_ || blockStart_;
+                if (reachable_ && !blockStart_) {
+                    // Reached in the middle of a block. If this is where the
+                    // runtime cut the block short it ends here and another
+                    // begins; if not it goes on past the label.
+                    line(strprintf("if ((ps2n_end & kBlockEndMask) != %s)", hex(a).c_str()));
+                    open();
+                    if (pending_) line(strprintf("acc += %uu;", pending_));
+                    line("goto " + midLabel(a) + ";");
+                    close();
+                    line(strprintf("PS2N_SPLIT_END(acc, %uu, %s);", pending_, hex(a).c_str()));
+                    body_ += label(a) + ":\n";
+                    blockStart(a);
+                    body_ += midLabel(a) + ":\n";
+                } else {
+                    body_ += label(a) + ":\n";
+                    blockStart(a);
+                }
                 pending_ = 0;
                 reachable_ = true;
-                body_ += label(a) + ":\n";
-                emitTimeoutLoop(a);
+                blockStart_ = false;
             } else if (!reachable_) {
                 // Follows code that never continues here, and nothing is known
                 // to jump here. If something does at run time, the interpreter
@@ -559,13 +688,21 @@ private:
 
         // In the middle of a block. The block is the unit of time, so the
         // function carries on through the code that follows it, compiled here
-        // a second time, until the block ends.
+        // a second time, until the block ends: at its branch, or at a leader
+        // of that code where the runtime cut it short.
         stats_.tails++;
         if (opt_.comments) line("// runs on into the code that follows, to the end of the block");
         for (int n = 0;; ++n) {
             if (!p_.inCode(a) || n >= kMaxTail) {
                 leave(a, nullptr, nullptr);
                 return;
+            }
+            if (p_.entryAt(a)) {
+                line(strprintf("if ((ps2n_end & kBlockEndMask) == %s)", hex(a).c_str()));
+                open();
+                line(strprintf("PS2N_SPLIT_END(acc, %uu, %s);", pending_, hex(a).c_str()));
+                transfer(a);
+                close();
             }
             const uint32_t before = a;
             a = emitAt(a, true);
@@ -653,32 +790,39 @@ std::vector<GeneratedFile> generateFiles(const Program& prog, const GenerateOpti
     uint64_t instructionsBefore = 0, instructionsInAll = 0;
     for (const Function& f : prog.functions) instructionsInAll += (f.end - f.start) / 4;
 
-    // The hash of the words a function, or a variant of it, was compiled from.
-    const auto hashOf = [&](const Function& f, int variant, uint32_t extent) {
+    // The fingerprint of the words from leader `i` of `f`, or of a variant of
+    // it, to the next leader or the function's end: what the runtime compares
+    // with memory before it lets compiled code run a block.
+    const auto segmentHash = [&](const Function& f, int variant, size_t i) {
+        const uint32_t end = i + 1 < f.leaders.size() ? f.leaders[i + 1] : f.end;
         CodeHash hash;
-        for (uint32_t a = f.start; a < extent; a += 4) hash.add(prog.word(f, variant, a));
+        for (uint32_t a = f.leaders[i]; a < end; a += 4) hash.add(prog.word(f, variant, a));
         return static_cast<unsigned long long>(hash.value);
     };
 
+    const LeaderIndex leaderIndex(prog);
+
     std::string table = "static const FunctionInfo functions[] = {\n";
-    std::string resume = "static const uint32_t resume_points[] = {\n";
+    std::string leaders = "static const uint32_t leaders[] = {\n";
+    std::string hashes = "static const uint64_t segment_hashes[] = {\n";
+    std::string variantHashes;
     std::string variants = "static const VariantInfo variants[] = {\n";
-    uint32_t resumeCount = 0;
+    uint32_t leaderCount = 0;
     uint32_t variantCount = 0;
     uint32_t textEnd = 0;
     for (const Function& f : prog.functions) {
         std::string& out = bodies[std::min<uint64_t>(options.parts - 1, instructionsBefore * options.parts / instructionsInAll)];
         instructionsBefore += (f.end - f.start) / 4;
 
-        FunctionEmitter emitter(prog, f, -1, options, stats);
+        FunctionEmitter emitter(prog, leaderIndex, f, -1, options, stats);
         out += emitter.emit();
         out += "\n";
 
-        const uint32_t firstResume = resumeCount;
-        for (uint32_t a : f.leaders) {
-            if (a == f.start) continue;
-            resume += (resumeCount % 6 == 0 ? "\t" : " ") + hex(a) + "," + (resumeCount % 6 == 5 ? "\n" : "");
-            ++resumeCount;
+        const uint32_t firstLeader = leaderCount;
+        for (size_t i = 0; i < f.leaders.size(); ++i) {
+            leaders += (leaderCount % 6 == 0 ? "\t" : " ") + hex(f.leaders[i]) + "," + (leaderCount % 6 == 5 ? "\n" : "");
+            hashes += strprintf("%s0x%016llXull,%s", leaderCount % 4 == 0 ? "\t" : " ", segmentHash(f, -1, i), leaderCount % 4 == 3 ? "\n" : "");
+            ++leaderCount;
         }
 
         const uint32_t firstVariant = variantCount;
@@ -686,38 +830,47 @@ std::vector<GeneratedFile> generateFiles(const Program& prog, const GenerateOpti
             // Counted apart: a variant is not more of the program, it is the
             // same place in it again.
             GenerateStats variantStats;
-            FunctionEmitter variantEmitter(prog, f, static_cast<int>(v), options, variantStats);
+            FunctionEmitter variantEmitter(prog, leaderIndex, f, static_cast<int>(v), options, variantStats);
             out += variantEmitter.emit();
             out += "\n";
-            variants += strprintf("\t{&%s, 0x%016llXull, %s},\n", fnName(f, static_cast<int>(v)).c_str(),
-                                  hashOf(f, static_cast<int>(v), variantEmitter.extent()), hex(variantEmitter.extent()).c_str());
+
+            const std::string name = strprintf("variant_hashes_%u", variantCount);
+            variantHashes += "static const uint64_t " + name + "[] = {\n";
+            for (size_t i = 0; i < f.leaders.size(); ++i)
+                variantHashes += strprintf("%s0x%016llXull,%s", i % 4 == 0 ? "\t" : " ", segmentHash(f, static_cast<int>(v), i), i % 4 == 3 ? "\n" : "");
+            variantHashes += (f.leaders.size() % 4 ? "\n" : "") + std::string("};\n\n");
+            variants += strprintf("\t{&%s, %s},\n", fnName(f, static_cast<int>(v)).c_str(), name.c_str());
             ++variantCount;
         }
 
-        table += strprintf("\t{%s, %s, %s, &%s, 0x%016llXull, %u, %u, %u, %u},\n", hex(f.start).c_str(), hex(f.end).c_str(),
-                           hex(emitter.extent()).c_str(), fnName(f, -1).c_str(), hashOf(f, -1, emitter.extent()), firstResume,
-                           resumeCount - firstResume, firstVariant, variantCount - firstVariant);
+        table += strprintf("\t{%s, %s, &%s, %u, %u, %u, %u},\n", hex(f.start).c_str(), hex(f.end).c_str(), fnName(f, -1).c_str(), firstLeader,
+                           leaderCount - firstLeader, firstVariant, variantCount - firstVariant);
         textEnd = std::max(textEnd, f.end);
     }
     table += "};\n\n";
-    if (resumeCount == 0) resume += "\t0,   // (none)\n";
-    else if (resumeCount % 6) resume += "\n";
-    resume += "};\n\n";
-    if (variantCount == 0) variants += "\t{nullptr, 0, 0},   // (none)\n";
+    if (leaderCount % 6) leaders += "\n";
+    leaders += "};\n\n";
+    if (leaderCount % 4) hashes += "\n";
+    hashes += "};\n\n";
+    if (variantCount == 0) variants += "\t{nullptr, nullptr},   // (none)\n";
     variants += "};\n\n";
 
-    std::string tables = table + resume + variants;
+    std::string tables = table + leaders + hashes + variantHashes + variants;
     tables += "const ImageInfo image = {\n";
     tables += "\t" + cstring(options.id) + ",\n";
     tables += "\t" + cstring(prog.elf->name()) + ",\n";
     tables += "\t" + hex(crc) + ",\n";
     tables += "\t" + hex(prog.functions.front().start) + ", " + hex(textEnd) + ",\n";
     tables += strprintf("\tfunctions, %zu,\n", count);
-    tables += strprintf("\tresume_points, %u,\n", resumeCount);
+    tables += strprintf("\tleaders, segment_hashes, %u,\n", leaderCount);
     tables += strprintf("\tvariants, %u,\n", variantCount);
-    tables += "\tstate,\n";
+    tables += "\tblocks,\n";
     tables += "\t" + cstring(kGeneratorName) + ",\n";
     tables += "};\n\n";
+
+    // What the runtime knows of the block that begins at each leader
+    // (recomp.h); zero until it has said.
+    const std::string blocks = strprintf("uint32_t blocks[%u];\n\n", leaderCount);
 
     std::vector<GeneratedFile> files;
     if (!split) {
@@ -725,7 +878,7 @@ std::vector<GeneratedFile> generateFiles(const Program& prog, const GenerateOpti
         out += "#include \"ps2n/recomp.h\"\n\n";
         out += usings + open;
         out += "extern const ImageInfo image;\n";
-        out += strprintf("uint8_t state[%zu];\n\n", count);
+        out += blocks;
         out += declarations + "\n";
         out += bodies[0];
         out += tables + close;
@@ -734,13 +887,13 @@ std::vector<GeneratedFile> generateFiles(const Program& prog, const GenerateOpti
         const std::string include = "#include " + cstring(options.headerName) + "\n\n";
 
         std::string main = banner + include + usings + open;
-        main += strprintf("uint8_t state[%zu];\n\n", count);
+        main += blocks;
         main += tables + close;
         files.push_back({".cpp", std::move(main)});
 
         std::string header = banner + "#pragma once\n\n#include \"ps2n/recomp.h\"\n\n" + open;
         header += "extern const ps2n::ee::ImageInfo image;\n";
-        header += strprintf("extern uint8_t state[%zu];\n\n", count);
+        header += strprintf("extern uint32_t blocks[%u];\n\n", leaderCount);
         header += declarations + "\n" + close;
         files.push_back({".h", std::move(header)});
 

@@ -14,7 +14,7 @@
 //   FD FS FT           FPU or VU register numbers (sa / rd / rt fields)
 //   DEST BC FSF FTF    VU dest mask, broadcast component, fs/ft component selectors
 //   MSADDR PERF        VCALLMS byte address, perf-counter register selector
-//   INTERLOCK          bit 0 of a COP2 transfer: whether it waits for VU0
+//   CREG               the number of a COP0 register (rd field)
 //
 // Instructions without a row (branches, jumps, SYSCALL, BREAK, traps, ERET,
 // SYNC/CACHE/PREF) are handled by the control-flow code of each consumer.

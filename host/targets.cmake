@@ -12,6 +12,8 @@ add_executable(ps2n-host
 	"${CMAKE_CURRENT_LIST_DIR}/main.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/selftest.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/selftest.h"
+	"${CMAKE_CURRENT_LIST_DIR}/sync_trace.cpp"
+	"${CMAKE_CURRENT_LIST_DIR}/sync_trace.h"
 )
 
 # The same include directories pcsx2-gsrunner uses.

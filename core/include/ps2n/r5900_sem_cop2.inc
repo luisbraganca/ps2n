@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Part of the semantic call table; see r5900_sem.inc for the format.
 //
-// COP2: VU0 in macro mode, with its load and store.
+// COP2: VU0 in macro mode. The transfers, and the load and store, are in
+// r5900_sem_cop2_ctl.inc.
 
 #include "ps2n/r5900_sem_cop2_ctl.inc"
 
-S(QMFC2, QMFC2, (RT, FS))
-S(QMTC2, QMTC2, (RT, FS))
 S(VADD, VADD, (DEST, FD, FS, FT))
 S(VSUB, VSUB, (DEST, FD, FS, FT))
 S(VMUL, VMUL, (DEST, FD, FS, FT))
@@ -91,7 +90,3 @@ S(VRGET, VRGET, (DEST, FT))
 S(VRNEXT, VRNEXT, (DEST, FT))
 S(VCALLMS, VCALLMS, (MSADDR))
 S(VCALLMSR, VCALLMSR, ())
-
-// load / store
-S(LQC2, LQC2, (FT, RS, SIMM))
-S(SQC2, SQC2, (FT, RS, SIMM))

@@ -90,35 +90,54 @@ struct WaitLoopScan {
 // holds nothing but `nop`s and one `addi` or `addiu` that adds a negative
 // number to a register, in place. It ends with a `bne` of that register
 // against $zero, back to the block's own first instruction, with a `nop` in
-// the delay slot. And it does not reach a 4 KB page boundary, where the
-// recompiler cuts a block.
+// the delay slot. And it is not cut short on the way there: at a 4 KB page
+// boundary, or where another block already exists (which only the runtime
+// knows, runtime/rec_blocks.cpp).
+
+// Feed it every instruction of a block in order, up to and including the
+// branch that ends it, each with the word that follows it. `possible` then
+// says whether the block is a timeout loop, provided that branch goes back
+// to the block's first instruction; `reg` is the register counted down.
+struct TimeoutLoopScan {
+    int32_t reg = -1;
+    bool possible = true;
+
+    void add(uint32_t code, uint32_t following) {
+        if (!possible) return;
+        const uint32_t opcode = code >> 26, rs = (code >> 21) & 31, rt = (code >> 16) & 31;
+        const int32_t imm = static_cast<int16_t>(code);
+
+        if (opcode == 8 || opcode == 9) {   // addi, addiu
+            if (reg >= 0 || rs != rt || imm >= 0) possible = false;
+            else reg = static_cast<int32_t>(rs);
+        } else if (opcode == 5) {   // bne
+            if (reg != static_cast<int32_t>(rs) || rt != 0 || following != 0) possible = false;
+        } else if (code != 0) {
+            possible = false;
+        }
+    }
+};
+
 struct TimeoutLoop {
     bool found = false;
     uint32_t reg = 0;   // the register counted down
     uint32_t end = 0;   // where execution continues once it is zero: after the delay slot
 };
 
-// Whether a block that begins at `start` is a timeout loop. `read(address)`
-// gives the instruction word at an address.
+// Whether a block that begins at `start`, with no other block in its way, is
+// a timeout loop. `read(address)` gives the instruction word at an address.
 template <typename Read>
 TimeoutLoop findTimeoutLoop(uint32_t start, Read&& read) {
-    int reg = -1;
+    TimeoutLoopScan scan;
     for (uint32_t a = start;; a += 4) {
         if (a != start && (a & 0xFFC) == 0) return {};   // a page boundary
 
         const uint32_t code = read(a);
-        const uint32_t opcode = code >> 26, rs = (code >> 21) & 31, rt = (code >> 16) & 31;
-        const int32_t imm = static_cast<int16_t>(code);
-
-        if (opcode == 8 || opcode == 9) {   // addi, addiu
-            if (reg >= 0 || rs != rt || imm >= 0) return {};
-            reg = static_cast<int>(rs);
-        } else if (opcode == 5) {   // bne
-            if (reg != static_cast<int>(rs) || rt != 0 || read(a + 4) != 0) return {};
-            if (a + 4 + static_cast<uint32_t>(imm * 4) != start) return {};
-            return {true, static_cast<uint32_t>(reg), a + 8};
-        } else if (code != 0) {
-            return {};
+        scan.add(code, read(a + 4));
+        if (!scan.possible) return {};
+        if ((code >> 26) == 5) {   // the bne
+            if (a + 4 + static_cast<uint32_t>(static_cast<int16_t>(code) * 4) != start) return {};
+            return {true, static_cast<uint32_t>(scan.reg), a + 8};
         }
     }
 }

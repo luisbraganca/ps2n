@@ -13,9 +13,9 @@ The run files, pictures included, are under the git-ignored build tree.
 | Step | State |
 |---|---|
 | G0 Baseline | **Done as far as the intro film** (2026-11-11): the game boots from the disc image under stock PCSX2 in `ps2n-host`, takes a scripted button press and plays its intro film. Runs repeat. Not yet: the title screen and beyond; the maintainer looking at the pictures. |
-| G1 The interpreter as reference | **Run for the first 900 frames; its criterion is not met** (2026-11-11): the same console output as under stock PCSX2 and the same picture at frame 900, but not the same picture at every frame. The compiled run is the interpreted run (step G3), so what G3 found open is open here too. |
+| G1 The interpreter as reference | **Done for the first 4,200 frames** (2026-11-11): with everything interpreted the run is the stock run. Same console output, same picture at every frame, and the same place and cycle count at every one of the 38.5 million moments the two can be compared; the registers as well, by way of the compiled run (G3). |
 | G2 The game's code compiled | **Done** (2026-11-11): the boot executable builds into the host, 1,003,452 instructions in 64 files. |
-| G3 The compiled game | **Done for the first 4,200 frames, with one thing open** (2026-11-11): the compiled run is the interpreted run at every one of 47.5 million event tests; after one rebuild none of the executable's code is interpreted; no code outside the executable has run. **Open: the pictures do not all come at the same frame numbers as under stock PCSX2** (the intro film starts four frames later), and why is not established. |
+| G3 The compiled game | **Done for the first 4,200 frames** (2026-11-11): the compiled run is the stock run at every one of those 38.5 million moments, registers included, with the same picture at every frame; it is the interpreted run at every event test; none of the executable's code is interpreted; no code outside the executable has run. |
 | G4 Further into the game | Not begun. |
 | G5 Measurement and report | Not begun. First times are below; they are not yet a measurement of the game. |
 
@@ -40,7 +40,7 @@ $iso = "C:\ps2\killzone\Killzone (Europe) (En,Fr,De,Es,It,Nl).iso"
 $elf = "C:\ps2\killzone\Killzone (Europe) (En,Fr,De,Es,It,Nl)\SCES_520.04"
 $env:PS2N_BIOS = "$HOME\Documents\PCSX2\bios\SCPH-70004_BIOS_V12_PAL_200.BIN"
 
-# The game's executable, compiled into the host (about half a minute):
+# The game's executable, compiled into the host:
 scripts\windows\build.ps1 -Game $elf
 
 # A run: the configuration, how many frames, the controller script.
@@ -49,6 +49,10 @@ scripts\windows\game.ps1 -Image $iso -Config ps2n-static -Frames 4200 -FrameEver
 
 # What a run had to interpret of the game goes into the capture file; build it in:
 scripts\windows\build.ps1 -GameCapture build\game\killzone\capture.toml
+
+# The compiled run against the stock run: at every sync point, and the picture at every frame
+# (17 minutes for both runs, and 3 GB in the build tree while it lasts):
+scripts\windows\game.ps1 -Image $iso -Config same-as-stock -Frames 4200 -FrameEvery 1 -Pad tests\games\killzone\start.pad -Name killzone
 
 # The compiled run against the interpreted run, at every event test:
 scripts\windows\game.ps1 -Image $iso -Config lockstep -Frames 900 -Name killzone
@@ -63,7 +67,10 @@ the test driver); `-frame-every`, which fingerprints and saves the picture
 on display every so many frames; `-pad`, a script of controller input that
 changes at frame boundaries, so that every run gets it at the same moments;
 `-times`; `ps2n-recomp compile --parts`; `ps2n-recomp capture`, which puts
-several runs' reports together.
+several runs' reports together; `-sync` and `-sync-against`, the record of
+sync points that a stock run can write as well, and the `same-as-stock`
+configuration built on it; `ps2n-recomp disasm`; and in the host's report,
+the places where compiled code handed over to the interpreter.
 
 ## What is on the disc
 
@@ -73,7 +80,7 @@ to 5.8 MB: graphics effects, network and online play, going by their names)
 and five data archives.
 
 What `ps2n-recomp info` makes of the two executables (2026-11-11, each in
-about a second):
+about two seconds):
 
 | | `SCES_520.04` | `LOADER.ELF` |
 |---|--:|--:|
@@ -81,23 +88,29 @@ about a second):
 | Code | `00140000`-`00513EF0` | `00100000`-`0016DED8` |
 | Functions | 22,668 | 1,810 |
 | Instructions | 1,003,452 | 112,566 |
-| Block leaders | 196,584 | 22,163 |
-| Delegated to PCSX2's interpreter functions | 4,881 (0.5%) | 319 (0.3%) |
-| Functions that run on into the next | 614 | 145 |
-| Places where a block is left to the interpreter | 538 | 526 |
-| Likely branches left to it when taken | 61 | 88 |
-| Idle loops, timeout loops | 46, 1 | 9, 1 |
+| Block leaders | 197,344 | 22,271 |
+| COP2 instructions, which the runtime carries out | 4,690 | 76 |
+| Other instructions delegated to PCSX2's interpreter functions | 1 (`tlbr`) | 1 (`tlbr`) |
+| Functions that run on into the next | 635 | 146 |
+| Places where a block is left to the interpreter | 536 | 524 |
+| Likely branches left to it when taken | 60 | 87 |
+| `DI` compiled with the instruction after it | 3 | 4 |
+| Branches that may close an idle loop | 46 | 9 |
 
-- Most of what is delegated in the game's executable is VU0: `lqc2` 2,081,
-  `sqc2` 886, `vmadda` 352, `qmtc2` 301, `vcallms` 230, `qmfc2` 217.
-- Of the 538 places left to the interpreter, 470 are words the decoder does
-  not know. All 470 lie in one stretch of 36 KB (`00408000`-`00410FFF`) and
+- Most of the COP2 instructions are transfers, which are PS2Native's own
+  semantics: `lqc2` 2,081, `sqc2` 886, `qmtc2` 301, `qmfc2` 217. The VU0
+  instructions among them are carried out by PCSX2's interpreter functions:
+  `vmadda` 352 and `vcallms` 230 are the most frequent.
+- Of the 536 places left to the interpreter, 472 are words the decoder does
+  not know. All 472 lie in one stretch of 36 KB (`00408000`-`00410FFF`) and
   look like VU micro programs kept in the executable as data, which the
-  analysis took for code. None was reached in the runs below ("blocks
-  finished by the interpreter: 0"). The other 68 have not been looked at.
+  analysis took for code. The other 64 are branches whose delay slot cannot
+  be compiled (54) and blocks that run on past the code that was followed
+  (10); they have not been looked at. None of the 536 was reached in the
+  runs below.
 - The four relocatable modules are code that is not in the executable. The
-  proof of concept left capturing such code open, and so far nothing tells
-  whether any of it has run (see "Open" at the end).
+  proof of concept left capturing such code open, and so far none of it has
+  run (see "Open" at the end).
 - `LOADER.ELF` has not been seen to run.
 
 ## G0: the game under stock PCSX2 (Windows, 2026-11-11)
@@ -117,7 +130,7 @@ as the host goes.
   and are what those screens should be.
 - **Runs repeat.** Two stock runs with the same input show the same picture
   at all eight frame numbers both fingerprinted (300 to 2,400).
-- 4,200 frames take 23.9 s.
+- 4,200 frames take 22.9 s.
 - The controller script is `tests/games/killzone/start.pad`: one press so
   far.
 
@@ -127,19 +140,28 @@ The first 900 frames, no input:
 
 | | Stock PCSX2, recompilers | PS2Native's provider, everything interpreted |
 |---|--:|--:|
-| Wall-clock time of the run | 7.2 s | 31.2 s |
-| EE cycle count at frame 900 | 5,302,548,050 | 5,302,548,032 |
+| Wall-clock time of the run | 7.2 s | 15.4 s |
+| EE cycle count at frame 900 | 5,302,548,050 | the same |
 | Lines printed by the game and the BIOS | 107 | the same 107 |
 | Frame on display | 512x512, fingerprint `C502270840CD4B61` | the same |
 
-- The interpreter ran 2,582,668,250 instructions: 2,449,092,650 of the
-  game's executable (94.8%), the rest the BIOS. 6.0% went through PCSX2's
-  interpreter functions: `sync` 75.2 million, `mfc0` 72.7 million, `mtc0`
-  3.7 million, `cache` 2.4 million, `eret` and `syscall` 0.9 million each.
-- **The game itself executes about 71 million `sync` and 68 million `mfc0`
-  in these 900 frames** (the BIOS's share is 4.3 and 4.8 million). Both are
-  still delegated, in compiled code too.
-- There were 4,330,253 event tests.
+- The interpreter ran 2,582,495,603 instructions: 2,450,943,199 of the
+  game's executable (94.9%), the rest the BIOS. 1,918,685 of them (0.07%)
+  went through PCSX2's interpreter functions.
+- There were 4,327,274 event tests.
+
+4,200 frames, with the button press: 16,834,048,591 instructions, of which
+16,620,421,292 are the executable's, in 99.2 s with nothing drawn.
+
+**The interpreted run is the stock run.** Compared with a stock run at
+every sync point (38,478,822), it is at the same place at the same cycle
+count each time, prints the same 107 lines and shows the same picture at
+each of the 4,199 frames fingerprinted. That comparison was made before the
+interpreter reproduced a defect of PCSX2's recompiler in one COP0 register
+(below), and that register was the one thing that differed; the compiled
+run, made after, has the stock run's registers too, and the interpreted
+run is the compiled run at every event test (G3). "The timing difference"
+below has how this was reached.
 
 ## G2: the game's code compiled (Windows, 2026-11-11)
 
@@ -148,140 +170,192 @@ executable and builds the result into `ps2n-host` beside the test programs.
 
 | | |
 |---|--:|
-| Generated C++ | 115.8 MB in 66 files: 64 parts of at most 2.2 MB, a header, the tables |
-| Time for the recompiler to write it | 1.3 s |
-| Time to rebuild the host after the game's code changed (clang-cl, Release, 20 threads) | 31 s |
-| `ps2n-host.exe` with the game and the 63 test programs | 115 MB |
+| Generated C++ | 152.4 MB in 66 files: 64 parts, a header, the tables |
+| Time for the recompiler to write it | 1.8 s |
+| Time to rebuild the host after the game's code changed (clang-cl, Release, 20 threads) | 119 s |
+| `ps2n-host.exe` with the game and the 63 test programs | 194 MB |
 
-A program of this size does not compile as one file, so the recompiler now
+A program of this size does not compile as one file, so the recompiler
 spreads the functions over a number of files (`--parts`), in address order
 and of about equal size, with a header that declares them.
+
+**Counting time as PCSX2's recompiler does made the generated code larger
+and much slower to compile.** Before, it was 115.8 MB, the host 115 MB, and
+a rebuild after the game's code changed took 31 s. Generated code now asks
+at every label where its block ends, and tests at every label reached from
+the instruction before it whether the block ends there. Nothing has been
+done yet to make that cheaper to compile.
 
 ## G3: the compiled game (Windows, 2026-11-11)
 
 ### The first 900 frames
 
-| | Compiled, first build | Compiled, rebuilt with what the first run reported |
-|---|--:|--:|
-| Wall-clock time of the run | 8.6 s | 8.7 s |
-| EE cycle count at frame 900 | 5,302,548,032 | the same |
-| Event tests | 4,330,253 | the same |
-| Frame on display | `C502270840CD4B61` | the same |
-| Functions compared with memory, found different | 5,033, 0 | 5,033, 0 |
-| Blocks finished by the interpreter | 0 | 0 |
-| Block starts in the executable that had to be interpreted | 464 | **0** |
-| Instructions of the executable interpreted | 5,104 | **0** |
-| Instructions interpreted in all (the BIOS) | 133,580,704 | 133,575,600 |
+| | Compiled |
+|---|--:|
+| Wall-clock time of the run | 7.7 s |
+| EE cycle count at frame 900 | 5,302,548,050 |
+| Event tests | 4,327,274 |
+| Frame on display | `C502270840CD4B61` |
+| Blocks compared with what was compiled, found to be other code | 28,100, 0 |
+| Blocks handed to the interpreter, whole or in part | 0 |
+| Block starts in the executable that had to be interpreted | 0 |
+| Instructions of the executable interpreted | 0 |
+| Instructions interpreted in all (the BIOS) | 131,552,404 |
 
-- The 464 block starts are functions the analysis did not find: small ones
-  that follow another function without a call or a pointer to them that it
-  could see. The run reported their addresses; the recompiler made them
-  entries; nothing of the executable was interpreted after that.
+- **One rebuild is enough.** A build from the executable alone, with no
+  capture file, has to interpret from 463 block starts in 4,200 frames
+  (5,079 instructions of the executable): functions the analysis did not
+  find, small ones that follow another function without a call or a pointer
+  to them that it could see. The run reports their addresses, the
+  recompiler makes them entries, and the next build interprets nothing of
+  the executable. (Before today's change of how time is counted there were
+  464: the one more is at a 4 KB page boundary, where a block can now begin
+  anyway.)
 - **Lockstep: the compiled run is the interpreted run at every one of the
-  4,330,253 event tests** (the same fingerprint of the run, `3D98DFECF5CEE020`).
-- The interpreter's share of the EE's cycles is 3.1%: the BIOS.
+  4,327,274 event tests** (the same fingerprint of the run,
+  `F1AAA21FDD8A4D30`).
+- The interpreter's share of the EE's cycles is 3.05%: the BIOS.
 
 ### 4,200 frames, with the button press
 
 | | Stock PCSX2, recompilers | Compiled |
 |---|--:|--:|
-| Wall-clock time of the run | 23.9 s | 27.9 s |
-| EE cycle count at frame 4,200 | 24,766,740,046 | 24,766,740,042 |
+| Wall-clock time of the run, two runs of each back to back | 22.8 s, 22.9 s | 25.8 s, 25.7 s |
+| The same with nothing drawn (the null renderer) | 11.2 s, 11.1 s | 15.1 s, 15.2 s |
+| EE cycle count at frame 4,200 | 24,766,740,046 | the same |
+| Sync points | 38,478,822 | the same at every one: where the EE is, its cycle count, its registers |
+| The picture at every frame (4,199 fingerprinted) | 2,035 different pictures | the same picture at every frame |
+| Lines printed by the game and the BIOS | 107 | the same 107 |
 | Block starts in the executable that had to be interpreted | | 0 |
-| Instructions interpreted in all | | 213,777,031 (1.1% of the EE's cycles) |
-| of them in the kernel's segments, in the BIOS's program loader (below `00100000`), elsewhere | | 197,728,088, 16,048,943, **0** |
-| Event tests | | 47,546,273 |
-| Pictures at every 300th frame, of 14 | | the first 7 the same, the last 7 not |
+| Blocks handed to the interpreter, whole or in part | | 0 |
+| Instructions of the executable interpreted | | 0 |
+| Instructions interpreted in all | | 213,627,299 (1.11% of the EE's cycles) |
+| of them in the kernel's segments, in the BIOS's program loader (below `00100000`), elsewhere | | 197,395,488, 16,231,811, **0** |
+| Event tests | | 47,705,744 |
 
+- **The compiled run is the stock run.** The two runs' records of sync
+  points, 3 GB each, are the same file byte for byte.
 - **Lockstep over all 4,200 frames: the compiled run is the interpreted run
-  at every one of the 47,546,273 event tests** (fingerprint of the run
-  `9BE6E5CE93E7680C` in both). That run interprets 16,845,109,763
-  instructions, 16,631,332,732 of them the executable's, and takes 405 s for
-  both halves.
+  at every one of the 47,705,744 event tests** (fingerprint of the run
+  `F99B5EFD472E87EC` in both; 302 s for both halves). So the interpreted
+  run is the stock run as well, registers included.
 - **Everything still interpreted is the BIOS.** Not one instruction was
   interpreted in user memory outside the executable, so none of the four
   `.REL` modules has run yet.
-- 1,114,337 system calls. The most frequent, by number: 122, 906,400 times
+- 1,120,141 system calls. The most frequent, by number: 122, 906,382 times
   (216 a frame; `SifGetReg` by ps2sdk's numbering, from memory and not
-  checked here); 64, 65, 67 and 68, about 22,330 times each (creating,
-  deleting, signalling and waiting for a semaphore, by the same numbering:
-  what a blocking call to the IOP does); 100, `FlushCache`, 12,751 times,
-  three a frame.
+  checked here); 5, 45,234 times; 119 and 120, 34,205 and 25,764 times; 64,
+  65, 67 and 68, about 24,770 times each (creating, deleting, signalling
+  and waiting for a semaphore, by the same numbering: what a blocking call
+  to the IOP does). Another 13,552 system calls, `FlushCache`, were not
+  made, as PCSX2's recompiler does not make them.
 - 8,394,871 cycles passed in a timeout loop that was not run (one loop of
-  1,048,576 counts).
+  1,048,576 counts, in 3,885 turns).
+- Of the VU0 instructions that still go through PCSX2's interpreter
+  functions, `vftoi4` ran 168,852 times and `vcallms` 26,240 times.
 
-**The two runs do not show the same picture at every frame, and the
-difference is in time, not in drawing.** With every one of the first 2,599
-frames fingerprinted in both runs:
+## The timing difference: found and removed (Windows, 2026-11-11)
 
-- Up to frame 737 every frame is the same.
-- From 738 to 1,949, 165 frames differ. One was looked at in both runs
-  (frame 923, the copyright screen): the same screen, with nothing the eye
-  can tell apart. What differs is a shimmer on the text, an effect that
-  moves with the game's clock. 118 of the compiled run's pictures in this
-  stretch are pictures stock PCSX2 never shows, and 125 the other way: the
-  effect is drawn at slightly different moments of its animation.
-- The intro film starts at frame 2,121 under stock PCSX2 and at 2,125
-  compiled. Its pictures are the same pictures: from there the compiled
-  run's frame N+4 is stock PCSX2's frame N for 352 of 391 frames looked at
-  (2,200 to 2,590), and never its frame N.
-- Two compiled runs show the same pictures at the same frames, as two stock
-  runs do. So each is repeatable; they differ from each other.
-- The console lines tell the same story earlier still. Both runs print the
-  same 107 lines, but between frames 150 and 220, while the game loads its
-  IOP modules, the EE cycle count at which a line appears is up to 0.42
-  million cycles lower in the compiled run than under stock PCSX2, and then
-  up to 0.32 million higher: up to 7% of a frame, which is 5.9 million
-  cycles.
+**What was seen.** Until today the compiled run and the stock run showed
+the same pictures, but not at the same frames: of the first 2,599 frames,
+165 between 738 and 1,949 differed in a shimmer that moves with the game's
+clock, and the intro film started at frame 2,125 instead of 2,121. The EE's
+cycle counts at the end of the two runs were four cycles apart.
 
-So the game's sense of time, within a frame, is not the same in the two
-runs. **Why is not established.** The EE's cycle counts agree to within a
-few cycles at the end of both runs, but that only shows that both were
-waiting for the same vertical blank; it says nothing about when, within a
-frame, the game finished its work. What is known to differ from PCSX2's
-recompiler in how time is counted is listed in the execution model ("Blocks
-and time") and in the proof-of-concept log ("Open questions"). One of those
-differences concerns writes to COP0's status register (the kernel executes
-`mtc0` about 4,000 times a frame here; to which registers has not been
-counted), and one concerns VU0 through COP2, which the game uses heavily.
-Neither has been shown to be the cause.
+**How the cause was found.** The core lets the IOP catch up with the EE
+from its event test, whatever provider runs the EE. `ps2n-host -sync` writes
+a line at each of those moments (a sync point): where the EE is, its cycle
+count, hashes of its registers. Under stock PCSX2's recompiler too, since
+the host only wraps the core's IOP provider. Two such records side by side
+show the first moment at which two runs differ. For the smallest test
+program that was the second sync point of the run, still in the BIOS: stock
+PCSX2 had counted 109 cycles for one block where PS2Native counted 67. By
+hand, from PCSX2's source, 109 is what its recompiler counts for that block:
+every instruction double, because the processor's configuration register
+still said so when the block was compiled (the block itself changes it),
+and the cycles so far added to the cycle count, rounded down, at each of
+its two writes to COP0.
 
-What was found while looking, and bears on it:
+**The cause.** PCSX2's recompiler counts time by the blocks it compiles,
+and what a block is depends on what had been compiled before it
+([ADR 0011](adr/0011-time-is-counted-as-pcsx2s-recompiler-counts-it.md)
+lists how). No rule about the program alone reproduces that. This game
+reads the EE's count register 73,000 times a frame in a loop that waits for
+a flag, so it sees every cycle of difference.
 
-- **The game spins on the EE's count register.** One instruction, `mfc0
-  $a1, Count` at `0014FE40`, runs 65,850,183 times in the first 900 frames:
-  73,000 times a frame. It is in a function that waits, for up to a second
-  (294,912,000 cycles), for a flag to clear, and on each turn calls a
-  callback and reads the count register to see how long it has waited. How
-  far such a loop gets in a frame depends on what each turn costs, to the
-  cycle, so this game is sensitive to exactly the kind of difference in
-  counting that the execution model lists.
-- PCSX2's recompiler treats that instruction specially: it adds the cycles
-  of the block so far to the cycle count before the read. PS2Native calls
-  PCSX2's interpreter function, which reads the count as of the block's
-  start. For this loop's block the two round to the same total (26 cycles),
-  so this is not shown to be the cause either; but the value read differs
-  by 8 cycles.
-- `FlushCache`, which PCSX2's recompiler does not run but charges 706 cycles
-  for, is called three times a frame. What the BIOS's own routine costs here
-  has not been measured (it executes about 128 `cache` instructions a call),
-  but three calls a frame are too few to explain differences of this size
-  by themselves.
+**What was done.** PS2Native now keeps the record of blocks that PCSX2's
+recompiler would keep, without the code, and counts time by it: first in
+the interpreter, which carries those blocks out; then in generated code,
+which asks at every label where the block that begins there ends
+([execution-model.md](execution-model.md)). PS2Native's own way of counting
+is gone.
 
-**How to find it**, without guessing: the EE cycle count at which each
-console line appears (`-times`) is a measure both runs give. Bring
-PS2Native's counting to PCSX2's recompiler's, one listed difference at a
-time, each checked by lockstep, and watch those numbers converge.
+**What was measured.**
+
+| | Before | Now |
+|---|--:|--:|
+| Test programs whose run is the stock run at every sync point, of 63 | not counted: the one tried parted from it at its second sync point | 59, interpreted and compiled |
+| The game, 4,200 frames: sync points the same as stock | | all 38,478,822 |
+| Frames, of 4,199, that show stock's picture | not all: see above | all |
+| EE cycle count at frame 4,200 against stock's | 4 less | the same |
+| The game interpreted, first 900 frames | 31.2 s | 15.4 s |
+| The game compiled, 4,200 frames, against stock's 22.9 s | 27.9 s | 25.7 s |
+
+- The four test programs whose run is not the stock run are those that
+  print something else than stock PCSX2 on purpose, because the console
+  does, and one that stock PCSX2 crashes on.
+  `tests/same-as-stock-known-differences.cmake` has each with its cause.
+- The test is in the suite: `<suite>/same-as-stock/<program>` runs a
+  program under stock PCSX2 and then compiled and requires the two records
+  to be equal. `scripts\windows\game.ps1 -Config same-as-stock` does the
+  same for a game, pictures included.
+- Whole suite: 2 unit test programs (42 cases) and 447 tests pass in
+  136 s. The 63 new ones are the same-as-stock tests.
+- The interpreter is twice as fast as it was because a block is now decoded
+  once, when it is formed, and not every time it runs.
+- What the compiled game gained is `sync` and `mfc0`: the game's waiting
+  loop executes them 800 million times in these frames, and they are
+  PS2Native's own semantics now instead of calls of PCSX2's interpreter
+  functions (27.9 s to 25.8 s, measured before the change of how time is
+  counted). Counting time the new way then cost nothing that shows in the
+  run time. It did cost in the size of the generated code and in the time
+  to compile it (G2).
+
+**Found on the way.**
+
+- **A defect in PCSX2's recompiler, which PS2Native now reproduces.** When
+  the count register is read, the recompiler brings it up to date with a
+  64-bit addition, and the register that follows it in memory, `EntryHi`,
+  takes the carry: it goes up by one each time the count register
+  overflows, about every fourteen seconds (`recMFC0`, `x86/iCOP0.cpp`;
+  PCSX2's interpreter does not do it). In this run that happens at sync
+  point 3,761,620, around frame 728. It is reproduced so that a run can be
+  held to the stock run register for register; nothing here was seen to
+  depend on it.
+- **`DI` takes effect one instruction late** under PCSX2's recompiler. The
+  game's routine that disables interrupts runs 19 times a frame; generated
+  code first left it to the interpreter (146,950 instructions of the game
+  in 760 frames), and now compiles `DI` together with the instruction that
+  follows it.
+- The test program `cpu/ee/branchdelay` (a branch in a branch's delay slot)
+  now prints what stock PCSX2 prints: PCSX2's recompiler drops the second
+  branch, and so does PS2Native.
 
 ## Open
 
-- **The timing difference above.** Step G1's criterion asks for every
-  difference from stock PCSX2 to be explained. This one is not.
-- **`sync` and `mfc0`.** About 800 million calls of PCSX2's interpreter
-  functions from compiled code in 4,200 frames (410 million `sync`, 402
-  million `mfc0`), nearly all from the one loop above. `sync` does nothing
-  in PCSX2; `mfc0` needs semantics of its own that match the recompiler's,
-  which is also the first step of the timing work.
+- **Speed.** 4,200 frames of logos, a prompt and a film take 25.7 s
+  compiled against 22.9 s under stock PCSX2 with the software renderer, and
+  15.1 s against 11.2 s with nothing drawn. That is not yet a measurement
+  of the game: nothing of a level has run. Where the four seconds go has
+  not been measured either. The BIOS, which is interpreted, accounts for
+  1.1% of the EE's cycles here; translating it ahead of time is
+  [ADR 0007](adr/0007-bios-code-translated-ahead-of-time.md), not started.
+- **What a longer run could meet.** PCSX2's recompiler throws all its
+  blocks away when its code cache is full, and PS2Native cannot know when
+  that is (execution model, "What is not reproduced"). It did not happen in
+  these 4,200 frames. PCSX2 logs it when it does ("EE/iR5900 Recompiler
+  Reset" in `core.log` after the two at start-up), and the same-as-stock
+  comparison would show the runs part there.
 - **Code outside the executable.** None has run yet. When a `.REL` module
   does, its code has to be captured and compiled; the proof of concept left
   that open.
@@ -292,6 +366,3 @@ time, each checked by lockstep, and watch those numbers converge.
 - **The pictures have only been looked at by the AI session.** The
   maintainer has not seen them. They are in
   `build\windows-clang\ps2n\tests\game\killzone\<configuration>`.
-- **Speed.** 4,200 frames of logos, a prompt and a film take 27.9 s compiled
-  against 23.9 s under stock PCSX2, with the software renderer in both. That
-  is not yet a measurement of the game: nothing of a level has run.

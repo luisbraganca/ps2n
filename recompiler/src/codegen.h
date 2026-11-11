@@ -47,9 +47,10 @@ struct GenerateStats {
     size_t tailInstructions = 0;   // instructions compiled a second time for that
     size_t leaves = 0;             // places where the rest of a block is left to the interpreter
     size_t guards = 0;             // likely branches left to it when taken, for what is in their delay slot
+    size_t cop2 = 0;               // COP2 instructions, which the runtime carries out whole
+    size_t delayedDisables = 0;    // DI compiled in one piece with the instruction after it
     size_t variants = 0;           // other versions of functions, from code an earlier run found in memory
-    size_t idleLoops = 0;          // branches that close an idle loop, whose time is skipped
-    size_t timeoutLoops = 0;       // labels at which a timeout loop begins, which is not run
+    size_t idleLoops = 0;          // branches that may close an idle loop, whose time is skipped
 };
 
 // The generated files: the main file first.

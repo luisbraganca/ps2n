@@ -15,8 +15,9 @@ ahead-of-time static recompilation. This repository is a reboot of
   reference projects.
 - [docs/execution-model.md](docs/execution-model.md): how compiled code, the
   fallback interpreter and the PCSX2 core run a program together. Read it
-  before touching `runtime/` or `recompiler/`: the block rule in it is a
-  contract between the two.
+  before touching `runtime/` or `recompiler/`: how time is counted (exactly
+  as PCSX2's EE recompiler counts it, by the blocks it would have formed) is
+  a contract between the two.
 
 ## Status
 
@@ -69,6 +70,14 @@ Decisions:
   deferred until the maintainer chooses. Linux is still required.
 - [ADR 0009](docs/adr/0009-phase-3-first-game-killzone.md): Phase 3 is
   approved; the first game is Killzone (`SCES-52004`).
+- [ADR 0010](docs/adr/0010-pcsx2-fix-goes-upstream-through-the-maintainer.md):
+  the fix for PCSX2's VU0 status-flag bug is offered to PCSX2 by the
+  maintainer; PS2Native carries it in its patch queue only if that stalls.
+- [ADR 0011](docs/adr/0011-time-is-counted-as-pcsx2s-recompiler-counts-it.md):
+  time is counted exactly as PCSX2's EE recompiler counts it. A run on
+  PS2Native is the stock run, sync point for sync point; a difference is a
+  defect to find, unless it comes from an instruction that deliberately
+  follows the console (ADR 0005) and is listed with its cause.
 
 ## Layout, build and test
 
@@ -80,7 +89,8 @@ CMakeLists.txt, core/     build-time tools, a project of their own with no PCSX2
                           instruction decoder, disassembler, assembler, ELF/IRX/SNR2 readers
 recompiler/               ps2n-recomp, in that same project: analysis and C++ generation for EE executables
 runtime/                  what PS2Native adds to the core at run time: the EE provider (dispatcher,
-                          fallback interpreter), instruction semantics, the contract for generated code
+                          fallback interpreter), the record of the blocks PCSX2's recompiler would have formed
+                          (rec_blocks), instruction semantics, the contract for generated code
 host/                     ps2n-host: console frontend for the PCSX2 core, the test bench
 tests/unit/               unit tests of the build-time tools
 tests/                    CTest registration for programs booted on the core, the driver script, the recorded
@@ -115,19 +125,31 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   `tests/sdk/bin`). Configurations: `stock-jit`, `stock-interp`
   (PCSX2 as it ships), `ps2n-ee` (our provider, interpreting), `ps2n-static`
   (our provider, the program compiled ahead of time), `lockstep` (the compiled
-  run compared with the interpreted one at every event test), `never-further`
-  (ADR 0005: the compiled run against the stock run, line by line; CTest
-  runs the two it compares first). Also `selftest/tables-and-semantics`: our
-  instruction semantics against PCSX2's interpreter and recompiler.
+  run compared with the interpreted one at every event test), `same-as-stock`
+  (ADR 0011: the compiled run compared with a stock run at every sync point:
+  place, cycle count, registers), `never-further` (ADR 0005: the compiled
+  run's output against the stock run's, line by line; CTest runs the two it
+  compares first). Also `selftest/tables-and-semantics`: our instruction
+  semantics against PCSX2's interpreter and recompiler.
 - A failing test's files are in `build\windows-clang\ps2n\tests\<test name>`:
   `core.log` (PCSX2's log), `guest.txt`, `actual.txt`.
-- A `lockstep` failure names the event test where the runs part. The
-  execution model's "Comparing two runs" says how to go from there.
+- A `lockstep` failure names the event test where the runs part, a
+  `same-as-stock` failure the sync point. The execution model's "Comparing
+  two runs" says how to go from there (`ps2n-host -sync`, `-sync-against`,
+  `-sync-detail`; they work under stock PCSX2 too).
 - Generated C++ is in `build\windows-clang\ps2n\generated`. To look at what
   the recompiler makes of one program without building:
-  `build\tools-windows\bin\ps2n-recomp.exe info <elf>`.
+  `build\tools-windows\bin\ps2n-recomp.exe info <elf>`. To read code at an
+  address, of an executable or of a raw image such as a BIOS:
+  `ps2n-recomp.exe disasm <file> --at <address> [--count n] [--base address]`.
 - A test that differs from the console recording goes into
-  `tests/ps2autotests-known-differences.cmake` only after its cause is known.
+  `tests/ps2autotests-known-differences.cmake` only after its cause is known;
+  one whose run differs from the stock run, into
+  `tests/same-as-stock-known-differences.cmake`, likewise.
+- After a run, `ps2n-host` reports what the interpreter did. For a game whose
+  image is complete, "instructions inside the executable's code" must be
+  zero; when it is not, the line "compiled code handed over to the
+  interpreter" names the addresses.
 - The Linux scripts have never been run. Only the maintainer can run them.
 - Never run stock `pcsx2-gsrunner` here: it writes into the maintainer's own
   `Documents\PCSX2`.
@@ -149,8 +171,11 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
 - PCSX2 (GPL-3.0+) may be reused with attribution. AnyPS5 is GPL-2.0-only:
   read it for ideas, never copy its code.
 - PCSX2's `AGENTS.md` forbids AI-generated contributions and any automated
-  posting to its GitHub. Never open issues or pull requests there, and never
-  plan on upstreaming a patch.
+  posting to its GitHub. Never open issues or pull requests there, never
+  comment there, and never write what is posted there (code, commit
+  messages, descriptions, replies). The maintainer may contribute a fix
+  themselves; a session may explain and point, no more
+  ([ADR 0010](docs/adr/0010-pcsx2-fix-goes-upstream-through-the-maintainer.md)).
 
 ## Development machine
 

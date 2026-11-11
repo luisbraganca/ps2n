@@ -96,29 +96,37 @@ namespace ps2n::ee
 		uint64_t static_entries = 0;
 		/// Event tests run (PCSX2's _cpuEventTest_Shared), from either.
 		uint64_t event_tests = 0;
-		/// Times a function's place in RAM was compared with what was compiled
-		/// for it: found to be the function or one of its variants, found to
-		/// be something else.
-		uint64_t verified = 0;
-		uint64_t verify_failed = 0;
+		/// Blocks that began at a label of compiled code and whose words were
+		/// compared with what was compiled: all of them, and those that were
+		/// neither a function's code nor one of its variants'.
+		uint64_t blocks_checked = 0;
+		uint64_t blocks_unknown = 0;
+		/// Times compiled code asked about a block and was told to run it; times
+		/// it asked and the interpreter carried the block out in its place (one
+		/// compiled code cannot run as PCSX2's recompiler would, or code nothing
+		/// was compiled from); times it asked about a timeout loop, which nothing
+		/// runs: its time passes.
+		uint64_t blocks_compiled = 0;
+		uint64_t blocks_interpreted_at_labels = 0;
+		uint64_t timeout_loop_entries = 0;
 		/// Times a function was entered while one of its variants was the code
 		/// in RAM (or the reverse), and that ran in its place.
 		uint64_t redirected = 0;
-		/// Functions whose pages are written so often that they are no longer
-		/// write-protected, and are compared with RAM on every entry instead.
-		uint64_t unprotected = 0;
-		/// Times compiled frames were abandoned because code memory was written.
+		/// Times compiled frames were abandoned because another executable started.
 		uint64_t forced_unwinds = 0;
 		/// Times they were abandoned because the host stack had grown too deep.
 		uint64_t stack_unwinds = 0;
 		/// Times compiled code handed the rest of a block to the interpreter.
 		uint64_t left = 0;
-		/// Times a compiled function returned without having executed anything.
-		/// Not zero means the recompiler and the runtime disagree.
-		uint64_t no_progress = 0;
 		/// EE cycles that passed in timeout loops without the loops being run
 		/// (ps2n/waitloop.h), in compiled and in interpreted code.
 		uint64_t timeout_loop_cycles = 0;
+		/// FlushCache calls that were not made, as PCSX2's recompiler does not
+		/// make them; and blocks carried out at another address than they were
+		/// formed at (a mirror of the same memory), which then run as if at the
+		/// first.
+		uint64_t syscalls_skipped = 0;
+		uint64_t other_mirror = 0;
 		/// SYSCALL instructions executed, by the number in $v1 (its low byte;
 		/// the kernel's interrupt-safe variants have the negated number and are
 		/// counted with the plain ones), from compiled and from interpreted code.
@@ -149,6 +157,18 @@ namespace ps2n::ee
 		std::vector<uint32_t> words;
 	};
 	const std::vector<CapturedCode>& GetCapturedCode();
+
+	/// Where compiled code handed over to the interpreter, and how often: the
+	/// instruction from which the rest of a block was left to it
+	/// (Stats::left), or the label at which a whole block was
+	/// (Stats::blocks_interpreted_at_labels). Most frequent first.
+	struct Handover
+	{
+		uint32_t pc;
+		uint64_t count;
+		bool whole_block;
+	};
+	std::vector<Handover> GetHandovers();
 
 	/// Carries out one instruction with PS2Native's own semantics, on the
 	/// core's registers and memory. Returns false, having done nothing, when
