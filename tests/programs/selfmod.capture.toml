@@ -1,0 +1,14 @@
+# What PS2Native had to interpret of selfmod.elf (CRC 76741501).
+# Give this file to the recompiler (ps2n-recomp compile --capture) to have it compiled.
+
+# Addresses at which a block was interpreted.
+entries = [
+  0x00100080,
+]
+
+# Code found in memory in the place of the function at 0x00100080.
+[[code]]
+start = 0x00100080
+words = [
+  0x03e00008, 0x24020002,
+]

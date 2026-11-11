@@ -1,0 +1,14 @@
+-- TEST BEGIN
+bench sum start
+bench sum = ed000000
+bench mem start
+bench mem = 7e800000
+bench call start
+bench call = 00213d05
+bench fpu start
+bench fpu = 2e802000
+bench mmi start
+bench mmi = 80f4b450
+bench jump start
+bench jump = ffffffce
+-- TEST END

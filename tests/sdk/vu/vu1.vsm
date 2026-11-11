@@ -1,0 +1,60 @@
+; VU1 micro program for the vu test (main.c starts it with VIF1 MSCAL once
+; per batch, on alternate halves of a TOP/TOPS double buffer).
+;
+; Absolute data: qw 0-3 a matrix, qw 4 a GIF tag, qw 5.x the log pointer.
+; Batch at TOP: qw 0 = scale (xyz) + vertex count (w), qw 1 = offset (xyz),
+; then count positions, count colors (integers), and room for the GIF packet.
+; Each vertex is transformed, divided by w and mapped to screen space; the
+; packet is sent with XGKICK. The log gets each vertex's fixed-point XYZ and
+; its color converted back to floats, with w = the position's length (ELENG).
+
+        .vu
+        .align 4
+        .global Vu1CodeStart
+        .global Vu1CodeEnd
+Vu1CodeStart:
+        NOP                         lq VF01,0(VI00)
+        NOP                         lq VF02,1(VI00)
+        NOP                         lq VF03,2(VI00)
+        NOP                         lq VF04,3(VI00)
+        NOP                         xtop VI02
+        NOP                         lq VF05,0(VI02)
+        NOP                         lq VF06,1(VI02)
+        NOP                         ilw.w VI03,0(VI02)
+        NOP                         iaddiu VI04,VI02,2
+        NOP                         iadd VI05,VI04,VI03
+        NOP                         iadd VI06,VI05,VI03
+        NOP                         iadd VI09,VI05,VI03
+        NOP                         lq VF07,4(VI00)
+        NOP                         ilw.x VI07,5(VI00)
+        NOP                         sqi VF07,(VI06++)
+vertexLoop:
+        NOP                         lqi VF08,(VI04++)
+        mulax ACC,VF01,VF08x        lqi VF09,(VI05++)
+        madday ACC,VF02,VF08y       NOP
+        maddaz ACC,VF03,VF08z       NOP
+        maddw VF10,VF04,VF08w       NOP
+        NOP                         div Q,VF00w,VF10w
+        NOP                         waitq
+        mulq.xyz VF10,VF10,Q        NOP
+        mulaw.xyz ACC,VF06,VF00w    NOP
+        madd.xyz VF10,VF10,VF05     NOP
+        ftoi4 VF11,VF10             NOP
+        NOP                         sqi VF09,(VI06++)
+        NOP                         sqi VF11,(VI06++)
+        itof0 VF12,VF09             eleng P,VF08
+        NOP                         sqi VF11,(VI07++)
+        NOP                         waitp
+        NOP                         mfp.w VF12,P
+        NOP                         sqi VF12,(VI07++)
+        NOP                         iaddi VI03,VI03,-1
+        NOP                         NOP
+        NOP                         ibne VI03,VI00,vertexLoop
+        NOP                         NOP
+        NOP                         isw.x VI07,5(VI00)
+        NOP                         xgkick VI09
+        NOP[E]                      NOP
+        NOP                         NOP
+
+        .align 4
+Vu1CodeEnd:

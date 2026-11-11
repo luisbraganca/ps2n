@@ -1,0 +1,7 @@
+[submodule "third_party/pcsx2"]
+	path = third_party/pcsx2
+	url = https://github.com/PCSX2/pcsx2.git
+	shallow = true
+[submodule "third_party/ps2autotests"]
+	path = third_party/ps2autotests
+	url = https://github.com/unknownbrackets/ps2autotests.git

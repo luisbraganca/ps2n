@@ -1,0 +1,5 @@
+# The frame tests/sdk/bin/vu.elf has on display four frames after it prints
+# "done", as stock PCSX2 v2.9.170 draws it with its software renderer
+# (recorded 2026-11-10 on Windows, twice, with its recompilers): the size at
+# the internal resolution, and ps2n-host's fingerprint of the colours.
+320x448, fingerprint A74A19105CFC746D

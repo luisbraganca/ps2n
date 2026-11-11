@@ -1,0 +1,10 @@
+# Build trees, downloaded dependency packages, local run data.
+/build/
+/deps/
+
+# Editor and OS droppings.
+.vs/
+.vscode/
+*.user
+Thumbs.db
+.DS_Store

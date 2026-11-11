@@ -1,0 +1,5 @@
+-- TEST BEGIN
+answer = 1
+answer = 2
+answer = 1
+-- TEST END

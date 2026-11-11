@@ -1,0 +1,12 @@
+# Shell scripts must keep Unix line endings, also when checked out on Windows.
+*.sh text eol=lf
+
+# Test programs, their expected outputs and capture files are compared as
+# they are, so they are the same bytes on every platform.
+tests/programs/* text eol=lf
+tests/sdk/*.expected text eol=lf
+tests/sdk/*.frame text eol=lf
+
+# Test programs built elsewhere.
+*.elf binary
+*.irx binary
