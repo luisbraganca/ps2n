@@ -362,7 +362,11 @@ is gone.
 - **Further into the game:** the title screen, the menus, a level. Each
   needs more of the controller script, and then a rebuild for whatever new
   code runs.
-- **A window, sound and a controller** for the maintainer to play it.
+- **A window, sound and a controller** for the maintainer to play it. The
+  window takes PS2Native's icon and a title of its own. What the core can
+  draw over the picture (messages, performance figures, indicators) gets a
+  switch: off for a finished game, on if wanted while bringing one up
+  ([ADR 0012](adr/0012-ps2native-branding-not-pcsx2s.md)).
 - **The pictures have only been looked at by the AI session.** The
   maintainer has not seen them. They are in
   `build\windows-clang\ps2n\tests\game\killzone\<configuration>`.

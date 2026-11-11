@@ -10,3 +10,7 @@ tests/sdk/*.frame text eol=lf
 # Test programs built elsewhere.
 *.elf binary
 *.irx binary
+
+# The brand kit (assets/branding).
+*.png binary
+*.ico binary

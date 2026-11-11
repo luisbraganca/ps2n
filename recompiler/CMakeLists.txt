@@ -14,6 +14,12 @@ target_link_libraries(ps2n_recomp PUBLIC ps2n_core)
 ps2n_set_warnings(ps2n_recomp)
 
 add_executable(ps2n-recomp src/main.cpp)
+if(WIN32)
+    # The PS2Native icon (assets/branding/README.md).
+    target_sources(ps2n-recomp PRIVATE ${PROJECT_SOURCE_DIR}/assets/ps2n.rc)
+    set_source_files_properties(${PROJECT_SOURCE_DIR}/assets/ps2n.rc PROPERTIES
+        OBJECT_DEPENDS ${PROJECT_SOURCE_DIR}/assets/branding/icons/favicon.ico)
+endif()
 target_link_libraries(ps2n-recomp PRIVATE ps2n_recomp)
 ps2n_set_warnings(ps2n-recomp)
 

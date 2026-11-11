@@ -1,0 +1,4 @@
+// The PS2Native icon (16, 32, 48 and 256 px) for the Windows executables:
+// ps2n-recomp.exe and ps2n-host.exe. Explorer shows it, and a window can load
+// it as resource 1. The path is relative to this file.
+1 ICON "branding/icons/favicon.ico"

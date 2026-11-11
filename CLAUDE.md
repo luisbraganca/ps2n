@@ -78,6 +78,14 @@ Decisions:
   PS2Native is the stock run, sync point for sync point; a difference is a
   defect to find, unless it comes from an instruction that deliberately
   follows the console (ADR 0005) and is listed with its cause.
+- [ADR 0012](docs/adr/0012-ps2native-branding-not-pcsx2s.md): what PS2Native
+  builds carries PS2Native's branding (`assets/branding`) and never PCSX2's
+  logo; PS2Native's logo is not put on PCSX2's interface either. PCSX2's
+  name stays wherever it is attribution: logs, license texts, copyright
+  headers, documentation. A finished game shows nothing of what the core can
+  draw over the picture (messages, performance figures, indicators): that is
+  switched off by settings, never restyled by patching PCSX2. Not built yet;
+  it comes with the host's window.
 
 ## Layout, build and test
 
@@ -100,6 +108,8 @@ tests/programs/           our own test programs, in assembly for core's assemble
 tests/sdk/                C test programs built with ps2sdk (prebuilt in bin/), their sources, what stock PCSX2 prints
 tests/games/              controller scripts for runs of a game (button presses we wrote; nothing from a game)
 scripts/windows, linux    build and test entry points
+assets/                   branding/ (the logo, the icons, the colours; its README says which to use where) and
+                          ps2n.rc (the icon of the Windows executables)
 docs/                     brief, assessment, decisions (adr/), proof-of-concept log, game log
 build/, deps/             build trees and downloaded dependency packages; git-ignored
 ```
