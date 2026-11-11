@@ -133,6 +133,16 @@ namespace ps2n::ee
 	// kUnwind.
 	uint32_t systemInstruction(uint32_t pc, uint32_t code, uint32_t eighths);
 
+	// A block begins at `start`, the first instruction of a timeout loop that
+	// counts register `reg` down and whose code ends before `end`
+	// (ps2n/waitloop.h). Lets the time pass that PCSX2's recompiler lets pass
+	// for it, instead of running it. Returns `end` when the count has reached
+	// zero: execution continues there, with nothing more counted and no event
+	// test. Returns `start` when timeout loops are not skipped (PCSX2's WaitLoop
+	// setting is off): the loop's code is to be run. Returns anything else as
+	// eventTest() does: the PC to continue at after an exception, or kUnwind.
+	uint32_t timeoutLoop(uint32_t reg, uint32_t start, uint32_t end);
+
 	// An instruction PS2Native has no semantics of its own for yet, carried out
 	// by the core's interpreter function for it. The second form is for an
 	// instruction in a delay slot.

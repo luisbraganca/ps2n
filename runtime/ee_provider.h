@@ -71,6 +71,14 @@ namespace ps2n::ee
 		/// Of those, inside the compiled executable's code range: what the
 		/// recompiler did not cover.
 		uint64_t interpreted_in_image = 0;
+		/// Of the rest, by where the code is: in the kernel's segments
+		/// (addresses from 80000000, the BIOS in RAM and in ROM); below
+		/// 00100000, where the BIOS puts its program loader; and in the rest
+		/// of user memory, which is code the executable does not hold: a module
+		/// the program loaded, another executable, code it wrote.
+		uint64_t interpreted_kernel = 0;
+		uint64_t interpreted_loader = 0;
+		uint64_t interpreted_elsewhere = 0;
 		/// Of the interpreted ones, executed by calling PCSX2's interpreter
 		/// function rather than PS2Native's own semantics.
 		uint64_t delegated = 0;
@@ -108,6 +116,13 @@ namespace ps2n::ee
 		/// Times a compiled function returned without having executed anything.
 		/// Not zero means the recompiler and the runtime disagree.
 		uint64_t no_progress = 0;
+		/// EE cycles that passed in timeout loops without the loops being run
+		/// (ps2n/waitloop.h), in compiled and in interpreted code.
+		uint64_t timeout_loop_cycles = 0;
+		/// SYSCALL instructions executed, by the number in $v1 (its low byte;
+		/// the kernel's interrupt-safe variants have the negated number and are
+		/// counted with the plain ones), from compiled and from interpreted code.
+		uint64_t syscalls[256] = {};
 
 		/// Fingerprint of the machine's state at every event test so far. Only
 		/// kept while a run is recorded or compared (StartTrace,

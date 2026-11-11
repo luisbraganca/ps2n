@@ -468,4 +468,29 @@ Capture parseCapture(const std::string& text, const std::string& fileName) {
 
 Capture loadCaptureFile(const std::filesystem::path& file) { return parseCapture(readTextFile(file), file.string()); }
 
+void Capture::normalize() {
+    std::sort(entries.begin(), entries.end());
+    entries.erase(std::unique(entries.begin(), entries.end()), entries.end());
+
+    const auto before = [](const Code& a, const Code& b) { return a.start != b.start ? a.start < b.start : a.words < b.words; };
+    const auto same = [](const Code& a, const Code& b) { return a.start == b.start && a.words == b.words; };
+    std::sort(code.begin(), code.end(), before);
+    code.erase(std::unique(code.begin(), code.end(), same), code.end());
+}
+
+std::string writeCapture(const Capture& capture, const std::string& comment) {
+    std::string out;
+    if (!comment.empty()) out += "# " + comment + "\n";
+    out += "# Give this file to the recompiler (ps2n-recomp compile --capture) to have it compiled.\n\n";
+    out += "# Addresses at which a block was interpreted.\nentries = [\n";
+    for (uint32_t a : capture.entries) out += strprintf("  0x%08x,\n", a);
+    out += "]\n";
+    for (const Capture::Code& c : capture.code) {
+        out += strprintf("\n# Code found in memory in the place of the function at 0x%08x.\n[[code]]\nstart = 0x%08x\nwords = [", c.start, c.start);
+        for (size_t i = 0; i < c.words.size(); ++i) out += strprintf("%s0x%08x,", (i % 8) ? " " : "\n  ", c.words[i]);
+        out += "\n]\n";
+    }
+    return out;
+}
+
 } // namespace ps2n::recomp

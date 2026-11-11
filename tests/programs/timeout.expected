@@ -1,0 +1,4 @@
+-- TEST BEGIN
+timeout loop: 8 cycles a count, 0 left
+other loop: 16 cycles a count
+-- TEST END

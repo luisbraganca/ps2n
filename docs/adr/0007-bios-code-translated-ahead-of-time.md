@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Accepted. The reading under "How this record reads the answer" awaits the maintainer's confirmation |
+| Status | Accepted. The maintainer confirmed the reading under "How this record reads the answer" on 2026-11-11: "Yes, do not interpret." |
 | Date | 2026-11-10 (recorded 2026-11-11) |
 | Decided by | Maintainer |
 | Settles | Question 4, second half, of [phase1-feasibility.md](../phase1-feasibility.md), section 16 |
@@ -52,8 +52,8 @@ it instead."
    The first and the third only repeat the brief ("Never distribute
    proprietary BIOS files"). The second is a design constraint.
 
-If the maintainer meant something else by the answer, this record is to be
-corrected before the kernel is translated.
+Asked on 2026-11-11 whether this reading is right, the maintainer answered:
+"Yes, do not interpret."
 
 ## Is it more efficient? What was measured
 

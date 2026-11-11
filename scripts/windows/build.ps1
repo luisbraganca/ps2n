@@ -11,16 +11,26 @@ Needs Visual Studio or its Build Tools with clang-cl, CMake and Ninja, and
 PCSX2's Windows dependency package extracted so that deps\windows-x64\deps
 holds bin, include and lib (docs\poc-log.md says where it comes from).
 
+With -Game, a game's boot executable is compiled into the host as well. The
+executable is read where it is; what is generated from it stays in the build
+tree. The choice is remembered by the build tree until -Game is given again
+(-Game none takes the game out).
+
 .EXAMPLE
 scripts\windows\build.ps1
 scripts\windows\build.ps1 -Target ps2n-host, pcsx2-gsrunner
+scripts\windows\build.ps1 -Game "C:\ps2\killzone\Killzone (Europe) (En,Fr,De,Es,It,Nl)\SCES_520.04"
 #>
 param(
     [string[]]$Target = @('ps2n-host'),
     [string]$BuildDir = 'build\windows-clang',
     [switch]$Reconfigure,
     # Build only the build-time tools (core/, recompiler/) and their unit tests.
-    [switch]$ToolsOnly
+    [switch]$ToolsOnly,
+    # A game's boot executable to compile into the host, or "none".
+    [string]$Game = '',
+    # What earlier runs of the game reported for the recompiler (ps2n-host -capture), or "none".
+    [string]$GameCapture = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,7 +74,19 @@ if ($ToolsOnly) { exit 0 }
 
 # 2. The run-time side (runtime/, host/), inside PCSX2's own CMake project.
 #    Its build runs the recompiler built in step 1 on the test programs.
-if ($Reconfigure -or -not (Test-Path (Join-Path $build 'build.ninja'))) {
+# A game to compile into the host: given here, it is put into the build tree's
+# settings, which keep it until it is given again.
+$gameSettings = @()
+if ($Game) {
+    $gamePath = if ($Game -eq 'none') { '' } else { ForCMake (Resolve-Path -LiteralPath $Game).Path }
+    $gameSettings += "-DPS2N_GAME_ELF=$gamePath"
+}
+if ($GameCapture) {
+    $capturePath = if ($GameCapture -eq 'none') { '' } else { ForCMake (Resolve-Path -LiteralPath $GameCapture).Path }
+    $gameSettings += "-DPS2N_GAME_CAPTURE=$capturePath"
+}
+
+if ($Reconfigure -or $gameSettings -or -not (Test-Path (Join-Path $build 'build.ninja'))) {
     # The flags PCSX2's own CI uses for its Windows CMake build with clang-cl,
     # minus the Qt interface and link-time optimization.
     cmake -S $pcsx2 -B $build -G Ninja `
@@ -75,7 +97,8 @@ if ($Reconfigure -or -not (Test-Path (Join-Path $build 'build.ninja'))) {
         -DENABLE_QT_UI=OFF -DENABLE_TESTS=OFF `
         "-DCMAKE_PROJECT_Pcsx2_INCLUDE=$(ForCMake (Join-Path $root 'cmake\ps2n-inject.cmake'))" `
         "-DPS2N_ROOT=$(ForCMake $root)" `
-        "-DPS2N_RECOMP=$(ForCMake (Join-Path $tools 'bin\ps2n-recomp.exe'))"
+        "-DPS2N_RECOMP=$(ForCMake (Join-Path $tools 'bin\ps2n-recomp.exe'))" `
+        @gameSettings
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 

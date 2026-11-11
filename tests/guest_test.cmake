@@ -28,6 +28,8 @@
 #   STACK_BUDGET  with LOCKSTEP: the host's -stack-budget for the compiled run
 #   CAPTURE_EXPECTED  with EE=ps2n: a capture file; what the run reports for
 #              the recompiler (ps2n-host -capture) must equal it
+#   CAPTURE    with EE=ps2n: write what the run reports for the recompiler to
+#              capture.toml in the scratch directory, without comparing it
 #   REQUIRE_REPORT, REQUIRE_REPORT_2  regular expressions that what the host
 #              prints about the run must match
 #   SECONDS    wall-clock limit (default 60)
@@ -43,6 +45,13 @@
 #              the scratch directory
 #   UPSCALE    internal resolution multiplier for a hardware renderer
 #   SETTLE     frames to run on after the program's last line
+#   PAD        a script of controller input for port 1 (ps2n-host -pad)
+#   FRAME_EVERY  with a renderer that draws: also fingerprint the frame on
+#              display every so many frames, and write each as
+#              frame-<number>.png in the scratch directory
+#   EXPECT_EXIT  how the host is expected to end (default 0, the program's last
+#              line was seen). 2: at the frame limit, for a program that
+#              prints no last line, such as a game run for a number of frames
 #   TIMES      also write times.txt in the scratch directory: the program's
 #              output with the frame and EE cycle count at which each line was
 #              printed (ps2n-host -times), to see where two runs part in time
@@ -91,6 +100,9 @@ if(NOT DEFINED SECONDS)
 endif()
 if(NOT DEFINED FRAMES)
 	set(FRAMES 3600)
+endif()
+if(NOT DEFINED EXPECT_EXIT)
+	set(EXPECT_EXIT 0)
 endif()
 
 if("$ENV{PS2N_BIOS}" STREQUAL "")
@@ -217,6 +229,12 @@ endif()
 if(DEFINED SETTLE)
 	list(APPEND limits -settle ${SETTLE})
 endif()
+if(DEFINED FRAME_EVERY AND NOT "${FRAME_EVERY}" STREQUAL "0")
+	list(APPEND limits -frame-every ${FRAME_EVERY})
+endif()
+if(DEFINED PAD AND NOT "${PAD}" STREQUAL "")
+	list(APPEND limits -pad "${PAD}")
+endif()
 if(DEFINED TIMES AND TIMES)
 	list(APPEND limits -times "${WORK_DIR}/times.txt")
 endif()
@@ -228,8 +246,8 @@ if(LOCKSTEP)
 		-ee ps2n -iop ${IOP} -vu ${VU} -static off ${image}
 		-trace "${WORK_DIR}/interpreted.trace"
 		${limits} "${ELF}")
-	if(NOT exit_code STREQUAL "0")
-		message(FATAL_ERROR "The interpreted run ended with ${exit_code} (0 marker seen, 1 error, 2 frame limit, 3 time limit). Log: ${WORK_DIR}/core-interpreted.log")
+	if(NOT exit_code STREQUAL "${EXPECT_EXIT}")
+		message(FATAL_ERROR "The interpreted run ended with ${exit_code}, not ${EXPECT_EXIT} (0 marker seen, 1 error, 2 frame limit, 3 time limit). Log: ${WORK_DIR}/core-interpreted.log")
 	endif()
 
 	set(stack "")
@@ -245,8 +263,8 @@ if(LOCKSTEP)
 		-trace-against "${WORK_DIR}/interpreted.trace"
 		-capture "${WORK_DIR}/capture.toml"
 		${limits} "${ELF}")
-	if(NOT exit_code STREQUAL "0")
-		message(FATAL_ERROR "The compiled run ended with ${exit_code} (0 marker seen, 1 error, 2 frame limit, 3 time limit). "
+	if(NOT exit_code STREQUAL "${EXPECT_EXIT}")
+		message(FATAL_ERROR "The compiled run ended with ${exit_code}, not ${EXPECT_EXIT} (0 marker seen, 1 error, 2 frame limit, 3 time limit). "
 			"Records of both runs: ${WORK_DIR}/interpreted.trace, ${WORK_DIR}/compiled.trace. Log: ${WORK_DIR}/core.log")
 	endif()
 
@@ -266,7 +284,7 @@ endif()
 set(static "")
 if(EE STREQUAL "ps2n")
 	set(static -static ${STATIC} ${image})
-	if(DEFINED CAPTURE_EXPECTED)
+	if(DEFINED CAPTURE_EXPECTED OR (DEFINED CAPTURE AND CAPTURE))
 		list(APPEND static -capture "${WORK_DIR}/capture.toml")
 	endif()
 endif()
@@ -276,8 +294,8 @@ ps2n_run(""
 	-ee ${EE} -iop ${IOP} -vu ${VU} ${static}
 	${limits} "${ELF}")
 
-if(NOT exit_code STREQUAL "0")
-	message(FATAL_ERROR "ps2n-host ended with ${exit_code} (0 marker seen, 1 error, 2 frame limit, 3 time limit). Log: ${WORK_DIR}/core.log")
+if(NOT exit_code STREQUAL "${EXPECT_EXIT}")
+	message(FATAL_ERROR "ps2n-host ended with ${exit_code}, not ${EXPECT_EXIT} (0 marker seen, 1 error, 2 frame limit, 3 time limit). Log: ${WORK_DIR}/core.log")
 endif()
 
 foreach(requirement IN ITEMS REQUIRE_REPORT REQUIRE_REPORT_2)

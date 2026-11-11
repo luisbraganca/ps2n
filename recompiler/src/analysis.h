@@ -62,6 +62,8 @@ struct Capture {
     std::vector<Code> code;
 
     void add(const Capture& other);
+    // Sorts both lists and drops what is there twice.
+    void normalize();
 };
 
 struct Options {
@@ -109,5 +111,9 @@ Program analyze(const ElfFile& elf, const Options& options = {});
 // '#' starts a comment. Throws ps2n::Error on anything else.
 Capture loadCaptureFile(const std::filesystem::path& file);
 Capture parseCapture(const std::string& text, const std::string& fileName);
+
+// A capture as a file, in the form the host writes and parseCapture() reads.
+// `comment` is its first line.
+std::string writeCapture(const Capture& capture, const std::string& comment);
 
 } // namespace ps2n::recomp

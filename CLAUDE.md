@@ -20,15 +20,22 @@ ahead-of-time static recompilation. This repository is a reboot of
 
 ## Status
 
-**Phase 2 (proof of concept), approved on 2026-11-10, is done on Windows as
-of 2026-11-11. Its Linux step (P5) is deferred by the maintainer. Phase 3
-(the first real game) has not been approved: ask before starting any of it.**
-The steps P0 to P5 and their pass criteria are in section 14 of the
-assessment; [docs/poc-log.md](docs/poc-log.md) records what has been done and
-measured, step by step. Its status table at the top says where things stand,
-and its last section lists the questions that are open, those waiting for the
-maintainer first. Record every decision the maintainer makes as an
+**Phase 3 (the first real game: Killzone) was approved on 2026-11-11 and is
+in progress.** [docs/game-log.md](docs/game-log.md) has its steps, their pass
+criteria and what has been measured; its status table at the top says where
+things stand. Phase 4 needs its own approval.
+
+Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
+deferred by the maintainer. Its steps and criteria are in section 14 of the
+assessment, and [docs/poc-log.md](docs/poc-log.md) records what was done and
+measured. Its last section lists the questions that are open, those waiting
+for the maintainer first. Record every decision the maintainer makes as an
 architecture decision record under `docs/adr/`.
+
+The game is the maintainer's own copy, used where it is: the disc image and
+the files extracted from it are in `C:\ps2\killzone`. Read them, never copy
+them, and keep everything generated from them (C++, captures, pictures) in
+the git-ignored build tree.
 
 Decisions:
 
@@ -60,6 +67,8 @@ Decisions:
   still required at run time. Not started; it comes after the EE.
 - [ADR 0008](docs/adr/0008-linux-run-deferred.md): the first Linux run is
   deferred until the maintainer chooses. Linux is still required.
+- [ADR 0009](docs/adr/0009-phase-3-first-game-killzone.md): Phase 3 is
+  approved; the first game is Killzone (`SCES-52004`).
 
 ## Layout, build and test
 
@@ -76,10 +85,12 @@ host/                     ps2n-host: console frontend for the PCSX2 core, the te
 tests/unit/               unit tests of the build-time tools
 tests/                    CTest registration for programs booted on the core, the driver script, the recorded
                           baselines; recompiles the test programs into the build tree and links them into the host
-tests/programs/           our own test programs, in assembly for core's assembler: selfmod (rewrites its code), bench
+tests/programs/           our own test programs, in assembly for core's assembler: selfmod (rewrites its code), bench,
+                          timeout (a delay loop that PCSX2 does not run)
 tests/sdk/                C test programs built with ps2sdk (prebuilt in bin/), their sources, what stock PCSX2 prints
+tests/games/              controller scripts for runs of a game (button presses we wrote; nothing from a game)
 scripts/windows, linux    build and test entry points
-docs/                     brief, assessment, decisions (adr/), proof-of-concept log
+docs/                     brief, assessment, decisions (adr/), proof-of-concept log, game log
 build/, deps/             build trees and downloaded dependency packages; git-ignored
 ```
 
@@ -90,6 +101,14 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   `Documents\PCSX2\bios`. Tests are skipped, not passed, without one.
 - Speed: `scripts\windows\bench.ps1 -Bios <BIOS image> -Repeat 3` runs
   `tests/programs/bench.s` under each configuration and prints the times.
+- The game: `scripts\windows\build.ps1 -Game <its boot executable>` compiles
+  it into the host (the build tree remembers it; `-GameCapture <file>` adds
+  what runs reported). `scripts\windows\game.ps1 -Image <disc image> -Config
+  <configuration> -Frames <n>` runs it, with `-Pad` for a controller script
+  (`tests/games/<game>/*.pad`), `-FrameEvery` for pictures along the way and
+  `-Capture` to collect what had to be interpreted. `docs/game-log.md`, "How
+  to run it", has the commands. A run's files are in
+  `build\windows-clang\ps2n\tests\game\<name>\<configuration>`.
 - Tests are named `<suite>/<configuration>/<program>`. Suites: `ps2autotests`
   (console recordings), `programs` (our own, `tests/programs/*.s`, built with
   `ps2n-recomp assemble`) and `sdk` (C programs built with ps2sdk, binaries in

@@ -42,22 +42,41 @@ set(PS2N_GENERATED "${CMAKE_BINARY_DIR}/ps2n/generated")
 set(ps2n_image_sources "")
 set(ps2n_image_ids "")
 
-# ps2n_add_image(<id> <elf> [CAPTURE <file>] [COMMENT <text>])
+# ps2n_add_image(<id> <elf> [CAPTURE <file>] [COMMENT <text>] [PARTS <n>])
 # CAPTURE: what an earlier run of the program reported (ps2n-host -capture).
+# PARTS: for a program too large to compile as one file, how many files its
+# functions are spread over (ps2n-recomp compile --parts).
 macro(ps2n_add_image id elf)
-	cmake_parse_arguments(image "" "CAPTURE;COMMENT" "" ${ARGN})
+	cmake_parse_arguments(image "" "CAPTURE;COMMENT;PARTS" "" ${ARGN})
 	set(image_capture "")
 	if(image_CAPTURE)
 		set(image_capture --capture "${image_CAPTURE}")
 	endif()
+
+	# The files the recompiler writes: it names the parts after the main file.
+	set(image_outputs "${PS2N_GENERATED}/${id}.cpp")
+	set(image_parts "")
+	if(image_PARTS AND image_PARTS GREATER 1)
+		set(image_parts --parts ${image_PARTS})
+		list(APPEND image_outputs "${PS2N_GENERATED}/${id}.h")
+		foreach(image_part RANGE 1 ${image_PARTS})
+			if(image_part LESS 10)
+				set(image_part "00${image_part}")
+			elseif(image_part LESS 100)
+				set(image_part "0${image_part}")
+			endif()
+			list(APPEND image_outputs "${PS2N_GENERATED}/${id}_part${image_part}.cpp")
+		endforeach()
+	endif()
+
 	add_custom_command(
-		OUTPUT "${PS2N_GENERATED}/${id}.cpp"
-		COMMAND "${PS2N_RECOMP}" compile "${elf}" --id "${id}" --out "${PS2N_GENERATED}/${id}.cpp" ${image_capture}
+		OUTPUT ${image_outputs}
+		COMMAND "${PS2N_RECOMP}" compile "${elf}" --id "${id}" --out "${PS2N_GENERATED}/${id}.cpp" ${image_capture} ${image_parts}
 		DEPENDS "${elf}" "${PS2N_RECOMP}" ${image_CAPTURE}
 		COMMENT "Recompiling ${image_COMMENT}"
 		VERBATIM
 	)
-	list(APPEND ps2n_image_sources "${PS2N_GENERATED}/${id}.cpp")
+	list(APPEND ps2n_image_sources ${image_outputs})
 	list(APPEND ps2n_image_ids "${id}")
 endmacro()
 
@@ -188,6 +207,7 @@ endforeach()
 # the recompiler's `assemble` command makes the executables, in the build tree.
 set(PS2N_PROGRAMS_ROOT "${PS2N_ROOT}/tests/programs")
 set(PS2N_PROGRAMS_BUILT "${CMAKE_BINARY_DIR}/ps2n/programs")
+include("${PS2N_ROOT}/tests/programs-known-differences.cmake")
 
 file(GLOB program_sources RELATIVE "${PS2N_PROGRAMS_ROOT}" "${PS2N_PROGRAMS_ROOT}/*.s")
 list(SORT program_sources)
@@ -298,6 +318,29 @@ if(EXISTS "${vu_elf}")
 		${frame_run} -DEE=ps2n -DSTATIC=on -DRENDERER=vulkan -DUPSCALE=1 -DFRAME_SIZE=320x448)
 	ps2n_add_guest_test("frames/vulkan-3x/ps2n-static/vu" 120 "frames;gpu;ps2n-static"
 		${frame_run} -DEE=ps2n -DSTATIC=on -DRENDERER=vulkan -DUPSCALE=3 -DFRAME_SIZE=960x1344)
+endif()
+
+# ---- a game (Phase 3) --------------------------------------------------------------
+# A game's boot executable, compiled into the host like the test programs. The
+# executable is the user's own file, outside the repository, and is read where
+# it is; what is generated from it goes into the build tree with the rest and
+# never into the repository. The build scripts set these (-Game, --game).
+set(PS2N_GAME_ELF "" CACHE FILEPATH "A game's boot executable to compile into ps2n-host")
+set(PS2N_GAME_CAPTURE "" CACHE FILEPATH "What earlier runs of the game reported for the recompiler (ps2n-host -capture)")
+set(PS2N_GAME_PARTS "64" CACHE STRING "How many files the game's generated code is spread over")
+if(PS2N_GAME_ELF)
+	if(NOT EXISTS "${PS2N_GAME_ELF}")
+		message(FATAL_ERROR "PS2N_GAME_ELF does not name a file: ${PS2N_GAME_ELF}")
+	endif()
+	set(game_arguments PARTS ${PS2N_GAME_PARTS} COMMENT "the game's executable, ${PS2N_GAME_ELF}")
+	if(PS2N_GAME_CAPTURE)
+		if(NOT EXISTS "${PS2N_GAME_CAPTURE}")
+			message(FATAL_ERROR "PS2N_GAME_CAPTURE does not name a file: ${PS2N_GAME_CAPTURE}")
+		endif()
+		list(APPEND game_arguments CAPTURE "${PS2N_GAME_CAPTURE}")
+	endif()
+	ps2n_add_image(game "${PS2N_GAME_ELF}" ${game_arguments})
+	message(STATUS "PS2Native: the host will hold the compiled code of ${PS2N_GAME_ELF}")
 endif()
 
 # ---- the images, linked into the host ----------------------------------------------

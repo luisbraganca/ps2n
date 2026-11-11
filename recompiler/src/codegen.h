@@ -19,6 +19,22 @@ struct GenerateOptions {
     std::string id;
     // A comment beside every instruction with its address and disassembly.
     bool comments = true;
+    // How many files the functions are spread over. With one, everything is
+    // in a single translation unit and the functions are local to it. With
+    // more, for a program too large to compile as one: the functions go into
+    // that many part files, in address order and of about equal size, a
+    // header declares them, and the main file holds the tables.
+    unsigned parts = 1;
+    // With more than one part: the name the part files include the header by.
+    std::string headerName;
+};
+
+// One generated file. `suffix` tells which, and names it once put after the
+// output's stem: ".cpp" is the main file (the only one when there is one
+// part), ".h" the header, "_part001.cpp" and so on the parts.
+struct GeneratedFile {
+    std::string suffix;
+    std::string text;
 };
 
 struct GenerateStats {
@@ -33,10 +49,18 @@ struct GenerateStats {
     size_t guards = 0;             // likely branches left to it when taken, for what is in their delay slot
     size_t variants = 0;           // other versions of functions, from code an earlier run found in memory
     size_t idleLoops = 0;          // branches that close an idle loop, whose time is skipped
+    size_t timeoutLoops = 0;       // labels at which a timeout loop begins, which is not run
 };
 
-// The generated translation unit.
+// The generated files: the main file first.
+std::vector<GeneratedFile> generateFiles(const Program& prog, const GenerateOptions& options, GenerateStats* stats = nullptr);
+
+// The generated translation unit, for one part.
 std::string generate(const Program& prog, const GenerateOptions& options, GenerateStats* stats = nullptr);
+
+// The suffixes of the files generateFiles() makes for `parts` parts, in its
+// order: what a build system has to know before the recompiler has run.
+std::vector<std::string> generatedSuffixes(unsigned parts);
 
 // A translation unit that lists images for a host: the array
 // `ps2n_images` and its length `ps2n_image_count`.

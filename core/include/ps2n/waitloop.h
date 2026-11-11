@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Idle loops ("wait loops").
+// Loops that only pass time: idle loops ("wait loops"), and further down
+// timeout loops.
 //
 // A program that waits for an interrupt often spins in a loop that does
 // nothing else: the BIOS's idle thread, a game polling a flag. PCSX2's EE
@@ -73,5 +74,53 @@ struct WaitLoopScan {
         idle = false;   // anything else changes the machine
     }
 };
+
+// ---- timeout loops ---------------------------------------------------------------
+//
+// A program that wants time to pass counts a register down in a loop of
+// `nop`s. PCSX2's EE recompiler does not run such a loop either. Entering a
+// block that is one, it lets eight cycles pass for each count left, or as
+// many as there are before the next event, and takes the count down by the
+// cycles that passed, divided by eight (its "timeout loop" skip,
+// recSkipTimeoutLoop() in the same file, part of the WaitLoop speed hack).
+// The eight is fixed, whatever the loop's instructions cost. PS2Native does
+// the same, so that such a loop takes the time it takes under the recompiler.
+//
+// The test is the one recRecompile() makes while it scans a block. The block
+// holds nothing but `nop`s and one `addi` or `addiu` that adds a negative
+// number to a register, in place. It ends with a `bne` of that register
+// against $zero, back to the block's own first instruction, with a `nop` in
+// the delay slot. And it does not reach a 4 KB page boundary, where the
+// recompiler cuts a block.
+struct TimeoutLoop {
+    bool found = false;
+    uint32_t reg = 0;   // the register counted down
+    uint32_t end = 0;   // where execution continues once it is zero: after the delay slot
+};
+
+// Whether a block that begins at `start` is a timeout loop. `read(address)`
+// gives the instruction word at an address.
+template <typename Read>
+TimeoutLoop findTimeoutLoop(uint32_t start, Read&& read) {
+    int reg = -1;
+    for (uint32_t a = start;; a += 4) {
+        if (a != start && (a & 0xFFC) == 0) return {};   // a page boundary
+
+        const uint32_t code = read(a);
+        const uint32_t opcode = code >> 26, rs = (code >> 21) & 31, rt = (code >> 16) & 31;
+        const int32_t imm = static_cast<int16_t>(code);
+
+        if (opcode == 8 || opcode == 9) {   // addi, addiu
+            if (reg >= 0 || rs != rt || imm >= 0) return {};
+            reg = static_cast<int>(rs);
+        } else if (opcode == 5) {   // bne
+            if (reg != static_cast<int>(rs) || rt != 0 || read(a + 4) != 0) return {};
+            if (a + 4 + static_cast<uint32_t>(imm * 4) != start) return {};
+            return {true, static_cast<uint32_t>(reg), a + 8};
+        } else if (code != 0) {
+            return {};
+        }
+    }
+}
 
 } // namespace ps2n::r5900

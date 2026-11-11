@@ -511,6 +511,63 @@ namespace
 			RunEventTest();
 	}
 
+	// Counts a SYSCALL about to be carried out, by its number.
+	__fi void CountSyscall()
+	{
+		const s32 number = cpuRegs.GPR.n.v1.SL[0];
+		s_stats.syscalls[static_cast<u8>(number < 0 ? -number : number)]++;
+	}
+
+	// One entry into the block of a timeout loop (ps2n/waitloop.h), as PCSX2's
+	// recompiler compiles it (recSkipTimeoutLoop, x86/ix86-32/iR5900.cpp). Eight
+	// cycles pass for each count left in `reg`, but time goes no further than
+	// the next event; the count comes down by the cycles that passed, divided
+	// by eight. Returns true when the count has reached zero: the loop is over,
+	// and execution continues after it without an event test. Otherwise an event
+	// test is due with cpuRegs.pc at the loop's first instruction, after which
+	// the block is entered again. The interpreter and compiled code both go
+	// through here, so that they do the same.
+	bool AdvanceTimeoutLoop(u32 reg)
+	{
+		// The recompiler tests this first, before it lets any time pass.
+		if (ps2n::ee::eventDue())
+			return false;
+
+		const u64 before = cpuRegs.cycle;
+		const u64 count = cpuRegs.GPR.r[reg].UL[0];
+		u64 after = before + count * 8;
+		if (cpuRegs.nextEventCycle < after)
+			after = cpuRegs.nextEventCycle;
+		cpuRegs.cycle = after;
+		s_stats.timeout_loop_cycles += after - before;
+
+		// The recompiler writes bits 0 to 31 of the register and leaves the rest.
+		const u32 left = static_cast<u32>(count - ((after - before) >> 3));
+		cpuRegs.GPR.r[reg].UL[0] = left;
+		return left == 0;
+	}
+
+	// At the start of an interpreted block: when a timeout loop begins at
+	// cpuRegs.pc, does what PCSX2's recompiler does in its place and returns
+	// true. Compiled code makes the same test ahead of time, at every label
+	// (emitTimeoutLoop in recompiler/src/codegen.cpp); the two must agree.
+	bool SkipTimeoutLoop()
+	{
+		if (!EmuConfig.Speedhacks.WaitLoop || s_block_eighths != 0 || s_delay_depth != 0)
+			return false;
+
+		const u32 start = cpuRegs.pc;
+		const ps2n::r5900::TimeoutLoop loop = ps2n::r5900::findTimeoutLoop(start, [](u32 address) { return ps2n::ee::read32(address); });
+		if (!loop.found)
+			return false;
+
+		if (AdvanceTimeoutLoop(loop.reg))
+			cpuRegs.pc = loop.end;
+		else
+			RunEventTest();
+		return true;
+	}
+
 	bool StepInstruction();
 
 	void SetLink(u32 reg)
@@ -712,6 +769,12 @@ namespace
 			s_interpreted_eighths_in_image += eighths;
 			s_stats.interpreted_in_image++;
 		}
+		else if (pc >= 0x80000000u)
+			s_stats.interpreted_kernel++;
+		else if (pc < 0x00100000u)
+			s_stats.interpreted_loader++;
+		else
+			s_stats.interpreted_elsewhere++;
 
 		if (in.isControlFlow())
 		{
@@ -729,6 +792,8 @@ namespace
 		{
 			if (ps2n::r5900::forcesEventTest(in))
 				cpuRegs.nextEventCycle = cpuRegs.cycle;
+			if (in.op == Op::SYSCALL)
+				CountSyscall();
 			R5900::GetInstruction(cpuRegs.code).interpret();
 			EndBlock();
 			return true;
@@ -786,6 +851,8 @@ namespace
 	void InterpretBlock()
 	{
 		BootHooks();
+		if (SkipTimeoutLoop())
+			return;
 		while (!StepInstruction())
 		{
 		}
@@ -1081,6 +1148,24 @@ uint32_t ps2n::ee::eventTest(uint32_t next)
 	return MustUnwind() ? kUnwind : cpuRegs.pc;
 }
 
+uint32_t ps2n::ee::timeoutLoop(uint32_t reg, uint32_t start, uint32_t end)
+{
+	if (!EmuConfig.Speedhacks.WaitLoop)
+		return start;
+
+	// What the interpreter does over as many blocks (SkipTimeoutLoop), here in
+	// one call: the same steps and the same event tests at the same moments.
+	for (;;)
+	{
+		if (AdvanceTimeoutLoop(reg))
+			return end;
+
+		const uint32_t next = eventTest(start);
+		if (next != start)
+			return next;
+	}
+}
+
 uint32_t ps2n::ee::systemInstruction(uint32_t pc, uint32_t code, uint32_t eighths)
 {
 	const Insn in(code, pc);
@@ -1091,6 +1176,8 @@ uint32_t ps2n::ee::systemInstruction(uint32_t pc, uint32_t code, uint32_t eighth
 	cpuRegs.branch = 0;
 	if (ps2n::r5900::forcesEventTest(in))
 		cpuRegs.nextEventCycle = cpuRegs.cycle;
+	if (in.op == Op::SYSCALL)
+		CountSyscall();
 
 	R5900::GetInstruction(code).interpret();
 

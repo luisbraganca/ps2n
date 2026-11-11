@@ -34,9 +34,19 @@ void usage() {
         "                         May be given more than once\n"
         "      --no-symbols       ignore the executable's symbol table\n"
         "      --no-comments      leave the disassembly out of the output\n"
+        "      --parts <n>        for a program too large to compile as one file:\n"
+        "                         spread the functions over n files beside the\n"
+        "                         output, <name>_part001.cpp and so on, with a\n"
+        "                         header <name>.h; the output then holds the tables\n"
         "\n"
         "  ps2n-recomp info <elf> [--capture <file>] [--no-symbols]\n"
         "      Prints what the analysis finds, without writing anything.\n"
+        "\n"
+        "  ps2n-recomp capture --out <file> <capture>...\n"
+        "      Puts what several runs reported (the host's -capture files) into one\n"
+        "      file, each address and each piece of code once. The output may be one\n"
+        "      of the inputs: a program that is rebuilt after every run then keeps a\n"
+        "      capture that only grows.\n"
         "\n"
         "  ps2n-recomp registry --out <file.cpp> <id>...\n"
         "      Writes the list of images a host is linked with.\n"
@@ -54,6 +64,7 @@ struct Args {
     std::vector<std::filesystem::path> captures;
     bool symbols = true;
     bool comments = true;
+    unsigned parts = 1;
 };
 
 Args parse(int argc, char** argv) {
@@ -71,6 +82,12 @@ Args parse(int argc, char** argv) {
         else if (arg == "--capture") a.captures.emplace_back(value());
         else if (arg == "--no-symbols") a.symbols = false;
         else if (arg == "--no-comments") a.comments = false;
+        else if (arg == "--parts") {
+            const std::string text = value();
+            const auto n = parseInt(text);
+            if (!n || *n < 1 || *n > 999) throw Error("--parts takes a number from 1 to 999, not '" + text + "'");
+            a.parts = static_cast<unsigned>(*n);
+        }
         else if (startsWith(arg, "--")) throw Error("unknown option " + arg);
         else a.positional.push_back(arg);
     }
@@ -103,11 +120,19 @@ int compile(const Args& a) {
     GenerateOptions go;
     go.id = a.id.empty() ? identifierFor(path.stem().string()) : a.id;
     go.comments = a.comments;
+    go.parts = a.parts;
+    if (go.parts > 1) go.headerName = a.out.stem().string() + ".h";
     GenerateStats stats;
-    const std::string source = generate(prog, go, &stats);
+    const std::vector<GeneratedFile> files = generateFiles(prog, go, &stats);
 
+    // The main file is the output as named; the others are beside it, named
+    // after it. A file that would not change is left alone, so that only the
+    // parts that did change are compiled again.
     if (a.out.has_parent_path()) std::filesystem::create_directories(a.out.parent_path());
-    writeFileIfChanged(a.out, source);
+    for (const GeneratedFile& file : files) {
+        const std::filesystem::path path = file.suffix == ".cpp" ? a.out : a.out.parent_path() / (a.out.stem().string() + file.suffix);
+        writeFileIfChanged(path, file.text);
+    }
 
     std::printf("%s: %zu functions, %zu instructions, %zu block leaders; %zu delegated (%.1f%%); "
                 "%zu functions run on into the next (%zu instructions); left to the interpreter: %zu places, "
@@ -140,6 +165,26 @@ int info(const Args& a) {
     std::printf("  %zu places where the rest of a block is left to the interpreter\n", stats.leaves);
     std::printf("  %zu likely branches left to the interpreter when taken, for what is in their delay slot\n", stats.guards);
     std::printf("  %zu branches that close an idle loop\n", stats.idleLoops);
+    std::printf("  %zu timeout loops, whose time passes without them being run\n", stats.timeoutLoops);
+    return 0;
+}
+
+int capture(const Args& a) {
+    if (a.out.empty()) throw Error("capture needs --out <file>");
+    if (a.positional.empty()) throw Error("capture takes one or more capture files");
+
+    Capture all;
+    for (const std::string& file : a.positional) {
+        // The output may be named among the inputs before it exists.
+        if (!std::filesystem::exists(file) && std::filesystem::path(file) == a.out) continue;
+        all.add(loadCaptureFile(file));
+    }
+    all.normalize();
+
+    if (a.out.has_parent_path()) std::filesystem::create_directories(a.out.parent_path());
+    writeFileIfChanged(a.out, writeCapture(all, "What runs of a program reported for the recompiler, put together by ps2n-recomp capture."));
+    std::printf("%s: %zu addresses at which a block was interpreted, %zu pieces of code found in memory\n", a.out.string().c_str(),
+                all.entries.size(), all.code.size());
     return 0;
 }
 
@@ -173,6 +218,7 @@ int main(int argc, char** argv) {
         const Args a = parse(argc, argv);
         if (a.command == "compile") return compile(a);
         if (a.command == "info") return info(a);
+        if (a.command == "capture") return capture(a);
         if (a.command == "registry") return registry(a);
         if (a.command == "assemble") return assemble(a);
         throw Error("unknown command '" + a.command + "'");

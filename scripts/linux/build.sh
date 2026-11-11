@@ -31,7 +31,13 @@
 # while and downloads their sources.
 #
 # Usage:
-#   scripts/linux/build.sh [--reconfigure] [target ...]     (default target: ps2n-host)
+#   scripts/linux/build.sh [--reconfigure] [--game <elf>] [--game-capture <file>] [target ...]
+#
+# The default target is ps2n-host. With --game, a game's boot executable is
+# compiled into the host as well. It is read where it is; what is generated
+# from it stays in the build tree. The build tree remembers the choice until
+# --game is given again ("--game none" takes the game out). --game-capture
+# names what earlier runs of the game reported (ps2n-host -capture).
 
 set -euo pipefail
 
@@ -42,11 +48,30 @@ build="$root/build/linux-clang"
 
 reconfigure=0
 targets=()
-for arg in "$@"; do
-	case "$arg" in
+game_settings=()
+while [ "$#" -gt 0 ]; do
+	case "$1" in
 		--reconfigure) reconfigure=1 ;;
-		*) targets+=("$arg") ;;
+		--game|--game-capture)
+			if [ "$#" -lt 2 ]; then
+				echo "$1 needs a file name, or none" >&2
+				exit 1
+			fi
+			value=""
+			if [ "$2" != "none" ]; then
+				value="$(realpath "$2")"
+			fi
+			if [ "$1" = "--game" ]; then
+				game_settings+=("-DPS2N_GAME_ELF=$value")
+			else
+				game_settings+=("-DPS2N_GAME_CAPTURE=$value")
+			fi
+			reconfigure=1
+			shift
+			;;
+		*) targets+=("$1") ;;
 	esac
+	shift
 done
 if [ "${#targets[@]}" -eq 0 ]; then
 	targets=(ps2n-host)
@@ -99,7 +124,8 @@ if [ "$reconfigure" -eq 1 ] || [ ! -f "$build/build.ninja" ]; then
 		-DENABLE_QT_UI=OFF -DENABLE_TESTS=OFF \
 		-DCMAKE_PROJECT_Pcsx2_INCLUDE="$root/cmake/ps2n-inject.cmake" \
 		-DPS2N_ROOT="$root" \
-		-DPS2N_RECOMP="$tools/bin/ps2n-recomp"
+		-DPS2N_RECOMP="$tools/bin/ps2n-recomp" \
+		${game_settings[@]+"${game_settings[@]}"}
 fi
 
 cmake --build "$build" --target "${targets[@]}"

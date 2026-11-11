@@ -384,6 +384,124 @@ _start: lw    $v0, 0($a0)          # 00100000
     CHECK(!constant.idle);
 }
 
+TEST_CASE(a_large_program_is_spread_over_several_files) {
+    const ElfFile elf = assemble(kCallsAndBranches);
+    const Program prog = analyze(elf);
+
+    GenerateOptions go;
+    go.id = "test";
+    go.parts = 2;
+    go.headerName = "test.h";
+    const std::vector<GeneratedFile> files = generateFiles(prog, go);
+    CHECK_EQ(files.size(), size_t{4});
+    CHECK(files[0].suffix == ".cpp" && files[1].suffix == ".h" && files[2].suffix == "_part001.cpp" && files[3].suffix == "_part002.cpp");
+
+    // The header declares what the parts share. Nothing is local to a file.
+    CHECK_CONTAINS(files[1].text, "#pragma once");
+    CHECK_CONTAINS(files[1].text, "extern const ps2n::ee::ImageInfo image;");
+    CHECK_CONTAINS(files[1].text, "extern uint8_t state[2];");
+    CHECK_CONTAINS(files[1].text, "\nuint32_t fn_00100000(uint32_t pc);");
+    CHECK_CONTAINS(files[1].text, "\nuint32_t fn_00100028(uint32_t pc);");
+
+    // The main file holds the tables and no function.
+    CHECK_CONTAINS(files[0].text, "#include \"test.h\"");
+    CHECK_CONTAINS(files[0].text, "uint8_t state[2];");
+    CHECK_CONTAINS(files[0].text, "static const FunctionInfo functions[] = {");
+    CHECK_CONTAINS(files[0].text, "const ImageInfo image = {");
+    CHECK(!contains(files[0].text, "PS2N_ENTER"));
+
+    // The functions follow each other in address order: eight instructions in
+    // the first part, two in the second. A call across parts is the same call.
+    CHECK_CONTAINS(files[2].text, "#include \"test.h\"");
+    CHECK_CONTAINS(files[2].text, "\nuint32_t fn_00100000(uint32_t pc)\n{");
+    CHECK_CONTAINS(files[2].text, "PS2N_CALL(fn_00100028, 0x00100028u, 0x00100014u);");
+    CHECK(!contains(files[2].text, "fn_00100028(uint32_t pc)\n{"));
+    CHECK_CONTAINS(files[3].text, "\nuint32_t fn_00100028(uint32_t pc)\n{");
+
+    // One part is one file, with everything local to it, as before.
+    CHECK(generatedSuffixes(1) == std::vector<std::string>{".cpp"});
+    CHECK(generatedSuffixes(2) == (std::vector<std::string>{".cpp", ".h", "_part001.cpp", "_part002.cpp"}));
+    const std::string single = generateFor(elf);
+    CHECK_CONTAINS(single, "static uint32_t fn_00100000(uint32_t pc)\n{");
+    CHECK_THROWS(generate(prog, go));   // generate() is for one part
+}
+
+TEST_CASE(timeout_loops_are_not_run) {
+    // PCSX2's recompiler does not run a loop of nops that counts a register
+    // down; it lets eight cycles a count pass instead. The test for such a
+    // loop is its own (ps2n/waitloop.h).
+    const ElfFile elf = assemble(R"(
+        .text
+        .globl _start
+_start: lui   $v0, 0x10            # 00100000
+1:      nop                        # 00100004  ps2sdk's delay loop
+        nop                        # 00100008
+        addiu $v0, $v0, -1         # 0010000C
+        bne   $v0, $zero, 1b       # 00100010
+        nop                        # 00100014
+2:      nop                        # 00100018  the decrement in the delay slot: an ordinary loop
+        bne   $v1, $zero, 2b       # 0010001C
+        addiu $v1, $v1, -1         # 00100020
+        jr    $ra                  # 00100024
+        nop                        # 00100028
+)");
+    const Program prog = analyze(elf);
+    const auto read = [&](uint32_t a) { return prog.inCode(a) ? prog.word(a) : 0xFFFFFFFFu; };
+
+    const r5900::TimeoutLoop loop = r5900::findTimeoutLoop(0x00100004u, read);
+    CHECK(loop.found);
+    CHECK_EQ(loop.reg, 2u);                 // $v0
+    CHECK_EQ(loop.end, 0x00100018u);        // after the delay slot
+    CHECK(!r5900::findTimeoutLoop(0x00100000u, read).found);   // the block must begin where the branch goes
+    CHECK(!r5900::findTimeoutLoop(0x00100008u, read).found);
+    CHECK(!r5900::findTimeoutLoop(0x00100018u, read).found);   // the decrement comes after the branch
+
+    GenerateStats stats;
+    const std::string code = generateFor(elf, &stats);
+    CHECK_EQ(stats.timeoutLoops, size_t{1});
+    // Only when a block begins at the label: nothing counted since the last block ended.
+    CHECK_CONTAINS(code, "L_00100004:\n");
+    CHECK_CONTAINS(code, "if (acc == 0)");
+    CHECK_CONTAINS(code, "const uint32_t next = timeoutLoop(V0, 0x00100004u, 0x00100018u);");
+    CHECK_CONTAINS(code, "if (next == 0x00100018u)");
+    CHECK_CONTAINS(code, "goto L_00100018;");
+    CHECK_CONTAINS(code, "if (next != 0x00100004u)");
+    // The loop is compiled all the same, for the first time round, which the
+    // block before runs into, and for when PCSX2's setting switches the skip off.
+    CHECK_CONTAINS(code, "ADDIU(V0, V0, -1);");
+}
+
+TEST_CASE(what_is_not_a_timeout_loop) {
+    // One instruction word per case, in the place of the decrement or of the
+    // branch of the loop: nop; <decrement>; <branch back to the nop>; nop.
+    const auto found = [](uint32_t decrement, uint32_t branch, uint32_t slot = 0, uint32_t start = 0x00100000u) {
+        const uint32_t words[] = {0, decrement, branch, slot};
+        return r5900::findTimeoutLoop(start, [&](uint32_t a) {
+            const uint32_t i = (a - start) / 4;
+            return i < 4 ? words[i] : 0xFFFFFFFFu;
+        }).found;
+    };
+    const uint32_t kDecrement = 0x2442FFFFu;   // addiu $v0, $v0, -1
+    const uint32_t kBranch = 0x1440FFFDu;      // bne $v0, $zero, back by three instructions
+
+    CHECK(found(kDecrement, kBranch));
+    CHECK(found(0x2042FFFFu, kBranch));        // addi counts as well
+    CHECK(found(0x2442FFF0u, kBranch));        // any negative step
+    CHECK(!found(0x24420001u, kBranch));       // counting up
+    CHECK(!found(0x2462FFFFu, kBranch));       // addiu $v0, $v1, -1: not in place
+    CHECK(!found(kDecrement, 0x1443FFFDu));    // bne $v0, $v1: not against $zero
+    CHECK(!found(kDecrement, 0x1460FFFDu));    // bne $v1, $zero: another register
+    CHECK(!found(kDecrement, 0x1040FFFDu));    // beq
+    CHECK(!found(kDecrement, 0x1440FFFEu));    // not back to the block's first instruction
+    CHECK(!found(kDecrement, kBranch, 0x24630001u));   // something in the delay slot
+    CHECK(!found(0x00021040u, kBranch));       // sll $v0, $v0, 1: something else in the loop
+    CHECK(!found(0, kBranch));                 // no decrement at all
+    // Cut by a 4 KB page boundary, as the recompiler cuts the block there:
+    // the nop is the last instruction of a page.
+    CHECK(!found(kDecrement, kBranch, 0, 0x00100FFCu));
+    CHECK(found(kDecrement, kBranch, 0, 0x00100FF0u));   // ends with the page: whole
+}
+
 TEST_CASE(capture_files_are_read) {
     const Capture capture = parseCapture(R"(
 # what a run reported
@@ -410,6 +528,19 @@ words = [ 0x00000000 ]
     CHECK(capture.code[1].words == (std::vector<uint32_t>{0u}));
 
     CHECK(parseCapture("entries = []\n", "empty.toml").entries.empty());
+
+    // Several runs' reports become one: every address and every piece of code
+    // once, in order, and what is written reads back as the same.
+    Capture all = capture;
+    all.add(parseCapture("entries = [ 0x00100090, 0x00100010 ]\n[[code]]\nstart = 0x00100080\nwords = [ 0x03e00008, 0x24020002 ]\n"
+                         "[[code]]\nstart = 0x00100080\nwords = [ 0x03e00008, 0x24020003 ]\n", "second.toml"));
+    all.normalize();
+    CHECK(all.entries == (std::vector<uint32_t>{0x00100010u, 0x00100080u, 0x00100090u, 0x001000A0u}));
+    CHECK_EQ(all.code.size(), size_t{3});   // the same code twice counts once; other code in the same place stays
+    const Capture again = parseCapture(writeCapture(all, "a comment"), "written.toml");
+    CHECK(again.entries == all.entries);
+    CHECK_EQ(again.code.size(), size_t{3});
+    CHECK(again.code[1].words == (std::vector<uint32_t>{0x03E00008u, 0x24020003u}));
 
     CHECK_THROWS(parseCapture("entries = [ 0x10\n", "x"));                          // not closed
     CHECK_THROWS(parseCapture("entries = [ banana ]\n", "x"));                      // not a number

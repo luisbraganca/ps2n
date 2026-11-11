@@ -50,6 +50,7 @@
 #include "pcsx2/MTGS.h"
 #include "pcsx2/R5900.h"
 #include "pcsx2/SIO/Pad/Pad.h"
+#include "pcsx2/SIO/Pad/PadDualshock2.h"
 #include "pcsx2/VMManager.h"
 
 // The executables compiled ahead of time that this host is linked with: a list
@@ -119,6 +120,8 @@ namespace
 		u32 upscale = 1; // internal resolution, for the hardware renderers
 		u32 settle_frames = 0; // frames to run on after the marker before stopping
 		std::string frame_path; // where the last displayed frame is written, as an image
+		u32 frame_every = 0; // when not zero: the frame on display is also fingerprinted every so many frames
+		std::string pad_path; // a script of controller input for port 1
 		ps2n::selftest::Options selftest_options;
 	};
 
@@ -155,9 +158,23 @@ namespace
 	std::deque<std::function<void()>> s_queue;
 
 	// The frame on display when the run was stopped: its size and fingerprint,
-	// in words, for the report. CPU thread only.
+	// in words, for the report. Before it, the same for the frames looked at
+	// along the way (-frame-every). CPU thread only.
 	std::string s_frame_line;
+	std::vector<std::string> s_frame_lines;
 	u32 s_frames_since_marker = 0;
+
+	// Scripted controller input (-pad): what the controller in port 1 is made
+	// to report from a given frame on, in frame order, and how far the run has
+	// got in it. CPU thread only once the machine runs.
+	struct PadEvent
+	{
+		u32 frame;
+		u32 input; // PadDualshock2::Inputs
+		float value; // 0 released, 1 fully pressed or pushed
+	};
+	std::vector<PadEvent> s_pad_events;
+	size_t s_pad_next = 0;
 
 	// The workload a benchmark program is running, and what has been measured.
 	std::string s_bench_name;
@@ -209,8 +226,20 @@ namespace
 			"                     no window; the last displayed frame is fingerprinted.\n"
 			"  -upscale <n>       Internal resolution multiplier for a hardware renderer.\n"
 			"  -frame <file>      Write the last displayed frame to this image file (.png).\n"
+			"  -frame-every <n>   Fingerprint the frame on display every n frames as well,\n"
+			"                     to see where two runs show different pictures. With\n"
+			"                     -frame, each is also written, with its frame number in\n"
+			"                     the file name.\n"
 			"  -settle <n>        Run this many frames on after the marker line before\n"
 			"                     stopping, so that what was drawn last is displayed.\n"
+			"  -pad <file>        Controller input for port 1, from a script: one line for\n"
+			"                     each press, \"<frame> <input> [<frames held> [<value>]]\".\n"
+			"                     Inputs: up down left right triangle circle cross square\n"
+			"                     select start l1 l2 r1 r2 l3 r3, and for the sticks l_up\n"
+			"                     l_down l_left l_right r_up r_down r_left r_right. Held\n"
+			"                     for 2 frames unless said; the value, 0 to 1, is how far a\n"
+			"                     stick is pushed. The input changes at frame boundaries, so\n"
+			"                     that every run gets it at the same moments.\n"
 			"  -until <text>      Stop once the program prints a line containing this\n"
 			"                     (default \"-- TEST END\").\n"
 			"  -frames <n>        Stop after this many frames (default 3600).\n"
@@ -261,6 +290,8 @@ namespace
 				o.capture_path = argv[++i];
 			else if (is("-times") && has_value)
 				o.times_path = argv[++i];
+			else if (is("-pad") && has_value)
+				o.pad_path = argv[++i];
 			else if (is("-image") && has_value)
 				o.image_id = argv[++i];
 			else if (is("-trace") && has_value)
@@ -387,6 +418,16 @@ namespace
 			}
 			else if (is("-frame") && has_value)
 				o.frame_path = argv[++i];
+			else if (is("-frame-every") && has_value)
+			{
+				const std::optional<u32> n = StringUtil::FromChars<u32>(argv[++i]);
+				if (!n || *n == 0)
+				{
+					std::fputs("ps2n-host: -frame-every takes a positive number of frames\n", stderr);
+					return false;
+				}
+				o.frame_every = *n;
+			}
 			else if (is("-frames") && has_value)
 			{
 				const std::optional<u32> n = StringUtil::FromChars<u32>(argv[++i]);
@@ -437,8 +478,77 @@ namespace
 		// (FileSystem::GetWin32Path in common/FileSystem.cpp). Build tools pass
 		// forward slashes, so every path is put in the platform's form here.
 		for (std::string* path : {&o.boot_path, &o.bios_path, &o.data_dir, &o.out_path, &o.times_path, &o.log_path, &o.capture_path,
-				 &o.trace_path, &o.trace_against_path, &o.frame_path})
+				 &o.trace_path, &o.trace_against_path, &o.frame_path, &o.pad_path})
 			Path::ToNativePath(path);
+		return true;
+	}
+
+	// Reads a script of controller input (-pad; PrintUsage() has the format).
+	bool LoadPadScript(const std::string& path)
+	{
+		static const struct
+		{
+			const char* name;
+			u32 input;
+		} kInputs[] = {
+			{"up", PadDualshock2::PAD_UP}, {"right", PadDualshock2::PAD_RIGHT}, {"down", PadDualshock2::PAD_DOWN},
+			{"left", PadDualshock2::PAD_LEFT}, {"triangle", PadDualshock2::PAD_TRIANGLE}, {"circle", PadDualshock2::PAD_CIRCLE},
+			{"cross", PadDualshock2::PAD_CROSS}, {"square", PadDualshock2::PAD_SQUARE}, {"select", PadDualshock2::PAD_SELECT},
+			{"start", PadDualshock2::PAD_START}, {"l1", PadDualshock2::PAD_L1}, {"l2", PadDualshock2::PAD_L2},
+			{"r1", PadDualshock2::PAD_R1}, {"r2", PadDualshock2::PAD_R2}, {"l3", PadDualshock2::PAD_L3},
+			{"r3", PadDualshock2::PAD_R3}, {"l_up", PadDualshock2::PAD_L_UP}, {"l_right", PadDualshock2::PAD_L_RIGHT},
+			{"l_down", PadDualshock2::PAD_L_DOWN}, {"l_left", PadDualshock2::PAD_L_LEFT}, {"r_up", PadDualshock2::PAD_R_UP},
+			{"r_right", PadDualshock2::PAD_R_RIGHT}, {"r_down", PadDualshock2::PAD_R_DOWN}, {"r_left", PadDualshock2::PAD_R_LEFT},
+		};
+
+		const std::optional<std::string> text = FileSystem::ReadFileToString(path.c_str());
+		if (!text)
+		{
+			std::fprintf(stderr, "ps2n-host: cannot read %s\n", path.c_str());
+			return false;
+		}
+
+		u32 line_number = 0;
+		for (std::string_view line : StringUtil::SplitString(*text, '\n', false))
+		{
+			line_number++;
+			if (const size_t hash = line.find('#'); hash != std::string_view::npos)
+				line = line.substr(0, hash);
+			std::string columns(line);
+			for (char& c : columns)
+			{
+				if (c == '\t' || c == '\r')
+					c = ' ';
+			}
+			const std::vector<std::string_view> words = StringUtil::SplitString(columns, ' ', true);
+			if (words.empty())
+				continue;
+
+			const std::optional<u32> frame = StringUtil::FromChars<u32>(words[0]);
+			const std::optional<u32> held = words.size() > 2 ? StringUtil::FromChars<u32>(words[2]) : std::optional<u32>(2);
+			const std::optional<float> value = words.size() > 3 ? StringUtil::FromChars<float>(words[3]) : std::optional<float>(1.0f);
+			std::optional<u32> input;
+			if (words.size() > 1)
+			{
+				for (const auto& known : kInputs)
+				{
+					if (words[1] == known.name)
+						input = known.input;
+				}
+			}
+			if (!frame || !input || !held || *held == 0 || !value || *value < 0.0f || *value > 1.0f || words.size() > 4)
+			{
+				std::fprintf(stderr, "ps2n-host: %s, line %u: expected \"<frame> <input> [<frames held> [<value from 0 to 1>]]\"\n",
+					path.c_str(), line_number);
+				return false;
+			}
+
+			s_pad_events.push_back({*frame, *input, *value});
+			s_pad_events.push_back({*frame + *held, *input, 0.0f});
+		}
+
+		// In frame order; at the same frame, as the script has them.
+		std::stable_sort(s_pad_events.begin(), s_pad_events.end(), [](const PadEvent& a, const PadEvent& b) { return a.frame < b.frame; });
 		return true;
 	}
 
@@ -681,16 +791,21 @@ namespace
 	// Reads back the frame the GS has on display and fingerprints it, so that
 	// two runs can be held to having drawn the same picture. At the internal
 	// resolution, without the aspect-ratio correction a window would apply.
-	void CaptureFrame()
+	// `along_the_way`: one of the frames looked at before the run stops
+	// (-frame-every), reported and named with its frame number.
+	void CaptureFrame(bool along_the_way = false)
 	{
 		if (s_options.renderer == GSRendererType::Null)
 			return;
+
+		const std::string label = along_the_way ? fmt::format("frame {}: ", s_frames) : std::string("frame ");
+		std::string& line = along_the_way ? s_frame_lines.emplace_back() : s_frame_line;
 
 		u32 width = 0, height = 0;
 		std::vector<u32> pixels;
 		if (!MTGS::SaveMemorySnapshot(0, 0, false, false, &width, &height, &pixels) || pixels.empty())
 		{
-			s_frame_line = "ps2n-host: no frame was on display";
+			line = along_the_way ? fmt::format("ps2n-host: {}nothing on display", label) : std::string("ps2n-host: no frame was on display");
 			return;
 		}
 
@@ -702,15 +817,24 @@ namespace
 			for (u32 shift = 0; shift < 24; shift += 8)
 				hash = (hash ^ ((pixel >> shift) & 0xFFu)) * 1099511628211ull;
 		}
-		s_frame_line = fmt::format("ps2n-host: frame {}x{}, fingerprint {:016X}", width, height, hash);
+		line = fmt::format("ps2n-host: {}{}x{}, fingerprint {:016X}", label, width, height, hash);
 
 		if (!s_options.frame_path.empty())
 		{
+			// Along the way: the file's name with the frame number before its extension.
+			std::string path = s_options.frame_path;
+			if (along_the_way)
+			{
+				const std::string_view extension = Path::GetExtension(path);
+				const std::string stem(Path::StripExtension(path));
+				path = fmt::format("{}-{:06}{}{}", stem, s_frames, extension.empty() ? "" : ".", extension);
+			}
+
 			for (u32& pixel : pixels)
 				pixel |= 0xFF000000u;
 			const RGBA8Image image(width, height, pixels.data());
-			if (!image.SaveToFile(s_options.frame_path.c_str()))
-				std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.frame_path.c_str());
+			if (!image.SaveToFile(path.c_str()))
+				std::fprintf(stderr, "ps2n-host: cannot write %s\n", path.c_str());
 		}
 	}
 
@@ -755,6 +879,34 @@ namespace
 			" interpreter functions\n",
 			static_cast<ull>(stats.interpreted), static_cast<ull>(stats.interpreted_in_image), static_cast<ull>(stats.delegated),
 			percent(stats.delegated, stats.interpreted));
+		std::fprintf(stderr,
+			"ps2n-host: interpreted outside the executable's code: %llu instructions in the kernel's segments (the BIOS), %llu below"
+			" 00100000 (the BIOS's program loader), %llu elsewhere in user memory (code the executable does not hold)\n",
+			static_cast<ull>(stats.interpreted_kernel), static_cast<ull>(stats.interpreted_loader),
+			static_cast<ull>(stats.interpreted_elsewhere));
+		if (stats.timeout_loop_cycles)
+		{
+			std::fprintf(stderr, "ps2n-host: %llu EE cycles passed in timeout loops that were not run\n",
+				static_cast<ull>(stats.timeout_loop_cycles));
+		}
+
+		// The system calls made most often, by number.
+		{
+			std::vector<std::pair<u64, size_t>> calls;
+			u64 total = 0;
+			for (size_t i = 0; i < std::size(stats.syscalls); i++)
+			{
+				total += stats.syscalls[i];
+				if (stats.syscalls[i])
+					calls.emplace_back(stats.syscalls[i], i);
+			}
+			std::sort(calls.rbegin(), calls.rend());
+			std::string line;
+			for (size_t i = 0; i < calls.size() && i < 10; i++)
+				line += fmt::format("{}number {} {} times", i ? ", " : "", calls[i].second, calls[i].first);
+			if (total)
+				std::fprintf(stderr, "ps2n-host: %llu system calls: %s\n", static_cast<ull>(total), line.c_str());
+		}
 		if (!s_options.trace_path.empty() || !s_options.trace_against_path.empty())
 		{
 			std::fprintf(stderr, "ps2n-host: %llu event tests, fingerprint of the run %016llX\n", static_cast<ull>(stats.event_tests),
@@ -949,6 +1101,8 @@ namespace
 					ReportProvider();
 				for (const std::string& line : s_bench_lines)
 					std::fprintf(stderr, "%s\n", line.c_str());
+				for (const std::string& line : s_frame_lines)
+					std::fprintf(stderr, "%s\n", line.c_str());
 				if (!s_frame_line.empty())
 					std::fprintf(stderr, "%s\n", s_frame_line.c_str());
 
@@ -1006,6 +1160,8 @@ namespace
 
 		if (!InitializeConfig())
 			return EXIT_ERROR;
+		if (!s_options.pad_path.empty() && !LoadPadScript(s_options.pad_path))
+			return EXIT_ERROR;
 
 		std::thread watchdog(WatchdogMain);
 
@@ -1057,6 +1213,14 @@ void ps2n::host::OnGuestFrame()
 	if (s_stop_requested || s_options.selftest)
 		return;
 
+	// Scripted controller input: what the script has for the frames up to this
+	// one. It changes here, between two frames, in every run alike.
+	while (s_pad_next < s_pad_events.size() && s_pad_events[s_pad_next].frame <= s_frames)
+	{
+		const PadEvent& event = s_pad_events[s_pad_next++];
+		Pad::SetControllerState(0, event.input, event.value);
+	}
+
 	// Never run on with a provider other than the one that was asked for.
 	if (s_options.ee == EEProvider::Ps2n && Cpu != ps2n::ee::Provider())
 		s_provider_replaced = true;
@@ -1079,6 +1243,10 @@ void ps2n::host::OnGuestFrame()
 		CaptureFrame();
 		s_stop_requested = true;
 		VMManager::SetState(VMState::Stopping);
+	}
+	else if (s_options.frame_every != 0 && s_frames % s_options.frame_every == 0)
+	{
+		CaptureFrame(true);
 	}
 }
 

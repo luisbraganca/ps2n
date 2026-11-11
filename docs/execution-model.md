@@ -77,6 +77,22 @@ what the loop costs). PCSX2's `WaitLoop` setting switches both off. This is
 what keeps the BIOS's idle thread, which is interpreted, from eating host
 time.
 
+**Timeout loops.** A loop of `nop`s that counts a register down to zero,
+which a program runs to let time pass (ps2sdk's `nopdelay`), is not run
+either, because PCSX2's recompiler does not run it. When a block begins at
+such a loop's first instruction, eight cycles pass for each count left in
+the register, but time goes no further than the next event; the count comes
+down by the cycles that passed, divided by eight; and unless it has reached
+zero an event test follows, after which the same happens again. Once it is
+zero, execution continues after the loop with no event test. The eight is
+PCSX2's, whatever the loop's instructions cost. The test for such a loop is
+`ps2n::r5900::findTimeoutLoop` (PCSX2's own); the interpreter makes it at
+the start of every block (`SkipTimeoutLoop`), the recompiler at every label,
+where the generated code calls `timeoutLoop()` when nothing has been counted
+since the last block ended. Both go through one function, so both do the
+same. The first time round the loop is run as it stands: the block before it
+runs into it. `WaitLoop` switches this off as well.
+
 What PCSX2's recompiler does about time that is not reproduced:
 
 - its EE cycle rate setting (counted as 0, with a warning);
@@ -90,9 +106,8 @@ What PCSX2's recompiler does about time that is not reproduced:
   count register or the performance counters or write the status register.
   Here the functions that carry those instructions out see the cycle count
   as it was when the block began;
-- its skipping of count-down delay loops ("timeout loops") and of the
-  `FlushCache` system calls, which it replaces by a fixed number of cycles;
-  here the loop runs and the BIOS serves the call;
+- its skipping of the `FlushCache` system calls, which it replaces by a
+  fixed number of cycles; here the BIOS serves the call;
 - the forced event test after a load from an EE timer register;
 - `GoemonTlbHack`, a fix for one game.
 
@@ -297,6 +312,29 @@ the program prints with the number of frames shown and the EE's cycle count
 at that moment. Two such files side by side show between which two lines the
 runs part in time. The proof-of-concept log, "When the same output comes at
 another time", has two cases found that way.
+
+For a program that draws, there is also the picture: `-frame-every <n>`
+fingerprints the frame on display every `n` frames (and with `-frame` saves
+each), and `-pad <file>` gives the controller in port 1 scripted input that
+changes only at frame boundaries, so that two runs get it at the same
+moments. Two runs that show the same fingerprints at the same frame numbers
+drew the same pictures at the same times; the game log has a case where they
+do not.
+
+## A program too large for one file, and more code than its executable shows
+
+A game's executable is a million instructions. `ps2n-recomp compile --parts
+<n>` spreads its functions over `n` files of about equal size, in address
+order, with a header that declares them; the main file then holds only the
+tables. In one file the functions are local to it; over several they are
+not, and a call from one part into another is the same call.
+
+The analysis does not find every place a block can begin: a function reached
+only through a pointer it cannot see is not known to be one. The run
+reports each such address the first time it has to interpret from it
+(`-capture`), `ps2n-recomp capture` puts the reports of several runs into
+one file, and the next build makes those addresses entries. The game log has
+the numbers: 464 in the first 900 frames, none after one rebuild.
 
 ## The recompiler's analysis
 

@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Controller input for Killzone (SCES-52004), from power-on: what a player
+# presses to get from the first screens into the game, as a script for
+# ps2n-host -pad (scripts/windows/game.ps1 -Pad). The frame numbers are those
+# of a run with no memory card in either slot.
+#
+# This file holds button presses, written for PS2Native's tests. Nothing in
+# it comes from the game.
+#
+# frame  input  frames held
+
+# "No memory card (PS2) found ... Do you want to start the game?": Continue.
+1900    cross   4

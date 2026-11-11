@@ -7,8 +7,8 @@ Every number here came from a run on the date given; nothing is estimated.
 | Step | State |
 |---|---|
 | P0 Baseline | **Done on Windows** (2026-11-10). Not run on Linux. |
-| P1 Static EE | **Done on Windows** (2026-11-11), by the criterion the maintainer set in its place ([ADR 0005](adr/0005-never-further-from-the-console-than-pcsx2.md)): on no line of the 55 ps2autotests programs is the compiled run further from the console than stock PCSX2, and every difference from the console is listed with its cause. All 62 test programs run with their own code compiled ahead of time, identical to the interpreted run at every event test; 40 of the 55 match the console (stock PCSX2: 39 with its recompilers, 38 with its interpreters). Still on PCSX2's interpreter functions: COP0 and the VU0 macro instructions other than `CFC2` and `CTC2`. |
-| P2 Hard problems | (a) done except CDVD: the kernel, DMA and interrupt programs of ps2autotests and the ps2sdk IOP RPC, pad and memory card programs print what stock PCSX2 prints. Two of the five ps2sdk programs print it at another time than under PCSX2's recompilers (one frame later, two frames earlier); both are explained. (b) done for all 62 test programs. (c) done. (d) done for the FPU in three clamp modes, for the multimedia instructions (2026-11-10) and for `CFC2` and `CTC2` (2026-11-11). |
+| P1 Static EE | **Done on Windows** (2026-11-11), by the criterion the maintainer set in its place ([ADR 0005](adr/0005-never-further-from-the-console-than-pcsx2.md)): on no line of the 55 ps2autotests programs is the compiled run further from the console than stock PCSX2, and every difference from the console is listed with its cause. All 63 test programs run with their own code compiled ahead of time, identical to the interpreted run at every event test; 40 of the 55 match the console (stock PCSX2: 39 with its recompilers, 38 with its interpreters). Still on PCSX2's interpreter functions: COP0 and the VU0 macro instructions other than `CFC2` and `CTC2`. |
+| P2 Hard problems | (a) done except CDVD: the kernel, DMA and interrupt programs of ps2autotests and the ps2sdk IOP RPC, pad and memory card programs print what stock PCSX2 prints. Four of the five ps2sdk programs print it at the same frame and EE cycle as under PCSX2's recompilers; `mc` is two frames earlier, a race in the program that a few cycles decide. (b) done for all 63 test programs. (c) done. (d) done for the FPU in three clamp modes, for the multimedia instructions (2026-11-10) and for `CFC2` and `CTC2` (2026-11-11). |
 | P3 Graphics path | **Done on Windows for the one program that draws** (2026-11-10): the frame of the ps2sdk VU program from PCSX2's software renderer is the same under stock PCSX2 and compiled; PCSX2's Vulkan renderer runs at 1x and 3x. |
 | P4 Measurement | **Done on Windows** (2026-11-10): compiled code runs as fast as PCSX2's recompiler on six CPU-bound workloads (0.87 to 1.47 times its time), 8 to 23 times as fast as PCSX2's interpreter, and counts the recompiler's EE cycles on those six to within one cycle (the same on four). |
 | P5 Linux | **Open, deferred by the maintainer** ([ADR 0008](adr/0008-linux-run-deferred.md)). Scripts written, never run. Nothing is known to work on Linux. |
@@ -551,11 +551,12 @@ Tests are named `<suite>/<configuration>/<program>`. The suites are
 (built with ps2sdk, in `tests/sdk`). The configurations are the four CPU
 configurations, `lockstep` (interpreted run against compiled run at every
 event test), for six programs `lockstep-no-stack`, and since 2026-11-11, for
-the 55 ps2autotests programs, `never-further` (increment 5). All 62 programs
-pass `lockstep`.
+the 55 ps2autotests programs, `never-further` (increment 5). All 63 programs
+pass `lockstep` (62 until `tests/programs/timeout.s` was added on
+2026-11-11).
 
-Whole suite at the end of this log (2026-11-11): 2 unit test programs (32
-cases) and 379 tests pass in 117 s.
+Whole suite at the end of this log (2026-11-11): 2 unit test programs (34
+cases) and 384 tests pass in 116 s.
 
 ### (a) Programs built with ps2sdk (Windows, 2026-11-10)
 
@@ -625,9 +626,43 @@ What this shows, beyond these two programs: PS2Native's timing is that of
 PCSX2's recompiler to within the differences listed in the execution model
 ("Blocks and time"), and a difference of a few cycles can flip a race
 between the EE and the IOP. PCSX2's own interpreter stands in the same
-relation to its recompiler. Reproducing the timeout loop skip would remove
-the one difference here that is systematic; it is the first entry under
-"Open questions".
+relation to its recompiler.
+
+### Timeout loops (Windows, 2026-11-11)
+
+The difference in `padx` was systematic, so it was removed: PS2Native now
+does with a timeout loop what PCSX2's recompiler does (execution model,
+"Timeout loops"). The maintainer approved this as the first piece of work of
+Phase 3; it is logged here because it finishes what the section above found.
+
+- The test for such a loop is PCSX2's, transcribed
+  ([waitloop.h](../core/include/ps2n/waitloop.h)), and so is what happens
+  instead of the loop. The interpreter and compiled code go through one
+  function for it.
+- `tests/programs/timeout.s` times two loops with the EE's count register. A
+  timeout loop of 500,000 counts whose instructions cost 17 cycles a count
+  takes 8 cycles a count, and leaves the register at zero; a loop that
+  differs only in having the decrement in the delay slot is run, at 16. That
+  is what PCSX2's recompiler makes of the program, and what both PS2Native
+  configurations print. PCSX2's interpreter runs both loops (18 and 17),
+  which `tests/programs-known-differences.cmake` records. The lockstep test
+  passes: interpreted and compiled, the run is the same at every event test.
+
+Where the ps2sdk programs print their last line now:
+
+| Program | PCSX2's recompilers | PS2Native, compiled or interpreted |
+|---|--:|--:|
+| `iop_rpc` | frame 13, cycle 59,041,448 | the same frame and cycle |
+| `vu` | frame 11, cycle 49,201,200 | the same frame and cycle |
+| `pad` | frame 274, cycle 1,343,192,768 | the same frame and cycle |
+| `padx` | frame 281, cycle 1,377,633,608 | **the same frame and cycle** (was frame 282) |
+| `mc` | frame 17 | frame 15: the race, as before |
+
+The six benchmark loops take what they took before, interpreted and
+compiled (within 2%), so the test at the start of every interpreted block
+costs nothing that shows.
+
+Whole suite: 2 unit test programs (34 cases) and 384 tests pass in 116 s.
 
 ### Idle loops
 
@@ -847,32 +882,44 @@ with `PS2N_BIOS` set).
 
 ### For the maintainer
 
-1. **Phase 3**, the first real game, is not approved. Nothing of it has been
-   started.
-2. **A patch for PCSX2's `vu0DenormalizeMicroStatus`?** (Increment 5.) Two
-   characters in `pcsx2/VU0micro.cpp` would start VU0 micro programs with
-   the status flags the console starts them with, and `vu/lower/integer`
-   would match the console again. It would be the first entry in the patch
-   queue: the first place where the machine is not stock PCSX2, to be
-   carried over every update of PCSX2 until PCSX2 corrects it. Recommended:
-   no patch. PCSX2 accepts reports from people, not from AI tools, so
-   reporting it there is the maintainer's to do or not.
-3. **The reading of [ADR 0007](adr/0007-bios-code-translated-ahead-of-time.md):**
-   that "not use BIOS" means "not interpret it", with a BIOS file still
-   required at run time, and that the three conditions of the recommendation
-   stand.
+Answered on 2026-11-11:
+
+1. **Phase 3** is approved, with Killzone as the game
+   ([ADR 0009](adr/0009-phase-3-first-game-killzone.md)). Its log is
+   [game-log.md](game-log.md).
+2. **The reading of [ADR 0007](adr/0007-bios-code-translated-ahead-of-time.md)**
+   is confirmed: the BIOS is to be translated, not interpreted, and a BIOS
+   file is still required at run time.
+
+Still open:
+
+3. **PCSX2's `vu0DenormalizeMicroStatus`** (Increment 5). Two characters in
+   `pcsx2/VU0micro.cpp` would start VU0 micro programs with the status flags
+   the console starts them with, and `vu/lower/integer` would match the
+   console again. The maintainer's answer: "We can try, but first we should
+   check if there's already a PR regarding this (if yes, comment on it with
+   info), if not, we can create one yes."
+   - Checked on 2026-11-11, by reading only: PCSX2's `master` still has the
+     two right shifts. Searching its pull requests and its issues for
+     `vu0DenormalizeMicroStatus` and for `micro_statusflags` finds nothing,
+     open or closed. The function came in with the commit "microVU: Move VU0
+     micro flag instance setup to program start" (`845e793`, 2022-02-28).
+   - **Commenting there or opening a pull request is not something an AI
+     session may do.** PCSX2's `AGENTS.md` forbids agents to post to its
+     GitHub in any form, forbids AI-written pull request descriptions, issue
+     texts and comments, and forbids new contributors to use AI-generated
+     content at all; breaking that can get the account banned. A report has
+     to come from the maintainer, in the maintainer's own words, about
+     something the maintainer can explain. Increment 5 has what there is to
+     explain.
+   - What is left to decide: whether PS2Native carries the correction itself
+     in the meantime, as the first entry in its patch queue. Recommended:
+     no, as before. It would be the first place where the machine is not
+     stock PCSX2.
 
 ### Timing against PCSX2's recompiler
 
-- **The timeout loop skip is not reproduced**, and it shows: one frame in
-  `padx` ("When the same output comes at another time"). PCSX2's recompiler
-  counts 8 cycles for each iteration of a count-down loop of `nop`s and goes
-  straight to the next event; PS2Native runs the loop at what its
-  instructions cost. Games have such loops (PCSX2's source names God of War
-  2 and the Need for Speed series). Reproducing it means recognizing the
-  loops ahead of time and in the interpreter, as was done for idle loops,
-  and is the first thing to do before a game's timing is compared with
-  stock PCSX2's.
+- The timeout loop skip is reproduced since 2026-11-11 ("Timeout loops").
 - The other differences are listed in the execution model, "Blocks and
   time". Each is at most a cycle per occurrence. A race between the EE and
   the IOP can turn on that (`mc`).
