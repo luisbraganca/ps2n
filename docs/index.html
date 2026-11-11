@@ -1,0 +1,713 @@
+<!doctype html>
+<!--
+	SPDX-License-Identifier: GPL-3.0-or-later
+
+	The PS2Native website, served by GitHub Pages from this folder.
+	docs/site/README.md says what belongs to the site, where each number on
+	this page comes from, and how to look at the page before it is pushed.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PS2Native: PlayStation 2 games as native applications</title>
+<meta name="description" content="PS2Native converts PlayStation 2 games into native applications by ahead-of-time static recompilation. The game's code is translated to C++ and compiled; the console around it is the core of PCSX2. In development.">
+<meta name="theme-color" content="#0A1022">
+<meta name="color-scheme" content="dark">
+<link rel="canonical" href="https://luisbraganca.github.io/ps2n/">
+<link rel="icon" href="site/brand/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="site/brand/ps2native-icon-blue-180.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="PS2Native">
+<meta property="og:title" content="PS2Native: PlayStation 2 games as native applications">
+<meta property="og:description" content="Ahead-of-time static recompilation of PlayStation 2 games, on the core of PCSX2. In development.">
+<meta property="og:url" content="https://luisbraganca.github.io/ps2n/">
+<meta property="og:image" content="https://luisbraganca.github.io/ps2n/site/brand/ps2native-social-1280x640.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="The PS2Native logo on navy">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preload" as="image" href="site/brand/ps2native-horizontal-dark.png" fetchpriority="high">
+<link rel="stylesheet" href="site/site.css">
+<script>
+// Before anything is drawn: is there to be motion? The reader's own choice
+// (the switch in the footer) comes first, then the system's "reduce motion".
+(function () {
+	var root = document.documentElement, motion = 'on';
+	try {
+		var stored = localStorage.getItem('ps2n-motion');
+		if (stored === 'on' || stored === 'off') motion = stored;
+		else if (matchMedia('(prefers-reduced-motion: reduce)').matches) motion = 'off';
+	} catch (e) {
+		try { if (matchMedia('(prefers-reduced-motion: reduce)').matches) motion = 'off'; } catch (e2) {}
+	}
+	root.className += ' js';
+	root.setAttribute('data-motion', motion);
+	// Should site.js never arrive, nothing it would have revealed stays hidden.
+	setTimeout(function () { if (!window.ps2nSite) root.setAttribute('data-motion', 'off'); }, 4000);
+})();
+</script>
+<script src="site/site.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to the content</a>
+<div class="progress" aria-hidden="true"></div>
+
+<header class="nav" id="nav">
+	<div class="container nav__inner">
+		<a class="nav__brand" href="#top" aria-label="PS2Native, to the top of the page">
+			<img src="site/brand/ps2native-icon-blue-64.png" width="30" height="30" alt="">
+			<span>PS2Native</span>
+		</a>
+		<nav aria-label="Sections">
+			<ul class="nav__links" id="nav-links">
+				<li><a href="#idea">The idea</a></li>
+				<li><a href="#how">How it works</a></li>
+				<li><a href="#same-run">The same run</a></li>
+				<li><a href="#measured">Measured</a></li>
+				<li><a href="#static">What is static</a></li>
+				<li><a href="#roadmap">Roadmap</a></li>
+				<li><a href="#docs">Docs</a></li>
+			</ul>
+		</nav>
+		<a class="nav__gh" href="https://github.com/luisbraganca/ps2n" rel="noopener">
+			<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+			<span>GitHub</span>
+		</a>
+		<button class="nav__toggle" type="button" aria-controls="nav-links" aria-expanded="false" aria-label="Sections">
+			<span></span><span></span><span></span>
+		</button>
+	</div>
+</header>
+
+<main id="main">
+
+<!-- ======================================================================== -->
+<section class="hero" id="top">
+	<canvas class="hero__field" aria-hidden="true"></canvas>
+	<div class="container hero__inner">
+		<div class="hero__logo" data-logo>
+			<img class="hero__logo-img" src="site/brand/ps2native-horizontal-dark.png" width="1455" height="453" alt="PS2Native" fetchpriority="high">
+			<canvas class="hero__logo-fx" aria-hidden="true"></canvas>
+		</div>
+		<p class="eyebrow" data-enter style="--i:0"><span data-scramble>Static recompilation &middot; on the core of PCSX2</span></p>
+		<h1>
+			<span class="line" data-enter style="--i:1">PlayStation 2 games</span>
+			<span class="line" data-enter style="--i:2">as <span class="grad">native applications</span></span>
+		</h1>
+		<p class="hero__lead" data-enter style="--i:3">PS2Native translates a game's code to C++ ahead of time and compiles it for the machine it will run on. The console around that code is the core of PCSX2.</p>
+		<div class="cta" data-enter style="--i:4">
+			<a class="btn btn--primary" href="https://github.com/luisbraganca/ps2n" rel="noopener">
+				<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+				Source on GitHub
+			</a>
+			<a class="btn btn--ghost" href="#how">See how it works</a>
+		</div>
+		<p class="pill" data-enter style="--i:5"><span class="pill__dot" aria-hidden="true"></span>In development. There is nothing here for players yet.</p>
+	</div>
+	<a class="hero__cue" href="#idea" aria-label="On to the idea"><i></i><i></i><i></i></a>
+	<div class="dissolve" data-dissolve="#070B18" aria-hidden="true"><canvas></canvas></div>
+</section>
+
+<!-- ======================================================================== -->
+<section class="section section--alt" id="idea">
+	<div class="container">
+		<div class="section__head" data-reveal>
+			<p class="eyebrow"><span data-scramble>01 &middot; The idea</span></p>
+			<h2>Compile the game. Keep the machine.</h2>
+			<p class="section__lead">The aim is a standalone game: no emulator to install, nothing to set up. A PlayStation 2 game talks to the console's hardware directly, though, and rebuilding that hardware is where the first PS2Native stalled. So this one translates the game's code and leaves the hardware to the emulator that has already solved it.</p>
+		</div>
+
+		<div class="cards" data-spot>
+			<article class="card" data-reveal style="--d:0">
+				<span class="card__px" aria-hidden="true"></span>
+				<div class="card__icon" aria-hidden="true">
+					<svg viewBox="0 0 52 52" fill="none">
+						<rect class="icon-sq" x="2" y="6" width="9" height="9" rx="1.6"/>
+						<rect class="icon-sq" x="2" y="21.5" width="9" height="9" rx="1.6"/>
+						<rect class="icon-sq" x="2" y="37" width="9" height="9" rx="1.6"/>
+						<path d="M17 26h10m-4-5 5 5-5 5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+						<rect x="34" y="6" width="16" height="40" rx="3.5" fill="currentColor"/>
+					</svg>
+				</div>
+				<h3>Translated ahead of time</h3>
+				<p>The game's code becomes C++ before the game ever runs: one C++ function for each function of the game, compiled by an ordinary compiler. The rule for a finished game is that no recompiler for PS2 code ships inside it.</p>
+			</article>
+			<article class="card" data-reveal style="--d:110">
+				<span class="card__px" aria-hidden="true"></span>
+				<div class="card__icon" aria-hidden="true">
+					<svg viewBox="0 0 52 52" fill="none">
+						<rect x="12" y="12" width="28" height="28" rx="4.5" stroke="currentColor" stroke-width="2.2"/>
+						<rect class="icon-sq" x="20" y="20" width="12" height="12" rx="2"/>
+						<path d="M19 5v7m7-7v7m7-7v7M19 40v7m7-7v7m7-7v7M5 19h7m-7 7h7m-7 7h7M40 19h7m-7 7h7m-7 7h7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+					</svg>
+				</div>
+				<h3>On the core of PCSX2</h3>
+				<p>Graphics, sound, storage, timing and the console's other processors are <a href="https://pcsx2.net" rel="noopener">PCSX2</a>'s, pinned to one version and unmodified. The translated code takes the place of PCSX2's recompiler for the console's main processor.</p>
+			</article>
+			<article class="card" data-reveal style="--d:220">
+				<span class="card__px" aria-hidden="true"></span>
+				<div class="card__icon" aria-hidden="true">
+					<svg viewBox="0 0 52 52" fill="none">
+						<g class="icon-spin">
+							<circle cx="23" cy="23" r="18" stroke="currentColor" stroke-width="2.2"/>
+							<circle cx="23" cy="23" r="4.5" stroke="currentColor" stroke-width="2.2"/>
+							<path d="M23 10.5a12.5 12.5 0 0 1 10.8 6.2" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" opacity=".55"/>
+						</g>
+						<rect x="33" y="33" width="16" height="16" rx="3" stroke="currentColor" stroke-width="2.2" style="fill: #0F1835"/>
+						<rect class="icon-sq" x="38" y="38" width="6" height="6" rx="1.2"/>
+					</svg>
+				</div>
+				<h3>Your game, your BIOS</h3>
+				<p>You provide your own game and your own BIOS dump. Neither is included here, and nothing generated from them is.</p>
+			</article>
+		</div>
+
+		<blockquote class="quote" data-reveal>
+			<p>Stop reinventing what PCSX2 has already solved, while preserving the goal of genuine native recompilation.</p>
+			<cite>From <a href="https://github.com/luisbraganca/ps2n/blob/main/docs/brief.md" rel="noopener">the project's brief</a></cite>
+		</blockquote>
+	</div>
+</section>
+
+<!-- ======================================================================== -->
+<section class="section section--grid" id="how">
+	<div class="container">
+		<div class="section__head" data-reveal>
+			<p class="eyebrow"><span data-scramble>02 &middot; How it works</span></p>
+			<h2>From a disc to native code</h2>
+			<p class="section__lead">Once, on your own machine, the game's executable goes through the recompiler and a C++ compiler. From then on the compiled code runs as the console's main processor, inside PCSX2's core.</p>
+		</div>
+
+		<p class="flow__label" data-reveal>When the game is built</p>
+		<ol class="pipe">
+			<li class="step" data-reveal style="--d:0">
+				<span class="step__n">01</span>
+				<h3>The game's executable</h3>
+				<p>From your own copy of the game. It is read where it is, and nothing is copied.</p>
+				<p class="step__fact"><b>1,003,452</b> instructions<br>in the first game's</p>
+				<span class="wire" aria-hidden="true"><i></i><i></i><i></i></span>
+			</li>
+			<li class="step" data-reveal style="--d:120">
+				<span class="step__n">02</span>
+				<h3>ps2n-recomp</h3>
+				<p>Finds the functions and every place a block of code can begin, and writes one C++ function for each function of the game.</p>
+				<p class="step__fact"><b>22,668</b> functions,<br>written in <b>1.8 s</b></p>
+				<span class="wire" aria-hidden="true"><i></i><i></i><i></i></span>
+			</li>
+			<li class="step" data-reveal style="--d:240">
+				<span class="step__n">03</span>
+				<h3>A C++ compiler</h3>
+				<p>Compiles the generated code like any other program, for the processor it will run on.</p>
+				<p class="step__fact"><b>152.4 MB</b> of C++,<br>built in <b>119 s</b></p>
+				<span class="wire" aria-hidden="true"><i></i><i></i><i></i></span>
+			</li>
+			<li class="step step--out" data-reveal style="--d:360">
+				<span class="step__n">04</span>
+				<h3>Native code</h3>
+				<p>The game's own code as machine code, carrying fingerprints of the code it was made from and not the code.</p>
+				<p class="step__fact">checked against memory<br>before it runs</p>
+				<span class="wire wire--down" aria-hidden="true"><i></i><i></i><i></i></span>
+			</li>
+		</ol>
+
+		<div class="machine" data-reveal>
+			<div class="machine__head">
+				<p class="flow__label" style="margin-bottom:12px">When the game runs</p>
+				<h3>The machine is PCSX2's core</h3>
+				<p>PCSX2 <span class="nowrap">v2.9.170</span>, a pinned and unmodified submodule. PS2Native owns no model of the hardware.</p>
+			</div>
+			<div class="socket">
+				<span class="socket__label">Main processor</span>
+				<div class="chipcard chipcard--static"><b>The game's code, compiled</b>Runs in the place of PCSX2's recompiler.</div>
+				<div class="chipcard chipcard--interp"><b>The interpreter</b>For code no one saw at build time, and for the BIOS for now.</div>
+			</div>
+			<ul class="devs">
+				<li class="dev"><b>Graphics</b>The GS and its renderers</li>
+				<li class="dev"><b>Sound</b>SPU2</li>
+				<li class="dev"><b>Memory and time</b>The scheduler, DMA, timers</li>
+				<li class="dev"><b>The other processors</b>The IOP and both vector units</li>
+				<li class="dev"><b>Storage</b>The disc, memory cards</li>
+				<li class="dev"><b>Input, and the rest</b>Pads, the game database, patches</li>
+			</ul>
+		</div>
+
+		<div class="loop">
+			<div data-reveal="left">
+				<h3>Code that no one saw coming</h3>
+				<p>Some code does not exist until the game runs, and some is reached in ways no analysis can see. It is interpreted once, reported and captured, and the next build compiles it. Nothing is interpreted silently.</p>
+				<p class="loop__fact"><span class="big">463</span><span class="arrow" aria-hidden="true">&rarr;</span><span class="sr-only">down to</span><span class="big">0</span><br>places in Killzone's executable where a first build had to interpret, and where it had to after one rebuild. <span class="when">First 4,200 frames, 2026-11-11</span></p>
+			</div>
+			<ol class="ring" data-reveal="right" aria-label="The loop">
+				<li><b>Run</b>The game runs. What was compiled runs compiled.</li>
+				<li><b>Report</b>The run lists every address it had to interpret from.</li>
+				<li><b>Capture</b>The reports of several runs go into one file.</li>
+				<li><b>Rebuild</b>The recompiler makes those addresses entries.</li>
+			</ol>
+		</div>
+	</div>
+</section>
+
+<!-- ======================================================================== -->
+<section class="section section--alt section--glow" id="translation" data-nav="how">
+	<div class="container">
+		<div class="section__head" data-reveal>
+			<p class="eyebrow"><span data-scramble>03 &middot; What comes out</span></p>
+			<h2>One loop, both sides</h2>
+			<p class="section__lead">Seven instructions of one of the project's own test programs, and the C++ that the recompiler writes for them. Nothing here comes from a game.</p>
+		</div>
+
+		<div class="xl8" data-xl8 data-reveal>
+			<div class="xl8__left">
+			<div class="pane">
+				<div class="pane__bar"><span class="sq" aria-hidden="true"></span><b>bench_sum</b><span>MIPS R5900</span><span class="push acc">eighths so far <b data-acc>65</b></span></div>
+				<ol class="code code--src" aria-label="The loop as ps2n-recomp disasm prints it: address, instruction word, cost in eighths of a cycle, instruction">
+<li data-i="0" data-cost="9"><span class="t-adr">001000CC</span>  <span class="t-hex">00025140</span>    <span class="t-cost">9</span>  <span class="t-op">sll</span> $t2, $v0, 5</li>
+<li data-i="1" data-cost="9"><span class="t-adr">001000D0</span>  <span class="t-hex">01425023</span>    <span class="t-cost">9</span>  <span class="t-op">subu</span> $t2, $t2, $v0</li>
+<li data-i="2" data-cost="9"><span class="t-adr">001000D4</span>  <span class="t-hex">01491021</span>    <span class="t-cost">9</span>  <span class="t-op">addu</span> $v0, $t2, $t1</li>
+<li data-i="3" data-cost="9"><span class="t-adr">001000D8</span>  <span class="t-hex">00481026</span>    <span class="t-cost">9</span>  <span class="t-op">xor</span> $v0, $v0, $t0</li>
+<li data-i="4" data-cost="9"><span class="t-adr">001000DC</span>  <span class="t-hex">25290001</span>    <span class="t-cost">9</span>  <span class="t-op">addiu</span> $t1, $t1, 1</li>
+<li data-i="5" data-cost="11"><span class="t-adr">001000E0</span>  <span class="t-hex">1528FFFA</span>   <span class="t-cost">11</span>  <span class="t-op">bne</span> $t1, $t0, 0x001000cc</li>
+<li data-i="6" data-cost="9"><span class="t-adr">001000E4</span>  <span class="t-hex">000258C2</span>    <span class="t-cost">9</span>  <span class="t-op">srl</span> $t3, $v0, 3</li>
+				</ol>
+			</div>
+			<div class="xl8__about">
+				<p>The loop of <code>bench_sum</code> in <a href="https://github.com/luisbraganca/ps2n/blob/main/tests/programs/bench.s" rel="noopener"><code>tests/programs/bench.s</code></a>, as <code>ps2n-recomp disasm</code> prints it: address, instruction word, cost in eighths of a cycle, instruction.</p>
+				<p>Beside it, what <code>ps2n-recomp</code> generates for the loop. The comment it writes after each line, naming the instruction the line came from, is left out here.</p>
+				<button class="btn btn--ghost btn--small xl8__replay" type="button" data-xl8-replay>Play it again</button>
+			</div>
+			</div>
+			<div class="xl8__gap" aria-hidden="true"></div>
+			<div class="pane">
+				<div class="pane__bar"><span class="sq" aria-hidden="true"></span><b>bench.cpp</b><span>generated by ps2n-recomp 0.3.0</span></div>
+				<ol class="code code--dst" aria-label="The C++ generated for the loop">
+<li data-step="p" data-notes="1"><span class="t-lb">L_001000CC</span>:</li>
+<li data-step="p" data-notes="1">  <span class="t-fn">PS2N_BLOCK_START</span>(<span class="t-num">10</span>, <span class="t-num">0x001000CCu</span>);</li>
+<li data-step="p" data-notes="1"><span class="t-lb">M_001000CC</span>:</li>
+<li data-step="0" data-link="0">  <span class="t-fn">SLL</span>(T2, V0, <span class="t-num">5</span>);</li>
+<li data-step="1" data-link="1">  <span class="t-fn">SUBU</span>(T2, T2, V0);</li>
+<li data-step="2" data-link="2">  <span class="t-fn">ADDU</span>(V0, T2, T1);</li>
+<li data-step="3" data-link="3">  <span class="t-fn">XOR</span>(V0, V0, T0);</li>
+<li data-step="4" data-link="4">  <span class="t-fn">ADDIU</span>(T1, T1, <span class="t-num">1</span>);</li>
+<li data-step="5" data-link="5">  <span class="t-cm">// 001000E0  bne $t1, $t0, 0x001000cc  -&gt; bench_sum+0xc</span></li>
+<li data-step="5" data-link="5">  {</li>
+<li data-step="5" data-link="5" data-notes="2">    <span class="t-kw">const bool</span> taken = ru64(T1) != ru64(T0);</li>
+<li data-step="6" data-link="6" data-notes="2">    <span class="t-fn">SRL</span>(T3, V0, <span class="t-num">3</span>);</li>
+<li data-step="e" data-notes="3">    <span class="t-fn">PS2N_BLOCK_END</span>(acc, <span class="t-num t-mark" data-total>65u</span>, taken ? <span class="t-num">0x001000CCu</span> : <span class="t-num">0x001000E8u</span>);</li>
+<li data-step="e" data-link="5" data-notes="2">    <span class="t-kw">if</span> (taken)</li>
+<li data-step="e" data-link="5">    {</li>
+<li data-step="e" data-link="5" data-notes="2">      <span class="t-kw">goto</span> <span class="t-lb">L_001000CC</span>;</li>
+<li data-step="e" data-link="5">    }</li>
+<li data-step="e" data-link="5">  }</li>
+				</ol>
+			</div>
+			<span class="xl8__token" aria-hidden="true"></span>
+		</div>
+
+		<div class="notes">
+			<article class="note" data-note="1" data-reveal style="--d:0">
+				<h3>Every label is a way in</h3>
+				<p>A block of code can begin at any label: after a call returns, or when an interrupt hands control back. <code>L_</code> is where one begins, and there the runtime checks that the code in memory is still the code that was compiled. <code>M_</code> is where a block that began earlier runs on through.</p>
+			</article>
+			<article class="note" data-note="2" data-reveal style="--d:110">
+				<h3>The delay slot, as on the console</h3>
+				<p>The branch is decided first. The instruction after it runs either way, and only then does the branch take effect.</p>
+			</article>
+			<article class="note" data-note="3" data-reveal style="--d:220">
+				<h3>Time, in eighths of a cycle</h3>
+				<p>Nine for most instructions, eleven for the branch: 65 for this block. They are added where PCSX2's recompiler would add them, and that is where the rest of the machine is given its turn.</p>
+			</article>
+		</div>
+	</div>
+</section>
+
+<!-- ======================================================================== -->
+<section class="section section--grid" id="same-run">
+	<div class="container">
+		<div class="section__head" data-reveal>
+			<p class="eyebrow"><span data-scramble>04 &middot; The same run</span></p>
+			<h2>Not close to the stock run. The same run.</h2>
+			<p class="section__lead">Again and again, PCSX2 lets the console's second processor catch up with the main one. At each of those moments a run can be written down: where the main processor is, its cycle count, hashes of its registers. Two runs with the same record took the same path through the program at the same times.</p>
+		</div>
+
+		<div class="same">
+			<div data-reveal="left">
+				<p class="hero-figure"><span data-count="38478822" data-dur="2600">38,478,822</span></p>
+				<p class="same__what">such moments in the first 4,200 frames of Killzone. The compiled run and the run under stock PCSX2 are <strong>the same at every one</strong>. Their records, 3 GB each, are the same file byte for byte.</p>
+				<ul class="facts">
+					<li><b>4,199</b><span>frames fingerprinted, and the same picture at every one of them.</span></li>
+					<li><b>47,705,744</b><span>event tests at which the compiled run is also the interpreted run.</span></li>
+					<li><b>59 of 63</b><span>test programs are the stock run too, at every such moment. The other four are listed, each with its cause.</span></li>
+				</ul>
+				<p class="when" style="margin-top:14px">Measured on 2026-11-11, on Windows</p>
+			</div>
+			<figure class="lanes" data-sync data-reveal="right" style="margin:0">
+				<div class="lanes__view" aria-hidden="true">
+					<canvas></canvas>
+					<span class="lanes__name lanes__name--a"><i></i>stock PCSX2</span>
+					<span class="lanes__name lanes__name--b"><i></i>PS2Native, compiled</span>
+				</div>
+				<figcaption class="lanes__foot">
+					<span>compared <b data-count="38478822" data-dur="2600">38,478,822</b></span>
+					<span>different <b>0</b></span>
+					<span>An illustration. The numbers are measured.</span>
+				</figcaption>
+			</figure>
+		</div>
+
+		<p class="aside" data-reveal>Those 4,200 frames are the copyright screen, the developer's logo, a memory card prompt and the intro film. Nothing of a level has been compared yet. Where PS2Native follows the console on purpose, because a recording shows PCSX2's recompiler wrong, a run does differ from the stock run, and each such place is listed with its cause.</p>
+	</div>
+</section>
+
+<!-- ======================================================================== -->
+<section class="section section--alt" id="measured">
+	<div class="container">
+		<div class="section__head" data-reveal>
+			<p class="eyebrow"><span data-scramble>05 &middot; Measured</span></p>
+			<h2>Numbers as measured, whatever they are</h2>
+			<p class="section__lead">Every number on this page came from a run on the date beside it. That goes for the ones that are not flattering as well.</p>
+		</div>
+
+		<div class="tiles" data-spot>
+			<article class="tile" data-reveal style="--d:0">
+				<p class="tile__label">Compiled ahead of time</p>
+				<p class="tile__value"><span data-count="1003452">1,003,452</span></p>
+				<p>instructions of Killzone's boot executable, in 22,668 functions.</p>
+				<p class="when">2026-11-11</p>
+			</article>
+			<article class="tile" data-reveal style="--d:90">
+				<p class="tile__label">Of them, still interpreted</p>
+				<p class="tile__value"><span data-count="0" data-count-from="5079">0</span></p>
+				<p>in the first 4,200 frames. A first build had to interpret 5,079; one rebuild compiled them.</p>
+				<p class="when">2026-11-11</p>
+			</article>
+			<article class="tile" data-reveal style="--d:180">
+				<p class="tile__label">Interpreted in all</p>
+				<p class="tile__value"><span data-count="1.11" data-decimals="2">1.11</span><small>%</small></p>
+				<p>of the main processor's cycles in those frames: the BIOS, which is to be translated as well.</p>
+				<p class="when">2026-11-11</p>
+			</article>
+			<article class="tile" data-reveal style="--d:0">
+				<p class="tile__label">Tests that pass</p>
+				<p class="tile__value"><span data-count="447">447</span></p>
+				<p>and 2 unit test programs of 42 cases, in 136 s. A test that differs from a console recording is listed only once its cause is known.</p>
+				<p class="when">2026-11-11</p>
+			</article>
+			<article class="tile" data-reveal style="--d:90">
+				<p class="tile__label">Programs that match the console</p>
+				<p class="tile__value"><span data-count="40">40</span><small>of 55</small></p>
+				<p>Stock PCSX2: 39 with its recompilers, 38 with its interpreters. On no line of them is stock PCSX2 right and PS2Native wrong.</p>
+				<p class="when">2026-11-11</p>
+			</article>
+			<article class="tile" data-reveal style="--d:180">
+				<p class="tile__label">Instructions checked one by one</p>
+				<p class="tile__value"><span data-count="204">204</span></p>
+				<p>against both of PCSX2's implementations: 4,077,475 cases against its recompiler and 36,976,118 against its interpreter, with no difference outside the documented ones.</p>
+				<p class="when">2026-11-11</p>
+			</article>
+		</div>
+
+		<div class="charts">
+			<section class="chart" data-reveal aria-labelledby="chart-game">
+				<h3 id="chart-game">Speed so far: slower</h3>
+				<p class="chart__sub">The first 4,200 frames of Killzone, in seconds. Shorter is faster.</p>
+				<ul class="legend" aria-hidden="true">
+					<li><i class="k-stock"></i>Stock PCSX2, its recompilers</li>
+					<li><i class="k-ps2n"></i>PS2Native, compiled</li>
+				</ul>
+				<table class="bars">
+					<caption class="sr-only">Wall-clock time of the first 4,200 frames of Killzone</caption>
+					<thead><tr><th scope="col"><span class="sr-only">Run</span></th><th scope="col"><span class="sr-only">Seconds</span></th></tr></thead>
+					<tbody>
+						<tr class="grp"><th colspan="2" scope="rowgroup">With PCSX2's software renderer</th></tr>
+						<tr><th scope="row">Stock</th><td><div class="bar" tabindex="0" style="--v:.8179;--i:0"><span class="bar__fill"></span><span class="bar__val">22.9 s</span><span class="bar__tip" role="tooltip"><b>22.9 s</b> stock PCSX2, software renderer. Two runs: 22.8 s and 22.9 s</span></div></td></tr>
+						<tr><th scope="row">PS2Native</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.9179;--i:1"><span class="bar__fill"></span><span class="bar__val">25.7 s</span><span class="bar__tip" role="tooltip"><b>25.7 s</b> PS2Native, software renderer. Two runs: 25.8 s and 25.7 s</span></div></td></tr>
+						<tr class="grp"><th colspan="2" scope="rowgroup">With nothing drawn</th></tr>
+						<tr><th scope="row">Stock</th><td><div class="bar" tabindex="0" style="--v:.4;--i:2"><span class="bar__fill"></span><span class="bar__val">11.2 s</span><span class="bar__tip" role="tooltip"><b>11.2 s</b> stock PCSX2, nothing drawn. Two runs: 11.2 s and 11.1 s</span></div></td></tr>
+						<tr><th scope="row">PS2Native</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.5393;--i:3"><span class="bar__fill"></span><span class="bar__val">15.1 s</span><span class="bar__tip" role="tooltip"><b>15.1 s</b> PS2Native, nothing drawn. Two runs: 15.1 s and 15.2 s</span></div></td></tr>
+					</tbody>
+				</table>
+				<p class="chart__note">These frames are logos, a prompt and a film. Nothing of a level has run, and where the extra seconds go has not been measured. <span class="when">2026-11-11</span></p>
+			</section>
+
+			<section class="chart" data-reveal style="--d:120" aria-labelledby="chart-loops">
+				<h3 id="chart-loops">Six loops that never leave the processor</h3>
+				<p class="chart__sub">Time of the compiled code relative to PCSX2's recompiler. Below 1.00 is faster.</p>
+				<table class="bars bars--ratio" style="--ref:.625">
+					<caption class="sr-only">Time of six CPU-bound workloads, compiled ahead of time, relative to PCSX2's recompiler</caption>
+					<thead><tr><th scope="col"><span class="sr-only">Workload</span></th><th scope="col"><span class="sr-only">Time relative to PCSX2's recompiler</span></th></tr></thead>
+					<tbody>
+						<tr><th scope="row">sum</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.5438;--i:0"><span class="bar__fill"></span><span class="bar__val">0.87</span><span class="bar__tip" role="tooltip"><b>0.87</b> register arithmetic: 60.4 ms against 69.7 ms</span></div></td></tr>
+						<tr><th scope="row">mem</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.6375;--i:1"><span class="bar__fill"></span><span class="bar__val">1.02</span><span class="bar__tip" role="tooltip"><b>1.02</b> word loads and stores: 19.2 ms against 18.8 ms</span></div></td></tr>
+						<tr><th scope="row">fpu</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.65;--i:2"><span class="bar__fill"></span><span class="bar__val">1.04</span><span class="bar__tip" role="tooltip"><b>1.04</b> floating point: 51.7 ms against 49.6 ms</span></div></td></tr>
+						<tr><th scope="row">call</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.7188;--i:3"><span class="bar__fill"></span><span class="bar__val">1.15</span><span class="bar__tip" role="tooltip"><b>1.15</b> seven million calls: 34.4 ms against 29.8 ms</span></div></td></tr>
+						<tr><th scope="row">mmi</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.7688;--i:4"><span class="bar__fill"></span><span class="bar__val">1.23</span><span class="bar__tip" role="tooltip"><b>1.23</b> 128-bit arithmetic: 10.2 ms against 8.3 ms</span></div></td></tr>
+						<tr><th scope="row">jump</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.9188;--i:5"><span class="bar__fill"></span><span class="bar__val">1.47</span><span class="bar__tip" role="tooltip"><b>1.47</b> a jump through a table: 71.9 ms against 48.8 ms</span></div></td></tr>
+						<tr class="axis" aria-hidden="true"><th></th><td><div class="bar"><span>1.00, PCSX2's recompiler</span></div></td></tr>
+					</tbody>
+				</table>
+				<p class="chart__note">Faster on one, within 4% on two, 15% to 47% slower on three, and none of it tuned yet. Against PCSX2's interpreter the same code is 8 to 23 times as fast. <span class="when">Proof of concept, 2026-11-10</span></p>
+			</section>
+		</div>
+	</div>
+</section>
+
+<!-- ======================================================================== -->
+<section class="section" id="static">
+	<div class="container">
+		<div class="section__head" data-reveal>
+			<p class="eyebrow"><span data-scramble>06 &middot; What is static</span></p>
+			<h2>What is translated today, and what is not yet</h2>
+			<p class="section__lead">The rule is that no recompiler for PS2 code ships in a finished game. Today that holds for the game's own code. Everything else is labeled for what it is, in this order of work.</p>
+		</div>
+
+		<div class="board">
+			<article class="chip chip--static" data-reveal style="--d:0">
+				<span class="chip__n">1 &middot; MAIN PROCESSOR</span>
+				<h3>The game's code</h3>
+				<p class="chip__sub">EE</p>
+				<span class="state"><i aria-hidden="true"></i>Static</span>
+				<p>Translated ahead of time. In the first 4,200 frames of Killzone not one instruction of the executable is interpreted.</p>
+			</article>
+			<article class="chip chip--interp" data-reveal style="--d:110">
+				<span class="chip__n">2 &middot; MAIN PROCESSOR</span>
+				<h3>The BIOS kernel</h3>
+				<p class="chip__sub">EE</p>
+				<span class="state"><i aria-hidden="true"></i>Interpreted, for now</span>
+				<p>System calls, interrupts and threads are the BIOS's own code. It is to be translated on your machine, from your own dump, into a file of its own beside the game.</p>
+			</article>
+			<article class="chip chip--standin" data-reveal style="--d:220">
+				<span class="chip__n">3 &middot; VECTOR UNITS</span>
+				<h3>Micro programs</h3>
+				<p class="chip__sub">VU0, VU1</p>
+				<span class="state"><i aria-hidden="true"></i>Stand-in</span>
+				<p>PCSX2's recompiler runs them for now. It is a temporary stand-in: a static translator is to take its place, once it has been validated against it.</p>
+			</article>
+			<article class="chip chip--standin" data-reveal style="--d:330">
+				<span class="chip__n">4 &middot; SECOND PROCESSOR</span>
+				<h3>The IOP's modules</h3>
+				<p class="chip__sub">IOP</p>
+				<span class="state"><i aria-hidden="true"></i>Stand-in</span>
+				<p>PCSX2's recompiler, for now, under the same rule. PCSX2's recompiler for the main processor is never a stand-in.</p>
+			</article>
+		</div>
+
+		<div class="board__rest">
+			<div class="plain" data-reveal>
+				<h3>The hardware stays PCSX2's</h3>
+				<p>Graphics, sound, DMA, timers, the disc, pads and memory cards are not rebuilt. That is the part the project does not reinvent.</p>
+			</div>
+			<div class="plain" data-reveal style="--d:110">
+				<h3>No finished game on a stand-in</h3>
+				<p>Packaging does not exist yet. When it does, it is to refuse a release while a stand-in is in use, or mark the result a development build.</p>
+			</div>
+		</div>
+	</div>
+</section>
+
+<!-- ======================================================================== -->
+<section class="section section--alt" id="rules">
+	<div class="container">
+		<div class="section__head" data-reveal>
+			<p class="eyebrow"><span data-scramble>07 &middot; Decisions</span></p>
+			<h2>Rules the project holds itself to</h2>
+			<p class="section__lead">Every decision is written down, with the maintainer's own words and how they were read. These are the ones that shape the rest.</p>
+		</div>
+
+		<div class="cards" data-spot>
+			<a class="card rule" data-reveal style="--d:0" href="https://github.com/luisbraganca/ps2n/blob/main/docs/adr/0002-static-cpus-on-pcsx2-core.md" rel="noopener">
+				<span class="rule__id">ADR 0002</span>
+				<h3>Static processors on PCSX2's core</h3>
+				<p>The game's code is translated ahead of time and acts as the console's processors. PCSX2's core is the machine. A BIOS is required.</p>
+				<span class="rule__go">Read the record <span aria-hidden="true">&rarr;</span></span>
+			</a>
+			<a class="card rule" data-reveal style="--d:110" href="https://github.com/luisbraganca/ps2n/blob/main/docs/adr/0003-no-jit-in-generated-games.md" rel="noopener">
+				<span class="rule__id">ADR 0003</span>
+				<h3>No JIT in a generated game</h3>
+				<p>No recompiler for PS2 code ships in a finished game. Code not seen at build time is interpreted once, reported, captured and rebuilt.</p>
+				<span class="rule__go">Read the record <span aria-hidden="true">&rarr;</span></span>
+			</a>
+			<a class="card rule" data-reveal style="--d:220" href="https://github.com/luisbraganca/ps2n/blob/main/docs/adr/0005-never-further-from-the-console-than-pcsx2.md" rel="noopener">
+				<span class="rule__id">ADR 0005</span>
+				<h3>Never further from the console than PCSX2</h3>
+				<p>On no line of a console-recorded test may stock PCSX2 be right and PS2Native wrong. Every remaining difference is listed with its cause.</p>
+				<span class="rule__go">Read the record <span aria-hidden="true">&rarr;</span></span>
+			</a>
+			<a class="card rule" data-reveal style="--d:0" href="https://github.com/luisbraganca/ps2n/blob/main/docs/adr/0007-bios-code-translated-ahead-of-time.md" rel="noopener">
+				<span class="rule__id">ADR 0007</span>
+				<h3>The BIOS is translated on your machine</h3>
+				<p>From your own dump, as a file of its own beside the game. It is never in the repository and never in anything PS2Native distributes.</p>
+				<span class="rule__go">Read the record <span aria-hidden="true">&rarr;</span></span>
+			</a>
+			<a class="card rule" data-reveal style="--d:110" href="https://github.com/luisbraganca/ps2n/blob/main/docs/adr/0011-time-is-counted-as-pcsx2s-recompiler-counts-it.md" rel="noopener">
+				<span class="rule__id">ADR 0011</span>
+				<h3>Time is counted as PCSX2's recompiler counts it</h3>
+				<p>A run on PS2Native is the stock run, moment for moment. A difference is a defect to find, not a property to argue about.</p>
+				<span class="rule__go">Read the record <span aria-hidden="true">&rarr;</span></span>
+			</a>
+			<a class="card rule" data-reveal style="--d:220" href="https://github.com/luisbraganca/ps2n/blob/main/docs/brief.md" rel="noopener">
+				<span class="rule__id">The brief</span>
+				<h3>Never invent a result</h3>
+				<p>No invented test or benchmark results, and no failing test skipped silently. A claim about speed or compatibility needs a measurement that can be repeated.</p>
+				<span class="rule__go">Read the brief <span aria-hidden="true">&rarr;</span></span>
+			</a>
+		</div>
+	</div>
+</section>
+
+<!-- ======================================================================== -->
+<section class="section section--glow" id="roadmap">
+	<div class="container">
+		<div class="section__head" data-reveal>
+			<p class="eyebrow"><span data-scramble>08 &middot; Roadmap</span></p>
+			<h2>Prove the architecture before building the application</h2>
+			<p class="section__lead">Five phases. Each one ends with a stop, and the next begins only with the maintainer's approval.</p>
+		</div>
+
+		<ol class="timeline" data-timeline>
+			<li class="phase is-done" data-reveal>
+				<div class="phase__top"><span class="phase__n">Phase 1</span><span class="badge badge--done">Done &middot; 2026-11-10</span></div>
+				<h3>Feasibility assessment</h3>
+				<p>The first PS2Native, PCSX2 and three other recompilation projects, read at the source. The recommendation: statically recompiled code as the processors, PCSX2's core as the machine, a BIOS supplied by the user.</p>
+			</li>
+			<li class="phase is-done" data-reveal>
+				<div class="phase__top"><span class="phase__n">Phase 2</span><span class="badge badge--done">Done on Windows &middot; 2026-11-11</span></div>
+				<h3>Proof of concept</h3>
+				<p>Every one of 63 test programs runs with its own code compiled ahead of time, the same as its interpreted run at every event test. The Linux step is deferred by the maintainer: its scripts are written and have never been run.</p>
+			</li>
+			<li class="phase is-now" data-reveal>
+				<div class="phase__top"><span class="phase__n">Phase 3</span><span class="badge badge--now">In progress</span></div>
+				<h3>The first real game: Killzone</h3>
+				<p>The European release, from the maintainer's own copy. Nothing of the game is in the repository, and nothing generated from it.</p>
+				<ul class="gsteps">
+					<li class="is-done"><b><span class="g">G0</span>Baseline</b>Done as far as the intro film</li>
+					<li class="is-done"><b><span class="g">G1</span>The interpreter as reference</b>Done for the first 4,200 frames</li>
+					<li class="is-done"><b><span class="g">G2</span>The game's code compiled</b>Done</li>
+					<li class="is-done"><b><span class="g">G3</span>The compiled game</b>Done for the first 4,200 frames</li>
+					<li class="is-open"><b><span class="g">G4</span>Further into the game</b>Next: the title screen, menus, a level; a window, sound, a controller</li>
+					<li class="is-open"><b><span class="g">G5</span>Measurement and report</b>Not begun</li>
+				</ul>
+			</li>
+			<li class="phase" data-reveal>
+				<div class="phase__top"><span class="phase__n">Phase 4</span><span class="badge">Needs its own approval</span></div>
+				<h3>The application</h3>
+				<p>A wizard that takes a game and gives back a native application. Every setting is fixed when the game is built, and the result shows no emulator's interface. None of it exists yet.</p>
+				<ol class="wizard" aria-label="The wizard's steps, as planned">
+					<li>Choose the game</li>
+					<li>Give the BIOS</li>
+					<li>Accept the defaults</li>
+					<li>Recompile</li>
+					<li>Package</li>
+				</ol>
+			</li>
+			<li class="phase" data-reveal>
+				<div class="phase__top"><span class="phase__n">Phase 5</span><span class="badge">Later</span></div>
+				<h3>Maintenance</h3>
+				<p>Automated regression tests, compatibility reports, and checks against each new version of PCSX2 before it is taken up.</p>
+			</li>
+		</ol>
+
+		<div class="platforms">
+			<div class="platform" data-reveal style="--d:0">
+				<span class="badge badge--done">Required</span>
+				<h3>Windows x64</h3>
+				<p>Built and run. Everything measured on this page was measured here.</p>
+			</div>
+			<div class="platform" data-reveal style="--d:110">
+				<span class="badge">Required</span>
+				<h3>Linux x64</h3>
+				<p>Its scripts are written and have never been run. Nothing is known to work there yet.</p>
+			</div>
+			<div class="platform" data-reveal style="--d:220">
+				<span class="badge">Optional</span>
+				<h3>macOS, Android, iOS</h3>
+				<p>Bounded by what PCSX2 supports. Nothing is built or tested for them.</p>
+			</div>
+		</div>
+	</div>
+</section>
+
+<!-- ======================================================================== -->
+<section class="section section--alt" id="docs">
+	<div class="container">
+		<div class="section__head" data-reveal>
+			<p class="eyebrow"><span data-scramble>09 &middot; Read more</span></p>
+			<h2>It is all written down</h2>
+			<p class="section__lead">The goals, the reasoning, the decisions and every measurement are in the repository, in plain words.</p>
+		</div>
+
+		<div class="cards" data-spot>
+			<a class="card doc" data-reveal style="--d:0" href="https://github.com/luisbraganca/ps2n/blob/main/docs/brief.md" rel="noopener">
+				<span class="doc__path">docs/brief.md</span>
+				<h3>The brief</h3>
+				<p>The project's goals and rules, in the maintainer's words.</p>
+			</a>
+			<a class="card doc" data-reveal style="--d:110" href="https://github.com/luisbraganca/ps2n/blob/main/docs/phase1-feasibility.md" rel="noopener">
+				<span class="doc__path">docs/phase1-feasibility.md</span>
+				<h3>The feasibility assessment</h3>
+				<p>Why this architecture, with references into the source of PCSX2 and of the other projects.</p>
+			</a>
+			<a class="card doc" data-reveal style="--d:220" href="https://github.com/luisbraganca/ps2n/blob/main/docs/execution-model.md" rel="noopener">
+				<span class="doc__path">docs/execution-model.md</span>
+				<h3>The execution model</h3>
+				<p>How compiled code, the interpreter and the PCSX2 core run a program together.</p>
+			</a>
+			<a class="card doc" data-reveal style="--d:0" href="https://github.com/luisbraganca/ps2n/blob/main/docs/poc-log.md" rel="noopener">
+				<span class="doc__path">docs/poc-log.md</span>
+				<h3>The proof-of-concept log</h3>
+				<p>What Phase 2 did and measured, step by step.</p>
+			</a>
+			<a class="card doc" data-reveal style="--d:110" href="https://github.com/luisbraganca/ps2n/blob/main/docs/game-log.md" rel="noopener">
+				<span class="doc__path">docs/game-log.md</span>
+				<h3>The game log</h3>
+				<p>The first real game: its steps, their pass criteria and what has been measured.</p>
+			</a>
+			<a class="card doc" data-reveal style="--d:220" href="https://github.com/luisbraganca/ps2n/tree/main/docs/adr" rel="noopener">
+				<span class="doc__path">docs/adr/</span>
+				<h3>The decisions</h3>
+				<p>The architecture decision records, one file each.</p>
+			</a>
+		</div>
+	</div>
+</section>
+
+<!-- ======================================================================== -->
+<section class="final">
+	<div class="dissolve dissolve--top" data-dissolve="#070B18" aria-hidden="true"><canvas></canvas></div>
+	<div class="container" data-reveal>
+		<h2>Follow the work</h2>
+		<p>PS2Native is free software and is being built in the open. There is nothing to download yet. There is a great deal to read.</p>
+		<div class="cta">
+			<a class="btn btn--primary" href="https://github.com/luisbraganca/ps2n" rel="noopener">Source on GitHub</a>
+			<a class="btn btn--ghost" href="https://github.com/luisbraganca/ps2n/blob/main/docs/game-log.md" rel="noopener">Read the game log</a>
+		</div>
+	</div>
+</section>
+
+</main>
+
+<footer class="footer">
+	<div class="container">
+		<div class="footer__top">
+			<a class="footer__brand" href="#top">
+				<img src="site/brand/ps2native-icon-blue-128.png" width="36" height="36" alt="">
+				<span>PS2Native</span>
+			</a>
+			<ul class="footer__links">
+				<li><a href="https://github.com/luisbraganca/ps2n" rel="noopener">GitHub</a></li>
+				<li><a href="https://github.com/luisbraganca/ps2n/blob/main/LICENSE" rel="noopener">License</a></li>
+				<li><a href="https://github.com/luisbraganca/ps2n/blob/main/assets/branding/README.md" rel="noopener">Brand assets</a></li>
+				<li><a href="https://pcsx2.net" rel="noopener">PCSX2</a></li>
+			</ul>
+		</div>
+		<p>PS2Native is free software under the GNU General Public License, version 3 or later. It builds on PCSX2 (GPL-3.0 or later, Copyright PCSX2 Dev Team), which is included unmodified as a submodule.</p>
+		<p>PS2Native is an independent project. It is not affiliated with the PCSX2 project or with Sony Interactive Entertainment. PlayStation and PS2 are trademarks of Sony Interactive Entertainment Inc. Other names belong to their owners and are used here only to say what the project works with.</p>
+		<div class="footer__end">
+			<span>The state of the project on 2026-11-11.</span>
+			<button class="motion-switch" type="button" data-motion-switch aria-pressed="true"><i aria-hidden="true"></i>Motion</button>
+		</div>
+	</div>
+</footer>
+
+</body>
+</html>

@@ -86,6 +86,11 @@ Decisions:
   draw over the picture (messages, performance figures, indicators): that is
   switched off by settings, never restyled by patching PCSX2. Not built yet;
   it comes with the host's window.
+- [ADR 0014](docs/adr/0014-the-website-is-served-from-docs.md): the project
+  has a website, one page that GitHub Pages serves from `docs/` as it is
+  (`docs/.nojekyll`). The documentation stays where it is; the site is
+  `docs/index.html`, `docs/404.html` and `docs/site/`. The page says only
+  what the logs say, with dates, and shows nothing from a game or a BIOS.
 
 ## Layout, build and test
 
@@ -110,7 +115,9 @@ tests/games/              controller scripts for runs of a game (button presses 
 scripts/windows, linux    build and test entry points
 assets/                   branding/ (the logo, the icons, the colours; its README says which to use where) and
                           ps2n.rc (the icon of the Windows executables)
-docs/                     brief, assessment, decisions (adr/), proof-of-concept log, game log
+docs/                     brief, assessment, decisions (adr/), proof-of-concept log, game log; and the website,
+                          which GitHub Pages serves from this folder: index.html, 404.html, .nojekyll, site/
+                          (site/README.md says what belongs to it and where each of its numbers comes from)
 build/, deps/             build trees and downloaded dependency packages; git-ignored
 ```
 
@@ -163,6 +170,12 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
 - The Linux scripts have never been run. Only the maintainer can run them.
 - Never run stock `pcsx2-gsrunner` here: it writes into the maintainer's own
   `Documents\PCSX2`.
+- The website: `scripts\windows\site.ps1 -Open` serves `docs` on this
+  machine as GitHub Pages serves it. It has no build step. The page repeats
+  numbers and states from `docs/game-log.md`, `docs/poc-log.md` and the
+  status above: when one of those changes, change `docs/index.html` and the
+  date at its foot too (`docs/site/README.md` lists what comes from where).
+  It goes live when `main` is pushed.
 
 ## Standing rules
 

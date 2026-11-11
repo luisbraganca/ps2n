@@ -1,0 +1,110 @@
+<!doctype html>
+<!--
+	SPDX-License-Identifier: GPL-3.0-or-later
+
+	What GitHub Pages shows for an address that holds no page. It is served
+	for any path under the site, so it stands alone: its style is in here, and
+	its links go through <base>, which names the site's place on the host
+	(docs/site/README.md says when that changes).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nothing at this address | PS2Native</title>
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0A1022">
+<meta name="color-scheme" content="dark">
+<base href="/ps2n/">
+<link rel="icon" href="site/brand/favicon.ico" sizes="any">
+<style>
+	:root { color-scheme: dark; }
+	* { box-sizing: border-box; }
+	html, body { height: 100%; }
+	body {
+		margin: 0;
+		display: grid;
+		place-items: center;
+		padding: 32px 22px;
+		background:
+			radial-gradient(60% 50% at 50% 0%, rgba(0, 96, 252, .3), transparent 70%),
+			#0A1022;
+		color: #B4C0D9;
+		font: 1.0625rem/1.6 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+		text-align: center;
+		-webkit-font-smoothing: antialiased;
+	}
+	main { max-width: 34rem; }
+	img { display: block; width: 64px; height: 64px; margin: 0 auto 26px; }
+	.code {
+		margin: 0 0 10px;
+		font: 600 .8rem/1.4 ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+		letter-spacing: .16em;
+		text-transform: uppercase;
+		color: #6BA6FF;
+	}
+	.code i {
+		display: inline-block;
+		width: 7px; height: 7px;
+		margin-right: 4px;
+		border-radius: 1.5px;
+		background: #0060FC;
+	}
+	.code i:nth-child(2) { opacity: .6; }
+	.code i:nth-child(3) { opacity: .3; margin-right: 12px; }
+	h1 {
+		margin: 0 0 14px;
+		color: #F2F6FF;
+		font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+		font-size: clamp(1.9rem, 5vw + .8rem, 2.9rem);
+		line-height: 1.08;
+		letter-spacing: -0.03em;
+	}
+	p { margin: 0 0 26px; }
+	.where { font-family: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace; font-size: .86rem; color: #8491AD; word-break: break-all; }
+	.links { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
+	a {
+		display: inline-flex;
+		align-items: center;
+		min-height: 46px;
+		padding: 0 20px;
+		border: 1px solid rgba(150, 178, 255, .3);
+		border-radius: 12px;
+		color: #F2F6FF;
+		font-weight: 600;
+		text-decoration: none;
+	}
+	a:hover { border-color: rgba(150, 178, 255, .6); }
+	a.main { border-color: transparent; background: #0060FC; color: #fff; }
+	a:focus-visible { outline: 2px solid #6BA6FF; outline-offset: 3px; }
+	@media (prefers-reduced-motion: no-preference) {
+		.code i { animation: blink 1.5s ease-in-out infinite; }
+		.code i:nth-child(2) { animation-delay: .2s; }
+		.code i:nth-child(3) { animation-delay: .4s; }
+		@keyframes blink { 0%, 100% { opacity: .25; } 35% { opacity: 1; } }
+	}
+</style>
+</head>
+<body>
+<main>
+	<img src="site/brand/ps2native-icon-blue-128.png" width="64" height="64" alt="PS2Native">
+	<p class="code"><i></i><i></i><i></i>404</p>
+	<h1>Nothing is mapped at this address</h1>
+	<p>There is no page here. The site is one page, and the project's documentation is in its repository.</p>
+	<p class="where" id="where" hidden></p>
+	<div class="links">
+		<a class="main" href="./">To the front page</a>
+		<a href="https://github.com/luisbraganca/ps2n" rel="noopener">The repository</a>
+	</div>
+</main>
+<script>
+// Says which address was asked for. It is put in as text, never as markup.
+(function () {
+	var el = document.getElementById('where');
+	if (!el) return;
+	el.textContent = location.pathname;
+	el.hidden = false;
+})();
+</script>
+</body>
+</html>

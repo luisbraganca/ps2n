@@ -9,6 +9,10 @@
   <strong>PlayStation 2 games as native applications, by static recompilation.</strong>
 </p>
 
+<p align="center">
+  <a href="https://luisbraganca.github.io/ps2n/">luisbraganca.github.io/ps2n</a>
+</p>
+
 PS2Native (`ps2n`) converts a PlayStation 2 game into a native application.
 The game's code is translated to C++ ahead of time and compiled for the
 machine it will run on. The console around that code (graphics, sound,
@@ -37,6 +41,7 @@ In development. There is nothing here for players yet.
 | [docs/execution-model.md](docs/execution-model.md) | How compiled code, the interpreter and the PCSX2 core run a program together |
 | [docs/adr/](docs/adr/) | The decisions, one file each |
 | [assets/branding/README.md](assets/branding/README.md) | The logo files, the colours and how to use them |
+| [docs/site/README.md](docs/site/README.md) | The website: which files in `docs/` are its own, and where its numbers come from |
 
 ## License
 

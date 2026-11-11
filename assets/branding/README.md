@@ -55,6 +55,11 @@ where it was measured.
   executable. Nothing is done for other platforms yet.
 - The social preview is set on GitHub (Settings, General, Social preview),
   not from a file in the repository.
+- The website (`docs/index.html`) shows the dark horizontal logo and the
+  blue emblem, and names the social preview as its picture for links. It
+  takes them from copies in `docs/site/brand/`, because GitHub Pages serves
+  only the `docs` folder; [docs/site/README.md](../../docs/site/README.md)
+  names the six files. Copy them again when a file here changes.
 
 ## PCSX2's logo and look
 
