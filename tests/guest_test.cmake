@@ -27,6 +27,12 @@
 #              recompiler (ten times as many against its interpreter)
 #   LOCKSTEP   compare a compiled run with an interpreted one
 #   SAME_AS_STOCK  compare a compiled run with a run of stock PCSX2
+#   REGISTERS  with SAME_AS_STOCK: "report" lets the runs differ in registers
+#              as long as place and time are the same at every sync point, and
+#              prints which registers differ and how often: for a game, where
+#              an instruction that follows the console on purpose (ADR 0005)
+#              leaves something else in a register than stock PCSX2 does.
+#              Without it the registers must be the same as well
 #   WORK_DIR   scratch directory for this test; emptied first
 #   EXPECTED   file the output must equal (a console recording)
 #   EE         jit, interp or ps2n (default jit)
@@ -329,14 +335,22 @@ if(SAME_AS_STOCK)
 		message(FATAL_ERROR "The compiled run ended with ${exit_code}, not ${EXPECT_EXIT} (0 marker seen, 1 error, 2 frame limit, 3 time limit). "
 			"The stock run's record: ${WORK_DIR}/stock.sync. Log: ${WORK_DIR}/core.log")
 	endif()
-	if(NOT host_report MATCHES "ps2n-host: sync: the same as the reference run at every sync point")
+	if(host_report MATCHES "ps2n-host: sync: the same as the reference run at every sync point")
+		message("The compiled run and the stock run are the same, sync point by sync point")
+	elseif(DEFINED REGISTERS AND REGISTERS STREQUAL "report"
+			AND host_report MATCHES "ps2n-host: sync: place and time are the same as the reference run's at every sync point")
+		# A game long enough to meet an instruction where PS2Native follows the
+		# console and stock PCSX2 does not (ADR 0005): the registers then differ
+		# on purpose, and the host says which and how often.
+		message("The compiled run and the stock run are at the same place at the same time at every sync point; "
+			"their registers differ as reported above")
+	else()
 		message(FATAL_ERROR "The compiled run is not the stock run (see \"ps2n-host: sync:\" above). The stock run's record: "
 			"${WORK_DIR}/stock.sync; to see the registers, run both again with SYNC and SYNC_DETAIL. Log: ${WORK_DIR}/core.log")
 	endif()
 
-	# Megabytes, and equal.
+	# Megabytes, and compared.
 	file(REMOVE "${WORK_DIR}/stock.sync")
-	message("The compiled run and the stock run are the same, sync point by sync point")
 
 	# With a renderer that draws: the frame each run ended on, and those
 	# fingerprinted along the way (FRAME_EVERY), by what the host printed of

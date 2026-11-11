@@ -19,8 +19,9 @@ The configurations:
   lockstep      ps2n-ee and then ps2n-static, the second compared with the
                 first at every event test
   same-as-stock stock-jit and then ps2n-static, the second compared with the
-                first at every sync point (where the EE is, its cycle count,
-                its registers) and at every frame fingerprinted
+                first at every sync point (where the EE is and its cycle count
+                must be the same; which registers differ, if any, is reported)
+                and at every frame fingerprinted
 
 The disc image is read where it is and nothing is written beside it. The
 run's files (the game's console output, the core's log, the last frame as a
@@ -100,7 +101,10 @@ $arguments = @(
 if ($Renderer -ne 'null') { $arguments += @("-DRENDERER=$Renderer", "-DUPSCALE=$Upscale", "-DFRAME_EVERY=$FrameEvery") }
 if ($Pad) { $arguments += "-DPAD=$(ForCMake (Resolve-Path -LiteralPath $Pad).Path)" }
 if ($Config -eq 'lockstep') { $arguments += '-DLOCKSTEP=1' }
-elseif ($Config -eq 'same-as-stock') { $arguments += '-DSAME_AS_STOCK=1' }
+# A game is held to the stock run in place and time at every sync point, and
+# in what it shows; where its registers differ, the host says which and how
+# often (an instruction that follows the console on purpose can do that).
+elseif ($Config -eq 'same-as-stock') { $arguments += @('-DSAME_AS_STOCK=1', '-DREGISTERS=report') }
 elseif ($p[0] -eq 'ps2n') { $arguments += '-DCAPTURE=1' }
 $arguments += @('-P', (Join-Path $root 'tests\guest_test.cmake'))
 

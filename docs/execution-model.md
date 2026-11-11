@@ -137,6 +137,19 @@ unless another file is named):
     also where PS2Native chooses the image of the executable.
 15. **Blocks are filed under physical addresses**, so one formed through one
     mirror of memory is the block at the others.
+16. **VU0's flags reach their registers only where something may read
+    them.** With PCSX2's "mVU flag hack" setting, which is on unless
+    switched off, the code for a VU0 instruction that writes the status or
+    the MAC flags brings the register up to date only before a transfer of
+    that register, before a micro program is called, before a store that
+    may start one, and at the block's end (`COP2FlagHackPass`,
+    `x86/iR5900Analysis.cpp`). Of a run of such instructions only the last
+    counts, and the sticky flags collect from those alone. And the
+    recompiler's VU0 code never sets the overflow and underflow flags
+    (`mVUupdateFlags`, `x86/microVU_Upper.inl`). The VU0 instructions are
+    still carried out by PCSX2's interpreter functions, which set every flag
+    at every instruction; the runtime puts the two registers right after
+    each (`FollowRecompilerFlags` in `runtime/ee_provider.cpp`).
 
 ### The interpreter
 
@@ -220,7 +233,13 @@ record keeps such a block usable until the next event test
   code). `RecConsts` follows the common cases.
 - A system instruction or a coprocessor branch in a delay slot. The host
   counts them ("other things in delay slots that are not reproduced").
-- `GoemonTlbHack`, a fix for one game.
+- `GoemonTlbHack`, a fix for one game, and PCSX2's VU overflow fix for
+  another (with it set the provider warns: VU0's instructions in EE code
+  still never set the overflow flags).
+- What the VU0 instructions compute. It is PCSX2's VU interpreter's, with
+  the flags put right as rule 16 says. Known to differ from its recompiler:
+  `VRSQRT` of zero by zero (the flags and the result) and `VSQRT` of -0
+  (the invalid flag).
 - Where PS2Native's instruction semantics deliberately follow the console
   and not the recompiler
   ([ADR 0005](adr/0005-never-further-from-the-console-than-pcsx2.md)), a run
@@ -228,7 +247,11 @@ record keeps such a block usable until the next event test
   time.
 
 None of the first four has been seen to make a run differ: see "Comparing
-two runs" for how that is tested.
+two runs" for how that is tested. The last has: in a game, `MIN.S` of -0
+and +0 leaves -0 in the register here and on the console, and +0 under
+stock PCSX2 (the game log, step G4). The host counts how often the four
+instructions of that kind are given operands for which stock PCSX2 may
+leave something else, and says so after a run.
 
 ## Entering and leaving compiled code
 
@@ -410,7 +433,11 @@ runs no compiled code, and delegates the FPU.
 EE from its event test, and that moment exists whatever runs the EE.
 `ps2n-host -sync <file>` writes one line for each (a *sync point*): the EE's
 PC and cycle count, how far the IOP is let run, and hashes of the EE's
-general, FPU, COP0 and VU0 registers. It works under every configuration,
+general, FPU, COP0 and VU0 registers. (Registers of the machine only: not
+the variables PCSX2's interpreter functions keep beside them, such as the
+VU interpreter's pending result of a division, which a run that goes
+through those functions has and a run on PCSX2's recompilers has not.) It
+works under every configuration,
 stock PCSX2's recompiler included (the host wraps the core's IOP provider;
 PCSX2 is not touched). `-sync-against <file>` compares a run with an earlier
 run's file as it goes and reports the first sync point where place or time
@@ -423,6 +450,14 @@ test of the section above: the `*/same-as-stock/*` tests run every test
 program under stock PCSX2 and then compiled, and require the records to be
 equal. The programs whose records differ are listed, each with its cause, in
 `tests/same-as-stock-known-differences.cmake`.
+
+A game runs long enough to meet an instruction where the console is
+followed on purpose, and from there a register differs for good. So for a
+game (`game.ps1 -Config same-as-stock`) place and time must be the same at
+every sync point, and so must the pictures; the registers are reported kind
+by kind (general, FPU, COP0, VU0): at how many sync points each differed and
+where first, so that one kind that differs for a known reason does not hide
+the others.
 
 **Compiled against interpreted: event tests.** Both carry out the same
 blocks, so event tests happen at the same instructions and cycle counts.

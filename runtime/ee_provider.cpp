@@ -85,6 +85,7 @@ namespace
 	bool s_executing = false;
 	bool s_cycle_rate_reported = false;
 	bool s_full_clamp_reported = false;
+	bool s_overflow_fix_reported = false;
 
 	// Every block is to be thrown away before the next one is formed (the
 	// recompiler's eeRecNeedsReset).
@@ -607,11 +608,50 @@ namespace
 		}
 	}
 
+	// What PCSX2's recompiler leaves in VU0's status and MAC flag registers
+	// after a VU0 instruction that writes them, where PCSX2's interpreter
+	// function for the instruction, which has just carried it out, leaves
+	// something else. `status` and `mac`: the registers before the instruction.
+	// The recompiler's code is microVU in macro mode (setupMacroOp and
+	// endMacroOp in x86/microVU_Macro.inl, mVUupdateFlags in
+	// x86/microVU_Upper.inl, mVU_DIV and its like in x86/microVU_Lower.inl);
+	// the interpreter's is VU_MAC_UPDATE and VU_STAT_UPDATE in pcsx2/VUflags.cpp
+	// and the SYNC functions in pcsx2/VUops.cpp.
+	//
+	//  - The registers change only where the block says the flags reach them
+	//    (blocks::kCop2Status, kCop2Mac). The interpreter writes both at every
+	//    instruction.
+	//  - The overflow and underflow flags are never set: microVU does not
+	//    compute them (but for a game fix, which is not reproduced). So the
+	//    status register gets the instruction's zero and sign flags, adds
+	//    them to its sticky zero and sign flags, clears overflow and underflow
+	//    and keeps the rest; the MAC register gets the zero and sign flags of
+	//    each component. The interpreter sets overflow for any result whose
+	//    exponent is all ones.
+	//  - VDIV, VSQRT and VRSQRT set the invalid and division flags and add
+	//    them to their sticky flags. The interpreter replaces the sticky ones.
+	void FollowRecompilerFlags(const Step& step, int writes, u32 status, u32 mac)
+	{
+		const u32 flags = VU0.statusflag; // the interpreter's flags of this instruction alone
+
+		if (writes == blocks::kWritesStatus)
+		{
+			// VDIV, VSQRT, VRSQRT.
+			VU0.VI[REG_STATUS_FLAG].UL = (status & ~0x30u) | (flags & 0x30u) | ((flags & 0x30u) << 6);
+			return;
+		}
+
+		VU0.VI[REG_STATUS_FLAG].UL =
+			(step.info & blocks::kCop2Status) ? ((status & 0xFF0u) | (flags & 0x3u) | ((flags & 0x3u) << 6)) : status;
+		VU0.VI[REG_MAC_FLAG].UL = (step.info & blocks::kCop2Mac) ? (VU0.macflag & 0x00FFu) : mac;
+	}
+
 	// A COP2 instruction, LQC2 or SQC2 itself, with nothing more done about
 	// VU0: PCSX2's interpreter functions wait for VU0 by rules of their own.
-	void Cop2Operation(const Insn& in)
+	void Cop2Operation(const Step& step)
 	{
 		using namespace ps2n::ee::ops;
+		const Insn& in = step.insn;
 		const u32 code = in.raw;
 		const u32 opcode = code >> 26, rs = in.rs();
 
@@ -648,10 +688,27 @@ namespace
 			cpuRegs.pc = in.addr + 4;
 			s_stats.delegated++;
 			s_stats.delegated_by_op[static_cast<size_t>(in.op)]++;
-			if (rs >= 020)
-				Int_COP2SPECIAL1PrintTable[code & 63]();
-			else
+			if (rs < 020)
+			{
 				R5900::GetInstruction(code).interpret();
+				return;
+			}
+
+			// The function computes as PCSX2's VU interpreter does, which is not
+			// in every respect what its recompiler makes of the instruction. The
+			// flags are where a game has been seen to meet the difference.
+			const int writes = blocks::Cop2Flags(code);
+			const u32 status = VU0.VI[REG_STATUS_FLAG].UL;
+			const u32 mac = VU0.VI[REG_MAC_FLAG].UL;
+			// The interpreter keeps a copy of the clip flags to work on; the
+			// recompiler works on the register.
+			if (writes & blocks::kWritesClip)
+				VU0.clipflag = VU0.VI[REG_CLIP_FLAG].UL;
+
+			Int_COP2SPECIAL1PrintTable[code & 63]();
+
+			if (writes & (blocks::kWritesStatus | blocks::kWritesMac))
+				FollowRecompilerFlags(step, writes, status, mac);
 		}
 	}
 
@@ -723,7 +780,7 @@ namespace
 		const u32 opcode = in.raw >> 26;
 		if (opcode == 022 || opcode == 066 || opcode == 076)
 		{
-			Cop2Operation(in);
+			Cop2Operation(step);
 			return;
 		}
 
@@ -1124,6 +1181,12 @@ namespace
 			Console.Warning("ps2n: the EE clamp mode Full is not implemented. FPU instructions are carried out by PCSX2's"
 							" interpreter functions, and no code compiled ahead of time is used.");
 		}
+		if (EmuConfig.Gamefixes.VUOverflowHack && !s_overflow_fix_reported)
+		{
+			s_overflow_fix_reported = true;
+			Console.Warning("ps2n: PCSX2's VU overflow game fix is not implemented for VU0's instructions in EE code (COP2):"
+							" they never set the overflow flags");
+		}
 
 		if (s_blocks_need_reset)
 		{
@@ -1273,10 +1336,15 @@ void ps2n::ee::StopTrace()
 	}
 }
 
+// ps2n/ops_fpu.h
+uint64_t ps2n::ee::ops::fpu::console_followed[2] = {0, 0};
+
 const ps2n::ee::Stats& ps2n::ee::GetStats()
 {
 	s_stats.interpreted_cycles = s_interpreted_eighths / 8;
 	s_stats.interpreted_cycles_in_image = s_interpreted_eighths_in_image / 8;
+	s_stats.console_followed_abs_neg = ops::fpu::console_followed[0];
+	s_stats.console_followed_max_min = ops::fpu::console_followed[1];
 	return s_stats;
 }
 
@@ -1478,7 +1546,7 @@ uint32_t ps2n::ee::cop2Instruction(uint32_t pc, uint32_t start, uint32_t eighths
 	{
 		FastmemFault(step);
 	}
-	Cop2Operation(step.insn);
+	Cop2Operation(step);
 	return eighths;
 }
 

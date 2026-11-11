@@ -84,7 +84,9 @@ argued about.
   the allocator. A difference would show in the comparison.
 - **VU0's own instructions** (COP2) are still carried out by PCSX2's
   interpreter functions, not as its recompiler computes them. When VU0 is
-  brought up to date is reproduced; the arithmetic is not yet PS2Native's.
+  brought up to date is reproduced, and since the first level of the game
+  showed the need, so is where and how its flags reach their registers; the
+  arithmetic is not yet PS2Native's.
 
 ## Consequences
 

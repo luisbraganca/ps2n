@@ -949,6 +949,14 @@ namespace
 			std::fprintf(stderr, "ps2n-host: %llu EE cycles passed in timeout loops that were not run\n",
 				static_cast<ull>(stats.timeout_loop_cycles));
 		}
+		if (stats.console_followed_abs_neg || stats.console_followed_max_min)
+		{
+			// Where a register may differ from a stock run's on purpose (ADR 0005).
+			std::fprintf(stderr,
+				"ps2n-host: the console was followed where stock PCSX2 may leave something else in an FPU register: max.s and"
+				" min.s of +0 and -0 or of bits PCSX2 clamps %llu times, abs.s and neg.s of such bits %llu times\n",
+				static_cast<ull>(stats.console_followed_max_min), static_cast<ull>(stats.console_followed_abs_neg));
+		}
 
 		// The system calls made most often, by number.
 		{
@@ -1185,8 +1193,20 @@ namespace
 						const char* state = ps2n::host::GetSyncStateMismatch();
 						if (!time && !state)
 							std::fputs("ps2n-host: sync: the same as the reference run at every sync point\n", stderr);
+						else if (!time)
+							std::fputs("ps2n-host: sync: place and time are the same as the reference run's at every sync point\n", stderr);
 						if (state)
 							std::fprintf(stderr, "ps2n-host: sync: registers first differ %s\n", state);
+						for (int kind = 0; kind < 4; kind++)
+						{
+							const char* name = nullptr;
+							const char* first = nullptr;
+							if (const u64 differing = ps2n::host::GetSyncRegisterDifferences(kind, &name, &first))
+							{
+								std::fprintf(stderr, "ps2n-host: sync: %s differ at %llu sync points, first %s\n", name,
+									static_cast<unsigned long long>(differing), first);
+							}
+						}
 						if (time)
 							std::fprintf(stderr, "ps2n-host: sync: place or time first differs %s\n", time);
 					}

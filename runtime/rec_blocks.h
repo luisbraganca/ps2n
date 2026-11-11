@@ -48,7 +48,20 @@ namespace ps2n::ee::blocks
 		kBranch = 1 << 11, // a branch or jump; a kDelaySlot step follows unless it was dropped
 		kFastmem = 1 << 12, // a load or store compiled as a direct access to host memory, which faults once
 		                    // if the memory turns out not to be plain; cleared when that has happened
+		kCop2Status = 1 << 13, // a VU0 instruction that writes VU0's status flags: here they reach the register
+		kCop2Mac = 1 << 14, // one that writes its MAC flags: here they reach the register
 	};
+
+	// Which of VU0's flag registers the recompiler's code for a COP2 instruction
+	// can write: 1 the status flags, 2 the MAC flags, 4 the clip flags
+	// (cop2flags in pcsx2/x86/ix86-32/iR5900.cpp).
+	enum Cop2FlagKind : int
+	{
+		kWritesStatus = 1,
+		kWritesMac = 2,
+		kWritesClip = 4,
+	};
+	int Cop2Flags(uint32_t code);
 
 	struct Step
 	{

@@ -16,7 +16,7 @@ The run files, pictures included, are under the git-ignored build tree.
 | G1 The interpreter as reference | **Done for the first 4,200 frames** (2026-11-11): with everything interpreted the run is the stock run. Same console output, same picture at every frame, and the same place and cycle count at every one of the 38.5 million moments the two can be compared; the registers as well, by way of the compiled run (G3). |
 | G2 The game's code compiled | **Done** (2026-11-11): the boot executable builds into the host, 1,003,452 instructions in 64 files. |
 | G3 The compiled game | **Done for the first 4,200 frames** (2026-11-11): the compiled run is the stock run at every one of those 38.5 million moments, registers included, with the same picture at every frame; it is the interpreted run at every event test; none of the executable's code is interpreted; no code outside the executable has run. |
-| G4 Further into the game | Not begun. |
+| G4 Further into the game | **The scripted half reaches and plays the first level** (2026-11-11): with the same input the compiled game is where stock PCSX2 is, at the same cycle count, at every one of 93 million sync points over 17,500 frames: menus, three and a half minutes of play, being killed, Retry. What differs is listed: one bit of history in VU0's flags, since reproduced, and the sign of a zero where the console is followed on purpose. Not yet: that whole run again with the last build, every tenth picture compared; a window, sound and a controller. |
 | G5 Measurement and report | Not begun. First times are below; they are not yet a measurement of the game. |
 
 ## The steps and their pass criteria
@@ -56,6 +56,12 @@ scripts\windows\game.ps1 -Image $iso -Config same-as-stock -Frames 4200 -FrameEv
 
 # The compiled run against the interpreted run, at every event test:
 scripts\windows\game.ps1 -Image $iso -Config lockstep -Frames 900 -Name killzone
+
+# Into the first level and through three and a half minutes of play there (step G4):
+scripts\windows\game.ps1 -Image $iso -Config same-as-stock -Frames 17500 -FrameEvery 10 -Pad tests\games\killzone\level1.pad -Name level1
+
+# The pictures a run saved, sixty to a sheet, to look a whole run over:
+scripts\windows\sheets.ps1 -Name level1 -Config same-as-stock
 ```
 
 The capture file is derived from the game and lives in the build tree, which
@@ -69,8 +75,10 @@ changes at frame boundaries, so that every run gets it at the same moments;
 `-times`; `ps2n-recomp compile --parts`; `ps2n-recomp capture`, which puts
 several runs' reports together; `-sync` and `-sync-against`, the record of
 sync points that a stock run can write as well, and the `same-as-stock`
-configuration built on it; `ps2n-recomp disasm`; and in the host's report,
-the places where compiled code handed over to the interpreter.
+configuration built on it; `ps2n-recomp disasm`; in the host's report, the
+places where compiled code handed over to the interpreter; and
+`scripts\windows\sheets.ps1`, which puts the pictures a run saved side by
+side under their frame numbers.
 
 ## What is on the disc
 
@@ -341,27 +349,157 @@ is gone.
   now prints what stock PCSX2 prints: PCSX2's recompiler drops the second
   branch, and so does PS2Native.
 
+## G4: further into the game (Windows, 2026-11-11)
+
+`tests/games/killzone/level1.pad` takes the game from power-on through its
+menus into the first level of the campaign and plays there: 17,500 frames.
+What each press is for was found by looking at the pictures of runs under
+stock PCSX2, sixty to a sheet (`scripts\windows\sheets.ps1`).
+
+| Frames | What is on display |
+|---|---|
+| from 2,350 | The title screen. Cross at 2,300 skips the intro film |
+| from 2,750 | The main menu: Options, Game, Extras |
+| from 2,950 | Game: Campaign or Battlefields |
+| from 3,400 | "Create profile", once the game has looked for a memory card |
+| 3,750 to 4,200 | The game's keyboard: a letter is taken when a direction is held and a button pressed |
+| from 4,480 | "Do you want to save this profile to the memory card?" No |
+| from 4,750 | Select level; from 5,050 the difficulty; from 5,350 the character |
+| from 5,800 | The level's opening scene, skipped at 5,900; the level loads until 6,550 |
+| from 6,600 | The first level, in first person: a trench under fire. The script walks, looks, fires, crouches, reloads |
+| 9,000 to 14,000 | Out of the trench and across the battlefield: enemy soldiers, shell bursts, objectives met and set, the player hit and, at about 14,000, killed |
+| from 14,500 | "Failed". Retry at 15,200, "Save progression?" Cancel at 15,500 |
+| from 15,600 | The level again, and more of the same play |
+
+### The compiled game against stock PCSX2
+
+The first 9,000 frames, each configuration run by itself with a picture
+saved every 50 frames (the script as it then was; it is the same up to frame
+8,960):
+
+| | Stock PCSX2, recompilers | Compiled |
+|---|--:|--:|
+| Wall-clock time of the run | 76.8 s | 83.6 s |
+| EE cycle count at frame 9,000 | 53,078,292,032 | the same |
+| Lines printed by the game and the BIOS | 108 | the same 108 |
+| The 179 pictures | | the same, file for file |
+| Block starts in the executable that had to be interpreted | | 1 (11 instructions); none after a rebuild with it |
+| Instructions interpreted in all (the BIOS) | | 162,415,664 |
+| in user memory outside the executable | | **0** |
+| VU0 instructions carried out by PCSX2's interpreter functions | | 43,356,999 |
+
+All 17,500 frames, the compiled run compared with a stock run at every sync
+point (`game.ps1 -Config same-as-stock`):
+
+| | |
+|---|--:|
+| EE cycle count at frame 17,500, both runs | 103,213,332,030 |
+| Sync points | 93,221,937 |
+| of them with the EE at the same place at the same cycle count | **all** |
+| Instructions of the executable interpreted | 0 |
+| Instructions interpreted in all (the BIOS) | 173,513,096 (0.21% of the EE's cycles) |
+| in user memory outside the executable | **0** |
+| Event tests | 112,297,746 |
+| System calls made; `FlushCache` calls not made | 1,047,768; 30,437 |
+| VU0 instructions carried out by PCSX2's interpreter functions | 158,299,586 |
+
+- **The compiled game gets where stock PCSX2 gets**, at the same time, all
+  the way: place and time are the same at every sync point.
+- **Still no code outside the executable has run**, not even in the level:
+  none of the four `.REL` modules has been called on yet.
+- The analysis, with the capture file of the first 4,200 frames, had found
+  all of the game's code that the menus and the level use but for one entry
+  point.
+- That run was made before the rule for VU0's flags below was in. With it
+  in, the first 8,000 frames were compared again (61,891,640 sync points,
+  place and time the same at every one). **The whole run has not been
+  repeated with the last build**, and its pictures (one every ten frames)
+  have therefore not been compared beyond the 179 above.
+- The times are not a measurement of speed: the long run writes two records
+  of 7.5 GB and hundreds of pictures.
+- Whole suite with the last build: 2 unit test programs (42 cases) and 453
+  tests pass in 153 s. The six new ones are those of
+  `tests/programs/countcarry.s`
+  ([ADR 0013](adr/0013-pcsx2s-count-register-carry-mirrored-until-fixed.md)).
+
+### What differs, and why
+
+The registers of the two runs are compared at every sync point as well.
+Three things came of that.
+
+1. **Not a difference: a variable of PCSX2's, not a register.** The record
+   hashed the VU interpreter's pending result of a division (`VU0.q`),
+   which PCSX2's interpreter functions write on the way to the Q register
+   and its recompilers never touch. The Q register itself was the same. The
+   record now holds the machine's registers only.
+2. **VU0's status flags, in the level's first frame. Reproduced since.** The
+   game compares two boxes with two `vsub` in a row. PCSX2's recompiler
+   (microVU) never sets the overflow and underflow flags, and with its
+   "flag hack" setting, which is on unless switched off, it brings the
+   status and MAC registers up to date only at the last such instruction
+   before something can read them, as it finds out from each block
+   (`COP2FlagHackPass`). PS2Native carried these instructions out with
+   PCSX2's interpreter functions, which set the flags at every instruction
+   and call a result whose exponent is all ones an overflow: the sticky
+   overflow flag was set here and not there. The block record now holds
+   the recompiler's rule and the flags are put right after each such
+   instruction (`FollowRecompilerFlags`). At the sync point where the runs
+   differed before, they no longer do.
+3. **The sign of a zero in an FPU register. On purpose.** `min.s` of -0 and
+   +0, at EE cycle 38,745,698,429, as the level starts. PS2Native gives -0,
+   as the console does (ps2autotests `cpu/ee_fpu/arithmetic`,
+   [ADR 0005](adr/0005-never-further-from-the-console-than-pcsx2.md)).
+   PCSX2's recompiler gives whichever operand its register allocator put
+   second, here +0. The value goes into memory and comes back: the FPU's
+   registers differ from sync point 57,130,066. This is the difference that
+   was listed before a game met it; nothing else has been seen to follow
+   from it. The host now counts how often `max.s`, `min.s`, `abs.s` and
+   `neg.s` are given such operands, and says so after a run.
+
+Because of the third, a game is held to the stock run in place and time and
+in what it shows, and the comparison reports for each kind of register
+(general, FPU, COP0, VU0) at how many sync points it differed and where
+first, so that one kind that differs for a known reason does not hide the
+others. A test program is still held to the registers as well.
+
+What is known of the VU0 instructions that is still PCSX2's interpreter's
+and not its recompiler's: `vrsqrt` of zero by zero (the flags and the
+result), and `vsqrt` of -0 (the invalid flag). Whether the game meets
+either is not known yet: the run that tells VU0's registers apart from the
+FPU's is the one still to be made.
+
 ## Open
 
+- **The level run with the last build.** All 17,500 frames against stock
+  again, with a picture every ten frames, to see the pictures compared over
+  the whole run and what the registers do after the first `min.s`.
+- **VU0's instructions.** They are the one family of the game's own code
+  that is not PS2Native's: 158 million calls of PCSX2's interpreter
+  functions in 17,500 frames, each through the runtime. Semantics of
+  PS2Native's own, following PCSX2's recompiler, would close the two known
+  differences above and take those calls out of the level's time.
 - **Speed.** 4,200 frames of logos, a prompt and a film take 25.7 s
   compiled against 22.9 s under stock PCSX2 with the software renderer, and
-  15.1 s against 11.2 s with nothing drawn. That is not yet a measurement
-  of the game: nothing of a level has run. Where the four seconds go has
-  not been measured either. The BIOS, which is interpreted, accounts for
-  1.1% of the EE's cycles here; translating it ahead of time is
+  15.1 s against 11.2 s with nothing drawn. Where the four seconds go has
+  not been measured. The BIOS, which is interpreted, accounts for 1.1% of
+  the EE's cycles there; translating it ahead of time is
   [ADR 0007](adr/0007-bios-code-translated-ahead-of-time.md), not started.
+  **The level's speed has not been measured.** The only times are those of
+  the first 9,000 frames, each run saving 180 pictures: 76.8 s under stock
+  PCSX2, 83.6 s compiled.
 - **What a longer run could meet.** PCSX2's recompiler throws all its
   blocks away when its code cache is full, and PS2Native cannot know when
   that is (execution model, "What is not reproduced"). It did not happen in
-  these 4,200 frames. PCSX2 logs it when it does ("EE/iR5900 Recompiler
-  Reset" in `core.log` after the two at start-up), and the same-as-stock
-  comparison would show the runs part there.
+  17,500 frames: stock PCSX2's log has the two resets at start-up and no
+  other. PCSX2 logs it when it does ("EE/iR5900 Recompiler Reset" in
+  `core.log`), and the same-as-stock comparison would show the runs part
+  there.
 - **Code outside the executable.** None has run yet. When a `.REL` module
   does, its code has to be captured and compiled; the proof of concept left
   that open.
-- **Further into the game:** the title screen, the menus, a level. Each
-  needs more of the controller script, and then a rebuild for whatever new
-  code runs.
+- **Further into the game:** the rest of the first level and the levels
+  after it, the other menus, the multiplayer side. Each needs more of the
+  controller script, and then a rebuild for whatever new code runs.
 - **A window, sound and a controller** for the maintainer to play it. The
   window takes PS2Native's icon and a title of its own. What the core can
   draw over the picture (messages, performance figures, indicators) gets a

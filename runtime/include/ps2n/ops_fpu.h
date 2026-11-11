@@ -63,6 +63,15 @@ namespace ps2n::ee::ops
 		inline constexpr uint32_t kFlagSI = 0x00000040u; // sticky invalid
 		inline constexpr uint32_t kFlagSD = 0x00000020u; // sticky division by zero
 
+		// How often ABS.S or NEG.S ([0]), MAX.S or MIN.S ([1]) was given operands
+		// for which stock PCSX2's recompiler may leave something else in the
+		// destination than the console does, and this file (the first item
+		// above): bits it clamps, or for the last two a zero of each sign. For
+		// the report of a run: when a run is compared with a stock run and an
+		// FPU register differs, this is the first place to look.
+		extern uint64_t console_followed[2];
+		inline bool clampedByPcsx2(uint32_t bits) { return (bits & 0x7F800000u) == 0x7F800000u; }
+
 		// PCSX2's clamp settings: CHECK_FPU_OVERFLOW and CHECK_FPU_EXTRA_OVERFLOW.
 		inline bool clampResults() { return EmuConfig.Cpu.Recompiler.fpuOverflow; }
 		inline bool clampOperands() { return EmuConfig.Cpu.Recompiler.fpuExtraOverflow; }
@@ -292,18 +301,43 @@ namespace ps2n::ee::ops
 	inline void MOV_S(uint32_t fd, uint32_t fs) { fpuRegs.fpr[fd].UL = fpuRegs.fpr[fs].UL; }
 
 	// ---- on the bits, as the console ---------------------------------------------
-	inline void ABS_S(uint32_t fd, uint32_t fs) { fpuRegs.fpr[fd].UL = fpuRegs.fpr[fs].UL & ~fpu::kSign; }
-	inline void NEG_S(uint32_t fd, uint32_t fs) { fpuRegs.fpr[fd].UL = fpuRegs.fpr[fs].UL ^ fpu::kSign; }
+	inline void ABS_S(uint32_t fd, uint32_t fs)
+	{
+		const uint32_t s = fpuRegs.fpr[fs].UL;
+		if (fpu::clampedByPcsx2(s)) [[unlikely]]
+			fpu::console_followed[0]++;
+		fpuRegs.fpr[fd].UL = s & ~fpu::kSign;
+	}
+	inline void NEG_S(uint32_t fd, uint32_t fs)
+	{
+		const uint32_t s = fpuRegs.fpr[fs].UL;
+		if (fpu::clampedByPcsx2(s)) [[unlikely]]
+			fpu::console_followed[0]++;
+		fpuRegs.fpr[fd].UL = s ^ fpu::kSign;
+	}
+
+	namespace fpu
+	{
+		// MAX.S and MIN.S: operands PCSX2 clamps, or +0 and -0.
+		inline void noteMaxMin(int32_t s, int32_t t)
+		{
+			const uint32_t us = static_cast<uint32_t>(s), ut = static_cast<uint32_t>(t);
+			if ((((us | ut) & ~kSign) == 0 && us != ut) || clampedByPcsx2(us) || clampedByPcsx2(ut)) [[unlikely]]
+				console_followed[1]++;
+		}
+	} // namespace fpu
 
 	// The EE's floats order like sign-and-magnitude integers.
 	inline void MAX_S(uint32_t fd, uint32_t fs, uint32_t ft)
 	{
 		const int32_t s = fpuRegs.fpr[fs].SL, t = fpuRegs.fpr[ft].SL;
+		fpu::noteMaxMin(s, t);
 		fpuRegs.fpr[fd].SL = (s < 0 && t < 0) ? (s < t ? s : t) : (s > t ? s : t);
 	}
 	inline void MIN_S(uint32_t fd, uint32_t fs, uint32_t ft)
 	{
 		const int32_t s = fpuRegs.fpr[fs].SL, t = fpuRegs.fpr[ft].SL;
+		fpu::noteMaxMin(s, t);
 		fpuRegs.fpr[fd].SL = (s < 0 && t < 0) ? (s > t ? s : t) : (s < t ? s : t);
 	}
 

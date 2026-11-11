@@ -61,7 +61,9 @@ page.
 | 463 places, 5,079 instructions, then none | game-log.md, "G3", "One rebuild is enough" |
 | 38,478,822 moments, 3 GB, 4,199 frames, 47,705,744 event tests, 1.11% | game-log.md, "G3", "4,200 frames, with the button press" |
 | 22.9 s and 25.7 s, 11.2 s and 15.1 s, and the two runs of each | game-log.md, "G3" and "Open" |
-| 59 of 63 test programs; 447 tests, 42 cases, 136 s | game-log.md, "The timing difference", "What was measured" |
+| 59 of 63 test programs | game-log.md, "The timing difference", "What was measured" |
+| 453 tests, 42 cases, 153 s | game-log.md, "G4", "The compiled game against stock PCSX2" |
+| The longer run: three and a half minutes of the first level, 93,221,937 moments, pictures compared for 9,000 frames | game-log.md, "G4" |
 | 40 of 55, 39, 38, and "on no line" | [ADR 0005](../adr/0005-never-further-from-the-console-than-pcsx2.md) |
 | 204 instructions, 4,077,475 and 36,976,118 cases | [poc-log.md](../poc-log.md), "Increment 5" |
 | The six loops: the ratios, the milliseconds, "8 to 23 times" | poc-log.md, "P4 Measurement" |

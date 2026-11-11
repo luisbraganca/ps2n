@@ -127,6 +127,13 @@ namespace ps2n::ee
 		/// first.
 		uint64_t syscalls_skipped = 0;
 		uint64_t other_mirror = 0;
+		/// Times an FPU instruction that follows the console (ps2n/ops_fpu.h) was
+		/// given operands for which stock PCSX2's recompiler may leave something
+		/// else in the register: ABS.S and NEG.S of bits it clamps; MAX.S and
+		/// MIN.S of such bits or of a zero of each sign. From compiled and from
+		/// interpreted code.
+		uint64_t console_followed_abs_neg = 0;
+		uint64_t console_followed_max_min = 0;
 		/// SYSCALL instructions executed, by the number in $v1 (its low byte;
 		/// the kernel's interrupt-safe variants have the negated number and are
 		/// counted with the plain ones), from compiled and from interpreted code.

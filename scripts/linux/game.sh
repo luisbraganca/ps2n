@@ -13,8 +13,8 @@
 #   --config <name>    stock-jit, stock-interp, ps2n-ee, ps2n-static (default),
 #                      lockstep (ps2n-ee, then ps2n-static compared with it at
 #                      every event test) or same-as-stock (stock-jit, then
-#                      ps2n-static compared with it at every sync point and at
-#                      every frame fingerprinted)
+#                      ps2n-static compared with it at every sync point, in
+#                      place and time, and at every frame fingerprinted)
 #   --frames <n>       stop after this many frames (default 900)
 #   --renderer <name>  null, sw (default), vulkan or opengl
 #   --frame-every <n>  also fingerprint and save the frame on display every n
@@ -99,7 +99,8 @@ fi
 if [ "$config" = "lockstep" ]; then
 	arguments+=(-DLOCKSTEP=1)
 elif [ "$config" = "same-as-stock" ]; then
-	arguments+=(-DSAME_AS_STOCK=1)
+	# Place and time must be the same; which registers differ, if any, is reported.
+	arguments+=(-DSAME_AS_STOCK=1 -DREGISTERS=report)
 elif [ "$ee" = "ps2n" ]; then
 	arguments+=(-DCAPTURE=1)
 fi

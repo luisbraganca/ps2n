@@ -72,7 +72,10 @@ Decisions:
   approved; the first game is Killzone (`SCES-52004`).
 - [ADR 0010](docs/adr/0010-pcsx2-fix-goes-upstream-through-the-maintainer.md):
   the fix for PCSX2's VU0 status-flag bug is offered to PCSX2 by the
-  maintainer; PS2Native carries it in its patch queue only if that stalls.
+  maintainer; PS2Native carries it in its patch queue only if that stalls
+  (30 days after the pull request is opened with no reply from a PCSX2
+  maintainer). The corrections are the maintainer's to write, not a
+  session's.
 - [ADR 0011](docs/adr/0011-time-is-counted-as-pcsx2s-recompiler-counts-it.md):
   time is counted exactly as PCSX2's EE recompiler counts it. A run on
   PS2Native is the stock run, sync point for sync point; a difference is a
@@ -86,6 +89,12 @@ Decisions:
   draw over the picture (messages, performance figures, indicators): that is
   switched off by settings, never restyled by patching PCSX2. Not built yet;
   it comes with the host's window.
+- [ADR 0013](docs/adr/0013-pcsx2s-count-register-carry-mirrored-until-fixed.md):
+  a defect of PCSX2's recompiler (reading the count register carries into
+  `EntryHi`) is offered upstream in the same pull request and reproduced by
+  PS2Native until PCSX2 has the correction, as long as it costs nothing in
+  speed and changes nothing on screen. `tests/programs/countcarry.s` shows
+  it.
 - [ADR 0014](docs/adr/0014-the-website-is-served-from-docs.md): the project
   has a website, one page that GitHub Pages serves from `docs/` as it is
   (`docs/.nojekyll`). The documentation stays where it is; the site is
@@ -109,7 +118,8 @@ tests/unit/               unit tests of the build-time tools
 tests/                    CTest registration for programs booted on the core, the driver script, the recorded
                           baselines; recompiles the test programs into the build tree and links them into the host
 tests/programs/           our own test programs, in assembly for core's assembler: selfmod (rewrites its code), bench,
-                          timeout (a delay loop that PCSX2 does not run)
+                          timeout (a delay loop that PCSX2 does not run), countcarry (a defect of PCSX2's
+                          recompiler that PS2Native reproduces)
 tests/sdk/                C test programs built with ps2sdk (prebuilt in bin/), their sources, what stock PCSX2 prints
 tests/games/              controller scripts for runs of a game (button presses we wrote; nothing from a game)
 scripts/windows, linux    build and test entry points
@@ -123,6 +133,9 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
 
 - Build: `scripts\windows\build.ps1` (add `-Reconfigure` after changing any
   CMake file). It enters the Visual Studio developer shell by itself.
+  `-Pcsx2Source <dir> -BuildDir build\<name>` builds against another PCSX2
+  source tree in a build tree of its own (and `test.ps1 -BuildDir` tests
+  it): to try a newer PCSX2, or a change someone made to PCSX2.
 - Test: `scripts\windows\test.ps1 -Bios <BIOS image>`, optionally
   `-Filter <regex>`. The BIOS is the maintainer's `SCPH-70004` dump in
   `Documents\PCSX2\bios`. Tests are skipped, not passed, without one.
@@ -136,6 +149,10 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   `-Capture` to collect what had to be interpreted. `docs/game-log.md`, "How
   to run it", has the commands. A run's files are in
   `build\windows-clang\ps2n\tests\game\<name>\<configuration>`.
+  `scripts\windows\sheets.ps1 -Name <name> -Config <configuration>` puts the
+  pictures a run saved on contact sheets, sixty to an image: the way to look
+  a whole run over, and to find out what a controller script has to press
+  when (look at a sheet with the Read tool).
 - Tests are named `<suite>/<configuration>/<program>`. Suites: `ps2autotests`
   (console recordings), `programs` (our own, `tests/programs/*.s`, built with
   `ps2n-recomp assemble`) and `sdk` (C programs built with ps2sdk, binaries in

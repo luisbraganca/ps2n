@@ -32,6 +32,18 @@ locally."
   first entry in its patch queue, until PCSX2 has it. How long is too long
   is the maintainer's to say; no time was named.
 
+Added on 2026-11-11, when the session asked how long. The maintainer's
+words: "Yea I can go with 30 days. Create the fix for both this fix and the
+EntryHI, I'll then create the PR." How they were read:
+
+- **Too long is 30 days** from the day the pull request is opened without a
+  reply from one of PCSX2's maintainers.
+- **One pull request carries two corrections:** this one, and the one for
+  the count register's carry into `EntryHi`
+  ([ADR 0013](0013-pcsx2s-count-register-carry-mirrored-until-fixed.md)).
+- "Create the fix": see below. The corrections are the maintainer's to
+  write.
+
 ## What an AI session may and may not do for that pull request
 
 PCSX2's `AGENTS.md` decides this, not PS2Native:
@@ -49,6 +61,14 @@ PCSX2's `AGENTS.md` decides this, not PS2Native:
   explain what the two functions do, say how the bug can be seen and how a
   fix can be checked, and ask the questions that show whether the
   explanation has landed.
+
+On 2026-11-11 the maintainer asked the session to create both corrections
+on one branch for them to open the pull request from. The session did not
+write them, for the reasons above, and said so. What it does instead: it
+shows where each defect is and how it can be seen, checks the maintainer's
+own change by building it and running the tests that show the defect, and
+keeps a test program in this repository that shows the second one
+(`tests/programs/countcarry.s`).
 
 ## Consequences
 

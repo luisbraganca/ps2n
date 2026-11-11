@@ -15,6 +15,7 @@
 #include "pcsx2/Patch.h"
 #include "pcsx2/R5900OpcodeTables.h"
 #include "pcsx2/VMManager.h"
+#include "pcsx2/VU.h"
 #include "pcsx2/vtlb.h"
 
 #include <cstdlib>
@@ -197,6 +198,105 @@ namespace
 				needs_vu0_sync = block_interlocked;
 			}
 		}
+	}
+
+	// ---- COP2: where VU0's flags reach their registers -------------------------------
+	// COP2FlagHackPass::Run (x86/iR5900Analysis.cpp), over the words of
+	// [start, nominal end): PCSX2's "mVU flag hack", which is on unless
+	// switched off. The recompiler's code for a VU0 instruction that writes
+	// the status or the MAC flags only brings the register up to date where
+	// something may read it afterwards: before a transfer of that register,
+	// before a micro program is called, before a store that may start one, and
+	// at the block's end. So of a run of such instructions only the last
+	// counts, and the sticky flags only ever collect from those. One entry per
+	// instruction: kCop2Status, kCop2Mac or neither. (The clip flags are written
+	// by every instruction that writes them; and where in the block the status
+	// register is kept in microVU's own layout is not something a block lets
+	// anything see.)
+	void Cop2FlagPass(const std::vector<u32>& words, std::vector<u16>& out)
+	{
+		const size_t n = words.size();
+		constexpr size_t kNone = ~size_t{0};
+		size_t last_status = kNone, last_mac = kNone;
+		size_t cfc2 = 0; // the CFC2 of the status register that a CTC2 to it is paired with
+
+		const auto commit_status = [&]() {
+			if (last_status != kNone)
+				out[last_status] |= kCop2Status;
+		};
+		const auto commit_mac = [&]() {
+			if (last_mac != kNone)
+				out[last_mac] |= kCop2Mac;
+		};
+
+		for (size_t i = 0; i < n; i++)
+		{
+			const u32 code = words[i];
+			const u32 opcode = code >> 26, rs = (code >> 21) & 31, rd = (code >> 11) & 31, funct = code & 63;
+
+			// SB, SH, SW: may start VU0 through VIF0.
+			if (opcode == 050 || opcode == 051 || opcode == 053)
+			{
+				commit_status();
+				commit_mac();
+				continue;
+			}
+			if (opcode != 022)
+				continue;
+
+			// CTC2 to the status register, then CFC2 of it: every instruction
+			// in between has to have its sticky flags right.
+			if (rs == 006 && rd == REG_STATUS_FLAG)
+			{
+				cfc2 = i;
+				for (size_t j = i; j < n; j++)
+				{
+					const u32 other = words[j];
+					if ((other >> 26) == 022 && ((other >> 21) & 31) == 002 && ((other >> 11) & 31) == REG_STATUS_FLAG)
+					{
+						cfc2 = j;
+						break;
+					}
+				}
+			}
+
+			// CFC2 and CTC2 of a flag register. (For FBRST the pass tests for
+			// CFC2 where its comment says CTC2; as it is written.)
+			if (rs == 006 || rs == 002)
+			{
+				if (rd == REG_STATUS_FLAG)
+					commit_status();
+				else if (rd == REG_MAC_FLAG)
+					commit_mac();
+				else if (rd == REG_FBRST && rs == 002)
+				{
+					commit_status();
+					commit_mac();
+				}
+			}
+
+			// VCALLMS, VCALLMSR.
+			if (((code >> 25) & 1) == 1 && ((code >> 2) & 15) == 14)
+			{
+				commit_status();
+				commit_mac();
+			}
+
+			const int writes = Cop2Flags(code);
+			if (writes & kWritesStatus)
+			{
+				// Between a CTC2 and its CFC2, and always for VDIV, VSQRT and VRSQRT.
+				const u32 sub_opcode = (code & 3) | ((code >> 4) & 0x7c);
+				if (i < cfc2 || (rs >= 020 && funct >= 074 && sub_opcode >= 070 && sub_opcode <= 072))
+					out[i] |= kCop2Status;
+				last_status = i;
+			}
+			if (writes & kWritesMac)
+				last_mac = i;
+		}
+
+		commit_status();
+		commit_mac();
 	}
 
 	// ---- forming a block --------------------------------------------------------
@@ -405,6 +505,13 @@ namespace
 					if (flags & (kCop2Sync | kCop2Finish))
 						info = (info & ~kCop2Sync) | kCop2Finish;
 
+					// Whether its flags reach the registers (setupMacroOp): where
+					// the pass says so, or always with the flag hack off.
+					if (!EmuConfig.Speedhacks.vuFlagHack)
+						info |= kCop2Status | kCop2Mac;
+					else
+						info |= flags & (kCop2Status | kCop2Mac);
+
 					// VCALLMS, VCALLMSR: INTERPRETATE_COP2_FUNC.
 					const u32 funct = code & 63;
 					if (funct == 070 || funct == 071)
@@ -485,6 +592,68 @@ namespace
 const Stats& ps2n::ee::blocks::GetStats()
 {
 	return s_stats;
+}
+
+int ps2n::ee::blocks::Cop2Flags(u32 code)
+{
+	// cop2flags(), as it is written.
+	if ((code >> 26) != 022)
+		return 0; // not COP2
+	if (((code >> 25) & 1) == 0)
+		return 0; // a branch or a transfer
+
+	switch ((code >> 2) & 15)
+	{
+		case 15:
+			switch ((code >> 6) & 0x1f)
+			{
+				case 4: // ITOF
+				case 5: // FTOI
+				case 12: // MOVE, MR32
+				case 13: // LQI, SQI, LQD, SQD
+				case 15: // MTIR, MFIR, ILWR, ISWR
+				case 16: // RNEXT, RGET, RINIT, RXOR
+					return 0;
+				case 7: // MULAq, ABS, MULAi, CLIP
+					if ((code & 3) == 1) // ABS
+						return 0;
+					if ((code & 3) == 3) // CLIP
+						return kWritesClip;
+					return kWritesStatus | kWritesMac;
+				case 11: // SUBA, MSUBA, OPMULA, NOP
+					if ((code & 3) == 3) // NOP
+						return 0;
+					return kWritesStatus | kWritesMac;
+				case 14: // DIV, SQRT, RSQRT, WAITQ
+					if ((code & 3) == 3) // WAITQ
+						return 0;
+					return kWritesStatus;
+				default:
+					break;
+			}
+			break;
+		case 4: // MAXbc
+		case 5: // MINIbc
+		case 12: // IADD, ISUB, IADDI
+		case 13: // IAND, IOR
+		case 14: // VCALLMS, VCALLMSR
+			return 0;
+		case 7:
+			if ((code & 1) == 1) // MAXi, MINIi
+				return 0;
+			return kWritesStatus | kWritesMac;
+		case 10:
+			if ((code & 3) == 3) // MAX
+				return 0;
+			return kWritesStatus | kWritesMac;
+		case 11:
+			if ((code & 3) == 3) // MINI
+				return 0;
+			return kWritesStatus | kWritesMac;
+		default:
+			break;
+	}
+	return kWritesStatus | kWritesMac;
 }
 
 u32 ps2n::ee::blocks::Physical(u32 pc)
@@ -702,7 +871,11 @@ Block* ps2n::ee::blocks::Form(u32 startpc)
 
 	std::vector<u16> cop2;
 	if (has_cop2)
+	{
 		Cop2Pass(words, cop2);
+		if (EmuConfig.Speedhacks.vuFlagHack)
+			Cop2FlagPass(words, cop2);
+	}
 
 	// ---- its page ---------------------------------------------------------------
 	Protect(block, nominal_size);

@@ -44,6 +44,13 @@ namespace ps2n::host
 	const char* GetSyncTimeMismatch(); // where the EE was, or when
 	const char* GetSyncStateMismatch(); // what its registers held
 
+	/// The registers kind by kind (0 general, 1 the FPU's, 2 COP0's, 3 VU0's):
+	/// at how many sync points this run's differed from the reference run's,
+	/// what the kind is called, and where the first of them was. One kind that
+	/// differs for a known reason does not hide the others this way. Only
+	/// counted while place and time are the same.
+	uint64_t GetSyncRegisterDifferences(int kind, const char** name, const char** first);
+
 	/// How many sync points there have been.
 	uint64_t GetSyncPointCount();
 } // namespace ps2n::host

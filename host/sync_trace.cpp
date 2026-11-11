@@ -32,6 +32,18 @@ namespace
 	std::string s_time_mismatch;
 	std::string s_state_mismatch;
 
+	// The registers, kind by kind: at how many sync points this run's differed
+	// from the reference run's, and the first of them. One kind that differs
+	// for good (the sign of a zero in an FPU register, say) must not hide what
+	// the others do.
+	struct Kind
+	{
+		const char* name;
+		u64 differing = 0;
+		std::string first;
+	};
+	Kind s_kinds[4] = {{"the general registers"}, {"the FPU's registers"}, {"COP0's registers"}, {"VU0's registers"}};
+
 	// The IOP provider the core chose, and what the core calls instead.
 	R3000Acpu* s_real = nullptr;
 	R3000Acpu s_wrapper;
@@ -101,8 +113,10 @@ namespace
 			std::fprintf(s_file, "%svf%02u=%08X.%08X.%08X.%08X%s", (r % 4) ? " " : "  ", r, VU0.VF[r].UL[0], VU0.VF[r].UL[1], VU0.VF[r].UL[2],
 				VU0.VF[r].UL[3], (r % 4 == 3) ? "\n" : "");
 		}
-		std::fprintf(s_file, "  vacc=%08X.%08X.%08X.%08X q=%08X p=%08X\n", VU0.ACC.UL[0], VU0.ACC.UL[1], VU0.ACC.UL[2], VU0.ACC.UL[3], VU0.q.UL,
-			VU0.p.UL);
+		// The last two are not compared (Record() says why); they are here
+		// because they explain a difference in Q when there is one.
+		std::fprintf(s_file, "  vacc=%08X.%08X.%08X.%08X; the VU interpreter's working q=%08X p=%08X\n", VU0.ACC.UL[0], VU0.ACC.UL[1],
+			VU0.ACC.UL[2], VU0.ACC.UL[3], VU0.q.UL, VU0.p.UL);
 	}
 
 	// One sync point: the core is about to let the IOP run for `ee_cycles`
@@ -124,12 +138,17 @@ namespace
 		for (u32 r = 0; r < 32; r++)
 			cp0.add(r == 9 ? CountNow() : cpuRegs.CP0.r[r]);
 
+		// VU0 as COP2 sees it: the floating-point registers, the integer and
+		// control registers (the flags, R, I, Q and P are among them) and ACC.
+		// Not VU0.q and VU0.p: those are working variables of PCSX2's VU
+		// interpreter, which its functions for the COP2 instructions write on
+		// the way to the Q register and its recompilers never touch. They are
+		// not registers of the machine, and a run that goes through those
+		// functions differs in them from one that does not.
 		Fold vu;
 		vu.add(&VU0.VF, sizeof(VU0.VF));
 		vu.add(&VU0.VI, sizeof(VU0.VI));
 		vu.add(&VU0.ACC, sizeof(VU0.ACC));
-		vu.add(VU0.q.UL);
-		vu.add(VU0.p.UL);
 
 		// number, PC, EE cycle, cycles the IOP is given, IOP cycle; then the
 		// registers, folded: general, FPU, COP0, VU0.
@@ -146,7 +165,9 @@ namespace
 				WriteDetail();
 		}
 
-		if (s_reference && (s_time_mismatch.empty() || s_state_mismatch.empty()))
+		// Once place or time have differed the runs are no longer at the same
+		// moments, and nothing more is compared.
+		if (s_reference && s_time_mismatch.empty())
 		{
 			char reference[4096];
 			bool have = false;
@@ -175,10 +196,28 @@ namespace
 					s_time_mismatch = fmt::format("at sync point {}: reference \"{}\", this run \"{}\"; the last one that was the same: \"{}\"",
 						s_count, reference, mine, s_last_same);
 				}
-				else if (same_time && s_state_mismatch.empty() && s_time_mismatch.empty() && mine != reference)
+				else if (same_time && mine != reference)
 				{
-					s_state_mismatch = fmt::format("at sync point {}: reference \"{}\", this run \"{}\"; the last one that was the same: \"{}\"",
-						s_count, reference, mine, s_last_same);
+					if (s_state_mismatch.empty())
+					{
+						s_state_mismatch =
+							fmt::format("at sync point {}: reference \"{}\", this run \"{}\"; the last one that was the same: \"{}\"", s_count,
+								reference, mine, s_last_same);
+					}
+
+					// Which registers.
+					const u32 ours[4] = {gpr.value(), fpu.value(), cp0.value(), vu.value()};
+					unsigned theirs[4] = {};
+					if (std::sscanf(reference + time_length, "%x %x %x %x", &theirs[0], &theirs[1], &theirs[2], &theirs[3]) == 4)
+					{
+						for (int k = 0; k < 4; k++)
+						{
+							if (theirs[k] == ours[k])
+								continue;
+							if (s_kinds[k].differing++ == 0)
+								s_kinds[k].first = fmt::format("at sync point {}, EE cycle {}, PC {:08X}", s_count, cpuRegs.cycle, cpuRegs.pc);
+						}
+					}
 				}
 				if (mine == reference)
 					s_last_same = mine;
@@ -280,4 +319,11 @@ const char* ps2n::host::GetSyncStateMismatch()
 uint64_t ps2n::host::GetSyncPointCount()
 {
 	return s_count;
+}
+
+uint64_t ps2n::host::GetSyncRegisterDifferences(int kind, const char** name, const char** first)
+{
+	*name = s_kinds[kind].name;
+	*first = s_kinds[kind].first.c_str();
+	return s_kinds[kind].differing;
 }

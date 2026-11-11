@@ -16,14 +16,25 @@ executable is read where it is; what is generated from it stays in the build
 tree. The choice is remembered by the build tree until -Game is given again
 (-Game none takes the game out).
 
+With -Pcsx2Source, another PCSX2 source tree is built in the place of the pinned
+submodule: to try PS2Native on a newer PCSX2 before the submodule is moved,
+or to check a change someone made to PCSX2 against the tests here. Give it a
+build tree of its own with -BuildDir (under build\, which git ignores), and
+the same -BuildDir to scripts\windows\test.ps1. That tree has to be close
+enough to the pinned version for PS2Native's host to compile against it.
+
 .EXAMPLE
 scripts\windows\build.ps1
 scripts\windows\build.ps1 -Target ps2n-host, pcsx2-gsrunner
 scripts\windows\build.ps1 -Game "C:\ps2\killzone\Killzone (Europe) (En,Fr,De,Es,It,Nl)\SCES_520.04"
+scripts\windows\build.ps1 -Pcsx2Source C:\src\pcsx2 -BuildDir build\windows-clang-other
 #>
 param(
     [string[]]$Target = @('ps2n-host'),
     [string]$BuildDir = 'build\windows-clang',
+    # Another PCSX2 source tree to build in the place of third_party\pcsx2.
+    # (Not named Pcsx2: PowerShell would take it for the variable $pcsx2 below.)
+    [string]$Pcsx2Source = '',
     [switch]$Reconfigure,
     # Build only the build-time tools (core/, recompiler/) and their unit tests.
     [switch]$ToolsOnly,
@@ -40,7 +51,14 @@ $pcsx2 = Join-Path $root 'third_party\pcsx2'
 $deps = Join-Path $root 'deps\windows-x64\deps'
 $build = Join-Path $root $BuildDir
 
-if (-not (Test-Path (Join-Path $pcsx2 'CMakeLists.txt'))) {
+if ($Pcsx2Source) {
+    $pcsx2 = (Resolve-Path -LiteralPath $Pcsx2Source).Path
+    if (-not (Test-Path (Join-Path $pcsx2 'pcsx2\CMakeLists.txt'))) { throw "$pcsx2 is not a PCSX2 source tree." }
+    if ($BuildDir -eq 'build\windows-clang') {
+        throw "Give another PCSX2 source tree a build tree of its own: -BuildDir build\<name>."
+    }
+}
+elseif (-not (Test-Path (Join-Path $pcsx2 'CMakeLists.txt'))) {
     throw "The PCSX2 submodule is missing. Run: git submodule update --init --depth 1"
 }
 if (-not (Test-Path (Join-Path $deps 'lib'))) {

@@ -8,5 +8,7 @@
 
 # Stock PCSX2 v2.9.170 with its interpreters.
 set(PROGRAMS_DIFFERS_stock-interp
+	countcarry  # only PCSX2's recompiler carries the count register's overflow into EntryHi (a defect:
+	            # docs/adr/0013-pcsx2s-count-register-carry-mirrored-until-fixed.md); its interpreter prints 0
 	timeout     # only PCSX2's recompiler skips timeout loops; its interpreter runs the loop at what it costs
 )
