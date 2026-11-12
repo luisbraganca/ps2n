@@ -55,7 +55,7 @@ page.
 | On the page | From |
 |---|---|
 | The phases and their states | `CLAUDE.md`, "Status" |
-| Steps G0 to G7 and their states | [game-log.md](../game-log.md), the table at the top |
+| Steps G0 to G9 and their states | [game-log.md](../game-log.md), the table at the top |
 | 1,003,452 instructions, 22,668 functions | game-log.md, "What is on the disc" |
 | 1.8 s, 152.4 MB, 119 s | game-log.md, "G2" |
 | 463 places, 5,079 instructions, then none | game-log.md, "G3", "One rebuild is enough" |

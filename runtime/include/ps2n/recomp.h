@@ -14,6 +14,7 @@
 #include "ps2n/ops_fpu.h"
 #include "ps2n/ops_int.h"
 #include "ps2n/ops_mmi.h"
+#include "ps2n/ops_vu0.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -182,6 +183,51 @@ namespace ps2n::ee
 	// before that, PCSX2's recompiler decides from the whole block, so the
 	// runtime does it all. Returns the eighths that remain counted.
 	uint32_t cop2Instruction(uint32_t pc, uint32_t start, uint32_t eighths);
+
+	// What PCSX2's recompiler decided about an instruction of its block, as
+	// the runtime records it (blocks::StepInfo in runtime/rec_blocks.h): the
+	// bits compiled code looks at.
+	inline constexpr uint32_t kStepFlush = 1u << 2; // the cycles of the block so far are added first
+	inline constexpr uint32_t kStepCop2Sync = 1u << 7; // VU0 is brought up to date with the EE first
+	inline constexpr uint32_t kStepCop2Finish = 1u << 8; // VU0's micro program is run to its end first
+	inline constexpr uint32_t kStepCop2Status = 1u << 13; // the instruction's flags reach VU0's status register
+	inline constexpr uint32_t kStepCop2Mac = 1u << 14; // and its MAC register
+	// What makes a VU0 instruction the runtime's to carry out (cop2Instruction).
+	inline constexpr uint32_t kStepCop2First = kStepFlush | kStepCop2Sync | kStepCop2Finish;
+	// PS2N_VU0_FLAGS turns the two flag bits into vu0::kStatus and vu0::kMac.
+	static_assert((kStepCop2Status >> 13) == vu0::kStatus && (kStepCop2Mac >> 13) == vu0::kMac);
+
+	// Where the runtime last found the record of a COP2 instruction, by its
+	// address: in the block that began at `start`, while blocks::epoch was
+	// `epoch`. For as long as no block has been formed or thrown away since,
+	// the record is the same (rec_blocks.h). `info` is its StepInfo.
+	struct Cop2Site
+	{
+		uint32_t pc;
+		uint32_t start;
+		uint64_t epoch;
+		void* step; // the runtime's record itself
+		uint32_t info;
+	};
+	inline constexpr size_t kCop2Sites = 4096;
+	extern Cop2Site cop2Sites[kCop2Sites];
+	namespace blocks
+	{
+		extern uint64_t epoch;
+	}
+
+	// The StepInfo of the COP2 instruction at `pc` in the block that began at
+	// `start`, found in the runtime's record when it is not at hand. Inlined
+	// even into a generated function so large that the compiler would not
+	// inline it by itself: what is left of it then is a few compares.
+	uint32_t cop2InfoSlow(uint32_t pc, uint32_t start);
+	PS2N_VU0_INLINE uint32_t cop2Info(uint32_t pc, uint32_t start)
+	{
+		const Cop2Site& site = cop2Sites[(pc >> 2) & (kCop2Sites - 1)];
+		if (site.pc == pc && site.start == start && site.epoch == blocks::epoch) [[likely]]
+			return site.info;
+		return cop2InfoSlow(pc, start);
+	}
 
 	// The load or store at `pc`, in the block that began at `start`, is about
 	// to touch memory that is not plain. The code PCSX2's recompiler makes for
@@ -412,6 +458,28 @@ namespace ps2n::ee
 	{ \
 		(acc_) = ::ps2n::ee::cop2Instruction(pc_, ps2n_start, (acc_) + (eighths_)); \
 		PS2N_TIME(); \
+	} while (0)
+
+// A VU0 instruction at `pc_`: `call_`, a function of ps2n::ee::vu0
+// (ps2n/ops_vu0.h) with the instruction's fields. Unless the block it is in
+// has something done about VU0 first, or its cycles so far added, compiled
+// code carries it out itself; it touches no register of the EE's.
+// PS2N_VU0_FLAGS, in `call_`: where the block lets its flags go.
+#define PS2N_VU0_FLAGS ((ps2n_info >> 13) & 3u)
+#define PS2N_VU0(acc_, eighths_, pc_, call_) \
+	do \
+	{ \
+		const uint32_t ps2n_info = ::ps2n::ee::cop2Info(pc_, ps2n_start); \
+		if (ps2n_info & ::ps2n::ee::kStepCop2First) [[unlikely]] \
+		{ \
+			(acc_) = ::ps2n::ee::cop2Instruction(pc_, ps2n_start, (acc_) + (eighths_)); \
+			PS2N_TIME(); \
+		} \
+		else \
+		{ \
+			(acc_) += (eighths_); \
+			::ps2n::ee::vu0::call_; \
+		} \
 	} while (0)
 
 // An instruction the core's interpreter function carries out, at `pc_`; the

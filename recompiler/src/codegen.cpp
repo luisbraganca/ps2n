@@ -15,7 +15,7 @@ namespace ps2n::recomp {
 
 using namespace r5900;
 
-const char* const kGeneratorName = "ps2n-recomp 0.4.0";
+const char* const kGeneratorName = "ps2n-recomp 0.5.0";
 
 namespace {
 
@@ -51,8 +51,10 @@ std::string cstring(const std::string& s) {
 // The families that have them so far: r5900_sem_int.inc, r5900_sem_cop1.inc,
 // r5900_sem_mmi.inc, r5900_sem_cop2_ctl.inc and r5900_sem_cop0.inc. The same
 // tables are what ExecuteOwn() in runtime/ee_provider.cpp includes; an
-// instruction of any other family is delegated by both.
-enum class Arg { RD, RS, RT, SA, SIMM, UIMM, FD, FS, FT, PERF, CREG };
+// instruction of any other family is delegated by both. The VU0 instructions
+// (r5900_sem_cop2.inc) are written as calls too, but inside PS2N_VU0
+// (vu0Call below).
+enum class Arg { RD, RS, RT, SA, SIMM, UIMM, FD, FS, FT, PERF, CREG, VUFLAGS, DEST, BC, FSF, FTF, IMM5 };
 
 std::string argText(const Insn& in, Arg a) {
     switch (a) {
@@ -67,6 +69,12 @@ std::string argText(const Insn& in, Arg a) {
     case Arg::FT: return std::to_string(in.ft());
     case Arg::PERF: return std::to_string(in.perfReg());
     case Arg::CREG: return std::to_string(in.rd());
+    case Arg::VUFLAGS: return "PS2N_VU0_FLAGS";
+    case Arg::DEST: return std::to_string(in.dest());
+    case Arg::BC: return std::to_string(in.bc());
+    case Arg::FSF: return std::to_string(in.fsf());
+    case Arg::FTF: return std::to_string(in.ftf());
+    case Arg::IMM5: return std::to_string(in.imm5());
     }
     return "?";
 }
@@ -122,6 +130,40 @@ std::string semanticCall(const Insn& in) {
 #undef FD
 #undef FS
 #undef FT
+}
+
+// The call of ps2n::ee::vu0 that carries out the VU0 instruction `in`, with
+// PS2N_VU0_FLAGS where its flags go; nothing for a COP2 instruction that is
+// not one (a transfer, VCALLMS, VCALLMSR).
+std::string vu0Call(const Insn& in) {
+#define VUFLAGS Arg::VUFLAGS
+#define DEST Arg::DEST
+#define FD Arg::FD
+#define FS Arg::FS
+#define FT Arg::FT
+#define BC Arg::BC
+#define FSF Arg::FSF
+#define FTF Arg::FTF
+#define IMM5 Arg::IMM5
+#define PS2N_EXPAND(...) __VA_ARGS__
+#define S(op, fn, args) \
+    case Op::op:        \
+        return formatCall(#fn, in, {PS2N_EXPAND args});
+    switch (in.op) {
+#include "ps2n/r5900_sem_cop2.inc"
+    default: return {};
+    }
+#undef S
+#undef PS2N_EXPAND
+#undef IMM5
+#undef FTF
+#undef FSF
+#undef BC
+#undef FT
+#undef FS
+#undef FD
+#undef DEST
+#undef VUFLAGS
 }
 
 // The general registers an instruction that is carried out through register
@@ -847,11 +889,24 @@ private:
             return cost;
         }
 
-        // The runtime does all of it: when VU0 is brought up to date first,
-        // and whether the cycles so far are added before that, depend on the
-        // block the instruction is in. It reads the registers it needs from
-        // the core, and writes the one a transfer from VU0 is for.
+        // When VU0 is brought up to date first, and whether the cycles so far
+        // are added before that, depend on the block the instruction is in,
+        // which only the runtime knows. A VU0 instruction asks it; where
+        // neither is to be done, compiled code carries the instruction out
+        // itself, and since it touches no register of the EE's, the locals
+        // stay as they are.
         if (isCop2(in)) {
+            const std::string vu0 = vu0Call(in);
+            if (!vu0.empty()) {
+                line(strprintf("PS2N_VU0(acc, %uu, %s, %s);", cost, hex(in.addr).c_str(), vu0.c_str()), &in, note);
+                stats_.cop2++;
+                stats_.vu0++;
+                return 0;
+            }
+
+            // Otherwise the runtime does all of it. It reads the registers it
+            // needs from the core, and writes the one a transfer from VU0 is
+            // for.
             put();
             line(strprintf("PS2N_COP2(acc, %uu, %s);", cost, hex(in.addr).c_str()), &in, note);
             forget(writtenMask(in), 0);

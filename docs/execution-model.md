@@ -208,7 +208,13 @@ What the generated code does with them:
   step in the record: `PS2N_SYSCALL` (made or not), `PS2N_COP2` (what
   happens to VU0 first, and whether cycles are added), and the loads and
   stores, `PS2N_LOAD`, `PS2N_STORE` and `PS2N_ACCESS` (only when one hits
-  memory that is not plain: rule 13, and for a timer read rule 1).
+  memory that is not plain: rule 13, and for a timer read rule 1). A VU0
+  instruction (`PS2N_VU0`) reads the same answer where the runtime keeps
+  the last few thousand it gave (`cop2Sites`, `cop2Info()` in
+  `ps2n/recomp.h`, good for as long as no block is formed or thrown away),
+  and where nothing is to happen first, carries itself out
+  ([ops_vu0.h](../runtime/include/ps2n/ops_vu0.h)); otherwise the runtime
+  carries it out as `PS2N_COP2` would.
 - **`DI`** is compiled in one piece with the instruction after it, which
   runs first (rule 8), when that is a plain instruction at which no block
   can begin; in a delay slot it takes effect at once.
@@ -264,11 +270,12 @@ not have yet. From that:
   the moves to and from its control registers).
 - **Everything changed is put back** before the end of a block, where an
   event test may follow; before a label, which other code can reach; before
-  a call; before the runtime carries out a COP2 instruction, a system
-  instruction or what the recompiler does not translate; and before the
-  interpreter takes over. After a call, a system instruction or a
-  delegated one the locals hold nothing; after a COP2 instruction, nothing
-  of what it may write.
+  a call; before the runtime carries out a COP2 instruction (a VU0
+  instruction does not count: it touches no register of the EE's, wherever
+  it is carried out), a system instruction or what the recompiler does not
+  translate; and before the interpreter takes over. After a call, a system
+  instruction or a delegated one the locals hold nothing; after a COP2
+  instruction, nothing of what it may write.
 - **After the end of a block the locals go on holding what they held.** An
   event test after which the code goes on where it was going has changed
   no register: one that takes an interrupt changes where the code goes on

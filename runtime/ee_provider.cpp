@@ -1522,35 +1522,41 @@ uint32_t ps2n::ee::syscallInstruction(uint32_t pc, uint32_t code, uint32_t start
 	return MustUnwind() ? kUnwind : cpuRegs.pc;
 }
 
+// The step compiled code asked for the last time at each of so many places,
+// so that a COP2 instruction that comes round again in the same block finds
+// its step without looking the block up. An answer holds for as long as no
+// block has been formed or thrown away since. Compiled code reads the copy of
+// the step's info (PS2N_VU0); a step's info changes afterwards only in a
+// load or store whose fault throws its block away (FastmemFault), which
+// counts the epoch up. The epoch starts at zero, which is never the blocks'
+// own: they begin at one.
+ps2n::ee::Cop2Site ps2n::ee::cop2Sites[ps2n::ee::kCop2Sites];
+
+static_assert(ps2n::ee::kStepFlush == blocks::kFlush && ps2n::ee::kStepCop2Sync == blocks::kCop2Sync &&
+			  ps2n::ee::kStepCop2Finish == blocks::kCop2Finish && ps2n::ee::kStepCop2Status == blocks::kCop2Status &&
+			  ps2n::ee::kStepCop2Mac == blocks::kCop2Mac);
+
 namespace
 {
-	// The step compiled code asked for the last time at each of so many
-	// places, so that a COP2 instruction that comes round again in the same
-	// block finds its step without looking the block up. An answer holds for
-	// as long as no block has been formed or thrown away since.
-	struct StepSite
-	{
-		u32 pc = 0;
-		u32 start = 0;
-		u64 epoch = 0; // never the blocks' own, which begins at one
-		Step* step = nullptr;
-	};
-	constexpr size_t kStepSites = 4096;
-	StepSite s_step_sites[kStepSites];
-
 	__fi Step& StepAt(u32 start, u32 pc)
 	{
-		StepSite& site = s_step_sites[(pc >> 2) & (kStepSites - 1)];
+		ps2n::ee::Cop2Site& site = ps2n::ee::cop2Sites[(pc >> 2) & (ps2n::ee::kCop2Sites - 1)];
 		if (site.pc == pc && site.start == start && site.epoch == blocks::epoch) [[likely]]
-			return *site.step;
+			return *static_cast<Step*>(site.step);
 
 		const StepRef ref = FindStep(start, pc);
 		if (ref.index < 0) [[unlikely]]
 			NoSuchStep(start, pc);
-		site = {pc, start, blocks::epoch, &ref.block->steps[ref.index]};
-		return *site.step;
+		Step& step = ref.block->steps[ref.index];
+		site = {pc, start, blocks::epoch, &step, step.info};
+		return step;
 	}
 } // namespace
+
+uint32_t ps2n::ee::cop2InfoSlow(uint32_t pc, uint32_t start)
+{
+	return StepAt(start, pc).info;
+}
 
 uint32_t ps2n::ee::cop2Instruction(uint32_t pc, uint32_t start, uint32_t eighths)
 {

@@ -433,6 +433,38 @@ _start: cfc2  $v0, $vi16           # 00100000
     CHECK_CONTAINS(code, "PS2N_BLOCK_END(acc, 0u, target);");
 }
 
+TEST_CASE(vu0_instructions_are_carried_out_by_compiled_code_where_the_runtime_lets_it) {
+    // A VU0 instruction asks the runtime what its block does about VU0 first;
+    // where nothing is to be done, compiled code carries it out itself
+    // (PS2N_VU0). It touches no register of the EE's, so the locals are not
+    // put back for it, as they are for VCALLMS, which the runtime carries
+    // out whole.
+    const ElfFile elf = assemble(R"(
+        .text
+        .globl _start
+_start: addiu $v0, $v0, 1            # 00100000
+        vmul.xyz $vf1, $vf2, $vf3    # 00100004
+        vaddx.xyzw $vf3, $vf1, $vf2x # 00100008
+        vdiv  $Q, $vf1x, $vf2y       # 0010000C
+        vcallms 0                    # 00100010
+        jr    $ra                    # 00100014
+        nop                          # 00100018
+)");
+    GenerateStats stats;
+    const std::string code = generateFor(elf, &stats);
+    CHECK_EQ(stats.cop2, size_t{4});
+    CHECK_EQ(stats.vu0, size_t{3});
+    // The fields as constants, and the flags where the block lets them go.
+    CHECK_CONTAINS(code, "PS2N_VU0(acc, 18u, 0x00100004u, VMUL(PS2N_VU0_FLAGS, 14, 1, 2, 3));");   // the addition's 9 and its own 9
+    CHECK_CONTAINS(code, "PS2N_VU0(acc, 9u, 0x00100008u, VADDbc(PS2N_VU0_FLAGS, 15, 3, 1, 2, 0));");
+    CHECK_CONTAINS(code, "PS2N_VU0(acc, 9u, 0x0010000Cu, VDIV(PS2N_VU0_FLAGS, 1, 0, 2, 1));");
+    CHECK_CONTAINS(code, "PS2N_PUT(2);\n\tPS2N_COP2(acc, 9u, 0x00100010u);");
+    // $v0 stays in its local past the three VU0 instructions.
+    const size_t vdiv = code.find("VDIV(PS2N_VU0_FLAGS");
+    const size_t put = code.find("PS2N_PUT(2);");
+    CHECK(vdiv != std::string::npos && put != std::string::npos && put > vdiv);
+}
+
 TEST_CASE(loads_and_stores_tell_the_runtime_when_memory_is_not_plain) {
     const ElfFile elf = assemble(R"(
         .text

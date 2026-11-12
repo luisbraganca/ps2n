@@ -205,6 +205,8 @@ namespace ps2n::host::profile
 				return "registers put back from locals";
 			if (begins("PS2N_COP2"))
 				return "COP2 instructions: the call of the runtime";
+			if (begins("PS2N_VU0"))
+				return "VU0 instructions in compiled code";
 			if (begins("PS2N_CALL") || begins("PS2N_JUMP") || begins("return") || begins("goto") || begins("switch") || begins("case") ||
 				begins("default") || begins("pc =") || begins("if (pc ==") || begins("E_"))
 				return "calls, jumps, returns, the entry switch";

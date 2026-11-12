@@ -31,8 +31,10 @@ stock PCSX2's time. The maintainer then chose a speed step inside the phase
 1.23 times stock PCSX2's time. The next step, G7 (ADR 0016), was done on
 2026-11-12: the game's VU0 instructions have semantics of PS2Native's own,
 which the self-test holds to PCSX2's recompiler, and the level run is still
-the stock run, at 1.21 times its time. What comes next is the maintainer's
-to say. Phase 4 needs its own approval.
+the stock run, at 1.21 times its time. G9 (ADR 0018), done on 2026-11-12
+in a worktree of its own, has compiled code carry out the VU0 instructions
+itself where their block lets it: 1.19 times stock PCSX2's time. What comes
+next is the maintainer's to say. Phase 4 needs its own approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -131,6 +133,14 @@ Decisions:
   that function; when VU0 is brought up to date, and which flags reach the
   registers, stay as the recompiler decides them for the block. Done on
   2026-11-12 (`runtime/include/ps2n/ops_vu0.h`).
+- [ADR 0018](docs/adr/0018-vu0-instructions-carried-out-by-compiled-code.md):
+  step G9: compiled code carries out a VU0 instruction itself, inline, where
+  the runtime's record of its block says nothing is done about VU0 first
+  (`PS2N_VU0`); elsewhere the runtime as before. Made in a worktree of its
+  own (`..\ps2n-vu0`, branch `vu0-direct`) while another session worked on
+  G8 in the main tree; the two sessions agree before timing anything, and
+  whichever step is committed second is rebased onto the first. Done on
+  2026-11-12.
 
 ## Layout, build and test
 
