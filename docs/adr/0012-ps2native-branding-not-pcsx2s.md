@@ -109,6 +109,22 @@ takes over as they are: `OsdShowIndicators`, `OsdShowVideoCapture` and
 What PS2Native itself draws, when it draws anything, takes its colours from
 the brand kit.
 
+**Built with the window, on 2026-11-11** (`ps2n-host -window`,
+`scripts\windows\game.ps1 -Play`; [game-log.md](../game-log.md), "G4"):
+
+- The window's icon is the executable's, PS2Native's. Its title is
+  "PS2Native" until the core knows the game, and from then the game's name
+  as PCSX2's game database has it, followed by " - PS2Native": "Killzone -
+  PS2Native". Seen in photographs of the window.
+- Nothing of what the core can draw over the picture is shown: the two
+  positions are set to none and every `OsdShow` switch is off, the three
+  that PCSX2 has on by default among them. `-osd` (`game.ps1 -Osd`) leaves
+  them as PCSX2 has them, for whoever is bringing a game up.
+- None of PCSX2's hotkeys is bound, so its own interface, its save states
+  and its settings cannot be reached from the keyboard or the controller.
+- Not looked at yet: what the system's volume controls call the game. The
+  core hands the sound output the name "PCSX2" from its own code.
+
 ## Consequences
 
 - The window, when it comes, takes its icon from the executable (resource 1)

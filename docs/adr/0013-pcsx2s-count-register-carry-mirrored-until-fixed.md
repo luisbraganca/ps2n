@@ -47,6 +47,32 @@ How they were read:
   that has it, PS2Native stops reproducing the defect: it follows the
   recompiler it is pinned to, never an older one.
 
+Later on 2026-11-11 the maintainer chose to report each defect to PCSX2 as
+an issue of its own, with the correction they suggest, instead of one pull
+request for both
+([ADR 0010](0010-pcsx2-fix-goes-upstream-through-the-maintainer.md), "An
+issue each instead of a pull request", which also has what a search of
+PCSX2's issues and pull requests found: nothing about this defect). Nothing
+else here changes: where this record says "the pull request", read "the
+issue". The issue is PCSX2's number 15186, opened on 2026-11-11.
+
+The addition became 64 bits wide with PCSX2's change to a 64-bit cycle
+counter (its pull request 14105, merged on 2026-03-07). PCSX2's `master` of
+2026-11-10 and its release 2.8.2 both have it.
+
+**Changed on 2026-11-12.** The maintainer's words: "If the issues are
+ignored, we'll implement the fixes locally, but they seem to be taking care
+of the issues." How they were read: should the issue go 30 days without an
+answer from PCSX2, this correction is carried in PS2Native's patch queue as
+the status-flag one would be, and PS2Native stops reproducing the defect
+then. The second bullet above said the opposite and no longer holds.
+
+As it went, the issue was answered within the hour: the author of PCSX2's
+change confirmed the defect and the correction (ADR 0010 has what was
+said). So nothing is carried. Until a PCSX2 that has the correction is the
+pinned one, PS2Native goes on reproducing the defect, on the condition
+above; `tests/programs/countcarry.s` says when that day has come.
+
 ## Consequences
 
 - `MFC0` in `runtime/include/ps2n/ops_cop0.h` keeps the 64-bit addition,

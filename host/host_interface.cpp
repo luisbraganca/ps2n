@@ -5,10 +5,13 @@
 //
 // Derived from pcsx2-gsrunner/Main.cpp of PCSX2 v2.9.170,
 // Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+. Changes for PS2Native:
-// the render window is always surfaceless, functions for the CPU thread are
-// queued instead of refused, and the per-frame callback goes to the runner.
+// the render window is the host's own when it has one (ps2n-host -window)
+// and surfaceless otherwise, functions for the CPU thread are queued instead
+// of refused, the per-frame callback goes to the runner, and the keyboard's
+// keys have names.
 
 #include "host_state.h"
+#include "window.h"
 
 #include "common/Console.h"
 #include "common/ProgressCallback.h"
@@ -27,13 +30,6 @@
 #include "pcsx2/VMManager.h"
 
 #include <cstring>
-
-static std::optional<WindowInfo> SurfacelessWindow()
-{
-	WindowInfo wi;
-	wi.type = WindowInfo::Type::Surfaceless;
-	return wi;
-}
 
 void Host::CommitBaseSettingChanges()
 {
@@ -107,11 +103,13 @@ void Host::EndTextInput()
 
 std::optional<WindowInfo> Host::GetTopLevelWindowInfo()
 {
-	return SurfacelessWindow();
+	return ps2n::host::window::GetInfo();
 }
 
 void Host::OnInputDeviceConnected(const std::string_view identifier, const std::string_view device_name)
 {
+	INFO_LOG("Input device connected: {} ({})", identifier, device_name);
+	ps2n::host::OnInputDeviceConnected(identifier);
 }
 
 void Host::OnInputDeviceDisconnected(const InputBindingKey key, const std::string_view identifier)
@@ -128,7 +126,9 @@ void Host::SetMouseLock(bool state)
 
 std::optional<WindowInfo> Host::AcquireRenderWindow(bool recreate_window)
 {
-	return SurfacelessWindow();
+	// The host's window when it has one, and otherwise a description that says
+	// there is none: the renderer then draws without showing anything.
+	return ps2n::host::window::GetInfo();
 }
 
 void Host::ReleaseRenderWindow()
@@ -166,6 +166,7 @@ void Host::OnVMResumed()
 void Host::OnGameChanged(const std::string& title, const std::string& elf_override, const std::string& disc_path,
 	const std::string& disc_serial, u32 disc_crc, u32 current_crc)
 {
+	ps2n::host::OnGameChanged(title);
 }
 
 void Host::OnPerformanceMetricsUpdated()
@@ -207,11 +208,12 @@ void Host::OnGameSettingsChanged(const std::string& path)
 
 bool Host::IsFullscreen()
 {
-	return false;
+	return ps2n::host::window::IsFullscreen();
 }
 
 void Host::SetFullscreen(bool enabled)
 {
+	ps2n::host::window::SetFullscreen(enabled);
 }
 
 void Host::OnCaptureStarted(const std::string& filename)
@@ -280,13 +282,17 @@ int Host::LocaleSensitiveCompare(std::string_view lhs, std::string_view rhs)
 	return lhs.size() > rhs.size() ? 1 : (lhs.size() < rhs.size() ? -1 : 0);
 }
 
+// The keyboard's keys, for the core's input bindings ("Keyboard/Return"). The
+// codes are the host window's own (window.h), the same on every platform.
 std::optional<u32> InputManager::ConvertHostKeyboardStringToCode(const std::string_view str)
 {
-	return std::nullopt;
+	return ps2n::host::window::KeyFromName(str);
 }
 
 std::optional<std::string> InputManager::ConvertHostKeyboardCodeToString(u32 code)
 {
+	if (const char* name = ps2n::host::window::NameOfKey(code))
+		return std::string(name);
 	return std::nullopt;
 }
 

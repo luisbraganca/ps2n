@@ -454,7 +454,8 @@ equal. The programs whose records differ are listed, each with its cause, in
 A game runs long enough to meet an instruction where the console is
 followed on purpose, and from there a register differs for good. So for a
 game (`game.ps1 -Config same-as-stock`) place and time must be the same at
-every sync point, and so must the pictures; the registers are reported kind
+every sync point, and so must the pictures and the state of the sound
+hardware at the frames looked at; the registers are reported kind
 by kind (general, FPU, COP0, VU0): at how many sync points each differed and
 where first, so that one kind that differs for a known reason does not hide
 the others.
@@ -482,6 +483,17 @@ draws, `-frame-every <n>` fingerprints the frame on display every `n` frames
 port 1 scripted input that changes only at frame boundaries, so that two
 runs get it at the same moments. Two runs that show the same fingerprints at
 the same frame numbers drew the same pictures at the same times.
+
+**What a program sounds like.** At the same frames, and always at the last
+one, the host fingerprints the sound hardware: the SPU2's registers and its
+memory. That memory holds the samples the program gave it, the working
+memory of its reverberation, and the last 512 samples of everything it
+mixed, which its mixer writes there as the console's does. The SPU2 runs on
+the CPU thread in the IOP's time, whether a sound device is open or not, so
+two runs that are at the same place at the same time and made the same
+sound print the same fingerprints. The `*/same-as-stock/*` tests and
+`game.ps1 -Config same-as-stock` hold the compiled run to the stock run in
+this too.
 
 ## A program too large for one file, and more code than its executable shows
 

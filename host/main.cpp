@@ -5,12 +5,16 @@
 // count or a time limit. It is the proof of concept's test bench: the same
 // run can be repeated with different CPU providers and the outputs compared.
 //
+// With -window it is also where a game is played: the same machine in a
+// window, at the console's speed, with sound, the keyboard and a controller.
+//
 // The start-up sequence follows pcsx2-gsrunner/Main.cpp of PCSX2 v2.9.170,
 // Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+.
 
 #include "host_state.h"
 #include "selftest.h"
 #include "sync_trace.h"
+#include "window.h"
 
 #include "runtime/ee_provider.h"
 #include "runtime/rec_blocks.h"
@@ -49,10 +53,12 @@
 #include "pcsx2/Counters.h"
 #include "pcsx2/Host.h"
 #include "pcsx2/ImGui/ImGuiManager.h"
+#include "pcsx2/Input/InputManager.h"
 #include "pcsx2/MTGS.h"
 #include "pcsx2/R5900.h"
 #include "pcsx2/SIO/Pad/Pad.h"
 #include "pcsx2/SIO/Pad/PadDualshock2.h"
+#include "pcsx2/SPU2/defs.h"
 #include "pcsx2/VMManager.h"
 
 // The executables compiled ahead of time that this host is linked with: a list
@@ -70,7 +76,7 @@ namespace
 
 	enum ExitCode : int
 	{
-		EXIT_MARKER = 0, // the guest printed the stop marker
+		EXIT_MARKER = 0, // the guest printed the stop marker, or the window was closed
 		EXIT_ERROR = 1, // the machine could not be set up or booted
 		EXIT_FRAME_LIMIT = 2, // the frame limit passed first
 		EXIT_TIME_LIMIT = 3, // the wall-clock limit passed first
@@ -127,8 +133,20 @@ namespace
 		std::string frame_path; // where the last displayed frame is written, as an image
 		u32 frame_every = 0; // when not zero: the frame on display is also fingerprinted every so many frames
 		std::string pad_path; // a script of controller input for port 1
+		bool window = false; // play in a window: the console's speed, sound, the keyboard, a controller, a memory card
+		bool mute = false; // with -window: no sound
+		bool osd = false; // with -window: let the core draw its messages and figures over the picture
 		ps2n::selftest::Options selftest_options;
 	};
+
+	// The window's title before the core knows the game, and after its name
+	// once it does (docs/adr/0012-ps2native-branding-not-pcsx2s.md).
+	constexpr const char* kWindowTitle = "PS2Native";
+
+	// The area the picture goes into when the window comes up, at a display
+	// scaling of 100%: 4:3, as the console's picture is shown.
+	constexpr u32 kWindowWidth = 960;
+	constexpr u32 kWindowHeight = 720;
 
 	Options s_options;
 	MemorySettingsInterface s_settings;
@@ -150,6 +168,7 @@ namespace
 
 	std::atomic<bool> s_marker_seen{false};
 	std::atomic<bool> s_time_limit_passed{false};
+	std::atomic<bool> s_close_requested{false}; // the window's close button
 	std::atomic<bool> s_cpu_thread_done{false};
 	std::atomic<int> s_exit_code{EXIT_ERROR};
 
@@ -169,6 +188,11 @@ namespace
 	std::vector<std::string> s_frame_lines;
 	u32 s_frames_since_marker = 0;
 
+	// The same for the sound: a fingerprint of the sound hardware when the run
+	// was stopped and, before it, at the frames looked at along the way.
+	std::string s_sound_line;
+	std::vector<std::string> s_sound_lines;
+
 	// Scripted controller input (-pad): what the controller in port 1 is made
 	// to report from a given frame on, in frame order, and how far the run has
 	// got in it. CPU thread only once the machine runs.
@@ -180,6 +204,13 @@ namespace
 	};
 	std::vector<PadEvent> s_pad_events;
 	size_t s_pad_next = 0;
+
+	// With -window: whether the first controller has been given the pad in
+	// port 1, and when the first and the latest frame were shown, to report the
+	// pace the session kept. CPU thread only.
+	bool s_controller_mapped = false;
+	std::chrono::steady_clock::time_point s_first_frame_time;
+	std::chrono::steady_clock::time_point s_latest_frame_time;
 
 	// The workload a benchmark program is running, and what has been measured.
 	std::string s_bench_name;
@@ -234,15 +265,32 @@ namespace
 			"  -hostfs            Let the program open files on this computer through the\n"
 			"                     core's \"host:\" device, relative to its executable. Off\n"
 			"                     unless given: only for programs you trust.\n"
-			"  -renderer <name>   GS renderer: null (default; nothing is drawn), sw (PCSX2's\n"
-			"                     software renderer), vulkan, opengl, dx11, dx12. There is\n"
-			"                     no window; the last displayed frame is fingerprinted.\n"
+			"  -window            Play: the machine in a window, at the console's speed, with\n"
+			"                     sound, a memory card in the data directory, and the pad in\n"
+			"                     port 1 on the keyboard and on the first controller, all as\n"
+			"                     PCSX2 sets them up by default. Keys: arrows (d-pad), W A S D\n"
+			"                     (left stick), T F G H (right stick), I J K L (triangle,\n"
+			"                     square, cross, circle), Q E (L1 R1), 1 3 (L2 R2), 2 4 (L3\n"
+			"                     R3), Return (start), Backspace (select). Alt+Enter or F11\n"
+			"                     covers the screen. The run ends when the window is closed;\n"
+			"                     -frames and -seconds only apply when given. Windows only.\n"
+			"  -mute              With -window: no sound.\n"
+			"  -osd               With -window: let the core draw its messages and performance\n"
+			"                     figures over the picture, as PCSX2 shows them. Off unless\n"
+			"                     given: a game shows none of it.\n"
+			"  -renderer <name>   GS renderer: null (nothing is drawn; the default without a\n"
+			"                     window), sw (PCSX2's software renderer), vulkan, opengl,\n"
+			"                     dx11, dx12, auto (the one PCSX2 chooses for this computer;\n"
+			"                     the default with -window). Without a window nothing is\n"
+			"                     shown; the last displayed frame is fingerprinted.\n"
 			"  -upscale <n>       Internal resolution multiplier for a hardware renderer.\n"
 			"  -frame <file>      Write the last displayed frame to this image file (.png).\n"
 			"  -frame-every <n>   Fingerprint the frame on display every n frames as well,\n"
 			"                     to see where two runs show different pictures. With\n"
 			"                     -frame, each is also written, with its frame number in\n"
-			"                     the file name.\n"
+			"                     the file name. The sound hardware (its registers and its\n"
+			"                     memory, which holds what it last mixed) is fingerprinted\n"
+			"                     at the same frames, and always at the last one.\n"
 			"  -settle <n>        Run this many frames on after the marker line before\n"
 			"                     stopping, so that what was drawn last is displayed.\n"
 			"  -pad <file>        Controller input for port 1, from a script: one line for\n"
@@ -285,6 +333,7 @@ namespace
 	bool ParseCommandLine(int argc, char* argv[])
 	{
 		Options& o = s_options;
+		bool renderer_given = false, frames_given = false, seconds_given = false;
 		for (int i = 1; i < argc; i++)
 		{
 			const char* arg = argv[i];
@@ -295,6 +344,12 @@ namespace
 				return false;
 			else if (is("-echo"))
 				o.echo = true;
+			else if (is("-window"))
+				o.window = true;
+			else if (is("-mute"))
+				o.mute = true;
+			else if (is("-osd"))
+				o.osd = true;
 			else if (is("-hostfs"))
 				o.host_fs = true;
 			else if (is("-selftest"))
@@ -404,8 +459,11 @@ namespace
 			else if (is("-renderer") && has_value)
 			{
 				const char* value = argv[++i];
+				renderer_given = true;
 				if (!std::strcmp(value, "null"))
 					o.renderer = GSRendererType::Null;
+				else if (!std::strcmp(value, "auto"))
+					o.renderer = GSRendererType::Auto;
 				else if (!std::strcmp(value, "sw"))
 					o.renderer = GSRendererType::SW;
 				else if (!std::strcmp(value, "vulkan"))
@@ -463,6 +521,7 @@ namespace
 					return false;
 				}
 				o.max_frames = *n;
+				frames_given = true;
 			}
 			else if (is("-seconds") && has_value)
 			{
@@ -473,6 +532,7 @@ namespace
 					return false;
 				}
 				o.max_seconds = *n;
+				seconds_given = true;
 			}
 			else if (arg[0] == '-')
 			{
@@ -496,6 +556,34 @@ namespace
 		if (o.selftest && (!o.boot_path.empty() || o.ee != EEProvider::Jit))
 		{
 			std::fputs("ps2n-host: -selftest takes no file to boot and needs PCSX2's EE recompiler (-ee jit)\n", stderr);
+			return false;
+		}
+		if (o.window)
+		{
+			if (o.selftest)
+			{
+				std::fputs("ps2n-host: -selftest has nothing to show in a window\n", stderr);
+				return false;
+			}
+			if (!ps2n::host::window::Available())
+			{
+				std::fputs("ps2n-host: -window is not available on this platform yet\n", stderr);
+				return false;
+			}
+
+			// Someone is playing: the run ends when they close the window, and
+			// the picture is drawn the way PCSX2 would draw it on this computer.
+			// (0 frames or seconds: no limit.)
+			if (!frames_given)
+				o.max_frames = 0;
+			if (!seconds_given)
+				o.max_seconds = 0;
+			if (!renderer_given)
+				o.renderer = GSRendererType::Auto;
+		}
+		else if (o.mute || o.osd)
+		{
+			std::fputs("ps2n-host: -mute and -osd are for -window\n", stderr);
 			return false;
 		}
 
@@ -764,22 +852,54 @@ namespace
 
 		si.SetBoolValue("EmuCore", "HostFs", o.host_fs);
 
-		// Run as fast as the host allows, with nothing presented.
 		si.SetIntValue("EmuCore/GS", "Renderer", static_cast<int>(o.renderer));
 		si.SetFloatValue("EmuCore/GS", "upscale_multiplier", static_cast<float>(o.upscale));
-		si.SetBoolValue("EmuCore/GS", "FrameLimitEnable", false);
-		si.SetIntValue("EmuCore/GS", "VsyncEnable", 0);
 
-		// No sound device, no input devices, no memory cards.
-		si.SetStringValue("SPU2/Output", "Backend", "Null");
-		si.SetBoolValue("InputSources", "SDL", false);
-		si.SetBoolValue("InputSources", "XInput", false);
-		Pad::ClearPortBindings(si, 0);
+		// None of PCSX2's hotkeys, with a window or without: they open its own
+		// interface, save states, change settings. A game has none of that.
 		si.ClearSection("Hotkeys");
-		for (u32 i = 0; i < 2; i++)
+
+		if (o.window)
 		{
-			si.SetBoolValue("MemoryCards", fmt::format("Slot{}_Enable", i + 1).c_str(), false);
-			si.SetStringValue("MemoryCards", fmt::format("Slot{}_Filename", i + 1).c_str(), "");
+			// Someone is playing. Everything else stays as PCSX2 sets it up by
+			// default (VMManager::SetDefaultSettings above): the frame limiter
+			// holds the machine to the console's speed, the sound goes to the
+			// system's output, the pad in port 1 is on the keyboard, controllers
+			// are looked for, and slot 1 holds a memory card, which the core
+			// makes in the data directory when there is none.
+			si.SetBoolValue("SPU2/Output", "OutputMuted", o.mute);
+
+			// What the core can draw over the picture: none of it, unless asked
+			// for (docs/adr/0012-ps2native-branding-not-pcsx2s.md).
+			if (!o.osd)
+			{
+				si.SetIntValue("EmuCore/GS", "OsdMessagesPos", 0);
+				si.SetIntValue("EmuCore/GS", "OsdPerformancePos", 0);
+				for (const char* name : {"OsdShowSpeed", "OsdShowFPS", "OsdShowVPS", "OsdShowCPU", "OsdShowGPU", "OsdShowGPUDebug",
+						 "OsdShowGPUStats", "OsdShowGPUShadersStats", "OsdShowResolution", "OsdShowGSStats", "OsdShowIndicators",
+						 "OsdShowSettings", "OsdshowPatches", "OsdShowInputs", "OsdShowFrameTimes", "OsdShowVersion",
+						 "OsdShowHardwareInfo", "OsdShowVideoCapture", "OsdShowInputRec", "OsdShowTextureReplacements"})
+				{
+					si.SetBoolValue("EmuCore/GS", name, false);
+				}
+			}
+		}
+		else
+		{
+			// Run as fast as the host allows, with nothing presented.
+			si.SetBoolValue("EmuCore/GS", "FrameLimitEnable", false);
+			si.SetIntValue("EmuCore/GS", "VsyncEnable", 0);
+
+			// No sound device, no input devices, no memory cards.
+			si.SetStringValue("SPU2/Output", "Backend", "Null");
+			si.SetBoolValue("InputSources", "SDL", false);
+			si.SetBoolValue("InputSources", "XInput", false);
+			Pad::ClearPortBindings(si, 0);
+			for (u32 i = 0; i < 2; i++)
+			{
+				si.SetBoolValue("MemoryCards", fmt::format("Slot{}_Enable", i + 1).c_str(), false);
+				si.SetStringValue("MemoryCards", fmt::format("Slot{}_Filename", i + 1).c_str(), "");
+			}
 		}
 
 		// The core only forwards the guest's console output when one of its own
@@ -812,6 +932,88 @@ namespace
 			}
 			function();
 		}
+	}
+
+	// What the window passes on (window.h). Each of these is called on the main
+	// thread; what it has for the machine goes to the CPU thread, which takes it
+	// up between two frames.
+	void OnWindowKey(u32 code, bool pressed)
+	{
+		ps2n::host::RunOnCPUThread(
+			[code, pressed]() { InputManager::InvokeEvents(InputManager::MakeHostKeyboardKey(code), pressed ? 1.0f : 0.0f); }, false);
+	}
+
+	void OnWindowResized(u32 width, u32 height, float scale)
+	{
+		ps2n::host::RunOnCPUThread(
+			[width, height, scale]() {
+				if (MTGS::IsOpen())
+					MTGS::ResizeDisplayWindow(width, height, scale);
+			},
+			false);
+	}
+
+	void OnWindowFocusLost()
+	{
+		// The keys that are down will come up in some other window.
+		ps2n::host::RunOnCPUThread([]() { InputManager::ClearBindStateFromSource(InputManager::MakeHostKeyboardKey(0)); }, false);
+	}
+
+	void OnWindowCloseRequested()
+	{
+		s_close_requested.store(true);
+	}
+
+	// Gives the first controller the pad in port 1, beside the keyboard: the
+	// mapping PCSX2 would make for it automatically, added to the bindings that
+	// are there. CPU thread, between two frames.
+	void MapFirstController()
+	{
+		if (s_controller_mapped)
+			return;
+
+		const InputManager::GenericInputBindingMapping mapping = InputManager::GetGenericBindingMapping("SDL-0");
+		const auto find = [&mapping](GenericInputBinding generic) -> const char* {
+			for (const std::pair<GenericInputBinding, std::string>& entry : mapping)
+			{
+				if (entry.first == generic)
+					return entry.second.c_str();
+			}
+			return nullptr;
+		};
+
+		u32 mapped = 0;
+		{
+			std::unique_lock<std::mutex> lock = Host::GetSettingsLock();
+			const std::string section = Pad::GetConfigSection(0);
+			const Pad::ControllerInfo* info = Pad::GetConfigControllerType(s_settings, section.c_str(), 0);
+			if (!info)
+				return;
+
+			for (const InputBindingInfo& binding : info->bindings)
+			{
+				if (binding.generic_mapping == GenericInputBinding::Unknown)
+					continue;
+				if (const char* source = find(binding.generic_mapping))
+				{
+					s_settings.AddToStringList(section.c_str(), binding.name, source);
+					mapped++;
+				}
+			}
+			if (info->vibration_caps == Pad::VibrationCapabilities::LargeSmallMotors)
+			{
+				if (const char* source = find(GenericInputBinding::SmallMotor))
+					s_settings.SetStringValue(section.c_str(), "SmallMotor", source);
+				if (const char* source = find(GenericInputBinding::LargeMotor))
+					s_settings.SetStringValue(section.c_str(), "LargeMotor", source);
+			}
+		}
+		if (mapped == 0)
+			return;
+
+		s_controller_mapped = true;
+		VMManager::ReloadInputBindings(true);
+		std::fprintf(stderr, "ps2n-host: the first controller has the pad in port 1 (%u inputs), beside the keyboard\n", mapped);
 	}
 
 	// Reads back the frame the GS has on display and fingerprints it, so that
@@ -862,6 +1064,30 @@ namespace
 			if (!image.SaveToFile(path.c_str()))
 				std::fprintf(stderr, "ps2n-host: cannot write %s\n", path.c_str());
 		}
+	}
+
+	// Fingerprints the sound hardware, so that two runs can be held to making
+	// the same sound, whether anything plays it or not. It covers the SPU2's
+	// registers and its memory. That memory holds the samples the program gave
+	// it, the working memory of its reverberation, and the last 512 samples of
+	// everything it mixed: its mixer writes them there, as the console's does
+	// (pcsx2/SPU2/Mixer.cpp). The SPU2 runs on the CPU thread, in the IOP's
+	// time, so two runs that are at the same place at the same time and made
+	// the same sound have the same fingerprint.
+	void CaptureSound(bool along_the_way = false)
+	{
+		u64 hash = 14695981039346656037ull;
+		const auto add = [&hash](const s16* words, size_t count) {
+			for (size_t i = 0; i < count; i++)
+				hash = (hash ^ static_cast<u16>(words[i])) * 1099511628211ull;
+		};
+		add(spu2regs, std::size(spu2regs));
+		add(_spu2mem, std::size(_spu2mem));
+
+		if (along_the_way)
+			s_sound_lines.push_back(fmt::format("ps2n-host: sound at frame {}: fingerprint {:016X}", s_frames, hash));
+		else
+			s_sound_line = fmt::format("ps2n-host: sound at the last frame: fingerprint {:016X}", hash);
 	}
 
 	// What PS2Native's EE provider did, so that nothing is interpreted or
@@ -1138,9 +1364,10 @@ namespace
 				}
 
 				// As fast as the host goes: the core otherwise holds the machine to
-				// the console's speed, however little work a frame is.
+				// the console's speed, however little work a frame is. With a
+				// window someone is playing, and the console's speed is the point.
 				VMManager::SetState(VMState::Running);
-				VMManager::SetLimiterMode(LimiterModeType::Unlimited);
+				VMManager::SetLimiterMode(s_options.window ? LimiterModeType::Nominal : LimiterModeType::Unlimited);
 				while (trace_ok && VMManager::GetState() == VMState::Running)
 					VMManager::Execute();
 
@@ -1171,6 +1398,11 @@ namespace
 					code = EXIT_MARKER;
 					reason = "marker";
 				}
+				else if (s_close_requested.load())
+				{
+					code = EXIT_MARKER;
+					reason = "the closing of the window";
+				}
 				else if (s_time_limit_passed.load())
 				{
 					code = EXIT_TIME_LIMIT;
@@ -1182,6 +1414,15 @@ namespace
 				std::fprintf(stderr, "ps2n-host: EE COP0 Config %08x (double issue %s), Status %08x, EE cycle rate setting %d\n",
 					cpuRegs.CP0.n.Config, (cpuRegs.CP0.n.Config >> 18) & 1 ? "on" : "off", cpuRegs.CP0.n.Status.val,
 					static_cast<int>(EmuConfig.Speedhacks.EECycleRate));
+				if (s_options.window && s_frames > 1)
+				{
+					// The pace the session kept, against the console's. A machine that
+					// cannot keep up shows fewer frames a second than the console.
+					const double seconds = std::chrono::duration<double>(s_latest_frame_time - s_first_frame_time).count();
+					std::fprintf(stderr, "ps2n-host: in the window, %u frames in %.1f s: %.2f a second, where the console shows %.2f\n",
+						s_frames - 1, seconds, seconds > 0.0 ? static_cast<double>(s_frames - 1) / seconds : 0.0,
+						static_cast<double>(GetVerticalFrequency()));
+				}
 				if (s_options.ee == EEProvider::Ps2n)
 					ReportProvider();
 				if (!s_options.sync_path.empty() || !s_options.sync_against_path.empty())
@@ -1217,6 +1458,10 @@ namespace
 					std::fprintf(stderr, "%s\n", line.c_str());
 				if (!s_frame_line.empty())
 					std::fprintf(stderr, "%s\n", s_frame_line.c_str());
+				for (const std::string& line : s_sound_lines)
+					std::fprintf(stderr, "%s\n", line.c_str());
+				if (!s_sound_line.empty())
+					std::fprintf(stderr, "%s\n", s_sound_line.c_str());
 
 				VMManager::Shutdown(false);
 				s_exit_code.store(code);
@@ -1243,19 +1488,40 @@ namespace
 		const auto start = std::chrono::steady_clock::now();
 		const auto limit = std::chrono::seconds(s_options.max_seconds);
 		const auto grace = std::chrono::seconds(20);
+		std::optional<std::chrono::steady_clock::time_point> close_seen;
 
 		while (!s_cpu_thread_done.load())
 		{
 			std::this_thread::sleep_for(std::chrono::milliseconds(50));
-			const auto elapsed = std::chrono::steady_clock::now() - start;
-			if (elapsed >= limit)
-				s_time_limit_passed.store(true);
-			if (elapsed >= limit + grace)
+			const auto now = std::chrono::steady_clock::now();
+			const auto elapsed = now - start;
+
+			// No limit when someone is playing in a window (0 seconds).
+			if (s_options.max_seconds != 0)
 			{
-				std::fputs("ps2n-host: the machine did not stop after the time limit; ending the process\n", stderr);
-				WriteGuestOutput();
-				std::fflush(nullptr);
-				std::_Exit(EXIT_TIME_LIMIT);
+				if (elapsed >= limit)
+					s_time_limit_passed.store(true);
+				if (elapsed >= limit + grace)
+				{
+					std::fputs("ps2n-host: the machine did not stop after the time limit; ending the process\n", stderr);
+					WriteGuestOutput();
+					std::fflush(nullptr);
+					std::_Exit(EXIT_TIME_LIMIT);
+				}
+			}
+
+			// A closed window must not leave a process behind either.
+			if (s_close_requested.load())
+			{
+				if (!close_seen)
+					close_seen = now;
+				else if (now - *close_seen >= grace)
+				{
+					std::fputs("ps2n-host: the machine did not stop after the window was closed; ending the process\n", stderr);
+					WriteGuestOutput();
+					std::fflush(nullptr);
+					std::_Exit(EXIT_ERROR);
+				}
 			}
 		}
 	}
@@ -1275,6 +1541,18 @@ namespace
 		if (!s_options.pad_path.empty() && !LoadPadScript(s_options.pad_path))
 			return EXIT_ERROR;
 
+		// The window belongs to this thread, which serves its messages below
+		// while the machine runs on its own.
+		if (s_options.window)
+		{
+			const ps2n::host::window::Listener listener = {&OnWindowKey, &OnWindowResized, &OnWindowFocusLost, &OnWindowCloseRequested};
+			if (!ps2n::host::window::Create(kWindowTitle, kWindowWidth, kWindowHeight, listener))
+			{
+				std::fputs("ps2n-host: cannot make the window\n", stderr);
+				return EXIT_ERROR;
+			}
+		}
+
 		std::thread watchdog(WatchdogMain);
 
 		// Compiled guest code calls compiled guest code: a guest call is a host
@@ -1286,12 +1564,14 @@ namespace
 			std::fputs("ps2n-host: cannot start the CPU thread\n", stderr);
 			s_cpu_thread_done.store(true);
 			watchdog.join();
+			ps2n::host::window::Destroy();
 			return EXIT_ERROR;
 		}
 
 #ifdef _WIN32
-		// Components of the core may create windows owned by this thread; keep
-		// its message queue served while the machine runs.
+		// The game's window, when there is one, and windows that components of
+		// the core may create are owned by this thread; keep its message queue
+		// served while the machine runs.
 		HANDLE handle = static_cast<HANDLE>(static_cast<void*>(cpu_thread));
 		for (;;)
 		{
@@ -1310,6 +1590,7 @@ namespace
 
 		cpu_thread.Join();
 		watchdog.join();
+		ps2n::host::window::Destroy();
 
 		if (!WriteGuestOutput())
 			return EXIT_ERROR;
@@ -1317,9 +1598,32 @@ namespace
 	}
 } // namespace
 
+void ps2n::host::OnGameChanged(std::string_view title)
+{
+	if (s_options.window)
+		window::SetTitle(title.empty() ? std::string(kWindowTitle) : fmt::format("{} - {}", title, kWindowTitle));
+}
+
+void ps2n::host::OnInputDeviceConnected(std::string_view identifier)
+{
+	// Only the first controller, and only when someone is playing. Not at
+	// once: the core may be holding its settings. Between two frames.
+	if (!s_options.window || identifier != "SDL-0")
+		return;
+
+	std::lock_guard lock(s_queue_mutex);
+	s_queue.push_back([]() { MapFirstController(); });
+}
+
 void ps2n::host::OnGuestFrame()
 {
 	s_frames++;
+	if (s_options.window)
+	{
+		s_latest_frame_time = std::chrono::steady_clock::now();
+		if (s_frames == 1)
+			s_first_frame_time = s_latest_frame_time;
+	}
 	DrainQueue();
 
 	if (s_stop_requested || s_options.selftest)
@@ -1350,15 +1654,20 @@ void ps2n::host::OnGuestFrame()
 		marker = false;
 	}
 
-	if (s_provider_replaced || parted || marker || s_time_limit_passed.load() || s_frames >= s_options.max_frames)
+	// 0 frames: no limit (someone is playing in a window).
+	const bool frames_done = s_options.max_frames != 0 && s_frames >= s_options.max_frames;
+
+	if (s_provider_replaced || parted || marker || s_time_limit_passed.load() || frames_done || s_close_requested.load())
 	{
 		CaptureFrame();
+		CaptureSound();
 		s_stop_requested = true;
 		VMManager::SetState(VMState::Stopping);
 	}
 	else if (s_options.frame_every != 0 && s_frames % s_options.frame_every == 0)
 	{
 		CaptureFrame(true);
+		CaptureSound(true);
 	}
 }
 

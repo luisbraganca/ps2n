@@ -72,10 +72,15 @@ Decisions:
   approved; the first game is Killzone (`SCES-52004`).
 - [ADR 0010](docs/adr/0010-pcsx2-fix-goes-upstream-through-the-maintainer.md):
   the fix for PCSX2's VU0 status-flag bug is offered to PCSX2 by the
-  maintainer; PS2Native carries it in its patch queue only if that stalls
-  (30 days after the pull request is opened with no reply from a PCSX2
-  maintainer). The corrections are the maintainer's to write, not a
-  session's.
+  maintainer, as an issue with the correction they suggest; PS2Native
+  carries it in its patch queue only if that stalls (30 days after the
+  issue is opened with no reply from a PCSX2 maintainer). The issue's text
+  and the correction are the maintainer's to write, not a session's. The
+  two issues, PCSX2's numbers 15185 and 15186, were opened on 2026-11-11.
+  15186 was answered within the hour: the defect and its correction were
+  confirmed there. 15185 had no reply on 2026-11-12: from 2026-12-11, look
+  by reading only whether it has one, and tell the maintainer. PCSX2's team
+  asked there that no LLM-generated issues be sent.
 - [ADR 0011](docs/adr/0011-time-is-counted-as-pcsx2s-recompiler-counts-it.md):
   time is counted exactly as PCSX2's EE recompiler counts it. A run on
   PS2Native is the stock run, sync point for sync point; a difference is a
@@ -87,13 +92,15 @@ Decisions:
   name stays wherever it is attribution: logs, license texts, copyright
   headers, documentation. A finished game shows nothing of what the core can
   draw over the picture (messages, performance figures, indicators): that is
-  switched off by settings, never restyled by patching PCSX2. Not built yet;
-  it comes with the host's window.
+  switched off by settings, never restyled by patching PCSX2. The host's
+  window does all of this (`ps2n-host -window`).
 - [ADR 0013](docs/adr/0013-pcsx2s-count-register-carry-mirrored-until-fixed.md):
   a defect of PCSX2's recompiler (reading the count register carries into
-  `EntryHi`) is offered upstream in the same pull request and reproduced by
-  PS2Native until PCSX2 has the correction, as long as it costs nothing in
-  speed and changes nothing on screen. `tests/programs/countcarry.s` shows
+  `EntryHi`) is offered upstream the same way, as an issue of its own, and
+  reproduced by PS2Native until the pinned PCSX2 has the correction, as
+  long as it costs nothing in speed and changes nothing on screen. (Had the
+  issue been ignored for 30 days, the correction would have been carried
+  locally; it was confirmed instead.) `tests/programs/countcarry.s` shows
   it.
 - [ADR 0014](docs/adr/0014-the-website-is-served-from-docs.md): the project
   has a website, one page that GitHub Pages serves from `docs/` as it is
@@ -113,7 +120,8 @@ recompiler/               ps2n-recomp, in that same project: analysis and C++ ge
 runtime/                  what PS2Native adds to the core at run time: the EE provider (dispatcher,
                           fallback interpreter), the record of the blocks PCSX2's recompiler would have formed
                           (rec_blocks), instruction semantics, the contract for generated code
-host/                     ps2n-host: console frontend for the PCSX2 core, the test bench
+host/                     ps2n-host: console frontend for the PCSX2 core, the test bench; with -window, where a game
+                          is played (window.cpp: Windows only so far)
 tests/unit/               unit tests of the build-time tools
 tests/                    CTest registration for programs booted on the core, the driver script, the recorded
                           baselines; recompiles the test programs into the build tree and links them into the host
@@ -153,6 +161,21 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   pictures a run saved on contact sheets, sixty to an image: the way to look
   a whole run over, and to find out what a controller script has to press
   when (look at a sheet with the Read tool).
+- Playing the game: `scripts\windows\game.ps1 -Image <disc image> -Play
+  -Name <name>` opens it in a window, at the console's speed, with sound,
+  the keyboard and the first controller (`ps2n-host -help` has the keys),
+  until the window is closed; `-Config stock-jit` puts stock PCSX2 in the
+  same window. What a game keeps between sessions (memory card, the
+  console's settings) is in `build\game\<name>\play`, and so is what the
+  last session had to interpret of the game (`capture.toml`; `-Capture
+  <file>` adds it to the file `build.ps1 -GameCapture` takes). Windows
+  only so far.
+  A session that checks the window does it with the sound off, because the
+  sound comes out of the maintainer's speakers:
+  `scripts\windows\window-check.ps1 -Image <disc image> -Name <name> -Steps
+  '5 shot a.png', '8 key K', '14 close'` starts a muted session, photographs
+  the window, presses keys in it and closes it (look at the photographs
+  with the Read tool).
 - Tests are named `<suite>/<configuration>/<program>`. Suites: `ps2autotests`
   (console recordings), `programs` (our own, `tests/programs/*.s`, built with
   `ps2n-recomp assemble`) and `sdk` (C programs built with ps2sdk, binaries in
@@ -213,9 +236,12 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
 - PCSX2's `AGENTS.md` forbids AI-generated contributions and any automated
   posting to its GitHub. Never open issues or pull requests there, never
   comment there, and never write what is posted there (code, commit
-  messages, descriptions, replies). The maintainer may contribute a fix
-  themselves; a session may explain and point, no more
+  messages, descriptions, issue texts, replies). The maintainer may
+  contribute a fix themselves; a session may explain and point, no more
   ([ADR 0010](docs/adr/0010-pcsx2-fix-goes-upstream-through-the-maintainer.md)).
+  A commit message here never names one of PCSX2's issues or pull requests
+  by its address or as `PCSX2/pcsx2#` and a number: GitHub would post a
+  reference there.
 
 ## Development machine
 

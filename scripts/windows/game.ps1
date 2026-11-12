@@ -32,20 +32,40 @@ are derived from the game: keep them out of the repository.
 With -Capture, what the run reports for the recompiler is added to that file
 (ps2n-recomp capture), which scripts\windows\build.ps1 -GameCapture takes.
 
+With -Play the game is played instead: in a window, at the console's speed,
+with sound, on the keyboard and on the first controller, until the window is
+closed (ps2n-host -help has the keys; Alt+Enter covers the screen). The
+configuration chooses what runs it, stock PCSX2 included, to compare by eye
+and ear. What a game keeps from one session to the next (the memory card,
+the console's settings, the renderer's caches) is in build\game\<Name>\play,
+shared by the configurations so that a game saved under one can be loaded
+under another: so one session at a time. -Frames and -Seconds end a session
+only when given. What a session had to interpret of the game is written to
+capture.toml in that folder, and with -Capture added to the file given.
+
 .EXAMPLE
 scripts\windows\game.ps1 -Image "C:\ps2\killzone\Killzone (Europe) (En,Fr,De,Es,It,Nl).iso" -Config stock-jit
 scripts\windows\game.ps1 -Image <iso> -Config ps2n-static -Capture build\game\killzone\capture.toml
 scripts\windows\game.ps1 -Image <iso> -Config lockstep -Frames 900
 scripts\windows\game.ps1 -Image <iso> -Config same-as-stock -Frames 4200 -FrameEvery 1 -Pad tests\games\killzone\start.pad
+scripts\windows\game.ps1 -Image <iso> -Play -Name killzone
+scripts\windows\game.ps1 -Image <iso> -Play -Name killzone -Config stock-jit
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Image,
     [string]$Bios = $env:PS2N_BIOS,
     [ValidateSet('stock-jit', 'stock-interp', 'ps2n-ee', 'ps2n-static', 'lockstep', 'same-as-stock')][string]$Config = 'ps2n-static',
     [int]$Frames = 900,
-    # null (nothing drawn, fastest), sw (PCSX2's software renderer: the picture to compare), vulkan, opengl, dx11, dx12
+    # null (nothing drawn, fastest), sw (PCSX2's software renderer: the picture to compare), vulkan, opengl, dx11, dx12,
+    # auto (the one PCSX2 chooses for this computer). With -Play the default is auto.
     [string]$Renderer = 'sw',
     [int]$Upscale = 1,
+    # Play the game in a window instead of running it for a number of frames (Windows only).
+    [switch]$Play,
+    # With -Play: no sound.
+    [switch]$Mute,
+    # With -Play: let the core draw its messages and performance figures over the picture.
+    [switch]$Osd,
     # Also fingerprint and save the frame on display every so many frames (0: only the last).
     [int]$FrameEvery = 0,
     # A script of controller input for port 1 (ps2n-host -help has the format; tests\games has some).
@@ -68,6 +88,86 @@ if (-not $Bios) { throw "A BIOS image is needed: -Bios <file>, or set PS2N_BIOS.
 $env:PS2N_BIOS = (Resolve-Path -LiteralPath $Bios).Path
 $imagePath = (Resolve-Path -LiteralPath $Image).Path
 
+# What runs the EE, the IOP and the VUs under each configuration, and whether
+# PS2Native's provider uses the code compiled ahead of time.
+$providers = @{
+    'stock-jit'    = @('jit', 'jit', 'jit', 'on')
+    'stock-interp' = @('interp', 'interp', 'interp', 'on')
+    'ps2n-ee'      = @('ps2n', 'jit', 'jit', 'off')
+    'ps2n-static'  = @('ps2n', 'jit', 'jit', 'on')
+    'lockstep'     = @('ps2n', 'jit', 'jit', 'on')
+    'same-as-stock' = @('ps2n', 'jit', 'jit', 'on')
+}
+$p = $providers[$Config]
+
+if ($Play) {
+    if ($Config -eq 'lockstep' -or $Config -eq 'same-as-stock') {
+        throw "-Play runs one machine: choose stock-jit, stock-interp, ps2n-ee or ps2n-static."
+    }
+
+    # (Not named $play: to PowerShell that is the parameter -Play.)
+    $session = Join-Path $root "build\game\$Name\play"
+    $biosDir = Join-Path $session 'bios'
+    New-Item -ItemType Directory -Force $biosDir | Out-Null
+
+    # The BIOS image is not copied. The core gets a link to it, and so keeps
+    # the console's NVRAM beside the link and not beside the image; the link
+    # stays, because the console's settings should outlast a session. With the
+    # image go the ROM1, ROM2 and EROM images the core loads from beside it.
+    $biosFile = Get-Item -LiteralPath $env:PS2N_BIOS
+    $biosFiles = @($biosFile) + @(Get-ChildItem -LiteralPath $biosFile.DirectoryName -File | Where-Object {
+            $_.Extension -match '^\.(rom1|rom2|erom)$' -and ($_.BaseName -eq $biosFile.BaseName -or $_.BaseName -eq $biosFile.Name) })
+    foreach ($file in $biosFiles) {
+        $link = Join-Path $biosDir $file.Name
+        if (-not (Test-Path -LiteralPath $link)) {
+            try { New-Item -ItemType HardLink -Path $link -Target $file.FullName | Out-Null }
+            catch { throw "Could not link $($file.FullName) into $biosDir (is it on another drive?): $_" }
+        }
+    }
+
+    $hostArgs = @('-bios', (Join-Path $biosDir $biosFile.Name), '-data', (Join-Path $session 'data'),
+        '-log', (Join-Path $session 'core.log'), '-out', (Join-Path $session 'guest.txt'), '-frame', (Join-Path $session 'frame.png'),
+        '-ee', $p[0], '-iop', $p[1], '-vu', $p[2], '-static', $p[3], '-image', 'game', '-until', '@@ no such line @@', '-window')
+    if ($PSBoundParameters.ContainsKey('Renderer')) { $hostArgs += @('-renderer', $Renderer) }
+    if ($Upscale -ne 1) { $hostArgs += @('-upscale', "$Upscale") }
+    if ($Mute) { $hostArgs += '-mute' }
+    if ($Osd) { $hostArgs += '-osd' }
+    if ($Pad) { $hostArgs += @('-pad', (Resolve-Path -LiteralPath $Pad).Path) }
+    if ($PSBoundParameters.ContainsKey('Frames')) { $hostArgs += @('-frames', "$Frames") }
+    if ($PSBoundParameters.ContainsKey('Seconds')) { $hostArgs += @('-seconds', "$Seconds") }
+    if ($FrameEvery -gt 0) { $hostArgs += @('-frame-every', "$FrameEvery") }
+
+    # Someone playing goes where no script has been. What the session had to
+    # interpret of the game is written down for the recompiler, as after any
+    # other run.
+    $reported = Join-Path $session 'capture.toml'
+    if ($p[0] -eq 'ps2n') {
+        Remove-Item -LiteralPath $reported -ErrorAction SilentlyContinue
+        $hostArgs += @('-capture', $reported)
+    }
+    $hostArgs += $imagePath
+
+    $env:PATH = (Join-Path $root 'deps\windows-x64\deps\bin') + ';' + $env:PATH
+    Write-Host "Playing in a window ($Config). Close the window to end the session. Its files are in $session"
+
+    # The host reports on its error stream, which Windows PowerShell would
+    # otherwise take for a failure.
+    $ErrorActionPreference = 'Continue'
+    & $hostExe @hostArgs 2>&1 | ForEach-Object { "$_" } |
+        Where-Object { $_ -match '^ps2n-host:' -and $_ -notmatch '^ps2n-host: frame \d+:' } | ForEach-Object { Write-Host $_ }
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+
+    # With -Capture, that goes into the file scripts\windows\build.ps1
+    # -GameCapture takes, beside what earlier runs reported.
+    if ($Capture -and $p[0] -eq 'ps2n' -and (Test-Path -LiteralPath $reported)) {
+        $recomp = Join-Path $root 'build\tools-windows\bin\ps2n-recomp.exe'
+        $target = if ([IO.Path]::IsPathRooted($Capture)) { $Capture } else { Join-Path $root $Capture }
+        & $recomp capture --out $target $target $reported
+    }
+    exit $code
+}
+
 # cmake only exists inside a Visual Studio developer shell.
 if (-not (Get-Command cmake.exe -ErrorAction SilentlyContinue)) {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
@@ -81,15 +181,6 @@ if (-not (Get-Command cmake.exe -ErrorAction SilentlyContinue)) {
 
 function ForCMake([string]$path) { $path -replace '\\', '/' }
 
-$providers = @{
-    'stock-jit'    = @('jit', 'jit', 'jit', 'on')
-    'stock-interp' = @('interp', 'interp', 'interp', 'on')
-    'ps2n-ee'      = @('ps2n', 'jit', 'jit', 'off')
-    'ps2n-static'  = @('ps2n', 'jit', 'jit', 'on')
-    'lockstep'     = @('ps2n', 'jit', 'jit', 'on')
-    'same-as-stock' = @('ps2n', 'jit', 'jit', 'on')
-}
-$p = $providers[$Config]
 $work = Join-Path $build "ps2n\tests\game\$Name\$Config"
 
 # A game prints no last line to stop at: the run ends at the frame limit.
