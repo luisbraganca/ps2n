@@ -409,10 +409,13 @@ _start: mfc0  $v0, $12             # 00100000
     CHECK_CONTAINS(code, "PS2N_BLOCK_END(acc, 18u, target);");
 }
 
-TEST_CASE(cop2_instructions_are_carried_out_by_the_runtime) {
+TEST_CASE(cop2_instructions_ask_the_runtime_what_their_block_does_first) {
     // Whether VU0 is brought up to date before one, and whether the cycles so
     // far are added before that, PCSX2's recompiler decides from the whole
-    // block; only the runtime knows the block.
+    // block; only the runtime knows the block. CFC2 and CTC2 it carries out
+    // whole. QMFC2 and LQC2 compiled code moves itself where nothing comes
+    // first; otherwise the runtime does it all, with the changed registers
+    // put back first and the one QMFC2 writes taken again after.
     const ElfFile elf = assemble(R"(
         .text
         .globl _start
@@ -425,14 +428,41 @@ _start: cfc2  $v0, $vi16           # 00100000
     GenerateStats stats;
     const std::string code = generateFor(elf, &stats);
     CHECK_EQ(stats.cop2, size_t{4});
+    CHECK_EQ(stats.cop2Moves, size_t{2});
     CHECK_EQ(stats.delegated, size_t{0});
     // Each is handed the eighths counted up to and including itself, and
     // gives back what is left of them.
     CHECK_CONTAINS(code, "PS2N_COP2(acc, 9u, 0x00100000u);");
     CHECK_CONTAINS(code, "PS2N_COP2(acc, 9u, 0x00100004u);");
-    CHECK_CONTAINS(code, "PS2N_COP2(acc, 9u, 0x00100008u);");
-    CHECK_CONTAINS(code, "PS2N_COP2(acc, 23u, 0x00100010u);");   // the jump's 9 and the load's 14
+    CHECK_CONTAINS(code,
+                   "PS2N_COP2_MOVE(acc, 9u, 0x00100008u, (void)0, PS2N_GET(3), g3 = VU0.VF[1].UD[0]; PS2N_GPR_HIGH(3) = VU0.VF[1].UD[1]);");
+    // The jump's 9 and the load's 14; $v1, changed, is put back only on the runtime's way and a device's.
+    CHECK_CONTAINS(code, "PS2N_COP2_MOVE(acc, 23u, 0x00100010u, PS2N_PUT(3), (void)0, PS2N_LQC2(1, static_cast<uint32_t>(g29) + "
+                         "static_cast<uint32_t>(16), 0x00100010u, PS2N_PUT(3)));");
     CHECK_CONTAINS(code, "PS2N_BLOCK_END(acc, 0u, target);");
+}
+
+TEST_CASE(cop2_moves_to_vu0_read_the_locals) {
+    // QMTC2 takes bits 0 to 63 from the register's local and 64 to 127 from
+    // the core; to VU0's register 0, which is constant, it moves nothing.
+    // SQC2 stores through the address table.
+    const ElfFile elf = assemble(R"(
+        .text
+        .globl _start
+_start: addiu $a0, $a0, 1          # 00100000
+        qmtc2 $a0, $vf2            # 00100004
+        sqc2  $vf2, 32($a1)        # 00100008
+        qmtc2 $a0, $vf0            # 0010000C
+        jr    $ra                  # 00100010
+        nop                        # 00100014
+)");
+    GenerateStats stats;
+    const std::string code = generateFor(elf, &stats);
+    CHECK_EQ(stats.cop2Moves, size_t{3});
+    CHECK_CONTAINS(code, "PS2N_COP2_MOVE(acc, 18u, 0x00100004u, PS2N_PUT(4), (void)0, VU0.VF[2].UD[0] = g4; VU0.VF[2].UD[1] = PS2N_GPR_HIGH(4));");
+    CHECK_CONTAINS(code, "PS2N_COP2_MOVE(acc, 14u, 0x00100008u, PS2N_PUT(4), (void)0, PS2N_SQC2(2, static_cast<uint32_t>(g5) + "
+                         "static_cast<uint32_t>(32), 0x00100008u, PS2N_PUT(4)));");
+    CHECK_CONTAINS(code, "PS2N_COP2_MOVE(acc, 9u, 0x0010000Cu, PS2N_PUT(4), (void)0, (void)0);");
 }
 
 TEST_CASE(vu0_instructions_are_carried_out_by_compiled_code_where_the_runtime_lets_it) {
@@ -615,6 +645,48 @@ _start: lw    $v0, 0($a0)          # 00100000
     CHECK(constant.idle);
     constant.add(0xAC430000u);   // sw: a store changes the machine
     CHECK(!constant.idle);
+}
+
+TEST_CASE(loops_that_may_reach_a_fixed_point_are_marked) {
+    // A loop of one block that loads, computes and stores, and writes no
+    // register it reads before writing it: once a time round has stored only
+    // what memory held, the times round after it up to the next event test
+    // are not run. One that counts writes a register it reads first, and
+    // never reaches one. One that only loads may be an idle loop of PCSX2's
+    // recompiler, and keeps that treatment.
+    const ElfFile elf = assemble(R"(
+        .text
+        .globl _start
+_start: lw    $v0, 0($a0)          # 00100000
+        sw    $v0, 4($a0)          # 00100004
+        beq   $v0, $a1, _start     # 00100008
+        sw    $zero, 8($a0)        # 0010000C
+1:      addiu $v1, $v1, 1          # 00100010
+        sw    $v1, 0($a0)          # 00100014
+        bne   $v1, $a1, 1b         # 00100018
+        nop                        # 0010001C
+2:      lw    $v0, 0($a0)          # 00100020
+        beqz  $v0, 2b              # 00100024
+        nop                        # 00100028
+        jr    $ra                  # 0010002C
+        nop                        # 00100030
+)");
+    GenerateStats stats;
+    const std::string code = generateFor(elf, &stats);
+    CHECK_EQ(stats.fixedLoops, size_t{1});
+    CHECK_EQ(stats.idleLoops, size_t{1});
+    CHECK_CONTAINS(code, "bool ps2n_same = false;");
+    CHECK_CONTAINS(code, "ps2n_same = true;");
+    // lw 14 + sw 14 + beq 11 + sw 14 in the delay slot; the loop's start, and its leader.
+    CHECK_CONTAINS(code, "PS2N_BLOCK_END_FIXED(acc, 53u, taken ? 0x00100000u : 0x00100010u, 0x00100000u, 0);");
+    // Its stores compare, the delay slot's too; its load is kept from being
+    // one that changed nothing when it is not of plain memory.
+    CHECK_CONTAINS(code, "PS2N_STORE_SAME(mem32_t, static_cast<uint32_t>(g4) + static_cast<uint32_t>(4), g2,");
+    CHECK_CONTAINS(code, "PS2N_STORE_SAME(mem32_t, static_cast<uint32_t>(g4) + static_cast<uint32_t>(8), uint64_t{0},");
+    CHECK_CONTAINS(code, ", 0x00100000u, ps2n_same = false);");
+    // The other loops end their blocks as before.
+    CHECK_CONTAINS(code, "PS2N_STORE(mem32_t, static_cast<uint32_t>(g4) + static_cast<uint32_t>(0), g3,");
+    CHECK_CONTAINS(code, "PS2N_BLOCK_END_LOOP(acc, 34u, taken ? 0x00100020u : 0x0010002Cu, taken);");
 }
 
 TEST_CASE(a_large_program_is_spread_over_several_files) {

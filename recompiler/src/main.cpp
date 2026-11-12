@@ -248,11 +248,12 @@ int info(const Args& a) {
     std::printf("  %zu functions run on into the next (%zu instructions compiled twice)\n", stats.tails, stats.tailInstructions);
     std::printf("  %zu places where the rest of a block is left to the interpreter\n", stats.leaves);
     std::printf("  %zu likely branches left to the interpreter when taken, for what is in their delay slot\n", stats.guards);
-    std::printf("  %zu COP2 instructions; of them %zu VU0 instructions, which compiled code carries out itself where the runtime"
-                " says nothing is to be done about VU0 first, and %zu the runtime carries out whole\n",
-                stats.cop2, stats.vu0, stats.cop2 - stats.vu0);
+    std::printf("  %zu COP2 instructions; of them %zu VU0 instructions and %zu transfers, which compiled code carries out itself where"
+                " the runtime says nothing is to be done about VU0 first, and %zu the runtime carries out whole\n",
+                stats.cop2, stats.vu0, stats.cop2Moves, stats.cop2 - stats.vu0 - stats.cop2Moves);
     std::printf("  %zu DI compiled in one piece with the instruction after them\n", stats.delayedDisables);
     std::printf("  %zu branches that may close an idle loop\n", stats.idleLoops);
+    std::printf("  %zu loops of one block that may reach a fixed point\n", stats.fixedLoops);
     return 0;
 }
 

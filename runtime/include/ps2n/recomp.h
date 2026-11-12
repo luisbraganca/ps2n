@@ -255,6 +255,13 @@ namespace ps2n::ee
 	void delegate(uint32_t pc, uint32_t code);
 	void delegateInDelaySlot(uint32_t pc, uint32_t code);
 
+	// A loop that has reached a fixed point is at the end of a time round, at
+	// `cycle`, short of the next event; each time round adds `cycles`. Lets
+	// the times round pass up to the first at whose end an event is due, and
+	// returns the cycle count there, which cpuRegs.cycle has then too
+	// (PS2N_BLOCK_END_FIXED).
+	uint64_t skipFixedLoop(uint64_t cycle, uint32_t cycles);
+
 	// A call whose target is only known at run time. Runs what is at `pc`,
 	// compiled or not, as far as a compiled function goes or until interpreted
 	// code reaches compiled code. Returns the PC to continue at, or kUnwind.
@@ -407,6 +414,44 @@ namespace ps2n::ee
 		} \
 	} while (0)
 
+// The same at the branch that closes a loop of one block which may reach a
+// fixed point (the generator's FunctionEmitter::fixedLoopBranch says which):
+// from its start `head_`, leader `index_`, straight to the branch, computing
+// general registers and loading and storing them in plain memory, without
+// writing a register it reads before writing it. `ps2n_same` says whether
+// this time round loaded and stored plain memory only and stored only what
+// memory held (PS2N_LOAD's `put_`, PS2N_STORE_SAME). If so, and the block
+// began at the loop's start and is still the one the runtime knows, and the
+// branch goes back, then this time round left the machine as it found it:
+// the next one, which depends on nothing else, does exactly the same, and
+// so does every one after it until the end of a time round at which an event
+// is due. Nothing else runs on the machine before that event test. So those
+// times round are not run: their cycles pass at once, and the event test is
+// made at the cycle count it would have been made at, on the same registers
+// and memory.
+#define PS2N_BLOCK_END_FIXED(acc_, eighths_, next_, head_, index_) \
+	do \
+	{ \
+		const uint32_t ps2n_expected = (next_); \
+		const uint32_t ps2n_cycles = ::ps2n::ee::blockCycles((acc_) + (eighths_)); \
+		ps2n_cycle += ps2n_cycles; \
+		cpuRegs.cycle = ps2n_cycle; \
+		(acc_) = 0; \
+		bool ps2n_test = ::ps2n::ee::eventDueAt(ps2n_cycle); \
+		if (!ps2n_test && ps2n_same && ps2n_expected == (head_) && ps2n_start == (head_) && blocks[index_] == ps2n_end) \
+		{ \
+			ps2n_cycle = ::ps2n::ee::skipFixedLoop(ps2n_cycle, ps2n_cycles); \
+			ps2n_test = true; \
+		} \
+		if (ps2n_test) [[unlikely]] \
+		{ \
+			const uint32_t ps2n_next = ::ps2n::ee::eventTest(ps2n_expected); \
+			if (ps2n_next != ps2n_expected) \
+				return ps2n_next; \
+			PS2N_TIME(); \
+		} \
+	} while (0)
+
 // Before an instruction at which PCSX2's recompiler adds the cycles of the
 // block so far to the cycle count (ps2n::r5900::flushesCycles). `eighths_`
 // includes the instruction.
@@ -491,6 +536,76 @@ namespace ps2n::ee
 		{ \
 			(acc_) += (eighths_); \
 			::ps2n::ee::vu0::call_; \
+		} \
+	} while (0)
+
+// A transfer between VU0's registers and the general registers or memory at
+// `pc_` (QMFC2, QMTC2, LQC2, SQC2): `move_`, which compiled code makes
+// itself, unless the block it is in has VU0 brought up to date first or its
+// cycles so far added, as PS2N_VU0 decides. Then the runtime carries it out
+// whole, as PS2N_COP2 does, with the changed registers put back first
+// (`put_`) and the general register it writes taken from the core again
+// afterwards (`get_`). The move is the runtime's (ps2n/ops_cop2.h): the
+// locals of the general registers hold their bits 0 to 63, and bits 64 to
+// 127 are always the core's (PS2N_GPR_HIGH).
+#define PS2N_GPR_HIGH(n_) cpuRegs.GPR.r[n_].UD[1]
+#define PS2N_COP2_MOVE(acc_, eighths_, pc_, put_, get_, move_) \
+	do \
+	{ \
+		const uint32_t ps2n_info = ::ps2n::ee::cop2Info(pc_, ps2n_start); \
+		if (ps2n_info & ::ps2n::ee::kStepCop2First) [[unlikely]] \
+		{ \
+			put_; \
+			(acc_) = ::ps2n::ee::cop2Instruction(pc_, ps2n_start, (acc_) + (eighths_)); \
+			PS2N_TIME(); \
+			get_; \
+		} \
+		else \
+		{ \
+			(acc_) += (eighths_); \
+			move_; \
+		} \
+	} while (0)
+
+// LQC2 and SQC2 as `move_`: VU0's register `ft_` from or to the sixteen bytes
+// at `addr_` with its low four bits cleared, through the address table; when
+// that is not plain memory, as PS2N_LOAD and PS2N_STORE have it (`put_`, the
+// runtime told, the core's function). A load into register 0 still reads a
+// device's register.
+#define PS2N_LQC2(ft_, addr_, pc_, put_) \
+	do \
+	{ \
+		const uint32_t ps2n_a = (addr_) & ~15u; \
+		const vtlb_private::VTLBVirtual ps2n_e = ps2n_vmap[ps2n_a >> vtlb_private::VTLB_PAGE_BITS]; \
+		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
+		{ \
+			put_; \
+			::ps2n::ee::memoryFault(pc_, ps2n_start); \
+			const r128 ps2n_q = vtlb_memRead128(ps2n_a); \
+			if ((ft_) != 0) \
+				r128_store(&VU0.VF[ft_], ps2n_q); \
+			PS2N_TIME(); \
+		} \
+		else if ((ft_) != 0) \
+		{ \
+			std::memcpy(&VU0.VF[ft_], reinterpret_cast<const void*>(ps2n_e.assumePtr(ps2n_a)), 16); \
+		} \
+	} while (0)
+#define PS2N_SQC2(ft_, addr_, pc_, put_) \
+	do \
+	{ \
+		const uint32_t ps2n_a = (addr_) & ~15u; \
+		const vtlb_private::VTLBVirtual ps2n_e = ps2n_vmap[ps2n_a >> vtlb_private::VTLB_PAGE_BITS]; \
+		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
+		{ \
+			put_; \
+			::ps2n::ee::memoryFault(pc_, ps2n_start); \
+			vtlb_memWrite128(ps2n_a, r128_load(&VU0.VF[ft_])); \
+			PS2N_TIME(); \
+		} \
+		else \
+		{ \
+			std::memcpy(reinterpret_cast<void*>(ps2n_e.assumePtr(ps2n_a)), &VU0.VF[ft_], 16); \
 		} \
 	} while (0)
 
@@ -684,5 +799,29 @@ namespace ps2n::ee
 		else \
 		{ \
 			::ps2n::ee::plainWrite<T_>(ps2n_e, ps2n_a, static_cast<T_>(value_)); \
+		} \
+	} while (0)
+
+// The same in a loop that may reach a fixed point (PS2N_BLOCK_END_FIXED): a
+// store of a value other than the one memory holds, or to memory that is not
+// plain, keeps this time round from being one that changed nothing.
+#define PS2N_STORE_SAME(T_, addr_, value_, pc_, put_) \
+	do \
+	{ \
+		const uint32_t ps2n_a = (addr_); \
+		const vtlb_private::VTLBVirtual ps2n_e = ps2n_vmap[ps2n_a >> vtlb_private::VTLB_PAGE_BITS]; \
+		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
+		{ \
+			put_; \
+			ps2n_same = false; \
+			::ps2n::ee::memoryFault(pc_, ps2n_start); \
+			vtlb_memWrite<T_>(ps2n_a, static_cast<T_>(value_)); \
+			PS2N_TIME(); \
+		} \
+		else \
+		{ \
+			const T_ ps2n_v = static_cast<T_>(value_); \
+			ps2n_same &= ::ps2n::ee::plainRead<T_>(ps2n_e, ps2n_a) == ps2n_v; \
+			::ps2n::ee::plainWrite<T_>(ps2n_e, ps2n_a, ps2n_v); \
 		} \
 	} while (0)

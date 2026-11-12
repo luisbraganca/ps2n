@@ -37,7 +37,12 @@ itself where their block lets it: 1.19 times stock PCSX2's time. G8 (ADR
 0017), done on 2026-11-12 and rebased onto G9, compiles the BIOS's EE code
 ahead of time, from the dump the build is given: 51 of its instructions are
 still interpreted, at boot, and the level run takes 1.18 times stock
-PCSX2's time. Phase 4 needs its own approval.
+PCSX2's time. G10 (ADR 0019), performance as the maintainer's research lays
+it out, is under way in the worktree `..\ps2n-vu0` (branch `perf`): with
+profile-guided optimization of the generated code and loops that have
+reached a fixed point skipped, the level run takes 1.07 times stock
+PCSX2's time (play alone 1.08), still the stock run. Phase 4 needs its own
+approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -153,6 +158,17 @@ Decisions:
   G8 in the main tree; the two sessions agree before timing anything, and
   whichever step is committed second is rebased onto the first. Done on
   2026-11-12.
+- [ADR 0019](docs/adr/0019-performance-as-the-research-lays-it-out.md):
+  step G10, inside Phase 3: performance as the maintainer's research lays
+  it out. Gameplay measured first (startup apart from play, nothing drawn
+  and the hardware renderer, profiled; `ps2n-host -mark`, `-profile-from`),
+  then the expensive paths one change at a time, each measured against
+  stock PCSX2 timed in turn, profile-guided and link-time optimization
+  evaluated. What would change how time is counted, or what is compared
+  with stock PCSX2, goes to the maintainer first. Under way: profile-guided
+  optimization (`build.ps1 -Pgo`), loops that have reached a fixed point
+  (`PS2N_BLOCK_END_FIXED`), the COP2 transfers made by compiled code
+  (`PS2N_COP2_MOVE`).
 - [ADR 0020](docs/adr/0020-no-claude-references-in-commit-messages.md):
   no commit message references Claude: no `Co-Authored-By` line naming
   Claude, no `Claude-Session` line. The history was rewritten on
@@ -214,7 +230,15 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   the same code, or the same build an hour apart, can differ by a second:
   a change worth less than that does not show, and a ratio needs a stock
   run timed beside it. `docs/game-log.md`, "G5" and "G6", has what was
-  measured.
+  measured. `game.ps1 -Marks 6600 -ProfileFrom 6600` notes the time at
+  chosen frames and profiles from one on: the level run's startup apart
+  from its play ("G10"). Profile-guided optimization of the generated code:
+  `build.ps1 -Pgo generate`, a run with `LLVM_PROFILE_FILE` set (the level
+  is trained on `tests/games/killzone/level1-train.pad`, not the timed
+  script), `llvm-profdata merge` (in the Visual Studio install's
+  `VC\Tools\Llvm\x64\bin`), then `build.ps1 -Pgo use -PgoData <file>`; the
+  counts stay in the build tree, and are made again after the generated
+  code changes ("G10", "Profile-guided optimization").
 - The game: `scripts\windows\build.ps1 -Game <its boot executable>` compiles
   it into the host (the build tree remembers it; `-GameCapture <file>` adds
   what runs reported). `scripts\windows\game.ps1 -Image <disc image> -Config

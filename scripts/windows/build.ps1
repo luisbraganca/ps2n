@@ -52,7 +52,12 @@ param(
     # A BIOS dump whose EE code to compile into the host, or "none".
     [string]$Bios = '',
     # What earlier runs reported of the BIOS for the recompiler (ps2n-host -bios-capture), or "none".
-    [string]$BiosCapture = ''
+    [string]$BiosCapture = '',
+    # Profile-guided optimization of the generated code (docs/adr/0019): "generate" builds it to count where it goes
+    # (a run then writes the counts where LLVM_PROFILE_FILE says), "use" builds it with the merged counts given as
+    # -PgoData (llvm-profdata merge), "off" without either. Remembered by the build tree, as -Game is.
+    [ValidateSet('', 'generate', 'use', 'off')][string]$Pgo = '',
+    [string]$PgoData = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -121,6 +126,13 @@ if ($Bios) {
 if ($BiosCapture) {
     $biosCapturePath = if ($BiosCapture -eq 'none') { '' } else { ForCMake (Resolve-Path -LiteralPath $BiosCapture).Path }
     $gameSettings += "-DPS2N_BIOS_CAPTURE=$biosCapturePath"
+}
+if ($Pgo) {
+    $gameSettings += "-DPS2N_PGO=$(if ($Pgo -eq 'off') { '' } else { $Pgo })"
+    if ($Pgo -eq 'use') {
+        if (-not $PgoData) { throw "-Pgo use needs -PgoData, the merged profile (llvm-profdata merge)." }
+        $gameSettings += "-DPS2N_PGO_DATA=$(ForCMake (Resolve-Path -LiteralPath $PgoData).Path)"
+    }
 }
 
 if ($Reconfigure -or $gameSettings -or -not (Test-Path (Join-Path $build 'build.ninja'))) {

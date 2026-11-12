@@ -348,7 +348,7 @@ namespace ps2n::host::profile
 		}
 	}
 
-	bool Write(const char* path, uint32_t frames, double seconds)
+	bool Write(const char* path, uint32_t first_frame, uint32_t frames, double seconds)
 	{
 		std::FILE* fp = std::fopen(path, "wb");
 		if (!fp)
@@ -467,9 +467,9 @@ namespace ps2n::host::profile
 		std::fprintf(fp,
 			"# Where the CPU thread was, looked at about a thousand times a second (ps2n-host -profile).\n"
 			"# The CPU thread carries the EE, the IOP and the VUs. The GS has a thread of its own, which was not looked at.\n"
-			"# %zu samples over %u frames in %.1f s (%.0f samples a second, %.1f frames a second)%s\n"
+			"# %zu samples over %u frames from frame %u on, in %.1f s (%.0f samples a second, %.1f frames a second)%s\n"
 			"# The host's own symbols: %s\n\n",
-			s_samples.size(), frames, seconds, seconds > 0.0 ? static_cast<double>(s_samples.size()) / seconds : 0.0,
+			s_samples.size(), frames, first_frame, seconds, seconds > 0.0 ? static_cast<double>(s_samples.size()) / seconds : 0.0,
 			seconds > 0.0 ? static_cast<double>(frames) / seconds : 0.0,
 			s_dropped ? "; more would have been taken had there been room" : "", host_symbols.c_str());
 
@@ -566,7 +566,7 @@ namespace ps2n::host::profile
 	{
 	}
 
-	bool Write(const char* path, uint32_t frames, double seconds)
+	bool Write(const char* path, uint32_t first_frame, uint32_t frames, double seconds)
 	{
 		return false;
 	}

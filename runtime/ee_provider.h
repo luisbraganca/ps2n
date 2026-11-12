@@ -153,6 +153,13 @@ namespace ps2n::ee
 		/// EE cycles that passed in timeout loops without the loops being run
 		/// (ps2n/waitloop.h), in compiled and in interpreted code.
 		uint64_t timeout_loop_cycles = 0;
+		/// Times round loops that had reached a fixed point which compiled code
+		/// did not run, and the EE cycles that passed in them
+		/// (PS2N_BLOCK_END_FIXED in ps2n/recomp.h); and how many times it
+		/// skipped some.
+		uint64_t fixed_loop_rounds = 0;
+		uint64_t fixed_loop_cycles = 0;
+		uint64_t fixed_loop_skips = 0;
 		/// FlushCache calls that were not made, as PCSX2's recompiler does not
 		/// make them; and blocks carried out at another address than they were
 		/// formed at (a mirror of the same memory), which then run as if at the

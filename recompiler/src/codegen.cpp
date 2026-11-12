@@ -15,7 +15,7 @@ namespace ps2n::recomp {
 
 using namespace r5900;
 
-const char* const kGeneratorName = "ps2n-recomp 0.5.0";
+const char* const kGeneratorName = "ps2n-recomp 0.6.0";
 
 namespace {
 
@@ -174,6 +174,51 @@ std::string vu0Call(const Insn& in) {
 uint32_t fieldMask(const Insn& in) { return ((1u << in.rs()) | (1u << in.rt()) | (1u << in.rd())) & ~1u; }
 uint32_t writtenMask(const Insn& in) { return ((1u << in.rt()) | (1u << in.rd())) & ~1u; }
 
+// What a loop that may reach a fixed point (FunctionEmitter::fixedLoopBranch)
+// may hold: an instruction that computes a general register from others, a
+// load or store of one (which compiled code makes on the locals, through the
+// address table), a nop or SYNC. Each depends on nothing but the registers it
+// reads and the memory it loads, and changes nothing but the register it
+// writes and the memory it stores. The general registers `in` reads and
+// writes ($zero left out); false for anything else.
+bool fixedLoopEffect(const Insn& in, uint32_t& reads, uint32_t& writes) {
+    const uint32_t rs = 1u << in.rs(), rt = 1u << in.rt(), rd = 1u << in.rd();
+    reads = writes = 0;
+    switch (in.op) {
+    case Op::ADD: case Op::ADDU: case Op::SUB: case Op::SUBU:
+    case Op::DADD: case Op::DADDU: case Op::DSUB: case Op::DSUBU:
+    case Op::AND: case Op::OR: case Op::XOR: case Op::NOR: case Op::SLT: case Op::SLTU:
+    case Op::SLLV: case Op::SRLV: case Op::SRAV: case Op::DSLLV: case Op::DSRLV: case Op::DSRAV:
+        reads = rs | rt;
+        writes = rd;
+        break;
+    case Op::ADDI: case Op::ADDIU: case Op::DADDI: case Op::DADDIU: case Op::SLTI: case Op::SLTIU:
+    case Op::ANDI: case Op::ORI: case Op::XORI:
+    case Op::LB: case Op::LBU: case Op::LH: case Op::LHU: case Op::LW: case Op::LWU: case Op::LD:
+        reads = rs;
+        writes = rt;
+        break;
+    case Op::SLL: case Op::SRL: case Op::SRA: case Op::DSLL: case Op::DSRL: case Op::DSRA:
+    case Op::DSLL32: case Op::DSRL32: case Op::DSRA32:
+        reads = rt;
+        writes = rd;
+        break;
+    case Op::LUI: writes = rt; break;
+    case Op::MOVZ: case Op::MOVN:   // the destination keeps its value unless the condition holds
+        reads = rs | rt | rd;
+        writes = rd;
+        break;
+    case Op::SB: case Op::SH: case Op::SW: case Op::SD: reads = rs | rt; break;
+    case Op::SYNC: break;
+    default:
+        if (in.raw != 0) return false;
+        break;
+    }
+    reads &= ~1u;
+    writes &= ~1u;
+    return true;
+}
+
 // A COP2 instruction, LQC2 or SQC2: what the runtime carries out whole,
 // because when VU0 is brought up to date first depends on the block.
 bool isCop2(const Insn& in) {
@@ -331,6 +376,9 @@ public:
         }
         if (usesTable_) out += "\tconst vtlb_private::VTLBVirtual* const ps2n_vmap = addressTable();\n";
         if (usesUnused_) out += "\t[[maybe_unused]] uint64_t ps2n_unused = 0;\n";
+        // Whether a time round of a loop that may reach a fixed point has
+        // changed nothing so far (PS2N_BLOCK_END_FIXED).
+        if (usesSame_) out += "\tbool ps2n_same = false;\n";
         if (needsDispatch_) out += "ps2n_dispatch:\n";
         // A call enters at the start; any other entry is the runtime's doing
         // and rare. Without this the switch searches its cases every time.
@@ -415,6 +463,12 @@ private:
     uint32_t declared_ = 0;      // every register that has a local in this function
     bool usesTable_ = false;     // ps2n_vmap, for loads and stores
     bool usesUnused_ = false;    // ps2n_unused, for a load into $zero
+    bool usesSame_ = false;      // ps2n_same, for a loop that may reach a fixed point
+
+    // The loop of one block that may reach a fixed point (fixedLoopBranch)
+    // being emitted: its first instruction and the branch that closes it.
+    uint32_t fixedHead_ = 0, fixedBranch_ = 0;
+    bool inFixedLoop(uint32_t a) const { return fixedBranch_ != 0 && a >= fixedHead_ && a <= fixedBranch_ + 4; }
 
     // The FPU's registers the same way, in the locals f0 to f31 and, for the
     // accumulator, facc: bit 32 of these sets. A local holds the register's 32
@@ -685,9 +739,15 @@ private:
             const std::string base = use(rs);
             return strprintf("static_cast<uint32_t>(%s) + static_cast<uint32_t>(%d)", base.c_str(), in.simm());
         };
+        // In a loop that may reach a fixed point, a load or store that turns
+        // out not to be of plain memory keeps this time round from being one
+        // (PS2N_BLOCK_END_FIXED), and so does a store of a value other than
+        // the one memory holds.
+        const bool fixed = inFixedLoop(in.addr);
         const auto load = [&](const char* as, const char* type) {
             const std::string at = address();
-            const std::string puts = putArgument();
+            std::string puts = putArgument();
+            if (fixed) puts = (puts == "(void)0" ? std::string() : puts + "; ") + "ps2n_same = false";
             usesTable_ = true;
             if (rt == 0) usesUnused_ = true;
             // After a read that may be of an EE timer register the block may
@@ -710,8 +770,9 @@ private:
             const std::string at = address();
             const std::string value = use(rt);
             usesTable_ = true;
-            line(strprintf("PS2N_STORE(%s, %s, %s, %s, %s);", type, at.c_str(), value.c_str(), hex(in.addr).c_str(), putArgument().c_str()), &in,
-                 note);
+            line(strprintf("PS2N_STORE%s(%s, %s, %s, %s, %s);", fixed ? "_SAME" : "", type, at.c_str(), value.c_str(), hex(in.addr).c_str(),
+                           putArgument().c_str()),
+                 &in, note);
         };
 
         const std::string simm = std::to_string(in.simm());
@@ -875,6 +936,59 @@ private:
         }
     }
 
+    // QMFC2, QMTC2, LQC2 and SQC2, after `cost` eighths not yet in `acc`
+    // (theirs included): the move compiled code makes where the block does
+    // nothing about VU0 first, or the runtime otherwise (PS2N_COP2_MOVE).
+    // The changed registers are put back only on the runtime's way, and on
+    // the way of a load or store that is not of plain memory; a general
+    // register's local holds its bits 0 to 63, and the core bits 64 to 127.
+    // False, with nothing emitted, for the other COP2 instructions.
+    bool emitCop2Move(const Insn& in, uint32_t cost, const char* note) {
+        const uint32_t rt = in.rt();
+        const std::string pc = hex(in.addr);
+        const auto emit = [&](const std::string& puts, const std::string& get, const std::string& move) {
+            line(strprintf("PS2N_COP2_MOVE(acc, %uu, %s, %s, %s, %s);", cost, pc.c_str(), puts.c_str(), get.c_str(), move.c_str()), &in, note);
+        };
+        switch (in.op) {
+        case Op::QMFC2: {
+            // Into general register rt from VU0's register fs (the rd field).
+            const std::string puts = putArgument();
+            if (rt == 0) {
+                emit(puts, "(void)0", "(void)0");
+                return true;
+            }
+            const uint32_t fs = in.rd();
+            const std::string to = def(rt);
+            emit(puts, strprintf("PS2N_GET(%u)", rt),
+                 strprintf("%s = VU0.VF[%u].UD[0]; PS2N_GPR_HIGH(%u) = VU0.VF[%u].UD[1]", to.c_str(), fs, rt, fs));
+            return true;
+        }
+        case Op::QMTC2: {
+            // From general register rt into VU0's register fs, of which 0 is constant.
+            const uint32_t fs = in.rd();
+            std::string move = "(void)0";
+            if (fs != 0) {
+                const std::string from = use(rt);
+                move = strprintf("VU0.VF[%u].UD[0] = %s; VU0.VF[%u].UD[1] = PS2N_GPR_HIGH(%u)", fs, from.c_str(), fs, rt);
+            }
+            emit(putArgument(), "(void)0", move);
+            return true;
+        }
+        case Op::LQC2:
+        case Op::SQC2: {
+            // VU0's register ft (the rt field) from or to memory.
+            const std::string base = use(in.rs());
+            const std::string at = strprintf("static_cast<uint32_t>(%s) + static_cast<uint32_t>(%d)", base.c_str(), in.simm());
+            const std::string puts = putArgument();
+            usesTable_ = true;
+            emit(puts, "(void)0",
+                 strprintf("%s(%u, %s, %s, %s)", in.op == Op::LQC2 ? "PS2N_LQC2" : "PS2N_SQC2", rt, at.c_str(), pc.c_str(), puts.c_str()));
+            return true;
+        }
+        default: return false;
+        }
+    }
+
     // ---- pieces -------------------------------------------------------------
     // An instruction that is neither control flow nor one that ends a block,
     // after `before` eighths not yet in `acc`. Returns the eighths not in
@@ -901,6 +1015,14 @@ private:
                 line(strprintf("PS2N_VU0(acc, %uu, %s, %s);", cost, hex(in.addr).c_str(), vu0.c_str()), &in, note);
                 stats_.cop2++;
                 stats_.vu0++;
+                return 0;
+            }
+
+            // A transfer between VU0's registers and the general registers
+            // or memory: the same, with the move made by compiled code.
+            if (emitCop2Move(in, cost, note)) {
+                stats_.cop2++;
+                stats_.cop2Moves++;
                 return 0;
             }
 
@@ -1006,6 +1128,14 @@ private:
         else line(strprintf("PS2N_BLOCK_END(acc, %uu, %s);", eighths, next.c_str()));
     }
 
+    // The end of the block of a loop that may reach a fixed point, at the
+    // branch that closes it (fixedLoopBranch).
+    void fixedBlockEnd(uint32_t eighths, const std::string& next) {
+        put();
+        line(strprintf("PS2N_BLOCK_END_FIXED(acc, %uu, %s, %s, %u);", eighths, next.c_str(), hex(fixedHead_).c_str(),
+                       leaders_.of(p_, f_, fixedHead_)));
+    }
+
     // Whether the code from the target of `branch` up to it, with its delay
     // slot `ds`, may be an idle loop (ps2n/waitloop.h). The runtime decides
     // whether the block that is running is one (rec_blocks.cpp): it must
@@ -1025,6 +1155,53 @@ private:
         }
         scan.add(ds.raw);
         return scan.idle;
+    }
+
+    // Whether leader `head` begins a loop of one block that may reach a fixed
+    // point: its code runs straight from `head` to a branch back to it, which
+    // is neither likely nor a call and tests general registers, and nothing
+    // enters it on the way; it holds only what fixedLoopEffect() allows, and
+    // no load after which its block may end; and it writes no register it
+    // reads before writing it. Once a time round has stored only what memory
+    // held, every time round after it until an event test does the same
+    // thing, because nothing else runs on the machine in between and the
+    // registers it depends on are the same. Compiled code then lets their
+    // cycles pass at once (PS2N_BLOCK_END_FIXED). Not for a loop that may be
+    // one of PCSX2's idle loops, whose time the recompiler skips otherwise.
+    // Returns the address of the branch, or 0.
+    uint32_t fixedLoopBranch(uint32_t head) const {
+        uint32_t reads = 0, writes = 0;
+        const auto add = [&](const Insn& in) {
+            uint32_t r = 0, w = 0;
+            if (!fixedLoopEffect(in, r, w)) return false;
+            reads |= r & ~writes;
+            writes |= w;
+            return true;
+        };
+
+        uint32_t a = head;
+        for (;; a += 4) {
+            if (a >= f_.end || (a != head && f_.isLeader(a))) return 0;
+            const Insn in = insn(a);
+            if (!in.valid()) return 0;
+            if (in.hasDelaySlot()) break;
+            if (isNarrowLoad(in) && p_.entryAt(a + 4)) return 0;
+            if (!add(in)) return 0;
+        }
+
+        const Insn branch = insn(a);
+        if (!branch.is(F_BRANCH) || branch.isLikely() || branch.isCall() || branch.branchTarget() != head) return 0;
+        switch (branch.op) {
+        case Op::BEQ: case Op::BNE: reads |= ((1u << branch.rs()) | (1u << branch.rt())) & ~writes & ~1u; break;
+        case Op::BLEZ: case Op::BGTZ: case Op::BLTZ: case Op::BGEZ: reads |= (1u << branch.rs()) & ~writes & ~1u; break;
+        default: return 0;
+        }
+        if (a + 4 >= f_.end || f_.isLeader(a + 4)) return 0;
+        const Insn ds = insn(a + 4);
+        if (!ds.valid() || ds.hasDelaySlot() || !add(ds)) return 0;
+        if (reads & writes) return 0;
+        if (mayCloseIdleLoop(branch, ds)) return 0;
+        return a;
     }
 
     // Whether `after`, the instruction that follows a DI, can be compiled in
@@ -1195,6 +1372,8 @@ private:
 
         const bool loop = mayCloseIdleLoop(in, ds);
         if (loop) stats_.idleLoops++;
+        // The branch that closes a loop that may reach a fixed point.
+        const bool fixedEnd = fixedBranch_ == a;
 
         switch (in.op) {
         case Op::J: {
@@ -1250,7 +1429,8 @@ private:
             if (in.isUnconditionalBranch()) {
                 if (linked) link(31, next);
                 const uint32_t rest = slot();
-                blockEnd(rest, hex(target), "true", loop);
+                if (fixedEnd) fixedBlockEnd(rest, hex(target));
+                else blockEnd(rest, hex(target), "true", loop);
                 if (linked) {
                     call(target, next);
                 } else {
@@ -1287,7 +1467,8 @@ private:
                 if (linked) link(31, next);
                 line("const bool taken = " + branchCondition(in) + ";");
                 const uint32_t rest = slot();
-                blockEnd(rest, "taken ? " + hex(target) + " : " + hex(next), "taken", loop);
+                if (fixedEnd) fixedBlockEnd(rest, "taken ? " + hex(target) + " : " + hex(next));
+                else blockEnd(rest, "taken ? " + hex(target) + " : " + hex(next), "taken", loop);
                 line("if (taken)");
                 open();
                 if (linked) call(target, next);
@@ -1301,6 +1482,7 @@ private:
 
         pending_ = 0;
         blockStart_ = true;
+        fixedHead_ = fixedBranch_ = 0;
         if (slotIsLeader) {
             // Step over the delay slot's own copy, which comes next.
             if (falls) transfer(next);
@@ -1346,6 +1528,19 @@ private:
                 } else {
                     body_ += label(a) + ":\n";
                     blockStart(a);
+                }
+                // A loop that may reach a fixed point begins here: each time
+                // round starts out as one. (Not in a variant, whose blocks the
+                // runtime is asked about every time.)
+                fixedHead_ = fixedBranch_ = 0;
+                if (variant_ < 0) {
+                    if (const uint32_t branch = fixedLoopBranch(a)) {
+                        fixedHead_ = a;
+                        fixedBranch_ = branch;
+                        usesSame_ = true;
+                        line("ps2n_same = true;");
+                        stats_.fixedLoops++;
+                    }
                 }
                 restore(want);
                 if (!want.empty()) {

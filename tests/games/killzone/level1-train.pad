@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Controller input for Killzone (SCES-52004): the same way through the menus
+# into the first level of the campaign as level1.pad, and then the level
+# played otherwise: other directions, other looks, more fire. For training
+# profile-guided optimization (scripts\windows\build.ps1 -Pgo), so that the
+# run that is timed, level1.pad, is not the run the compiler was taught by.
+# Run it for 17,500 frames.
+#
+# This file holds button presses, written for PS2Native's tests. Nothing in
+# it comes from the game.
+#
+# frame  input  frames held
+
+# "No memory card (PS2) found ... Do you want to start the game?": Continue.
+1900    cross     4
+# The intro film: skip it. The title screen follows.
+2300    cross     4
+# The title screen: to the main menu (Options, Game, Extras).
+2500    start     4
+# Game, then Campaign. The game looks for a memory card and asks for a profile.
+2900    cross     4
+3300    cross     4
+
+# "Create profile": edit the profile name. The game's keyboard takes a letter
+# when a direction is held and a button pressed meanwhile: three letters.
+3700    cross     4
+3800    up        60
+3830    cross     4
+3900    l_up      60
+3930    cross     4
+4000    l_left    60
+4030    cross     4
+# With no direction held, Cross is "enter": the name is done.
+4200    cross     4
+# Down to "Create profile", and create it.
+4300    down      30
+4450    cross     4
+# "Do you want to save this profile to the memory card?": No.
+4700    triangle  4
+
+# Select level (the first), difficulty (Normal), character (the first).
+5000    cross     4
+5300    cross     4
+5600    cross     4
+# The level's opening scene: skip it. The level loads until about frame 6,600.
+5900    cross     4
+
+# In the level, otherwise than level1.pad plays it.
+6700    l_left    200
+6800    r1        120
+7000    r_left    60
+7100    l_up      400
+7300    r1        80
+7400    l_right   150
+7600    r_up      40
+7700    r1        150
+7900    l_down    100
+8000    square    4
+8100    l_up      500
+8300    r_right   80
+8500    r1        200
+8800    l_left    300
+9000    r1        100
+9200    l_up      700
+9500    r_left    40
+9700    r1        150
+10000   l_right   400
+10200   r1        120
+10500   l_up      800
+10800   r_down    20
+11000   r1        200
+11400   l_left    300
+11700   r1        150
+12000   l_up      900
+12400   r_right   60
+12600   r1        200
+13000   l_up      900
+13400   r1        150
+14000   l_right   300
+14300   r1        200
+
+# Whatever has happened by now: Retry, should "Failed" be up, and play on.
+15200   cross     4
+15500   triangle  4
+16600   l_up      300
+16800   r1        60
+17100   r_left    60
+17200   r1        60

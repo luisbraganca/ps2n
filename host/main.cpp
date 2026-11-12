@@ -137,6 +137,8 @@ namespace
 		u32 frame_every = 0; // when not zero: the frame on display is also fingerprinted every so many frames
 		std::string pad_path; // a script of controller input for port 1
 		std::string profile_path; // where the report of where the CPU thread's time went is written
+		u32 profile_from = 1; // the frame from which the profile looks (startup left out when later than 1)
+		std::vector<u32> marks; // frames at which the wall-clock time is noted, for the report
 		bool fast_cores = false; // keep the run on the processor's fastest cores, so that its time repeats
 		bool window = false; // play in a window: the console's speed, sound, the keyboard, a controller, a memory card
 		bool mute = false; // with -window: no sound
@@ -216,6 +218,13 @@ namespace
 	bool s_controller_mapped = false;
 	std::chrono::steady_clock::time_point s_first_frame_time;
 	std::chrono::steady_clock::time_point s_latest_frame_time;
+
+	// When the host started, when the profile began looking (-profile-from),
+	// and the wall-clock time at the frames asked for with -mark, in seconds
+	// since the host started. CPU thread only, after the start.
+	const std::chrono::steady_clock::time_point s_host_start = std::chrono::steady_clock::now();
+	std::chrono::steady_clock::time_point s_profile_start_time;
+	std::vector<std::pair<u32, double>> s_frame_marks;
 
 	// The workload a benchmark program is running, and what has been measured.
 	std::string s_bench_name;
@@ -319,6 +328,12 @@ namespace
 			"                     compiled code, to PS2Native's runtime, to PCSX2's core, to\n"
 			"                     the code PCSX2's recompilers generated and to the system,\n"
 			"                     with the functions that had most of it. Windows only.\n"
+			"  -profile-from <n>  With -profile: look from frame n on, not from the first,\n"
+			"                     to leave out what comes before (a game's startup).\n"
+			"  -mark <n>          Note the wall-clock time at frame n, and report it after\n"
+			"                     the run with the time of the first and the last frame,\n"
+			"                     each since the host started. May be given more than once:\n"
+			"                     to time a game's startup and its play apart.\n"
 			"  -fast-cores        Keep the run on the processor's fastest cores. On a\n"
 			"                     processor with fast and slow cores the system otherwise\n"
 			"                     moves a run between them, and the same run takes up to\n"
@@ -387,6 +402,20 @@ namespace
 				o.pad_path = argv[++i];
 			else if (is("-profile") && has_value)
 				o.profile_path = argv[++i];
+			else if ((is("-profile-from") || is("-mark")) && has_value)
+			{
+				const bool mark = is("-mark");
+				const std::optional<u32> n = StringUtil::FromChars<u32>(argv[++i]);
+				if (!n || *n == 0)
+				{
+					std::fprintf(stderr, "ps2n-host: %s takes a positive frame number\n", mark ? "-mark" : "-profile-from");
+					return false;
+				}
+				if (mark)
+					o.marks.push_back(*n);
+				else
+					o.profile_from = *n;
+			}
 			else if (is("-fast-cores"))
 				o.fast_cores = true;
 			else if (is("-image") && has_value)
@@ -1265,6 +1294,13 @@ namespace
 			std::fprintf(stderr, "ps2n-host: %llu EE cycles passed in timeout loops that were not run\n",
 				static_cast<ull>(stats.timeout_loop_cycles));
 		}
+		if (stats.fixed_loop_skips)
+		{
+			std::fprintf(stderr,
+				"ps2n-host: loops that had reached a fixed point: %llu times round not run, %llu EE cycles, at %llu event tests\n",
+				static_cast<ull>(stats.fixed_loop_rounds), static_cast<ull>(stats.fixed_loop_cycles),
+				static_cast<ull>(stats.fixed_loop_skips));
+		}
 		if (stats.console_followed_abs_neg || stats.console_followed_max_min)
 		{
 			// Where a register may differ from a stock run's on purpose (ADR 0005).
@@ -1573,6 +1609,21 @@ namespace
 						s_frames - 1, seconds, seconds > 0.0 ? static_cast<double>(s_frames - 1) / seconds : 0.0,
 						static_cast<double>(GetVerticalFrequency()));
 				}
+				if (!s_options.marks.empty() && s_frames > 0)
+				{
+					// The first frame, those asked for, and the last, each with its
+					// wall-clock time since the host started: what lies between two of
+					// them is the time of that part of the run.
+					std::string line;
+					const auto add = [&line](u32 frame, double seconds) {
+						line += fmt::format("{}frame {} at {:.3f} s", line.empty() ? "" : ", ", frame, seconds);
+					};
+					for (const auto& [frame, seconds] : s_frame_marks)
+						add(frame, seconds);
+					if (s_frame_marks.empty() || s_frame_marks.back().first != s_frames)
+						add(s_frames, std::chrono::duration<double>(s_latest_frame_time - s_host_start).count());
+					std::fprintf(stderr, "ps2n-host: wall-clock time since the host started: %s\n", line.c_str());
+				}
 				if (s_options.ee == EEProvider::Ps2n)
 					ReportProvider();
 				if (!s_options.sync_path.empty() || !s_options.sync_against_path.empty())
@@ -1809,8 +1860,11 @@ namespace
 		{
 			// The CPU thread has ended: what it kept for itself can be read here.
 			ps2n::host::profile::Stop();
-			const double seconds = std::chrono::duration<double>(s_latest_frame_time - s_first_frame_time).count();
-			if (ps2n::host::profile::Write(s_options.profile_path.c_str(), s_frames ? s_frames - 1 : 0, seconds))
+			// From the frame at which it began looking to the last.
+			const bool looked = s_frames >= s_options.profile_from;
+			const double seconds = looked ? std::chrono::duration<double>(s_latest_frame_time - s_profile_start_time).count() : 0.0;
+			const u32 frames = looked ? s_frames - s_options.profile_from : 0;
+			if (ps2n::host::profile::Write(s_options.profile_path.c_str(), s_options.profile_from, frames, seconds))
 				std::fprintf(stderr, "ps2n-host: where the CPU thread's time went: %s\n", s_options.profile_path.c_str());
 			else
 				std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.profile_path.c_str());
@@ -1843,16 +1897,21 @@ void ps2n::host::OnGuestFrame()
 {
 	s_frames++;
 	const bool profiling = !s_options.profile_path.empty();
-	if (s_options.window || profiling)
+	s_latest_frame_time = std::chrono::steady_clock::now();
+	if (s_frames == 1)
 	{
-		s_latest_frame_time = std::chrono::steady_clock::now();
-		if (s_frames == 1)
-		{
-			// From the first frame on: the machine exists now.
-			s_first_frame_time = s_latest_frame_time;
-			if (profiling)
-				ps2n::host::profile::Enable(true);
-		}
+		// From the first frame on: the machine exists now.
+		s_first_frame_time = s_latest_frame_time;
+	}
+	if (profiling && s_frames == s_options.profile_from)
+	{
+		s_profile_start_time = s_latest_frame_time;
+		ps2n::host::profile::Enable(true);
+	}
+	if (!s_options.marks.empty() &&
+		(s_frames == 1 || std::find(s_options.marks.begin(), s_options.marks.end(), s_frames) != s_options.marks.end()))
+	{
+		s_frame_marks.emplace_back(s_frames, std::chrono::duration<double>(s_latest_frame_time - s_host_start).count());
 	}
 	DrainQueue();
 

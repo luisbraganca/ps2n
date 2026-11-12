@@ -28,7 +28,7 @@ namespace ps2n::host::profile
 	void Stop();
 
 	/// Writes the report: how many samples fell into each kind of code, and the
-	/// functions that had most of them. `frames` and `seconds` are the run's,
-	/// for the report's first lines.
-	bool Write(const char* path, uint32_t frames, double seconds);
+	/// functions that had most of them. `frames` and `seconds` are those looked
+	/// at, from frame `first_frame` on, for the report's first lines.
+	bool Write(const char* path, uint32_t first_frame, uint32_t frames, double seconds);
 } // namespace ps2n::host::profile

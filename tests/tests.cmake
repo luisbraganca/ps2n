@@ -430,3 +430,33 @@ target_link_libraries(ps2n-host PRIVATE ps2n-test-images)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 	target_compile_options(ps2n-test-images PRIVATE -gline-tables-only)
 endif()
+
+# Profile-guided optimization of the generated code (docs/adr/0019). With
+# PS2N_PGO=generate the generated code is built to count where it goes, and
+# the host writes what it counted when it exits, where LLVM_PROFILE_FILE
+# says; with PS2N_PGO=use the merged counts (llvm-profdata merge),
+# PS2N_PGO_DATA, guide the compiler. The counts come from running a game:
+# they stay in the build tree and never go into the repository.
+set(PS2N_PGO "" CACHE STRING "Profile-guided optimization of the generated code: generate, use, or empty for none")
+set(PS2N_PGO_DATA "" CACHE FILEPATH "With PS2N_PGO=use: the merged profile (.profdata)")
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+	if(PS2N_PGO STREQUAL "generate")
+		target_compile_options(ps2n-test-images PRIVATE -fprofile-instr-generate)
+		if(WIN32)
+			# The linker is called directly, so the profiling runtime has to be named.
+			execute_process(COMMAND "${CMAKE_CXX_COMPILER}" /clang:-print-resource-dir
+				OUTPUT_VARIABLE ps2n_clang_resources OUTPUT_STRIP_TRAILING_WHITESPACE)
+			target_link_libraries(ps2n-host PRIVATE "${ps2n_clang_resources}/lib/windows/clang_rt.profile-x86_64.lib")
+		else()
+			target_link_options(ps2n-host PRIVATE -fprofile-instr-generate)
+		endif()
+	elseif(PS2N_PGO STREQUAL "use")
+		if(NOT EXISTS "${PS2N_PGO_DATA}")
+			message(FATAL_ERROR "PS2N_PGO=use needs PS2N_PGO_DATA, a merged profile: ${PS2N_PGO_DATA}")
+		endif()
+		target_compile_options(ps2n-test-images PRIVATE "-fprofile-instr-use=${PS2N_PGO_DATA}"
+			-Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date)
+	elseif(NOT PS2N_PGO STREQUAL "")
+		message(FATAL_ERROR "PS2N_PGO is generate, use or empty, not ${PS2N_PGO}")
+	endif()
+endif()

@@ -68,6 +68,12 @@ param(
     [switch]$Osd,
     # Also write profile.txt among the run's files: where the CPU thread's time went (ps2n-host -profile).
     [switch]$TimeProfile,
+    # With -TimeProfile: look from this frame on (ps2n-host -profile-from), to leave the game's startup out.
+    [int]$ProfileFrom = 0,
+    # Frames at which the wall-clock time is noted, reported after the run with the first and the last frame's
+    # (ps2n-host -mark): to time a game's startup and its play apart. Separated by commas, "6600,12000": through
+    # powershell -File an array of numbers would arrive as one number.
+    [string]$Marks = '',
     # Also fingerprint and save the frame on display every so many frames (0: only the last).
     [int]$FrameEvery = 0,
     # A script of controller input for port 1 (ps2n-host -help has the format; tests\games has some).
@@ -196,6 +202,9 @@ $arguments = @(
 if ($Renderer -ne 'null') { $arguments += @("-DRENDERER=$Renderer", "-DUPSCALE=$Upscale", "-DFRAME_EVERY=$FrameEvery") }
 if ($Pad) { $arguments += "-DPAD=$(ForCMake (Resolve-Path -LiteralPath $Pad).Path)" }
 if ($TimeProfile) { $arguments += '-DPROFILE=1' }
+if ($TimeProfile -and $ProfileFrom -gt 0) { $arguments += "-DPROFILE_FROM=$ProfileFrom" }
+$markList = @($Marks -split '[,;\s]+' | Where-Object { $_ -ne '' } | ForEach-Object { [int]$_ })
+if ($markList.Count -gt 0) { $arguments += "-DMARKS=$($markList -join ';')" }
 # Every run here is timed, so it is kept on the processor's fastest cores:
 # left to the system, the same run took between 75 and 150 s.
 $arguments += '-DFAST_CORES=1'

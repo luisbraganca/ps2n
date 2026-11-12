@@ -60,12 +60,14 @@ struct GenerateStats {
     size_t guards = 0;             // likely branches left to it when taken, for what is in their delay slot
     size_t cop2 = 0;               // COP2 instructions, which the runtime carries out whole or decides about
     size_t vu0 = 0;                // of those, VU0 instructions that compiled code carries out itself where it may
+    size_t cop2Moves = 0;          // and transfers (QMFC2, QMTC2, LQC2, SQC2) whose move it makes where it may
     size_t delayedDisables = 0;    // DI compiled in one piece with the instruction after it
     size_t onLocals = 0;           // instructions that work on the local variables registers are kept in
     size_t labelsHolding = 0;      // labels at which the locals hold registers, whichever way the label is reached
     size_t registersAtLabels = 0;  // and how many, over all those labels
     size_t variants = 0;           // other versions of functions, from code an earlier run found in memory
     size_t idleLoops = 0;          // branches that may close an idle loop, whose time is skipped
+    size_t fixedLoops = 0;         // loops of one block that may reach a fixed point, whose times round after it are skipped
 };
 
 // The generated files: the main file first.

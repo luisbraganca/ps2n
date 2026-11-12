@@ -1909,6 +1909,21 @@ uint32_t ps2n::ee::cop2Instruction(uint32_t pc, uint32_t start, uint32_t eighths
 	return eighths;
 }
 
+uint64_t ps2n::ee::skipFixedLoop(uint64_t cycle, uint32_t cycles)
+{
+	// No event is due at `cycle`; after n more times round the count is
+	// cycle + n * cycles, and the first n at which one is due is the time
+	// round whose end tests for it.
+	const uint64_t left = cpuRegs.nextEventCycle - cycle;
+	const uint64_t rounds = (left + cycles - 1) / cycles;
+	cycle += rounds * cycles;
+	cpuRegs.cycle = cycle;
+	s_stats.fixed_loop_rounds += rounds;
+	s_stats.fixed_loop_cycles += rounds * cycles;
+	s_stats.fixed_loop_skips++;
+	return cycle;
+}
+
 bool ps2n::ee::memoryFault(uint32_t pc, uint32_t start)
 {
 	const StepRef ref = FindStep(start, pc);

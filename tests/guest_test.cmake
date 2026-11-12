@@ -75,6 +75,10 @@
 #              printed (ps2n-host -times), to see where two runs part in time
 #   PROFILE    also write profile.txt in the scratch directory: where the CPU
 #              thread's time went (ps2n-host -profile; Windows only)
+#   PROFILE_FROM  with PROFILE: the frame from which to look (ps2n-host
+#              -profile-from), to leave a game's startup out
+#   MARKS      frames at which the wall-clock time is noted and reported
+#              (ps2n-host -mark, once each), a list: to time parts of a run
 #   FAST_CORES keep the run on the processor's fastest cores, so that its time
 #              repeats (ps2n-host -fast-cores): for runs that are timed
 #   SYNC       also write sync.txt in the scratch directory: the run's record of
@@ -302,6 +306,14 @@ if(DEFINED TIMES AND TIMES)
 endif()
 if(DEFINED PROFILE AND PROFILE)
 	list(APPEND limits -profile "${WORK_DIR}/profile.txt")
+	if(DEFINED PROFILE_FROM AND NOT "${PROFILE_FROM}" STREQUAL "")
+		list(APPEND limits -profile-from "${PROFILE_FROM}")
+	endif()
+endif()
+if(DEFINED MARKS)
+	foreach(mark IN LISTS MARKS)
+		list(APPEND limits -mark "${mark}")
+	endforeach()
 endif()
 if(DEFINED FAST_CORES AND FAST_CORES)
 	list(APPEND limits -fast-cores)

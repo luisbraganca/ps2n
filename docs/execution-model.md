@@ -216,6 +216,28 @@ What the generated code does with them:
 - **At a branch, jump or other end** it adds the block's cycles and tests
   for events (`PS2N_BLOCK_END`; `PS2N_BLOCK_END_LOOP` where the branch may
   close an idle loop, which the flag in `ps2n_end` decides).
+- **At the branch that closes a loop that may reach a fixed point**
+  (`PS2N_BLOCK_END_FIXED`) it may let many times round pass at once. This is
+  PS2Native's, not PCSX2's: PCSX2's recompiler runs every time round. The
+  generator marks a loop of one block whose code runs straight from a leader
+  to a branch back to it (neither likely nor a call, on general registers),
+  with nothing in it but arithmetic on general registers and their loads and
+  stores, and which writes no register it reads before writing it; not one
+  that may be an idle loop (rule 5), which keeps PCSX2's treatment. Each time
+  round notes whether it stored anything other than what memory held, or
+  touched memory that is not plain (`ps2n_same`, `PS2N_STORE_SAME`). When
+  one did neither, began at the loop's start, is still the block the image's
+  table knows, and goes back, it has left the machine as it found it: the
+  next time round depends on nothing else, so it and every one after it
+  until the end at which an event is due do exactly the same, and nothing
+  else runs on the machine before that event test (the IOP, the DMA, the
+  other processors and the interrupts all wait for one). Those times round
+  are not run. Their cycles pass at once (`skipFixedLoop()`), and the event
+  test is made at the cycle count it would have been made at, on the same
+  registers and memory, so the run is still the stock run at every event
+  test and sync point. A block whose page is not write-protected is checked
+  against memory each time it runs and keeps no answer in the table, and is
+  never skipped. The host reports how many times round were not run.
 - **Before an instruction of rule 4** that is in COP0, `PS2N_FLUSH` adds the
   cycles so far.
 - **What depends on the block** is asked of the runtime, which looks up the
@@ -228,7 +250,13 @@ What the generated code does with them:
   `ps2n/recomp.h`, good for as long as no block is formed or thrown away),
   and where nothing is to happen first, carries itself out
   ([ops_vu0.h](../runtime/include/ps2n/ops_vu0.h)); otherwise the runtime
-  carries it out as `PS2N_COP2` would.
+  carries it out as `PS2N_COP2` would. The transfers between VU0's
+  registers and the general registers or memory (`QMFC2`, `QMTC2`, `LQC2`,
+  `SQC2`) read the same answer and, where nothing is to happen first, make
+  the move themselves (`PS2N_COP2_MOVE`): a general register's local holds
+  its bits 0 to 63 and the core bits 64 to 127, and `LQC2` and `SQC2` go
+  through the address table as the other loads and stores do. `CFC2`,
+  `CTC2`, `VCALLMS` and `VCALLMSR` are the runtime's (`PS2N_COP2`).
 - **`DI`** is compiled in one piece with the instruction after it, which
   runs first (rule 8), when that is a plain instruction at which no block
   can begin; in a delay slot it takes effect at once.

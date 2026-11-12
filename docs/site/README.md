@@ -55,7 +55,7 @@ page.
 | On the page | From |
 |---|---|
 | The phases and their states | `CLAUDE.md`, "Status" |
-| Steps G0 to G9 and their states | [game-log.md](../game-log.md), the table at the top |
+| Steps G0 to G10 and their states | [game-log.md](../game-log.md), the table at the top |
 | 1,003,452 instructions, 22,668 functions | game-log.md, "What is on the disc" |
 | 1.8 s, 152.4 MB, 119 s | game-log.md, "G2" |
 | 463 places, 5,079 instructions, then none | game-log.md, "G3", "One rebuild is enough" |
@@ -68,6 +68,7 @@ page.
 | 453 tests, 42 cases, 153 s | game-log.md, "G4", "The compiled game against stock PCSX2" |
 | The longer run: three and a half minutes of the first level, 93,221,937 moments, 1,750 pictures compared | game-log.md, "G4", "The compiled game against stock PCSX2" |
 | 51 instructions interpreted in the first 4,200 frames, at boot; the BIOS kernel "Static"; G8's 1.18 times | game-log.md, "G8": "The game's code in kernel memory, compiled with the game", "What is still interpreted, and why", "The time" |
+| G10's 1.07 times | game-log.md, "G10", "Loops that have reached a fixed point" |
 | 40 of 55, 39, 38, and "on no line" | [ADR 0005](../adr/0005-never-further-from-the-console-than-pcsx2.md) |
 | 204 instructions, 4,077,475 and 36,976,118 cases | [poc-log.md](../poc-log.md), "Increment 5" |
 | The six loops: the ratios, the milliseconds, "8 to 23 times" | poc-log.md, "P4 Measurement" |
