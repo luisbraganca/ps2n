@@ -45,17 +45,22 @@ set(ps2n_image_ids "")
 
 # ps2n_add_image(<id> <elf> [CAPTURE <file>] [COMMENT <text>] [PARTS <n>])
 # CAPTURE: what an earlier run of the program reported (ps2n-host -capture).
+# With it, the code the program ran outside its executable (code it copied
+# into kernel memory, for one) becomes an image of its own, <id>_outside
+# (ps2n-recomp compile --outside), perhaps empty.
 # PARTS: for a program too large to compile as one file, how many files its
 # functions are spread over (ps2n-recomp compile --parts).
 macro(ps2n_add_image id elf)
 	cmake_parse_arguments(image "" "CAPTURE;COMMENT;PARTS" "" ${ARGN})
 	set(image_capture "")
+	set(image_outside "")
 	if(image_CAPTURE)
-		set(image_capture --capture "${image_CAPTURE}")
+		set(image_capture --capture "${image_CAPTURE}" --outside "${PS2N_GENERATED}/${id}_outside.cpp")
+		set(image_outside "${PS2N_GENERATED}/${id}_outside.cpp")
 	endif()
 
 	# The files the recompiler writes: it names the parts after the main file.
-	set(image_outputs "${PS2N_GENERATED}/${id}.cpp")
+	set(image_outputs "${PS2N_GENERATED}/${id}.cpp" ${image_outside})
 	set(image_parts "")
 	if(image_PARTS AND image_PARTS GREATER 1)
 		set(image_parts --parts ${image_PARTS})
@@ -79,6 +84,9 @@ macro(ps2n_add_image id elf)
 	)
 	list(APPEND ps2n_image_sources ${image_outputs})
 	list(APPEND ps2n_image_ids "${id}")
+	if(image_CAPTURE)
+		list(APPEND ps2n_image_ids "${id}_outside")
+	endif()
 endmacro()
 
 # ---- tests -------------------------------------------------------------------------
@@ -358,6 +366,43 @@ if(PS2N_GAME_ELF)
 	endif()
 	ps2n_add_image(game "${PS2N_GAME_ELF}" ${game_arguments})
 	message(STATUS "PS2Native: the host will hold the compiled code of ${PS2N_GAME_ELF}")
+endif()
+
+# ---- the BIOS's EE code (step G8) ------------------------------------------------------
+# Compiled from the user's own BIOS dump, read where it is, as four images
+# (ps2n-recomp bios). What is generated from it goes into the build tree and
+# never into the repository (docs/adr/0007, 0017). The build scripts set these
+# (-Bios, --bios). Without a dump the BIOS's code is interpreted.
+set(PS2N_BIOS_IMAGE "" CACHE FILEPATH "A BIOS dump whose EE code is compiled into ps2n-host")
+set(PS2N_BIOS_CAPTURE "" CACHE FILEPATH "What earlier runs reported of the BIOS for the recompiler (ps2n-host -bios-capture)")
+if(PS2N_BIOS_IMAGE)
+	if(NOT EXISTS "${PS2N_BIOS_IMAGE}")
+		message(FATAL_ERROR "PS2N_BIOS_IMAGE does not name a file: ${PS2N_BIOS_IMAGE}")
+	endif()
+	set(bios_capture "")
+	set(bios_depends "${PS2N_BIOS_IMAGE}" "${PS2N_RECOMP}")
+	if(PS2N_BIOS_CAPTURE)
+		if(NOT EXISTS "${PS2N_BIOS_CAPTURE}")
+			message(FATAL_ERROR "PS2N_BIOS_CAPTURE does not name a file: ${PS2N_BIOS_CAPTURE}")
+		endif()
+		set(bios_capture --capture "${PS2N_BIOS_CAPTURE}")
+		list(APPEND bios_depends "${PS2N_BIOS_CAPTURE}")
+	endif()
+	set(bios_ids bios_rom0 bios_rom1 bios_kernel bios_loader)
+	set(bios_outputs "")
+	foreach(bios_id IN LISTS bios_ids)
+		list(APPEND bios_outputs "${PS2N_GENERATED}/bios/${bios_id}.cpp")
+	endforeach()
+	add_custom_command(
+		OUTPUT ${bios_outputs}
+		COMMAND "${PS2N_RECOMP}" bios "${PS2N_BIOS_IMAGE}" --out-dir "${PS2N_GENERATED}/bios" ${bios_capture}
+		DEPENDS ${bios_depends}
+		COMMENT "Recompiling the BIOS's EE code, ${PS2N_BIOS_IMAGE}"
+		VERBATIM
+	)
+	list(APPEND ps2n_image_sources ${bios_outputs})
+	list(APPEND ps2n_image_ids ${bios_ids})
+	message(STATUS "PS2Native: the host will hold the compiled EE code of the BIOS ${PS2N_BIOS_IMAGE}")
 endif()
 
 # ---- the images, linked into the host ----------------------------------------------

@@ -40,6 +40,32 @@ ElfFile ElfFile::parse(std::vector<uint8_t> bytes, std::string displayName) {
     return f;
 }
 
+ElfFile ElfFile::fromPieces(std::string displayName, uint32_t entry, const std::vector<Piece>& pieces) {
+    ElfFile f;
+    f.name_ = std::move(displayName);
+    f.type = elf::ET_EXEC;
+    f.machine = elf::EM_MIPS;
+    f.entry = entry;
+    for (const Piece& p : pieces) {
+        if (p.bytes.size() > 0xFFFFFFFFu - p.address) throw Error(f.name_ + ": " + p.name + " does not fit in the address space");
+        ElfSegment s;
+        s.type = elf::PT_LOAD;
+        s.offset = static_cast<uint32_t>(f.bytes_.size());
+        s.vaddr = s.paddr = p.address;
+        s.filesz = s.memsz = static_cast<uint32_t>(p.bytes.size());
+        s.flags = elf::PF_R | elf::PF_X;
+        for (const ElfSegment& other : f.segments) {
+            if (s.vaddr < other.vaddr + other.memsz && other.vaddr < s.vaddr + s.memsz)
+                throw Error(f.name_ + ": " + p.name + " overlaps another piece");
+        }
+        f.segments.push_back(s);
+        f.codeRanges_.push_back({p.address, p.address + (s.memsz & ~3u), p.name});
+        f.bytes_.insert(f.bytes_.end(), p.bytes.begin(), p.bytes.end());
+    }
+    std::sort(f.codeRanges_.begin(), f.codeRanges_.end(), [](const AddrRange& a, const AddrRange& b) { return a.start < b.start; });
+    return f;
+}
+
 void ElfFile::parseAll() {
     const auto& b = bytes_;
     if (b.size() < 52 || std::memcmp(b.data(), "\x7f" "ELF", 4) != 0)

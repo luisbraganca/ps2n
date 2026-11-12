@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Accepted. The maintainer confirmed the reading under "How this record reads the answer" on 2026-11-11: "Yes, do not interpret." |
+| Status | Accepted. The maintainer confirmed the reading under "How this record reads the answer" on 2026-11-11: "Yes, do not interpret." Begun on 2026-11-12 as step G8 of Phase 3 ([ADR 0017](0017-bios-ee-code-compiled-as-step-g8.md)). |
 | Date | 2026-11-10 (recorded 2026-11-11) |
 | Decided by | Maintainer |
 | Settles | Question 4, second half, of [phase1-feasibility.md](../phase1-feasibility.md), section 16 |

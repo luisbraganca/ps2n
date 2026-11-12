@@ -38,12 +38,16 @@
 #   EE         jit, interp or ps2n (default jit)
 #   IOP VU     jit or interp (default jit)
 #   STATIC     with EE=ps2n: on or off, whether compiled code is used (default on)
+#   BIOS_STATIC  with EE=ps2n: off to leave the BIOS to the interpreter even
+#              where the host has it compiled (ps2n-host -bios-static off)
 #   IMAGE      with EE=ps2n or LOCKSTEP: the id of the compiled image to use
 #   STACK_BUDGET  with LOCKSTEP: the host's -stack-budget for the compiled run
 #   CAPTURE_EXPECTED  with EE=ps2n: a capture file; what the run reports for
 #              the recompiler (ps2n-host -capture) must equal it
 #   CAPTURE    with EE=ps2n: write what the run reports for the recompiler to
-#              capture.toml in the scratch directory, without comparing it
+#              capture.toml in the scratch directory, without comparing it.
+#              (What a run with compiled code had to interpret of the BIOS
+#              goes to bios-capture.toml there whatever this says.)
 #   REQUIRE_REPORT, REQUIRE_REPORT_2  regular expressions that what the host
 #              prints about the run must match
 #   SECONDS    wall-clock limit (default 60)
@@ -419,6 +423,14 @@ if(EE STREQUAL "ps2n")
 	set(static -static ${STATIC} ${image})
 	if(DEFINED CAPTURE_EXPECTED OR (DEFINED CAPTURE AND CAPTURE))
 		list(APPEND static -capture "${WORK_DIR}/capture.toml")
+	endif()
+	# What the BIOS's compiled code did not cover, for the next build of it
+	# (build.ps1 -BiosCapture): every run with compiled code reports it.
+	if(NOT STATIC STREQUAL "off")
+		list(APPEND static -bios-capture "${WORK_DIR}/bios-capture.toml")
+	endif()
+	if(DEFINED BIOS_STATIC AND BIOS_STATIC STREQUAL "off")
+		list(APPEND static -bios-static off)
 	endif()
 	if(DEFINED TRACE AND TRACE)
 		list(APPEND static -trace "${WORK_DIR}/run.trace")

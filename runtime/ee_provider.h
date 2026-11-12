@@ -23,9 +23,11 @@ namespace ps2n::ee
 	/// VMManager::Initialize(), then call its Reset.
 	R5900cpu* Provider();
 
-	/// The executables compiled ahead of time that this program contains. The
-	/// one whose CRC is that of the executable the machine boots is used. Call
-	/// before execution starts; the array must stay valid.
+	/// The code compiled ahead of time that this program contains. Of the
+	/// executables', the one whose CRC is that of the executable the machine
+	/// boots is used from its entry point on; the BIOS's, those made from the
+	/// ROM the machine has, from the first instruction on. Call before
+	/// execution starts; the array must stay valid.
 	void SetImages(const ImageInfo* const* images, size_t count);
 
 	/// Whether compiled code is used at all. Off, everything is interpreted,
@@ -62,6 +64,20 @@ namespace ps2n::ee
 	/// Closes the files of StartTrace and CompareTraceWith.
 	void StopTrace();
 
+	/// Where the BIOS's code lies, as far as the EE runs it (ps2n/romdir.h):
+	/// where a block of it begins.
+	enum BiosPlace : uint8_t
+	{
+		kBiosRom, // the ROM, through either mirror: the reset code and the memory's set-up run there
+		kBiosKernel, // the kernel's file, where it runs (from 80000000)
+		kBiosKernelOther, // the rest of RAM through the kernel's segment
+		kBiosUncached, // RAM through its uncached mirror (from A0000000)
+		kBiosIdle, // the idle thread's file (00081FC0)
+		kBiosLoader, // the program loader's file (from 00082000)
+		kBiosLowOther, // the rest of memory below 00100000
+		kBiosPlaces,
+	};
+
 	/// How the instructions executed so far were carried out. Nothing is
 	/// interpreted or delegated without being counted here.
 	struct Stats
@@ -79,6 +95,22 @@ namespace ps2n::ee
 		uint64_t interpreted_kernel = 0;
 		uint64_t interpreted_loader = 0;
 		uint64_t interpreted_elsewhere = 0;
+		/// The BIOS's code among those, by where its blocks begin (BiosPlace):
+		/// [0] at boot, until the executable reached its entry point; [1] after.
+		uint64_t bios_interpreted[2][kBiosPlaces] = {};
+		/// Distinct addresses there at which the interpreter carried out a
+		/// whole block.
+		uint64_t bios_block_starts[kBiosPlaces] = {};
+		/// Instructions interpreted in blocks whose instructions were counted
+		/// double (formed while COP0's Config said the EE issues one a cycle),
+		/// which compiled code does not carry out; and the runs, compiled or
+		/// interpreted, of the blocks PCSX2 hooks in the program loader for fast
+		/// boot.
+		uint64_t interpreted_doubled = 0;
+		uint64_t hooked_block_runs = 0;
+		/// The BIOS's compiled images in use, and their functions.
+		uint64_t bios_images = 0;
+		uint64_t bios_functions = 0;
 		/// Of the interpreted ones, executed by calling PCSX2's interpreter
 		/// function rather than PS2Native's own semantics.
 		uint64_t delegated = 0;
@@ -164,6 +196,40 @@ namespace ps2n::ee
 		std::vector<uint32_t> words;
 	};
 	const std::vector<CapturedCode>& GetCapturedCode();
+
+	/// The addresses in the BIOS's places (BiosPlace) at which the interpreter
+	/// carried out a whole block, sorted: entries for the recompiler, in the
+	/// form of a capture file's.
+	std::vector<uint32_t> GetBiosBlockStarts();
+
+	/// The program's code outside its executable: the blocks the interpreter
+	/// carried out outside the executable's code and outside the BIOS's files,
+	/// where no image in use has a function (code the program copied
+	/// elsewhere, into kernel memory for one, or loaded). Their words as they
+	/// were when it first did, by start, for the recompiler (ps2n-recomp
+	/// compile --outside).
+	std::vector<CapturedCode> GetCodeOutside();
+
+	/// One of the BIOS's files as the ROM holds it, against what memory holds
+	/// where the EE runs it (ps2n/romdir.h): the kernel, the idle thread, the
+	/// program loader.
+	struct BiosFileCheck
+	{
+		const char* file = nullptr; // its name in the ROM's directory
+		uint32_t address = 0; // where it runs
+		uint32_t words = 0; // its size in words; zero when the ROM has no such file
+		uint32_t differing = 0; // words of memory that differ from the file's
+		uint32_t first = 0, last = 0; // the addresses of the first and the last of them
+		struct Word
+		{
+			uint32_t address, rom, memory;
+		};
+		std::vector<Word> sample; // the first 256 of them
+	};
+	/// As they were when the executable reached its entry point (none before
+	/// then), and as they are now.
+	const std::vector<BiosFileCheck>& GetBiosFilesAtEntry();
+	std::vector<BiosFileCheck> CompareBiosFiles();
 
 	/// Where compiled code handed over to the interpreter, and how often: the
 	/// instruction from which the rest of a block was left to it

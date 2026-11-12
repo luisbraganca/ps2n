@@ -22,6 +22,7 @@ const char* sourceName(Source s) {
     case Source::DataRef: return "data pointer";
     case Source::CodePointer: return "code pointer (lui/addiu)";
     case Source::Prologue: return "prologue heuristic";
+    case Source::Captured: return "captured entry";
     case Source::Gap: return "unclaimed code";
     }
     return "?";
@@ -99,13 +100,17 @@ public:
     void run() {
         prog_.ranges = elf_.codeRanges();
         if (prog_.ranges.empty()) throw Error(elf_.name() + ": no executable code found (no SHF_EXECINSTR sections or PF_X segments)");
-        collectSymbols();
-        scanJalTargets();
-        scanDataPointers();
-        scanCodePointers();
-        scanPrologues();
-        classifyPointers();
-        buildFunctions();
+        if (options_.followCode) {
+            followCode();
+        } else {
+            collectSymbols();
+            scanJalTargets();
+            scanDataPointers();
+            scanCodePointers();
+            scanPrologues();
+            classifyPointers();
+            buildFunctions();
+        }
         attachVariants();
         findLeaders();
         for (const auto& f : prog_.functions) {
@@ -327,6 +332,137 @@ private:
         }
     }
 
+    // ---- an image whose code is followed, not swept ----------------------------------
+    std::set<uint32_t> reached_;   // the instructions reached by following the code
+    std::set<uint32_t> exits_;     // targets outside the ranges
+
+    // From the entry point, `entries` and the captured entries, through every
+    // branch, jump and call: the instructions reached are the code. Functions
+    // are the runs of reached instructions, cut where one is entered from
+    // elsewhere (an entry, a call's target).
+    void followCode() {
+        std::map<uint32_t, Source> starts;
+        std::vector<uint32_t> work;
+        const auto start = [&](uint32_t a, Source s) {
+            if (!inCode(a)) {
+                if (s != Source::Entry && !(a & 3)) exits_.insert(a);
+                return;
+            }
+            const auto [it, inserted] = starts.try_emplace(a, s);
+            if (!inserted && s < it->second) it->second = s;
+            work.push_back(a);
+        };
+        start(elf_.entry, Source::Entry);
+        for (uint32_t a : options_.entries) start(a, Source::Entry);
+        std::set<uint32_t> captured;
+        for (uint32_t a : options_.capture.entries) {
+            if (!inCode(a)) continue;
+            captured.insert(a);
+            work.push_back(a);
+        }
+
+        while (!work.empty()) {
+            const uint32_t a = work.back();
+            work.pop_back();
+            follow(a, start, work);
+        }
+
+        std::vector<Function> fns;
+        for (uint32_t a : reached_) {
+            const bool continues = !fns.empty() && fns.back().end == a && rangeOf(a)->start != a;
+            const auto s = starts.find(a);
+            if (continues && s == starts.end()) {
+                fns.back().end = a + 4;
+                continue;
+            }
+            Function f;
+            f.start = a;
+            f.end = a + 4;
+            f.source = s != starts.end() ? s->second : (captured.count(a) ? Source::Captured : Source::Gap);
+            fns.push_back(std::move(f));
+        }
+        prog_.functions = std::move(fns);
+        prog_.exits.assign(exits_.begin(), exits_.end());
+    }
+
+    // `target` is where the code followed may go next.
+    void goTo(uint32_t target, std::vector<uint32_t>& work) {
+        if (inCode(target)) work.push_back(target);
+        else if (!(target & 3)) exits_.insert(target);
+    }
+
+    // Follows the code from `a` until it leaves for good: a return, a jump, an
+    // exception return, an encoding the decoder does not know, the end of the
+    // ranges, or what was reached before. Where it may also go elsewhere, that
+    // is put on `work`; a call's target is a start.
+    template <typename Start>
+    void follow(uint32_t a, const Start& start, std::vector<uint32_t>& work) {
+        while (inCode(a) && !reached_.count(a)) {
+            const Insn in(word(a), a);
+            if (!in.valid()) return;
+            reached_.insert(a);
+            if (!in.hasDelaySlot()) {
+                if (in.op == Op::ERET) return;
+                a += 4;
+                continue;
+            }
+            const uint32_t slot = a + 4;
+            if (inCode(slot) && Insn(word(slot), slot).valid()) reached_.insert(slot);
+            if (in.is(F_BRANCH)) {
+                goTo(in.branchTarget(), work);
+                if (in.endsBlock()) return;
+                a += 8;
+                continue;
+            }
+            if (in.is(F_JUMP)) {
+                if (in.isCall()) {
+                    start(in.jumpTarget(), Source::Jal);
+                    a += 8;
+                    continue;
+                }
+                goTo(in.jumpTarget(), work);
+                return;
+            }
+            // JR and JALR go where a register says. Where the instructions just
+            // before make it a constant, that is followed.
+            if (const std::optional<uint32_t> target = constantBefore(a, in.rs())) {
+                if (in.isCall()) start(*target, Source::CodePointer);
+                else goTo(*target, work);
+            }
+            if (in.isCall()) {
+                a += 8;
+                continue;
+            }
+            return;
+        }
+    }
+
+    // The value register `reg` holds at `at`, where the straight-line code
+    // just before makes it a constant: lui, and then perhaps addiu or ori.
+    std::optional<uint32_t> constantBefore(uint32_t at, uint32_t reg) const {
+        // The last instruction before `at` (at most eight back) that writes
+        // `r`, if no branch or jump comes between.
+        const auto writer = [&](uint32_t from, uint32_t r) -> std::optional<Insn> {
+            for (uint32_t b = from; b >= 4 && from - b < 4 * 8;) {
+                b -= 4;
+                if (!inCode(b)) break;
+                const Insn in(word(b), b);
+                if (!in.valid() || in.isControlFlow()) break;
+                if (in.writesGpr(r)) return in;
+            }
+            return std::nullopt;
+        };
+        if (reg == 0) return std::nullopt;
+        const std::optional<Insn> last = writer(at, reg);
+        if (!last) return std::nullopt;
+        if (last->op == Op::LUI) return last->uimm() << 16;
+        if (last->op != Op::ADDIU && last->op != Op::ORI) return std::nullopt;
+        const std::optional<Insn> high = writer(last->addr, last->rs());
+        if (!high || high->op != Op::LUI || last->rs() == 0) return std::nullopt;
+        const uint32_t hi = high->uimm() << 16;
+        return last->op == Op::ADDIU ? hi + static_cast<uint32_t>(last->simm()) : (hi | last->uimm());
+    }
+
     // ---- blocks -----------------------------------------------------------------
     // A block can begin: at a function's start; at the target of a branch or
     // jump; after a branch's or jump's delay slot (where a branch not taken
@@ -427,6 +563,32 @@ Program analyze(const ElfFile& elf, const Options& options) {
     p.elf = &elf;
     Analyzer(elf, options, p).run();
     return p;
+}
+
+bool inCodeRanges(const ElfFile& elf, uint32_t addr) {
+    for (const AddrRange& r : elf.codeRanges())
+        if (r.contains(addr)) return true;
+    return false;
+}
+
+ElfFile codeOutside(const ElfFile& elf, const Capture& capture, std::vector<Note>& notes, std::vector<uint32_t>& starts) {
+    std::map<uint32_t, uint32_t> words;
+    for (const Capture::Code& c : capture.code) {
+        if (inCodeRanges(elf, c.start)) continue;
+        starts.push_back(c.start);
+        for (size_t i = 0; i < c.words.size(); ++i) {
+            const uint32_t at = c.start + 4 * static_cast<uint32_t>(i);
+            const auto [it, inserted] = words.try_emplace(at, c.words[i]);
+            if (!inserted && it->second != c.words[i])
+                notes.push_back({at, "two different words were captured at " + hex32(at) + " outside the executable; the first is kept"});
+        }
+    }
+    std::vector<ElfFile::Piece> pieces;
+    for (const auto& [at, w] : words) {
+        if (pieces.empty() || pieces.back().address + pieces.back().bytes.size() != at) pieces.push_back({hex32(at), at, {}});
+        for (int i = 0; i < 4; ++i) pieces.back().bytes.push_back(static_cast<uint8_t>(w >> (8 * i)));
+    }
+    return ElfFile::fromPieces(elf.name() + ", the code it ran outside its executable", 0, pieces);
 }
 
 Capture parseCapture(const std::string& text, const std::string& fileName) {

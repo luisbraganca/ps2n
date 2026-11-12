@@ -220,7 +220,7 @@
 			<div class="socket">
 				<span class="socket__label">Main processor</span>
 				<div class="chipcard chipcard--static"><b>The game's code, compiled</b>Runs in the place of PCSX2's recompiler.</div>
-				<div class="chipcard chipcard--interp"><b>The interpreter</b>For code no one saw at build time, and for the BIOS for now.</div>
+				<div class="chipcard chipcard--interp"><b>The interpreter</b>For code no one saw at build time, and a few of the BIOS's instructions at boot.</div>
 			</div>
 			<ul class="devs">
 				<li class="dev"><b>Graphics</b>The GS and its renderers</li>
@@ -383,9 +383,9 @@
 			</article>
 			<article class="tile" data-reveal style="--d:180">
 				<p class="tile__label">Interpreted in all</p>
-				<p class="tile__value"><span data-count="1.11" data-decimals="2">1.11</span><small>%</small></p>
-				<p>of the main processor's cycles in those frames: the BIOS, which is to be translated as well.</p>
-				<p class="when">2026-11-11</p>
+				<p class="tile__value"><span data-count="51">51</span></p>
+				<p>instructions in those frames, at boot, since the BIOS is compiled too. Before, the BIOS's code was 1.11% of the main processor's cycles there.</p>
+				<p class="when">2026-11-12</p>
 			</article>
 			<article class="tile" data-reveal style="--d:0">
 				<p class="tile__label">Tests that pass</p>
@@ -469,12 +469,12 @@
 				<span class="state"><i aria-hidden="true"></i>Static</span>
 				<p>Translated ahead of time. In the first 4,200 frames of Killzone not one instruction of the executable is interpreted.</p>
 			</article>
-			<article class="chip chip--interp" data-reveal style="--d:110">
+			<article class="chip chip--static" data-reveal style="--d:110">
 				<span class="chip__n">2 &middot; MAIN PROCESSOR</span>
 				<h3>The BIOS kernel</h3>
 				<p class="chip__sub">EE</p>
-				<span class="state"><i aria-hidden="true"></i>Interpreted, for now</span>
-				<p>System calls, interrupts and threads are the BIOS's own code. It is to be translated on your machine, from your own dump, into a file of its own beside the game.</p>
+				<span class="state"><i aria-hidden="true"></i>Static</span>
+				<p>System calls, interrupts and threads are the BIOS's own code, translated ahead of time on your machine from your own dump. Of it, 51 instructions at boot are interpreted. In a finished game it will be a file of its own beside the game.</p>
 			</article>
 			<article class="chip chip--standin" data-reveal style="--d:220">
 				<span class="chip__n">3 &middot; VECTOR UNITS</span>
@@ -588,6 +588,7 @@
 					<li class="is-done"><b><span class="g">G5</span>Measurement and report</b>Done as far as the first level: 1.35 times stock PCSX2's time, all of it in the game's own code</li>
 					<li class="is-done"><b><span class="g">G6</span>Speed</b>Done: the run into the first level takes 1.21 to 1.23 times stock PCSX2's time, from 1.35, and is still the stock run</li>
 					<li class="is-done"><b><span class="g">G7</span>VU0's instructions</b>Done: the game's VU0 instructions are PS2Native's own, the same as PCSX2's recompiler in every case the self-test tried, and the run into the first level is still the stock run</li>
+					<li class="is-done"><b><span class="g">G8</span>The BIOS's EE code</b>Done: the BIOS's code that runs on the main processor is compiled ahead of time from the user's own dump, but for 51 instructions at boot; the run into the first level takes 1.18 times stock PCSX2's time and is still the stock run</li>
 					<li class="is-done"><b><span class="g">G9</span>VU0's instructions in compiled code</b>Done: compiled code carries them out itself where their block lets it; the run into the first level takes 1.19 times stock PCSX2's time, from 1.21, and is still the stock run</li>
 				</ul>
 			</li>

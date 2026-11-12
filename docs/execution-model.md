@@ -22,12 +22,22 @@ code is right and this file needs fixing.
   `Execute()` is a dispatcher loop: look up the PC; run the compiled function
   that has an entry there, or interpret one block.
 - **Compiled code** is one C++ function per guest function, generated ahead of
-  time by `ps2n-recomp`, in an *image* per executable. The image whose CRC
-  (PCSX2's, the exclusive-or of the ELF's words) equals that of the executable
-  the machine boots is used.
-- **The interpreter** runs everything else: the BIOS, code that is not in the
-  image, code that changed in memory. It is also the reference: a run with
-  compiled code must be the same run as without (`ps2n-host -static off`).
+  time by `ps2n-recomp`, in *images* (`ImageInfo::kind` in `recomp.h`), whose
+  code ranges do not overlap:
+  - an executable's: used from its entry point on, when its CRC (PCSX2's,
+    the exclusive-or of the ELF's words) is that of the executable the
+    machine boots;
+  - the BIOS's: four images of the EE code of the user's BIOS dump
+    (`ps2n-recomp bios`, [ADR 0017](adr/0017-bios-ee-code-compiled-as-step-g8.md)),
+    used from the first instruction on while the CRC of the whole ROM is
+    the one they were made from;
+  - the code an executable ran outside its own (code it copied into kernel
+    memory, for one), as runs captured it (`ps2n-recomp compile --outside`):
+    used with the executable's.
+- **The interpreter** runs everything else: code that is in no image, code
+  that changed in memory, the few blocks compiled code does not carry out
+  (below). It is also the reference: a run with compiled code must be the
+  same run as without (`ps2n-host -static off`).
 - **The record of blocks** (`ps2n::ee::blocks`) is what both count time by:
   for every address at which PCSX2's EE recompiler would hold a compiled
   block, the block as it would have compiled it. Nothing in it generates
@@ -138,7 +148,11 @@ unless another file is named):
     does the same, once for each such instruction.
 14. **The BIOS's program loader** is hooked at three blocks, and the
     executable's entry point is noticed when its block is formed. That is
-    also where PS2Native chooses the image of the executable.
+    also where PS2Native chooses the image of the executable. The hooks run
+    at the start of the block, at every execution, whether the interpreter
+    or compiled code carries it out (`blockStart()` runs them, and keeps no
+    answer in the image's table for such a block, so that it is asked
+    every time).
 15. **Blocks are filed under physical addresses**, so one formed through one
     mirror of memory is the block at the others.
 16. **VU0's flags reach their registers only where something may read
@@ -296,9 +310,10 @@ not have yet. From that:
 What this buys is measured in the game log, step G6.
 
 Blocks compiled code cannot carry out are interpreted where compiled code
-asks about them: one that counts double (rule 3), a hooked block, one cut
-short at an address that is not a leader, one that ends after a timer read
-where no leader follows. The analysis makes leaders of page boundaries and
+asks about them: one that counts double (rule 3; the BIOS's reset code
+forms three such, 48 instructions, before it sets `Config`), one cut short
+at an address that is not a leader, one that ends after a timer read where
+no leader follows. The analysis makes leaders of page boundaries and
 of the instruction after a load that may be a timer read so that the last
 two are rare; the host reports how often and where it happened ("times the
 interpreter carried one out at a label instead", "compiled code handed over
@@ -404,16 +419,18 @@ longer than 64 instructions is left to the interpreter from there.
 - `PS2N_BLOCK_END` calls `ps2n::ee::eventTest(next)` when an event is due. If
   the core took an interrupt, `cpuRegs.pc` is the exception vector; the value
   returned differs from `next`; every compiled frame returns; the dispatcher
-  interprets the BIOS's handler. When the kernel returns with `ERET`, the
-  dispatcher finds the entry for that PC (a block leader of the interrupted
-  function, or of another thread's function) and enters it.
+  enters the BIOS's handler, compiled in the BIOS's image (or interprets it,
+  without one). When the kernel returns with `ERET`, the dispatcher finds
+  the entry for that PC (a block leader of the interrupted function, or of
+  another thread's function) and enters it.
 - `SYSCALL` and the other system instructions are carried out by PCSX2's own
   function for them (`PS2N_SYSCALL`, `PS2N_SYSTEM`). A system call usually
   leaves compiled code; the program is re-entered at the instruction after
   it. The few calls the core answers itself, and the `FlushCache` calls that
   are not made, continue in place.
 - Nothing is high-level emulated. Threads, semaphores, alarms, handlers are
-  the BIOS kernel's, running interpreted.
+  the BIOS kernel's, compiled ahead of time from the user's dump, which the
+  build is given (`build.ps1 -Bios`; interpreted without one).
 
 The host stack: a guest call is a host call, so the thread that runs the core
 needs a large stack (64 MB in `ps2n-host`). Guest code can make the host stack
@@ -464,9 +481,23 @@ checks that a build from the executable alone reports exactly what
 `selfmod.capture.toml` holds; `programs/rebuilt/selfmod` checks that the
 build with it interprets nothing of the program.
 
-Not covered yet: code where no function was compiled at all (an overlay
-loaded into memory the executable does not fill). It is interpreted and its
-block starts are reported, but its words are not captured.
+### Code an executable runs outside its own
+
+Code where no image has a function at all: an overlay loaded into memory
+the executable does not fill, or code a program's libraries copy into
+kernel memory and install as system calls (the game and the test programs
+built with ps2sdk do, at `80075000` and `80076000`). The first run
+interprets it, and the capture file holds the words of each block it ran
+there (`[[code]]`, as they were then; outside the executable's code and the
+BIOS's files, so that nothing of the BIOS's ends up with a program's).
+Given that file, `ps2n-recomp compile --outside` makes an image of its own
+from those words, put together where blocks adjoin, followed from where
+they ran as a BIOS image is (`<id>_outside`, with the executable's CRC), and
+the runtime uses it with the executable's. Its blocks are checked against
+memory like any other's, so other code in that place later is interpreted
+and captured again. The build does this for a program built with a capture
+(the game; `ps2n_add_image ... CAPTURE`); the test programs are built from
+their executables alone and interpret such code.
 
 ## What is not compiled, and how it shows
 
@@ -481,7 +512,17 @@ Nothing is interpreted or delegated silently. `ps2n-host` prints after a run:
 - the block starts inside the code range that had to be interpreted
   ("missing entries"), written to a file with `-capture <file>`. Giving that
   file to `ps2n-recomp compile --capture` makes them block leaders in the
-  next build;
+  next build. The same file holds the program's code that ran outside its
+  executable ("Code an executable runs outside its own");
+- what of the BIOS was interpreted, by where its blocks begin (the ROM, the
+  kernel's file, the rest of kernel memory, the idle thread's file, the
+  program loader's file, the rest of low memory), at boot and after the
+  executable's entry point; the BIOS's images in use; the instructions in
+  blocks counted double; and the BIOS's files the EE runs from RAM compared
+  with the ROM's, word for word, at the entry point and at the end.
+  `-bios-capture <file>` writes the BIOS's block starts the interpreter
+  carried out, for `ps2n-recomp bios --capture` (the test driver writes one
+  for every run with compiled code);
 - what became of the record of blocks: how many were formed, thrown away,
   found changed; the `FlushCache` calls not made; and the things listed
   under "What is not reproduced" that the run met.
@@ -634,7 +675,24 @@ skipped. An address that is none of these and is still jumped to at run time
 is interpreted and reported; a block that the record cuts short at an
 address that is none of these is interpreted too.
 
-`ps2n-recomp info <elf>` reports what the analysis makes of a program, and
+The BIOS's files, and code captured outside an executable, have no sections
+or symbols, and data lies among their code: the kernel's variables at
+`800010C0` come right after one of its functions. Swept as an executable's
+code is, that data
+would end up inside functions, under the fingerprints the runtime compares
+with memory, and every block there would be interpreted once the kernel had
+written to it. Their code is followed instead (`Options::followCode`): from
+where execution is known to enter it (the reset vector, the kernel's
+exception vectors, the entries of the idle thread and the program loader,
+where a run's block began) through every branch, jump and call, and every
+jump through a register the instructions just before make a constant.
+Functions are the runs of instructions reached, cut where one is entered.
+Nothing is taken for code on a guess, so what is reached only through a
+table (most of the kernel's handlers) is found by runs, as a pointer a game
+calls through is.
+
+`ps2n-recomp info <elf>` reports what the analysis makes of a program,
+`ps2n-recomp bios-info <BIOS image>` what it makes of a BIOS, and
 `ps2n-recomp disasm <file> --at <address> [--count n] [--base address]`
 disassembles any part of an executable or of a raw image such as a BIOS,
 with each instruction's count.

@@ -84,6 +84,7 @@ namespace ps2n::ee::blocks
 		kHookMain = 1 << 4, // eeloadHook() is called at every execution
 		kHookExec = 1 << 5, // eeloadHook2() is called at every execution
 		kCutShort = 1 << 6, // it ends where the scan for its end stopped, not at a branch or an instruction that ends one
+		kInterpreted = 1 << 7, // the interpreter has carried it out whole (for the provider's report)
 	};
 
 	struct Block

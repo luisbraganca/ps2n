@@ -6,6 +6,8 @@
 add_library(ps2n_recomp STATIC
     src/analysis.cpp
     src/analysis.h
+    src/bios.cpp
+    src/bios.h
     src/codegen.cpp
     src/codegen.h
 )

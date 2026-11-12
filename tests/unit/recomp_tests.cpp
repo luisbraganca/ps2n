@@ -6,6 +6,7 @@
 #include "testing.h"
 
 #include "analysis.h"
+#include "bios.h"
 #include "codegen.h"
 
 #include "ps2n/assembler.h"
@@ -14,6 +15,7 @@
 #include "ps2n/util.h"
 #include "ps2n/waitloop.h"
 
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -943,6 +945,225 @@ TEST_CASE(registry_lists_the_images) {
     CHECK_CONTAINS(code, "&ps2n_image_b_c::image,");
     CHECK_CONTAINS(code, "const size_t ps2n_image_count = 2;");
     CHECK_THROWS(generateRegistry({"not an identifier"}));
+}
+
+// ---- the BIOS's code (docs/game-log.md, "G8") ------------------------------------
+
+namespace {
+
+// An assembled program's code as one raw piece where it was assembled to
+// run: no sections and no symbols, as the BIOS's files are read.
+ElfFile asPieces(const char* source) {
+    const ElfFile elf = assemble(source);
+    const AddrRange text = elf.codeRanges().front();
+    ElfFile::Piece p;
+    p.name = "code";
+    p.address = text.start;
+    for (uint32_t a = text.start; a < text.end; a += 4) {
+        uint32_t w = 0;
+        elf.read32(a, w);
+        for (int i = 0; i < 4; ++i) p.bytes.push_back(static_cast<uint8_t>(w >> (8 * i)));
+    }
+    return ElfFile::fromPieces("pieces", elf.entry, {p});
+}
+
+// Code with data among it, as the BIOS's files have it.
+const char* const kCodeAndData = R"(
+        .text
+        .globl _start
+_start: jal   sub              # 00100000
+        nop                    # 00100004
+        lui   $t0, 0x0010      # 00100008
+        ori   $t0, $t0, 0x0030 # 0010000C  other
+        jr    $t0              # 00100010
+        nop                    # 00100014
+        .word 0x00000000       # 00100018  data
+        .word 0x2402FFFF       # 0010001C  data that reads as an instruction
+sub:    jr    $ra              # 00100020
+        addiu $v0, $zero, 1    # 00100024
+        .word 0x12345678       # 00100028  data
+        .word 0x00100020       # 0010002C  data: the address of sub
+other:  j     0x00200000       # 00100030  out of the image
+        nop                    # 00100034
+        .word 0xFFFFFFFF       # 00100038  data
+far:    addiu $v0, $zero, 2    # 0010003C  only a captured entry leads here
+        jr    $ra              # 00100040
+        nop                    # 00100044
+)";
+
+// A BIOS image of our own making: the directory and the files the EE runs,
+// each holding "jr $ra; nop" and nothing else.
+std::vector<uint8_t> makeBiosRom(bool withLoader = true) {
+    struct File {
+        const char* name;
+        uint32_t size;
+    };
+    std::vector<File> files = {{"RESET", 0x40}, {"ROMDIR", 0x70}, {"RDRAM", 0x10}, {"KERNEL", 0x10}, {"EENULL", 0x10}};
+    if (withLoader) files.push_back({"EELOAD", 0x10});
+    std::vector<uint8_t> rom(0x100, 0);
+    const auto put32 = [&](size_t at, uint32_t v) { std::memcpy(rom.data() + at, &v, 4); };
+    uint32_t offset = 0;
+    for (size_t i = 0; i < files.size(); ++i) {
+        const size_t entry = 0x40 + 16 * i;
+        std::memcpy(rom.data() + entry, files[i].name, std::strlen(files[i].name));
+        put32(entry + 12, files[i].size);
+        if (std::strcmp(files[i].name, "ROMDIR") != 0) {
+            put32(offset, 0x03E00008u);  // jr $ra; then nop
+        }
+        offset += (files[i].size + 15) & ~15u;
+    }
+    return rom;
+}
+
+} // namespace
+
+TEST_CASE(pieces_are_code_where_they_are_placed) {
+    const ElfFile image = ElfFile::fromPieces("two", 0x2000u, {{"b", 0x2000u, {8, 0, 0xE0, 3, 0, 0, 0, 0}}, {"a", 0x1000u, {0, 0, 0, 0}}});
+    CHECK_EQ(image.codeRanges().size(), size_t{2});
+    CHECK_EQ(image.codeRanges()[0].name, std::string("a"));   // in address order
+    CHECK_EQ(image.codeRanges()[1].end, 0x2008u);
+    uint32_t w = 0;
+    CHECK(image.read32(0x2000u, w) && w == 0x03E00008u);
+    CHECK(!image.isMapped(0x1004u));
+    CHECK_THROWS(ElfFile::fromPieces("overlap", 0, {{"a", 0x1000u, std::vector<uint8_t>(8)}, {"b", 0x1004u, std::vector<uint8_t>(8)}}));
+}
+
+TEST_CASE(code_that_is_followed_leaves_the_data_out) {
+    const ElfFile image = asPieces(kCodeAndData);
+    Options o;
+    o.followCode = true;
+    const Program prog = analyze(image, o);
+
+    // _start; sub, which it calls; other, where it jumps through a register it
+    // has just made a constant.
+    CHECK_EQ(prog.functions.size(), size_t{3});
+    if (prog.functions.size() != 3) return;
+    CHECK_EQ(prog.functions[0].start, 0x00100000u);
+    CHECK_EQ(prog.functions[0].end, 0x00100018u);
+    CHECK_EQ(prog.functions[1].start, 0x00100020u);
+    CHECK_EQ(prog.functions[1].end, 0x00100028u);
+    CHECK_EQ(prog.functions[1].source, Source::Jal);
+    CHECK_EQ(prog.functions[2].start, 0x00100030u);
+    CHECK_EQ(prog.functions[2].end, 0x00100038u);
+    CHECK(prog.exits == std::vector<uint32_t>{0x00200000u});
+    // The data is in no function, not even what reads as an instruction or as
+    // the address of code.
+    for (uint32_t a : {0x00100018u, 0x0010001Cu, 0x00100028u, 0x0010002Cu, 0x00100038u, 0x0010003Cu})
+        CHECK(prog.functionContaining(a) == nullptr);
+}
+
+TEST_CASE(code_that_is_followed_takes_captured_entries) {
+    const ElfFile image = asPieces(kCodeAndData);
+    Options o;
+    o.followCode = true;
+    o.capture.entries = {0x0010003Cu, 0x00100024u};
+    const Program prog = analyze(image, o);
+    const Function* far = prog.functionAt(0x0010003Cu);
+    CHECK(far != nullptr);
+    if (far) {
+        CHECK_EQ(far->end, 0x00100048u);
+        CHECK_EQ(far->source, Source::Captured);
+    }
+    // Inside code that was reached, a captured entry is a leader.
+    const Function* sub = prog.functionAt(0x00100020u);
+    CHECK(sub && sub->isLeader(0x00100024u));
+    CHECK(prog.functionContaining(0x00100038u) == nullptr);
+}
+
+TEST_CASE(a_bios_image_is_read_as_the_pieces_the_ee_runs) {
+    const std::vector<uint8_t> rom = makeBiosRom();
+    const Bios b = readBios(rom, "test.bin");
+    uint32_t crc = 0;
+    for (size_t i = 0; i < rom.size(); i += 4) crc ^= static_cast<uint32_t>(rom[i]) | static_cast<uint32_t>(rom[i + 1]) << 8 |
+                                                     static_cast<uint32_t>(rom[i + 2]) << 16 | static_cast<uint32_t>(rom[i + 3]) << 24;
+    CHECK_EQ(b.crc, crc);
+    CHECK_EQ(b.images.size(), size_t{4});
+    if (b.images.size() != 4) return;
+
+    // RESET at 0, RDRAM at B0 in the ROM: through each mirror.
+    CHECK_EQ(b.images[0].id, std::string("bios_rom0"));
+    CHECK_EQ(b.images[0].code.codeRanges()[0].start, 0x9FC00000u);
+    CHECK_EQ(b.images[0].code.codeRanges()[1].start, 0x9FC000B0u);
+    CHECK_EQ(b.images[1].id, std::string("bios_rom1"));
+    CHECK_EQ(b.images[1].code.codeRanges()[0].start, 0xBFC00000u);
+    CHECK(b.images[1].entries == std::vector<uint32_t>{0xBFC00000u});
+    CHECK_EQ(b.images[2].id, std::string("bios_kernel"));
+    CHECK_EQ(b.images[2].code.codeRanges()[0].start, 0x80000000u);
+    CHECK_EQ(b.images[2].code.codeRanges()[0].end, 0x80000010u);
+    CHECK_EQ(b.images[2].entries.size(), size_t{5});
+    CHECK_EQ(b.images[3].id, std::string("bios_loader"));
+    CHECK_EQ(b.images[3].code.codeRanges()[0].start, 0x00081FC0u);
+    CHECK_EQ(b.images[3].code.codeRanges()[1].start, 0x00082000u);
+    CHECK(b.images[3].entries == (std::vector<uint32_t>{0x00081FC0u, 0x00082000u}));
+    uint32_t w = 0;
+    CHECK(b.images[2].code.read32(0x80000000u, w) && w == 0x03E00008u);
+
+    CHECK_THROWS(readBios(makeBiosRom(false), "no loader.bin"));
+    CHECK_THROWS(readBios(std::vector<uint8_t>(0x100, 0), "no directory.bin"));
+}
+
+TEST_CASE(a_bios_image_with_nothing_found_in_it_is_still_generated) {
+    const Bios b = readBios(makeBiosRom(), "test.bin");
+    Options o;
+    o.followCode = true;   // bios_rom0 has no entry of its own
+    const Program prog = analyze(b.images[0].code, o);
+    CHECK(prog.functions.empty());
+    GenerateOptions go;
+    go.id = "bios_rom0";
+    go.kind = 1;
+    go.name = "test.bin";
+    go.crc = 0x12345678u;
+    const std::string code = generate(prog, go);
+    CHECK_CONTAINS(code, "kImageBios,");
+    CHECK_CONTAINS(code, "0x12345678u,");
+    CHECK_CONTAINS(code, "{0, 0, nullptr, 0, 0, 0, 0},   // (none)");
+    CHECK_CONTAINS(code, "derived from the BIOS image");
+
+    // An executable without code is still a mistake.
+    go.kind = 0;
+    CHECK_THROWS(generate(prog, go));
+}
+
+TEST_CASE(code_run_outside_the_executable_makes_an_image_of_its_own) {
+    const ElfFile elf = assemble(kCallsAndBranches);
+    Capture capture;
+    // Blocks the program ran in kernel memory, the second starting inside the
+    // first; and one inside the executable, which is a variant's business.
+    capture.code.push_back({0x80075000u, {0x24020055u, 0x03E00008u, 0x00000000u}});   // li $v0, 0x55; jr $ra; nop
+    capture.code.push_back({0x80075008u, {0x00000000u, 0x24020001u}});
+    capture.code.push_back({0x80076000u, {0x03E00008u, 0x00000000u}});
+    capture.code.push_back({0x00100000u, {0x27BDFFF0u}});
+    std::vector<Note> notes;
+    std::vector<uint32_t> starts;
+    const ElfFile pieces = codeOutside(elf, capture, notes, starts);
+    CHECK(starts == (std::vector<uint32_t>{0x80075000u, 0x80075008u, 0x80076000u}));
+    CHECK_EQ(pieces.codeRanges().size(), size_t{2});
+    if (pieces.codeRanges().size() == 2) {
+        CHECK_EQ(pieces.codeRanges()[0].start, 0x80075000u);
+        CHECK_EQ(pieces.codeRanges()[0].end, 0x80075010u);
+        CHECK_EQ(pieces.codeRanges()[1].start, 0x80076000u);
+    }
+    CHECK(notes.empty());
+
+    Options o;
+    o.followCode = true;
+    o.capture.entries = starts;
+    const Program prog = analyze(pieces, o);
+    CHECK(prog.functionAt(0x80075000u) != nullptr);
+    GenerateOptions go;
+    go.id = "test_outside";
+    go.kind = 2;
+    go.crc = pcsx2Crc(elf);
+    const std::string code = generate(prog, go);
+    CHECK_CONTAINS(code, "kImageOutside,");
+    CHECK_CONTAINS(code, strprintf("0x%08Xu,", pcsx2Crc(elf)));
+
+    // Two different words captured at one address: the first is kept, and said.
+    capture.code.push_back({0x80076004u, {0x24020002u}});
+    notes.clear();
+    starts.clear();
+    codeOutside(elf, capture, notes, starts);
+    CHECK_EQ(notes.size(), size_t{1});
 }
 
 int main(int argc, char** argv) { return ::testing::runAll(argc, argv); }

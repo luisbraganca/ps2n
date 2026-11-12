@@ -6,6 +6,7 @@
 #include "ps2n/elf.h"
 #include "ps2n/irx.h"
 #include "ps2n/r5900.h"
+#include "ps2n/romdir.h"
 #include "ps2n/snr2.h"
 #include "ps2n/util.h"
 #include "ps2n/vu_program.h"
@@ -464,6 +465,58 @@ TEST_CASE(vu_programs_are_told_by_their_code_wherever_they_sit) {
     changed = program;
     changed.push_back(pair(lowerNop, upperNop | ebit));   // 8: after the routine's return
     CHECK(keys(memoryWith(0x0100, changed), 0x0100) == here);
+}
+
+namespace {
+
+// A BIOS image of our own making, as small as one can be: RESET (with the
+// word "RESET" among its own bytes, which is not the directory), the
+// directory, a space between files, and one more file.
+std::vector<uint8_t> makeRom() {
+    std::vector<uint8_t> rom(0xC0, 0xEE);
+    const auto entry = [&](size_t at, const char* name, uint32_t size) {
+        std::memset(rom.data() + at, 0, 16);
+        std::memcpy(rom.data() + at, name, std::strlen(name));
+        std::memcpy(rom.data() + at + 12, &size, 4);
+    };
+    std::memcpy(rom.data() + 0x10, "RESET\0\0\0\0\0", 10);  // a decoy inside RESET
+    entry(0x30, "RESET", 0x30);
+    entry(0x40, "ROMDIR", 0x50);
+    entry(0x50, "-", 0x08);
+    entry(0x60, "KERNEL", 0x14);
+    std::memset(rom.data() + 0x70, 0, 16);  // the end of the directory
+    return rom;
+}
+
+} // namespace
+
+TEST_CASE(rom_directory_lists_files_where_they_lie) {
+    const std::vector<uint8_t> rom = makeRom();
+    const std::vector<bios::RomFile> files = bios::readRomDirectory(rom.data(), rom.size());
+    CHECK_EQ(files.size(), size_t{4});
+    if (files.size() != 4) return;
+    CHECK_EQ(files[0].name, std::string("RESET"));
+    CHECK_EQ(files[0].offset, 0u);
+    CHECK_EQ(files[1].name, std::string("ROMDIR"));
+    CHECK_EQ(files[1].offset, 0x30u);
+    CHECK_EQ(files[2].name, std::string("-"));
+    CHECK_EQ(files[2].offset, 0x80u);
+    CHECK_EQ(files[3].offset, 0x90u);  // after "-", rounded up to 16 bytes
+    CHECK_EQ(files[3].size, 0x14u);
+
+    const auto kernel = bios::findRomFile(files, "KERNEL");
+    CHECK(kernel && kernel->offset == 0x90u);
+    CHECK(!bios::findRomFile(files, "EELOAD"));
+}
+
+TEST_CASE(rom_directory_absent_or_cut_short_is_none) {
+    const std::vector<uint8_t> nothing(0x100, 0);
+    CHECK(bios::readRomDirectory(nothing.data(), nothing.size()).empty());
+
+    // KERNEL would end past the end of the image.
+    const std::vector<uint8_t> rom = makeRom();
+    CHECK(bios::readRomDirectory(rom.data(), 0xA0).empty());
+    CHECK(bios::readRomDirectory(nullptr, 0).empty());
 }
 
 int main(int argc, char** argv) { return ::testing::runAll(argc, argv); }

@@ -74,12 +74,23 @@ namespace ps2n::ee
 		const uint64_t* segment_hashes; // one for each leader of its function, as ImageInfo::segment_hashes
 	};
 
-	// The code of one executable, compiled ahead of time.
+	// What an image holds: the code of an executable, used once the machine
+	// boots it; a piece of the BIOS's code, used from reset on while the ROM
+	// is the one it was made from (docs/game-log.md, "G8"); or the code an
+	// executable ran outside its own, where it had copied or loaded it (into
+	// kernel memory, for one), as runs captured it, used with the
+	// executable's.
+	inline constexpr uint32_t kImageExecutable = 0;
+	inline constexpr uint32_t kImageBios = 1;
+	inline constexpr uint32_t kImageOutside = 2;
+
+	// The code of one executable, or of a piece of the BIOS, compiled ahead of
+	// time.
 	struct ImageInfo
 	{
 		const char* id; // names it among the images of a program
-		const char* name; // the executable's file name
-		uint32_t crc; // of the executable, as PCSX2 computes a game's CRC
+		const char* name; // the executable's file name; for the BIOS, the ROM's and the piece's
+		uint32_t crc; // of the executable, as PCSX2 computes a game's CRC; for the BIOS, of the whole ROM the same way
 		uint32_t text_start; // lowest compiled address
 		uint32_t text_end; // one past the highest
 		const FunctionInfo* functions; // sorted by start
@@ -92,6 +103,7 @@ namespace ps2n::ee
 		uint32_t variant_count;
 		uint32_t* blocks; // for each leader: zero, or what compiled code needs to know of the block that begins there
 		const char* generator; // the recompiler that wrote it
+		uint32_t kind = kImageExecutable;
 	};
 
 	// ---- time ---------------------------------------------------------------

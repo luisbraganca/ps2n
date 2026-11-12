@@ -98,6 +98,17 @@ public:
     static ElfFile load(const std::filesystem::path& path);
     static ElfFile parse(std::vector<uint8_t> bytes, std::string displayName);
 
+    // An image made of raw pieces, each loaded at its address: no sections and
+    // no symbols, and every piece code as far as codeRanges() says, though it
+    // may hold data too. The BIOS's files, placed where the EE runs them
+    // (ps2n/romdir.h), are read this way.
+    struct Piece {
+        std::string name;
+        uint32_t address = 0;
+        std::vector<uint8_t> bytes;
+    };
+    static ElfFile fromPieces(std::string displayName, uint32_t entry, const std::vector<Piece>& pieces);
+
     const std::string& name() const { return name_; }
     const std::vector<uint8_t>& bytes() const { return bytes_; }
 

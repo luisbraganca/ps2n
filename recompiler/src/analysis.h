@@ -20,7 +20,7 @@
 namespace ps2n::recomp {
 
 // Where a function start came from, strongest first.
-enum class Source : uint8_t { Symbol, Entry, Jal, DataRef, CodePointer, Prologue, Gap };
+enum class Source : uint8_t { Symbol, Entry, Jal, DataRef, CodePointer, Prologue, Captured, Gap };
 const char* sourceName(Source s);
 
 struct Function {
@@ -70,6 +70,17 @@ struct Options {
     // Take function starts and sizes from the ELF's symbol table when it has one.
     bool useSymbols = true;
     Capture capture;
+
+    // For an image whose code ranges hold data as well, without sections or
+    // symbols to tell the two apart (the BIOS's files, ElfFile::fromPieces).
+    // Its ranges are not swept: its code is what is reached by following the
+    // instructions from the entry point, from `entries` and from the entries
+    // `capture` holds, through branches, jumps, calls, and jumps through a
+    // register just made a constant. Nothing is taken for code on a guess,
+    // so no data ends up inside a function, where the fingerprints the
+    // runtime compares with memory would cover it.
+    bool followCode = false;
+    std::vector<uint32_t> entries;
 };
 
 struct Program {
@@ -81,6 +92,9 @@ struct Program {
     size_t instructionCount = 0;
     size_t leaderCount = 0;
     size_t variantCount = 0;
+    // With Options::followCode: where the code followed leaves the image's
+    // ranges (a branch, jump or call to an address outside them), sorted.
+    std::vector<uint32_t> exits;
 
     // Whether `addr` is the address of an instruction.
     bool inCode(uint32_t addr) const;
@@ -99,6 +113,16 @@ struct Program {
 };
 
 Program analyze(const ElfFile& elf, const Options& options = {});
+
+// Whether `addr` lies in the executable's code.
+bool inCodeRanges(const ElfFile& elf, uint32_t addr);
+
+// The code a capture holds outside the executable's code (code it copied
+// elsewhere and ran there, into kernel memory for one), its blocks put
+// together where they adjoin or overlap: the pieces an image of the code it
+// ran outside its own is made of. `starts` gets where the blocks begin, and
+// `notes` what could not be kept.
+ElfFile codeOutside(const ElfFile& elf, const Capture& capture, std::vector<Note>& notes, std::vector<uint32_t>& starts);
 
 // Reads a capture file written by ps2n-host:
 //

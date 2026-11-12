@@ -16,6 +16,13 @@ executable is read where it is; what is generated from it stays in the build
 tree. The choice is remembered by the build tree until -Game is given again
 (-Game none takes the game out).
 
+With -Bios, the EE code of a BIOS dump is compiled into the host as well
+(docs\adr\0017): the user's own dump, read where it is, and what is
+generated from it stays in the build tree and never goes into the
+repository. -BiosCapture adds what runs reported of the BIOS
+(ps2n-host -bios-capture). Both are remembered like -Game; "none" takes
+them out.
+
 With -Pcsx2Source, another PCSX2 source tree is built in the place of the pinned
 submodule: to try PS2Native on a newer PCSX2 before the submodule is moved,
 or to check a change someone made to PCSX2 against the tests here. Give it a
@@ -41,7 +48,11 @@ param(
     # A game's boot executable to compile into the host, or "none".
     [string]$Game = '',
     # What earlier runs of the game reported for the recompiler (ps2n-host -capture), or "none".
-    [string]$GameCapture = ''
+    [string]$GameCapture = '',
+    # A BIOS dump whose EE code to compile into the host, or "none".
+    [string]$Bios = '',
+    # What earlier runs reported of the BIOS for the recompiler (ps2n-host -bios-capture), or "none".
+    [string]$BiosCapture = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,6 +113,14 @@ if ($Game) {
 if ($GameCapture) {
     $capturePath = if ($GameCapture -eq 'none') { '' } else { ForCMake (Resolve-Path -LiteralPath $GameCapture).Path }
     $gameSettings += "-DPS2N_GAME_CAPTURE=$capturePath"
+}
+if ($Bios) {
+    $biosPath = if ($Bios -eq 'none') { '' } else { ForCMake (Resolve-Path -LiteralPath $Bios).Path }
+    $gameSettings += "-DPS2N_BIOS_IMAGE=$biosPath"
+}
+if ($BiosCapture) {
+    $biosCapturePath = if ($BiosCapture -eq 'none') { '' } else { ForCMake (Resolve-Path -LiteralPath $BiosCapture).Path }
+    $gameSettings += "-DPS2N_BIOS_CAPTURE=$biosCapturePath"
 }
 
 if ($Reconfigure -or $gameSettings -or -not (Test-Path (Join-Path $build 'build.ninja'))) {

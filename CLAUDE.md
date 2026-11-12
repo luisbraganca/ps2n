@@ -33,8 +33,11 @@ stock PCSX2's time. The maintainer then chose a speed step inside the phase
 which the self-test holds to PCSX2's recompiler, and the level run is still
 the stock run, at 1.21 times its time. G9 (ADR 0018), done on 2026-11-12
 in a worktree of its own, has compiled code carry out the VU0 instructions
-itself where their block lets it: 1.19 times stock PCSX2's time. What comes
-next is the maintainer's to say. Phase 4 needs its own approval.
+itself where their block lets it: 1.19 times stock PCSX2's time. G8 (ADR
+0017), done on 2026-11-12 and rebased onto G9, compiles the BIOS's EE code
+ahead of time, from the dump the build is given: 51 of its instructions are
+still interpreted, at boot, and the level run takes 1.18 times stock
+PCSX2's time. Phase 4 needs its own approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -75,7 +78,7 @@ Decisions:
 - [ADR 0007](docs/adr/0007-bios-code-translated-ahead-of-time.md): the
   BIOS's EE code is to be translated ahead of time, on the user's machine
   from their own dump, as a file of its own beside the game. A BIOS image is
-  still required at run time. Not started; it comes after the EE.
+  still required at run time. Begun on 2026-11-12 as step G8 (ADR 0017).
 - [ADR 0008](docs/adr/0008-linux-run-deferred.md): the first Linux run is
   deferred until the maintainer chooses. Linux is still required.
 - [ADR 0009](docs/adr/0009-phase-3-first-game-killzone.md): Phase 3 is
@@ -133,6 +136,15 @@ Decisions:
   that function; when VU0 is brought up to date, and which flags reach the
   registers, stay as the recompiler decides them for the block. Done on
   2026-11-12 (`runtime/include/ps2n/ops_vu0.h`).
+- [ADR 0017](docs/adr/0017-bios-ee-code-compiled-as-step-g8.md): the next
+  step, G8, inside Phase 3: the BIOS's EE code compiled ahead of time, as
+  ADR 0007 has it, beginning with the four pieces that run under fast boot
+  (the reset code, the kernel, `EELOAD`, `EENULL`). During development the
+  translation is linked into `ps2n-host` from the build tree, made from the
+  dump the build is given and never in the repository; a file of its own
+  beside a packaged game is Phase 4's. Done on 2026-11-12: four images,
+  and the code the game copies into kernel memory compiled with the game
+  (`game_outside`).
 - [ADR 0018](docs/adr/0018-vu0-instructions-carried-out-by-compiled-code.md):
   step G9: compiled code carries out a VU0 instruction itself, inline, where
   the runtime's record of its block says nothing is done about VU0 first
@@ -149,8 +161,10 @@ third_party/pcsx2         PCSX2 v2.9.170, a pinned submodule. Never edit it; cha
 third_party/ps2autotests  hardware-verified PS2 test programs, a pinned submodule
 cmake/ps2n-inject.cmake   adds PS2Native's targets to PCSX2's own CMake project without touching it
 CMakeLists.txt, core/     build-time tools, a project of their own with no PCSX2 dependency: the
-                          instruction decoder, disassembler, assembler, ELF/IRX/SNR2 readers
+                          instruction decoder, disassembler, assembler, ELF/IRX/SNR2 readers, the reader of a
+                          BIOS image's directory (romdir)
 recompiler/               ps2n-recomp, in that same project: analysis and C++ generation for EE executables
+                          and for the BIOS's EE code (bios.cpp)
 runtime/                  what PS2Native adds to the core at run time: the EE provider (dispatcher,
                           fallback interpreter), the record of the blocks PCSX2's recompiler would have formed
                           (rec_blocks), instruction semantics, the contract for generated code
@@ -208,6 +222,17 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   pictures a run saved on contact sheets, sixty to an image: the way to look
   a whole run over, and to find out what a controller script has to press
   when (look at a sheet with the Read tool).
+- The BIOS's EE code (step G8): `scripts\windows\build.ps1 -Bios <BIOS
+  image> -BiosCapture build\bios\capture.toml` compiles it into the host as
+  four images, from the maintainer's dump read in place, into
+  `build\windows-clang\ps2n\generated\bios`; the build tree remembers both.
+  Every test run with compiled code writes what it had to interpret of the
+  BIOS to `bios-capture.toml` among its files (`ps2n-host -bios-capture`);
+  `ps2n-recomp capture --out build\bios\capture.toml build\bios\capture.toml
+  <those files>` puts them into the BIOS's capture for the next build.
+  Without -Bios the BIOS is interpreted. Nothing generated from the BIOS
+  may leave the build tree (ADR 0007). `ps2n-recomp bios-info <BIOS image>`
+  says what the analysis finds in it.
 - Playing the game: `scripts\windows\game.ps1 -Image <disc image> -Play
   -Name <name>` opens it in a window, at the console's speed, with sound,
   the keyboard and the first controller (`ps2n-host -help` has the keys),
@@ -253,7 +278,10 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
 - After a run, `ps2n-host` reports what the interpreter did. For a game whose
   image is complete, "instructions inside the executable's code" must be
   zero; when it is not, the line "compiled code handed over to the
-  interpreter" names the addresses.
+  interpreter" names the addresses. "The BIOS interpreted" says, piece by
+  piece, what of the BIOS was; with the BIOS compiled, that is 48
+  instructions at boot (blocks counted double) and one `di`/`eret` at
+  `8000517C`.
 - The Linux scripts have never been run. Only the maintainer can run them.
 - Never run stock `pcsx2-gsrunner` here: it writes into the maintainer's own
   `Documents\PCSX2`.

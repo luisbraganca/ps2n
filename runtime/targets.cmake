@@ -25,12 +25,13 @@ add_library(ps2n-runtime STATIC
 	"${CMAKE_CURRENT_LIST_DIR}/rec_blocks.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/rec_blocks.h"
 
-	# The instruction decoder, shared with the build-time tools (core/). Only
-	# the parts that use no C++ exceptions are compiled here: PCSX2's build
-	# switches exceptions off.
+	# The instruction decoder and the reader of a BIOS image's directory,
+	# shared with the build-time tools (core/). Only the parts that use no C++
+	# exceptions are compiled here: PCSX2's build switches exceptions off.
 	"${PS2N_ROOT}/core/src/cycles.cpp"
 	"${PS2N_ROOT}/core/src/decoder.cpp"
 	"${PS2N_ROOT}/core/src/disasm.cpp"
+	"${PS2N_ROOT}/core/src/romdir.cpp"
 	"${PS2N_ROOT}/core/src/strings.cpp"
 )
 

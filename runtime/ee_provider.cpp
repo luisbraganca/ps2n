@@ -33,6 +33,7 @@
 #include "ps2n/r5900.h"
 #include "ps2n/rec_rules.h"
 #include "ps2n/recomp.h"
+#include "ps2n/romdir.h"
 
 #include "pcsx2/PrecompiledHeader.h"
 
@@ -51,8 +52,11 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <map>
+#include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 // Defined in pcsx2/VU0.cpp; PCSX2 declares it in no header.
 void _vu0WaitMicro(); // runs VU0's micro program until it ends or stops at an M bit
@@ -96,8 +100,21 @@ namespace
 	size_t s_image_count = 0;
 	bool s_static_enabled = true;
 
-	// The image of the executable in memory, when there is one, and whether
-	// its code is dispatched to.
+	// The images in use: the BIOS's (ImageInfo::kind), from the first
+	// instruction on, while the ROM is the one they were made from; and the
+	// executable's, from its entry point on. Their code ranges do not
+	// overlap. With each, one bit per instruction of its code range: a block
+	// had to be interpreted from there.
+	struct InUse
+	{
+		const ImageInfo* image;
+		std::vector<u64> missing;
+	};
+	std::vector<InUse> s_in_use;
+	bool s_bios_looked_for = false;
+
+	// The executable's image among them, when there is one; and whether
+	// compiled code is dispatched to at all.
 	const ImageInfo* s_image = nullptr;
 	bool s_dispatching = false;
 
@@ -109,15 +126,119 @@ namespace
 	// compiled matched it.
 	std::vector<ps2n::ee::CapturedCode> s_captured;
 
-	// One bit per instruction of the image's code range: a block had to be
-	// interpreted from there.
-	std::vector<u64> s_missing;
-
 	// Where compiled code handed over to the interpreter, and how often: the
 	// rest of a block (by the instruction it left at), a whole block (by its
 	// label).
 	std::unordered_map<u32, u64> s_left_at;
 	std::unordered_map<u32, u64> s_interpreted_at;
+
+	// ---- the BIOS ----------------------------------------------------------------
+	// Whether the executable has reached its entry point: what ran before it
+	// is the boot.
+	bool s_after_entry = false;
+
+	// The addresses in the BIOS's places at which the interpreter formed a
+	// block; and the BIOS's files against memory when the executable reached
+	// its entry point.
+	std::unordered_set<u32> s_bios_starts;
+	std::vector<ps2n::ee::BiosFileCheck> s_bios_at_entry;
+
+	// The words of the blocks the interpreter ran where no image in use has
+	// code, as they were then, by the block's start.
+	std::map<u32, std::vector<u32>> s_unheld;
+
+	// The ROM's directory (ps2n/romdir.h) places the files the EE runs from RAM
+	// where PCSX2 has them.
+	static_assert(ps2n::bios::kRamPieces[0].address == (0x80000000u | EEKERNEL_START) &&
+				  ps2n::bios::kRamPieces[1].address == EENULL_START && ps2n::bios::kRamPieces[2].address == EELOAD_START);
+
+	// The files of the ROM's directory that the EE runs, read from the ROM in
+	// memory the first time they are needed.
+	struct BiosLayout
+	{
+		bool read = false;
+		std::vector<ps2n::bios::RomFile> files;
+		u32 kernel_size = 0, idle_size = 0, loader_size = 0; // in bytes
+	};
+	BiosLayout s_bios;
+
+	const BiosLayout& Bios()
+	{
+		if (!s_bios.read && eeMem)
+		{
+			s_bios.read = true;
+			s_bios.files = ps2n::bios::readRomDirectory(eeMem->ROM, Ps2MemSize::Rom);
+			const auto size = [](const char* name) {
+				const std::optional<ps2n::bios::RomFile> f = ps2n::bios::findRomFile(s_bios.files, name);
+				return f ? f->size : 0u;
+			};
+			s_bios.kernel_size = size("KERNEL");
+			s_bios.idle_size = size("EENULL");
+			s_bios.loader_size = size("EELOAD");
+		}
+		return s_bios;
+	}
+
+	// Which of the BIOS's places (ps2n::ee::BiosPlace) a block that begins at
+	// `pc` lies in, or kBiosPlaces when it is none of them: user memory from
+	// 00100000, where the executable is.
+	u8 BiosPlaceOf(u32 pc)
+	{
+		const u32 hw = blocks::Physical(pc);
+		if (hw == ~0u)
+			return ps2n::ee::kBiosPlaces;
+		if (hw >= 0x1E000000u) // the ROMs, as blocks::Physical() files them
+			return ps2n::ee::kBiosRom;
+		const BiosLayout& bios = Bios();
+		if (pc >= 0xA0000000u)
+			return ps2n::ee::kBiosUncached;
+		if (pc >= 0x80000000u)
+			return (hw - EEKERNEL_START) < bios.kernel_size ? ps2n::ee::kBiosKernel : ps2n::ee::kBiosKernelOther;
+		if (pc >= 0x00100000u)
+			return ps2n::ee::kBiosPlaces;
+		if (pc - EENULL_START < bios.idle_size)
+			return ps2n::ee::kBiosIdle;
+		if (pc - EELOAD_START < bios.loader_size)
+			return ps2n::ee::kBiosLoader;
+		return ps2n::ee::kBiosLowOther;
+	}
+
+	// The BIOS's files that the EE runs from RAM, each against what memory
+	// holds where it runs.
+	std::vector<ps2n::ee::BiosFileCheck> CompareBiosFilesNow()
+	{
+		std::vector<ps2n::ee::BiosFileCheck> checks;
+		if (!eeMem)
+			return checks;
+		const BiosLayout& bios = Bios();
+		for (const ps2n::bios::RamPiece& piece : ps2n::bios::kRamPieces)
+		{
+			const u32 hw = blocks::Physical(piece.address);
+			ps2n::ee::BiosFileCheck check;
+			check.file = piece.file;
+			check.address = piece.address;
+			if (const std::optional<ps2n::bios::RomFile> f = ps2n::bios::findRomFile(bios.files, piece.file))
+			{
+				check.words = std::min<u32>(f->size, Ps2MemSize::MainRam - hw) / 4;
+				for (u32 i = 0; i < check.words; i++)
+				{
+					u32 rom, ram;
+					std::memcpy(&rom, eeMem->ROM + f->offset + i * 4, 4);
+					std::memcpy(&ram, eeMem->Main + hw + i * 4, 4);
+					if (rom != ram)
+					{
+						if (!check.differing++)
+							check.first = piece.address + i * 4;
+						check.last = piece.address + i * 4;
+						if (check.sample.size() < 256)
+							check.sample.push_back({piece.address + i * 4, rom, ram});
+					}
+				}
+			}
+			checks.push_back(check);
+		}
+		return checks;
+	}
 
 	// The host stack: where Execute() was entered, and how far below that
 	// compiled code may go before its frames are abandoned.
@@ -133,11 +254,13 @@ namespace
 	std::string s_trace_mismatch;
 	u64 s_trace_detail_from = ~0ull;
 
-	// PC -> function of the image with an entry there, or -1.
+	// PC -> the image in use with an entry there and the function's index in
+	// it, or -1.
 	struct CacheEntry
 	{
 		u32 pc;
 		s32 index;
+		const ImageInfo* image;
 	};
 	constexpr u32 kCacheSize = 1u << 14;
 	CacheEntry s_cache[kCacheSize];
@@ -150,27 +273,53 @@ namespace
 	void FlushCache()
 	{
 		for (CacheEntry& e : s_cache)
-			e = {0xFFFFFFFFu, -1};
+			e = {0xFFFFFFFFu, -1, nullptr};
 	}
 
+	// Inside the executable's code.
 	bool InImage(u32 pc)
 	{
 		return s_image && (pc - s_image->text_start) < (s_image->text_end - s_image->text_start);
 	}
 
+	bool InUseImage(const ImageInfo* image)
+	{
+		for (const InUse& u : s_in_use)
+		{
+			if (u.image == image)
+				return true;
+		}
+		return false;
+	}
+
+	// Puts `image` in use. Nothing is known of any of its blocks yet.
+	void Use(const ImageInfo& image)
+	{
+		std::memset(image.blocks, 0, image.leader_count * sizeof(u32));
+		s_in_use.push_back({&image, std::vector<u64>(((image.text_end - image.text_start) / 4 + 63) / 64, 0)});
+		s_dispatching = s_static_enabled;
+		FlushCache();
+	}
+
 	// Chooses the image of the executable that has just reached its entry
-	// point.
+	// point. The BIOS's stay in use.
 	void SelectImage()
 	{
 		const u32 crc = VMManager::GetCurrentCRC();
 
+		std::erase_if(s_in_use, [](const InUse& u) { return u.image->kind != ps2n::ee::kImageBios; });
 		s_image = nullptr;
+		const ImageInfo* outside = nullptr; // the code it ran outside its own, as runs captured it
 		for (size_t i = 0; i < s_image_count; i++)
 		{
-			if (s_images[i]->crc == crc)
+			if (s_images[i]->crc != crc)
+				continue;
+			if (s_images[i]->kind == ps2n::ee::kImageExecutable)
 				s_image = s_images[i];
+			else if (s_images[i]->kind == ps2n::ee::kImageOutside)
+				outside = s_images[i];
 		}
-		s_dispatching = s_image && s_static_enabled;
+		s_dispatching = s_static_enabled && !s_in_use.empty();
 		s_stats.image = s_image;
 		FlushCache();
 
@@ -180,16 +329,61 @@ namespace
 		if (!s_image)
 		{
 			Console.WriteLn(Color_StrongOrange, "ps2n: no compiled code for the executable with CRC %08X; it is interpreted", crc);
-			s_missing.clear();
 			return;
 		}
 
-		// Nothing is known of any of its blocks yet.
-		std::memset(s_image->blocks, 0, s_image->leader_count * sizeof(u32));
-		s_missing.assign(((s_image->text_end - s_image->text_start) / 4 + 63) / 64, 0);
+		Use(*s_image);
 		Console.WriteLn(Color_StrongGreen, "ps2n: %s compiled code of %s (CRC %08X): %u functions at %08X-%08X, by %s",
 			s_dispatching ? "using" : "NOT using (switched off)", s_image->name, crc, s_image->function_count, s_image->text_start,
 			s_image->text_end, s_image->generator);
+		if (outside && outside->function_count)
+		{
+			Use(*outside);
+			Console.WriteLn(Color_StrongGreen, "ps2n: and of the code it ran outside its executable: %u functions at %08X-%08X",
+				outside->function_count, outside->text_start, outside->text_end);
+		}
+	}
+
+	// Puts the BIOS's images in use, from the first instruction on: those
+	// made from the ROM the machine has, which the CRC of the whole ROM tells.
+	void UseBios()
+	{
+		s_bios_looked_for = true;
+		if (!eeMem)
+			return;
+
+		u32 crc = 0;
+		for (u32 i = 0; i + 4 <= Ps2MemSize::Rom; i += 4)
+		{
+			u32 word;
+			std::memcpy(&word, eeMem->ROM + i, 4);
+			crc ^= word;
+		}
+
+		bool any = false;
+		for (size_t i = 0; i < s_image_count; i++)
+		{
+			const ImageInfo& image = *s_images[i];
+			if (image.kind != ps2n::ee::kImageBios)
+				continue;
+			any = true;
+			if (image.crc != crc)
+				continue;
+			Use(image);
+			s_stats.bios_images++;
+			s_stats.bios_functions += image.function_count;
+		}
+		s_dispatching = s_static_enabled && !s_in_use.empty();
+		if (s_stats.bios_images)
+		{
+			Console.WriteLn(Color_StrongGreen, "ps2n: %s compiled code of the BIOS (CRC %08X): %u images, %u functions",
+				s_dispatching ? "using" : "NOT using (switched off)", crc, static_cast<unsigned>(s_stats.bios_images),
+				static_cast<unsigned>(s_stats.bios_functions));
+		}
+		else if (any)
+		{
+			Console.WriteLn(Color_StrongOrange, "ps2n: no compiled code for the BIOS with CRC %08X; its code is interpreted", crc);
+		}
 	}
 
 	// The function of `image` that holds `pc`, or null.
@@ -229,6 +423,27 @@ namespace
 		return static_cast<s32>(f - image.functions);
 	}
 
+	// The image in use and the function of it that can be entered at `pc`.
+	__fi const CacheEntry& LookupEntry(u32 pc)
+	{
+		CacheEntry& e = s_cache[(pc >> 2) & (kCacheSize - 1)];
+		if (e.pc != pc)
+		{
+			e = {pc, -1, nullptr};
+			for (const InUse& u : s_in_use)
+			{
+				const s32 index = FindEntry(*u.image, pc);
+				if (index >= 0)
+				{
+					e.index = index;
+					e.image = u.image;
+					break;
+				}
+			}
+		}
+		return e;
+	}
+
 	// The compiled function to enter at `pc`, or null. PCSX2's fourth clamp
 	// mode for the EE's FPU is not implemented, and compiled code has the FPU
 	// semantics built in: with it set, nothing compiled runs.
@@ -237,18 +452,48 @@ namespace
 		if (!s_dispatching || EmuConfig.Cpu.Recompiler.fpuFullMode)
 			return nullptr;
 
-		CacheEntry& e = s_cache[(pc >> 2) & (kCacheSize - 1)];
-		if (e.pc != pc)
-			e = {pc, FindEntry(*s_image, pc)};
-		return e.index < 0 ? nullptr : s_image->functions[e.index].fn;
+		const CacheEntry& e = LookupEntry(pc);
+		return e.index < 0 ? nullptr : e.image->functions[e.index].fn;
+	}
+
+	// Whether `pc` is in one of the BIOS's files, where the BIOS's images have
+	// their code (ps2n/romdir.h): the ROM, the kernel's, the idle thread's, the
+	// program loader's. RAM through the uncached mirror is taken where the
+	// kernel's segment has it.
+	bool InBiosFile(u32 pc)
+	{
+		u32 at = pc;
+		if (pc >= 0xA0000000u && pc < 0xC0000000u && blocks::Physical(pc) < Ps2MemSize::MainRam)
+			at = pc - 0x20000000u;
+		const u8 place = BiosPlaceOf(at);
+		return place == ps2n::ee::kBiosRom || place == ps2n::ee::kBiosKernel || place == ps2n::ee::kBiosIdle ||
+			   place == ps2n::ee::kBiosLoader;
+	}
+
+	// Whether an image in use has a function that holds `pc`.
+	bool HeldByImage(u32 pc)
+	{
+		for (const InUse& u : s_in_use)
+		{
+			if (FunctionOf(*u.image, pc))
+				return true;
+		}
+		return false;
 	}
 
 	void RecordMissing(u32 pc)
 	{
-		if (s_dispatching && InImage(pc))
+		if (!s_dispatching)
+			return;
+		for (InUse& u : s_in_use)
 		{
-			const u32 bit = (pc - s_image->text_start) / 4;
-			s_missing[bit / 64] |= 1ull << (bit % 64);
+			const u32 offset = pc - u.image->text_start;
+			if (offset < u.image->text_end - u.image->text_start)
+			{
+				const u32 bit = offset / 4;
+				u.missing[bit / 64] |= 1ull << (bit % 64);
+				return;
+			}
 		}
 	}
 
@@ -554,7 +799,11 @@ namespace
 			const bool booted = VMManager::Internal::HasBootedELF();
 			VMManager::Internal::EntryPointCompilingOnCPUThread();
 			if (!booted)
+			{
 				SelectImage();
+				s_after_entry = true;
+				s_bios_at_entry = CompareBiosFilesNow();
+			}
 		}
 
 		if (s_blocks_need_reset)
@@ -900,13 +1149,20 @@ namespace
 	{
 		s_stats.interpreted += steps;
 		if (InImage(pc))
+		{
 			s_stats.interpreted_in_image += steps;
-		else if (pc >= 0x80000000u)
+			return;
+		}
+		if (pc >= 0x80000000u)
 			s_stats.interpreted_kernel += steps;
 		else if (pc < 0x00100000u)
 			s_stats.interpreted_loader += steps;
 		else
 			s_stats.interpreted_elsewhere += steps;
+
+		const u8 place = BiosPlaceOf(pc);
+		if (place < ps2n::ee::kBiosPlaces)
+			s_stats.bios_interpreted[s_after_entry][place] += steps;
 	}
 
 	// Carries out the steps of `block` from step `first` on, with `eighths`
@@ -916,6 +1172,8 @@ namespace
 		bool ended = false; // by an instruction that ends a block without being a branch
 		const size_t count = block.steps.size();
 		CountRecSteps(block.start, count - first);
+		if (block.factor != 1) [[unlikely]]
+			s_stats.interpreted_doubled += count - first;
 		s_interpreting_image = InImage(block.start);
 
 		for (size_t i = first; i < count; i++)
@@ -956,9 +1214,26 @@ namespace
 		if (cpuRegs.pc != block.start) [[unlikely]]
 			s_stats.other_mirror++;
 
+		// The BIOS's block starts the interpreter carries out, for the
+		// recompiler; and the words of every block it carries out where no
+		// image in use has code, for whichever image the code belongs to.
+		if (!(block.flags & blocks::kInterpreted)) [[unlikely]]
+		{
+			block.flags |= blocks::kInterpreted;
+			if (BiosPlaceOf(block.start) < ps2n::ee::kBiosPlaces)
+				s_bios_starts.insert(block.start);
+			if (!InImage(block.start) && !InBiosFile(block.start) && !HeldByImage(block.start) && !s_unheld.count(block.start))
+			{
+				std::vector<u32>& words = s_unheld[block.start];
+				for (u32 i = 0; i < block.size; i++)
+					words.push_back(memRead32(block.start + i * 4));
+			}
+		}
+
 		// What the BIOS's program loader is hooked for.
 		if (block.flags & (blocks::kHookMain | blocks::kHookExec)) [[unlikely]]
 		{
+			s_stats.hooked_block_runs++;
 			if (block.flags & blocks::kHookMain)
 				eeloadHook();
 			if (block.flags & blocks::kHookExec)
@@ -1055,12 +1330,12 @@ namespace
 	// Whether compiled code can carry out `block` as the recompiler's code
 	// would. Not: a block whose instructions count double (formed while the EE
 	// issued one instruction a cycle; compiled code counts single); one that
-	// is not run at all or runs a hook; one cut short where compiled code has
-	// no label to notice it; one that ends after a load that compiled code
-	// does not expect to end a block.
+	// is not run at all; one cut short where compiled code has no label to
+	// notice it; one that ends after a load that compiled code does not expect
+	// to end a block. (One that runs a hook can: blockStart() runs the hook.)
 	bool CompiledCodeCanRun(const ImageInfo& image, const Block& block)
 	{
-		if (block.factor != 1 || (block.flags & (blocks::kTimeoutLoop | blocks::kHookMain | blocks::kHookExec)))
+		if (block.factor != 1 || (block.flags & blocks::kTimeoutLoop))
 			return false;
 		if ((block.flags & blocks::kCutShort) && LeaderIndex(image, block.nominal_end) < 0)
 			return false;
@@ -1125,6 +1400,12 @@ namespace
 
 	void ProviderShutdown()
 	{
+		// A machine started after this one may have another ROM.
+		s_in_use.clear();
+		s_image = nullptr;
+		s_dispatching = false;
+		s_bios_looked_for = false;
+		FlushCache();
 	}
 
 	// "Forget what you know about the code in memory." The core calls this
@@ -1184,6 +1465,8 @@ namespace
 			s_blocks_need_reset = false;
 			blocks::Reset();
 		}
+		if (!s_bios_looked_for)
+			UseBios();
 
 		for (;;)
 		{
@@ -1336,23 +1619,57 @@ const ps2n::ee::Stats& ps2n::ee::GetStats()
 	s_stats.interpreted_cycles_in_image = s_interpreted_eighths_in_image / 8;
 	s_stats.console_followed_abs_neg = ops::fpu::console_followed[0];
 	s_stats.console_followed_max_min = ops::fpu::console_followed[1];
+	std::fill(std::begin(s_stats.bios_block_starts), std::end(s_stats.bios_block_starts), 0);
+	for (const u32 pc : s_bios_starts)
+	{
+		const u8 place = BiosPlaceOf(pc);
+		if (place < kBiosPlaces)
+			s_stats.bios_block_starts[place]++;
+	}
 	return s_stats;
+}
+
+std::vector<uint32_t> ps2n::ee::GetBiosBlockStarts()
+{
+	std::vector<uint32_t> starts(s_bios_starts.begin(), s_bios_starts.end());
+	std::sort(starts.begin(), starts.end());
+	return starts;
+}
+
+const std::vector<ps2n::ee::BiosFileCheck>& ps2n::ee::GetBiosFilesAtEntry()
+{
+	return s_bios_at_entry;
+}
+
+std::vector<ps2n::ee::CapturedCode> ps2n::ee::GetCodeOutside()
+{
+	std::vector<CapturedCode> code;
+	for (const auto& [start, words] : s_unheld)
+		code.push_back({start, words});
+	return code;
+}
+
+std::vector<ps2n::ee::BiosFileCheck> ps2n::ee::CompareBiosFiles()
+{
+	return CompareBiosFilesNow();
 }
 
 std::vector<uint32_t> ps2n::ee::GetMissingEntries()
 {
 	std::vector<uint32_t> entries;
-	if (!s_image)
-		return entries;
-
-	for (size_t i = 0; i < s_missing.size(); i++)
+	for (const InUse& u : s_in_use)
 	{
-		for (u64 bits = s_missing[i]; bits; bits &= bits - 1)
+		if (u.image != s_image)
+			continue;
+		for (size_t i = 0; i < u.missing.size(); i++)
 		{
-			u32 bit = 0;
-			for (u64 b = bits; !(b & 1); b >>= 1)
-				bit++;
-			entries.push_back(s_image->text_start + static_cast<u32>(i * 64 + bit) * 4);
+			for (u64 bits = u.missing[i]; bits; bits &= bits - 1)
+			{
+				u32 bit = 0;
+				for (u64 b = bits; !(b & 1); b >>= 1)
+					bit++;
+				entries.push_back(s_image->text_start + static_cast<u32>(i * 64 + bit) * 4);
+			}
 		}
 	}
 	return entries;
@@ -1397,8 +1714,9 @@ uint32_t ps2n::ee::blockStart(const ImageInfo& image, uint32_t index, uint32_t b
 	{
 		cpuRegs.pc = addr;
 
-		// Only the image of the executable in memory is ever dispatched to.
-		if (&image != s_image || !s_dispatching) [[unlikely]]
+		// Only the images in use are ever dispatched to: the BIOS's, and the
+		// executable's in memory.
+		if (!InUseImage(&image) || !s_dispatching) [[unlikely]]
 			return kUnwind;
 
 		Block* block = blocks::Find(addr);
@@ -1406,7 +1724,7 @@ uint32_t ps2n::ee::blockStart(const ImageInfo& image, uint32_t index, uint32_t b
 		{
 			block = FormRecBlock(addr);
 			// Forming it may have been what started another executable.
-			if (&image != s_image || !s_dispatching)
+			if (!InUseImage(&image) || !s_dispatching)
 				return kUnwind;
 		}
 
@@ -1437,13 +1755,25 @@ uint32_t ps2n::ee::blockStart(const ImageInfo& image, uint32_t index, uint32_t b
 				return other(addr);
 			}
 
+			// The program loader's blocks PCSX2 hooks for fast boot: its
+			// recompiler calls the hook at the block's start, at every
+			// execution, and then runs the block's code.
+			if (block->flags & (blocks::kHookMain | blocks::kHookExec)) [[unlikely]]
+			{
+				s_stats.hooked_block_runs++;
+				if (block->flags & blocks::kHookMain)
+					eeloadHook();
+				if (block->flags & blocks::kHookExec)
+					eeloadHook2();
+			}
+
 			// A block in a page that is not write-protected checks itself at
 			// every execution, and is formed anew when it has changed.
 			if ((block->flags & blocks::kManual) && !blocks::EnterManual(*block))
 				continue;
 
 			*out = PackBlock(*block);
-			if (body == kBodyFunction && !(block->flags & blocks::kManual))
+			if (body == kBodyFunction && !(block->flags & (blocks::kManual | blocks::kHookMain | blocks::kHookExec)))
 			{
 				// From now on the function's label need not ask, until the
 				// block is thrown away.
@@ -1653,8 +1983,8 @@ uint32_t PS2N_CC ps2n::ee::jump(uint32_t pc)
 	// and what it returns is for that caller to judge.
 	if (const StaticFn fn = Lookup(pc))
 	{
-		const FunctionInfo* f = FunctionOf(*s_image, pc);
-		if (f && f->start == pc)
+		const CacheEntry& e = LookupEntry(pc);
+		if (e.image->functions[e.index].start == pc)
 			return fn(pc);
 	}
 

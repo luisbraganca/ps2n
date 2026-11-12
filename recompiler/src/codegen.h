@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,16 @@ struct GenerateOptions {
     unsigned parts = 1;
     // With more than one part: the name the part files include the header by.
     std::string headerName;
+    // What the image holds (ImageInfo::kind in recomp.h): an executable's
+    // code (0), a piece of the BIOS (1), or the code an executable ran
+    // outside its own (2). An image of either of the last two may hold no
+    // code at all.
+    uint32_t kind = 0;
+    // In place of the executable's file name and CRC: for the BIOS, the
+    // dump's name and the CRC of the whole ROM (Bios in bios.h); for code
+    // run outside an executable, the executable's.
+    std::string name;
+    std::optional<uint32_t> crc;
 };
 
 // One generated file. `suffix` tells which, and names it once put after the

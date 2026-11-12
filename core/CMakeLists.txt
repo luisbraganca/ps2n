@@ -10,6 +10,7 @@ add_library(ps2n_core STATIC
     src/elf.cpp
     src/files.cpp
     src/irx.cpp
+    src/romdir.cpp
     src/snr2.cpp
     src/strings.cpp
 )

@@ -20,6 +20,7 @@ The run files, pictures included, are under the git-ignored build tree.
 | G5 Measurement and report | **Done as far as the first level** (2026-11-12): times repeat now (a run is kept on the processor's fast cores). Over the level run the compiled game takes 1.35 times as long as stock PCSX2: 100 s against 74 s. The whole difference is in the game's own code, which takes twice as long compiled as under PCSX2's recompiler; the rest of the machine takes the same time. A first look says why: the generated code keeps the registers in memory and checks every address twice. The report on compatibility, issues and limitations is at the end of "G5". |
 | G6 Speed | **Done** (2026-11-12, ended there by the maintainer; [ADR 0015](adr/0015-a-speed-step-before-phase-3-ends.md)): seven changes to how the code is generated, each measured. The level run takes 1.21 to 1.23 times stock PCSX2's time (91.7 s against 75.6 s, and 91.3 s against 74.3 s, each pair timed together), where it took 1.35, and is still the stock run (the same place and time at each of 93 million sync points, the same picture and sound state at each of 1,750 frames) and the interpreted run (47.7 million event tests). The game's own code takes 41.1 s against 25.8 s under PCSX2's recompiler. Four further attempts were measured and taken out again. Where it stands is in "G6" below. |
 | G7 VU0's instructions | **Done** (2026-11-12, [ADR 0016](adr/0016-vu0-instructions-with-semantics-of-ps2natives-own.md)): the game's VU0 instructions have semantics of PS2Native's own, all but `VCALLMS` and `VCALLMSR`, which stay PCSX2's function as in its recompiler. The self-test finds them to be PCSX2's recompiler's in every case it tried: 1,968,000 cases, in each VU clamp mode and with the game fixes that change them, Killzone's configuration among them. The two known differences (`VRSQRT` of zero by zero, `VSQRT` of -0) are closed. The level run is still the stock run, VU0's registers the same at each of 93 million sync points, and the interpreted run; its time did not change that the measurement can show (1.21 times stock PCSX2's). Where it stands is in "G7" below. |
+| G8 The BIOS's EE code | **Done** (2026-11-12, [ADR 0017](adr/0017-bios-ee-code-compiled-as-step-g8.md)): the BIOS's code that runs on the EE under fast boot is compiled ahead of time from the dump the build is given, as four images, its code followed from where it is entered; of it, 51 instructions at boot are still interpreted, each with its cause. What the game copies into kernel memory is the game's code, and is compiled with it. Rebased onto G9: every test passes, and the game is still the stock run over the level script and the interpreted run over its first 4,200 frames. The level run takes 1.18 times stock PCSX2's time, 1.1 s less than with the BIOS interpreted; a test program boots in stock PCSX2's time. Where it stands is in "G8" below. |
 | G9 VU0's instructions in compiled code | **Done** (2026-11-12, [ADR 0018](adr/0018-vu0-instructions-carried-out-by-compiled-code.md), in a worktree of its own): compiled code carries out the game's VU0 instructions itself, inline, where its block has nothing done about VU0 first, and keeps its registers in locals past them. The level run takes 1.19 times stock PCSX2's time (89.5 s against 74.9 s, timed in turn), from 1.21, a gain at the edge of what the measurement shows; the profile has the runtime's share 1.3 s smaller. Still the stock run and the interpreted run. Where it stands is in "G9" below. |
 
 ## The steps and their pass criteria
@@ -34,6 +35,7 @@ The run files, pictures included, are under the git-ignored build tree.
 | G5 Measurement and report | Speed against stock PCSX2 on the same scenes with the same renderer. Where the time goes: compiled code, the interpreter, the rest of the machine. Compatibility, visual issues, limitations. | Numbers reported as measured, whatever they are. |
 | G6 Speed ([ADR 0015](adr/0015-a-speed-step-before-phase-3-ends.md)) | The generated code made faster, beginning with what G5 found: one look at the address table for each load and store, and the registers held in local variables within a block. Each change measured by itself, on the level run and with the profile. | The compiled game is still the stock run and the interpreted run, and every test passes, after each change. What each change gave back is reported as measured. The aim: the game's own code no slower than under PCSX2's recompiler. |
 | G7 VU0's instructions ([ADR 0016](adr/0016-vu0-instructions-with-semantics-of-ps2natives-own.md)) | The VU0 instructions in the game's EE code (COP2 in macro mode) carried out by semantics of PS2Native's own, following PCSX2's recompiler (microVU) as every other family does, in place of PCSX2's interpreter functions. Each compared with the recompiler on random and boundary operands, in each VU clamp mode and with the game fixes that change them (`ps2n-host -selftest`). Not with the interpreter, which computes the flags, the clamps and the special cases differently. | Every VU0 instruction has semantics of PS2Native's own, which the self-test finds to be the recompiler's on every case tried, or the console's where a recording shows the recompiler wrong; what is left is listed with its cause. The two known differences (`VRSQRT` of zero by zero, `VSQRT` of -0) closed. Every test passes, and the game is still the stock run, VU0's registers included, and the interpreted run. The level run's time measured. |
+| G8 The BIOS's EE code ([ADR 0017](adr/0017-bios-ee-code-compiled-as-step-g8.md)) | The BIOS's code that runs on the EE under PCSX2's fast boot (the reset code in the ROM, the kernel, the program loader `EELOAD`, the idle thread `EENULL`) compiled ahead of time from the dump the build is given, into the build tree and never the repository ([ADR 0007](adr/0007-bios-code-translated-ahead-of-time.md)). In order, each part checked before the next: what the BIOS runs, measured; the recompiler reads a BIOS image; the runtime runs the BIOS's images beside the game's; compiled code carries out what the BIOS needs and the game did not (blocks counted double, the loader's hooked blocks); the suite and the game with the BIOS compiled. | Every test passes with the BIOS compiled, the `lockstep` and `same-as-stock` comparisons included. From reset on, no instruction of the BIOS is interpreted in any test program or run of the game, or each one left is listed with its cause. The game is still the stock run and the interpreted run. The level run's time, and the test programs' boot, measured. |
 | G9 VU0's instructions in compiled code ([ADR 0018](adr/0018-vu0-instructions-carried-out-by-compiled-code.md)) | Compiled code carries out a VU0 instruction itself, with G7's semantics inline, where the runtime's record of its block says nothing is to be done about VU0 first and no cycles are to be added first; elsewhere the runtime, as before. Measured on the level run and with the profile. | The compiled game is still the stock run and the interpreted run, and every test passes. What it gave back is reported as measured. |
 
 The brief's rules for this phase: reusable solutions, no game-specific
@@ -1238,6 +1240,289 @@ The way to make that cheaper would be for the generated code to call the
 semantics itself where its block says what to do about VU0; that is not
 built.
 
+## G8: the BIOS's EE code (Windows, 2026-11-12)
+
+The step [ADR 0017](adr/0017-bios-ee-code-compiled-as-step-g8.md) added,
+which [ADR 0007](adr/0007-bios-code-translated-ahead-of-time.md) decided:
+the BIOS's code that runs on the EE compiled ahead of time, where the
+interpreter carried it out until then.
+
+What was known of its cost before the step: the level run interpreted
+173.5 million of the BIOS's instructions (0.21% of the EE's cycles; "G4"),
+about a second of its 92 s by the samples of G7's profile; every test
+program interprets at least 34.2 million at boot, which cost 0.31 to
+0.46 s against stock PCSX2 (proof-of-concept log, "P4").
+
+### What of the BIOS runs on the EE, measured
+
+`ps2n-host` boots with PCSX2's fast boot, which goes from the reset code to
+the program loader and on to the game, without the BIOS's own menu. Since
+this step the host says what of the BIOS the interpreter ran: by where its
+blocks begin, before the executable reaches its entry point (the boot) and
+after; the instructions in blocks counted double, which compiled code does
+not carry out, and the runs of the loader's hooked blocks; and the files
+the EE runs from RAM compared with the ROM's, word for word, at the entry
+point and at the end (`ps2n-host -bios-capture <file>` writes the block
+starts, and the words that differ; the test driver passes it in every run
+with compiled code). Five files of the ROM's directory
+(`ps2n/romdir.h`) run on the EE (`SCPH-70004`, read where it is):
+
+| File | Size | Where the EE runs it |
+|---|--:|---|
+| `RESET` | 10,048 bytes | in the ROM, at `BFC00000`, and part of it through the ROM's cached mirror (`9FC00C00`-`9FC00E94`) |
+| `RDRAM` | 12,356 bytes | in the ROM, through its cached mirror (`9FC41000`): the set-up of main memory |
+| `KERNEL` | 93,736 bytes | copied to `80000000` |
+| `EENULL` | 64 bytes | copied to `00081FC0`: the idle thread |
+| `EELOAD` | 61,840 bytes | copied to `00082000`: the program loader |
+
+The addresses in RAM are PCSX2's (`EEKERNEL_START`, `EENULL_START` and
+`EELOAD_START` in `pcsx2/R5900.h`); the hooks it puts into `EELOAD` for fast
+boot depend on them. `KERNEL` begins with the code of the exception vector
+at `80000000`. The reset code holds the IOP's too: both processors start at
+`BFC00000`, and its first instructions send each its own way.
+
+The game's first 4,200 frames (`start.pad`, compiled, nothing drawn), and
+one test program (`sdk/iop_rpc`, compiled), in instructions:
+
+| Where the blocks begin | Game: at boot | Game: after | Game: block starts | `iop_rpc`: at boot | `iop_rpc`: after |
+|---|--:|--:|--:|--:|--:|
+| The ROM | 7,077,464 | 0 | 338 | 7,034,267 | 0 |
+| `KERNEL` | 14,937,669 | 175,380,067 | 814 | 14,959,682 | 153,581 |
+| Kernel memory past `KERNEL` | 0 | 288 | 8 | 0 | 1,036 |
+| `EENULL` | 1,213,188 | 3,946,318 | 3 | 1,076 | 39,806 |
+| `EELOAD` | 11,072,305 | 0 | 216 | 11,069,979 | 0 |
+
+- **The boot is 34 million instructions**, whatever the program: 7 million
+  in the ROM, 15 million in the kernel, 11 million in the loader. Of the
+  game's 213.6 million interpreted instructions, the other 179 million are
+  the kernel and the idle thread while the game runs.
+- **Blocks counted double are not what makes the boot long**: 48
+  instructions in all are in such blocks. The loader's hooked blocks run
+  twice.
+- **The code in memory is the ROM's.** When the executable reaches its
+  entry point, 46 words of `KERNEL` differ from the ROM's file, and none of
+  them is an instruction: variables at `800010C0`-`800010E4`, saved
+  registers, the tables of handlers at `800153C0`-`8001543C` (their
+  defaults replaced), the path of the executable that was started. By the
+  end, addresses have been put into the kernel's tables at
+  `80014F60`-`8001533C` where the ROM's file has the kernel's own (or
+  zero): addresses in the game's code, and at `80075000` and `80076000`.
+  `EENULL` is the ROM's word for word. 9 words of `EELOAD` differ, all
+  data; after the game starts, its memory is used for something else
+  (12,671 of its words differ at the end), so the loader only matters at
+  boot.
+- **Code past `KERNEL` in kernel memory**: the 8 block starts there are at
+  `80075000` and `80076000`, where some of those table entries lead. None
+  of it ran before the game started. It is the game's own ("What is still
+  interpreted, and why", below), so it belongs with the game's image, not
+  the BIOS's.
+- 1,379 distinct block starts in all, in the BIOS's places, over the game's
+  4,200 frames.
+
+With these counts in, the whole suite passes (2 unit test programs and 453
+tests).
+
+### The recompiler reads a BIOS image
+
+`ps2n-recomp bios <BIOS image> --out-dir <dir> [--capture <file>]...` makes
+four images of the BIOS's EE code, each of files that lie close together
+where the EE runs them (`recompiler/src/bios.cpp`): `bios_rom0` and
+`bios_rom1`, `RESET` and `RDRAM` in the ROM through its cached mirror and at
+`BFC00000`; `bios_kernel`; and `bios_loader`, `EENULL` and `EELOAD`. An
+image is marked as the BIOS's, with the CRC of the whole ROM it was made
+from (`ImageInfo::kind`, `recomp.h`). `ps2n-recomp bios-info` says what the
+analysis finds, without writing anything.
+
+The kernel's file holds data among its code: the variables at
+`800010C0`-`800010E4` come right after one of its functions. A sweep of the file, as an
+executable's code is swept, would put such data inside functions, where the
+fingerprints the runtime compares with memory would cover it, and every
+block there would be interpreted once the kernel had written to it. So the
+code of a BIOS image is followed instead of swept (`Options::followCode` in
+`recompiler/src/analysis.cpp`): from the reset vector, the kernel's five
+exception vectors, the entries of `EENULL` and `EELOAD`, and the block
+starts runs report (`-bios-capture`), through every branch, jump and call,
+and every jump through a register the instructions just before make a
+constant. Where one image's code goes into another (the reset code into
+the ROM's cached mirror, and into the kernel and the loader once it has
+copied them), the other is followed from there too. Nothing is taken for
+code on a guess. Unit tests hold the analysis to a program of code with
+data among it (`tests/unit/recomp_tests.cpp`).
+
+With the capture of the game's first 4,200 frames (`SCPH-70004`):
+
+| Image | Functions | Instructions | Block leaders | Captured entries in it | Found without the capture |
+|---|--:|--:|--:|--:|--:|
+| `bios_rom0` | 33 | 2,733 | 428 | 326 | 253 |
+| `bios_rom1` | 6 | 437 | 57 | 12 | 12 |
+| `bios_kernel` | 226 | 15,141 | 2,812 | 814 | 404 |
+| `bios_loader` | 61 | 1,837 | 427 | 219 | 189 |
+
+Half the kernel's entries are only reached through its tables of handlers,
+which nothing follows; runs report them, as they report a game's. None of
+the words step 1 found changed in memory lies inside a function: the one
+before the variables ends at `800010C0`. Of the 20,148 instructions, one in
+each image but the loader's is delegated (`tlbwi`), and the kernel has
+three places where the rest of a block is left to the interpreter and 20
+likely branches left to it when taken.
+
+### The runtime runs the BIOS's images beside the game's
+
+The runtime held one image, the executable's, chosen at its entry point.
+It now holds the images in use, whose code ranges do not overlap
+(`runtime/ee_provider.cpp`): the BIOS's, from the first instruction on,
+when the CRC of the whole ROM is the one they were made from; and the
+executable's, from its entry point on. A PC finds its image and function
+through the dispatcher's cache as before. The build compiles the BIOS when
+it is given a dump (`build.ps1 -Bios <file> -BiosCapture <file>`), into the
+build tree; `ps2n-host -bios-static off` leaves the BIOS to the interpreter
+in a host that has it compiled.
+
+Compiled code now also carries out the two blocks of the program loader
+that PCSX2 hooks for fast boot: the runtime calls the hook when compiled
+code reaches the block, at every execution, as PCSX2's recompiler does at
+the block's start.
+
+The first build had the capture of the game's first 4,200 frames. Every
+test run with compiled code reports what it had to interpret of the BIOS
+(the test driver passes `-bios-capture`); the 69 such runs of the suite
+added 155 block starts, mostly kernel code the game never called (threads
+put to sleep and woken), and one more build had them (1,534 in the BIOS's
+capture). With that build:
+
+| | Before (BIOS interpreted) | BIOS compiled |
+|---|--:|--:|
+| Instructions interpreted in a compiled test run, over the suite's 202 | 34 to 43 million | 51 to 1,087 |
+| Instructions interpreted in the game's first 4,200 frames | 213,627,299 | 339 |
+| The game's EE cycles that were the interpreter's | 1.11% | 486 cycles of 24.8 thousand million |
+
+- **The whole suite passes** with the BIOS compiled (2 unit test programs
+  and 453 tests): every `lockstep` test holds the compiled BIOS to the
+  interpreted one at every event test, every `same-as-stock` test to stock
+  PCSX2 at every sync point.
+- **The game's first 4,200 frames are the interpreted run** at each of
+  47,705,744 event tests, with the same fingerprint of the whole run as at
+  G6 and G7 (`F99B5EFD472E87EC`; 307 s for both runs).
+- **The level run is the stock run** (17,500 frames, `level1.pad`, 21
+  minutes for both runs): the same place at the same cycle count at each of
+  93,221,937 sync points, the same picture at each of the 1,750 frames
+  compared, the sound hardware in the same state at each of the 1,750
+  moments compared. The registers differ only where they did at G4, G6 and
+  G7: the FPU's, at 964 sync points, the first at 57,130,066, where the
+  console is followed on purpose. The compiled run interpreted 339
+  instructions, where it interpreted 173.5 million at G4.
+
+### What is still interpreted, and why
+
+Of the BIOS's own code, in every run, 51 instructions at boot:
+
+- **The first three blocks after reset** (`BFC00000`, `BFC00014`,
+  `BFC00800`; 48 instructions) are counted double: they are formed before
+  the reset code sets `Config`, and compiled code counts every block once
+  (execution model, rule 3). Carrying them out compiled would change how
+  generated code counts time, for 48 instructions once a boot.
+- **`di` followed by `eret`** at `8000517C`, once a boot: compiled code
+  leaves a `DI` before a system instruction to the interpreter (execution
+  model, rule 8).
+
+And code that is not the BIOS's: what programs copy into kernel memory and
+then run there (`80075000`, `80076000`; 288 instructions in the game's
+first 4,200 frames, the same in the whole level run, about 1,000 in a test
+program built with ps2sdk). The words are in the game's executable (at
+file offsets `0x3D9300` and `0x3D8B20`) and in the test program's, and not
+in the ROM: the programs' libraries put them there, and install them as
+system calls. The old count of "instructions in the kernel's segments"
+took them for the BIOS's.
+
+### The game's code in kernel memory, compiled with the game
+
+Code where no image has a function was interpreted every time, and its
+words were never captured (execution model, "Not covered yet" until now).
+A run now writes the words of each such block it ran, outside the
+executable's code and the BIOS's files, into the program's capture file
+(`[[code]]`), and `ps2n-recomp compile --outside` makes an image of that
+code beside the executable's: `game_outside`, with the game's CRC, its
+code followed from where it ran as a BIOS image's is. The runtime uses it
+with the executable's. One run of the level with `-Capture` recorded the 8
+blocks; the next build has 2 functions there, 24 instructions.
+
+With that build the game's first 4,200 frames interpret 51 instructions:
+the 48 of the three blocks counted double at boot, and the `di`/`eret` at
+`8000517C`. Of the BIOS's code and the game's, nothing else. The test
+programs are built from their executables alone, without a capture, so
+they still interpret what ps2sdk copies into kernel memory (about 1,000
+instructions each).
+
+With the final build, the suite passes again (2 unit test programs, 37 and
+17 cases, and 453 tests).
+
+### Rebased onto G9
+
+G8 was made on G7 in the main working tree while another session made G9
+([ADR 0018](adr/0018-vu0-instructions-carried-out-by-compiled-code.md)) in
+a worktree of its own. G9 was committed first, and G8 was rebased onto it:
+the code took both steps' changes without conflict (both change
+`runtime/ee_provider.cpp` and `recompiler/src/codegen.cpp`, in different
+places), the logs had both added, and G9's cache of COP2 steps is keyed by
+place and block, not by image. On the two together (compiled code carrying
+out the VU0 instructions itself, the BIOS compiled):
+
+- **The whole suite passes** (2 unit test programs, 38 and 17 cases, and
+  453 tests).
+- **The game's first 4,200 frames are the interpreted run** at each of
+  47,705,744 event tests (fingerprint `F99B5EFD472E87EC`, as before).
+- **The level run is the stock run**: the same place at the same cycle
+  count at each of 93,221,937 sync points, the same picture at each of the
+  1,750 frames compared, the sound hardware in the same state at each of
+  the 1,750 moments compared; the registers differ only in the FPU's, at
+  the 964 sync points of G4, where the console is followed on purpose.
+- Both compiled runs interpreted 51 instructions: those of the BIOS at
+  boot.
+
+### The time
+
+Measured on G8 rebased onto G9 (below), the machine otherwise quiet (the
+other session held its runs), every run on the fast cores. The level run
+as at G5-G9 (17,500 frames, `level1.pad`, nothing drawn; the whole run),
+three rounds, each round the three in turn; `-BiosStatic off`
+(`ps2n-host -bios-static off`) leaves the BIOS to the interpreter in the
+same build:
+
+| Round | Stock PCSX2 | Compiled, the BIOS compiled | Compiled, the BIOS interpreted |
+|---|--:|--:|--:|
+| 1 | 75.1 | 87.3 | 88.0 |
+| 2 | 73.6 | 86.7 | 87.8 |
+| 3 | 72.9 | 86.6 | 88.1 |
+| Mean | 73.9 | 86.9 | 88.0 |
+
+All nine runs ended at the same cycle count (103,213,332,030) with the
+sound hardware in the same state. The compiled runs interpreted 51
+instructions with the BIOS compiled, and 173,512,808 without.
+
+- **Compiling the BIOS gave back 1.1 s of the level run** (0.7, 1.1 and
+  1.5 s, round by round): about what G7's profile had the interpreter's own
+  functions at.
+- **The compiled game takes 1.18 times stock PCSX2's time** over the level
+  run (86.9 s against 73.9 s; each pair 1.16 to 1.19), where it took 1.19
+  after G9 and 1.21 after G7.
+
+The boot, five test programs (those of P4), each run three times under each
+configuration, one run at a time; the whole test driver, start-up of the
+core included, best of three, in milliseconds:
+
+| Program | Stock PCSX2 | Compiled, the BIOS compiled | Compiled, the BIOS interpreted |
+|---|--:|--:|--:|
+| `sdk` `pad` (274 frames) | 1,697 | 1,658 | 1,794 |
+| `sdk` `iop_rpc` (13 frames) | 1,497 | 1,507 | 1,650 |
+| `sdk` `mc` (15 frames) | 1,500 | 1,490 | 1,609 |
+| `cpu/ee/alu` (26 frames) | 1,452 | 1,456 | 1,609 |
+| `kernel/ee/thread/terminate` (11 frames) | 1,493 | 1,453 | 1,595 |
+
+- **With the BIOS compiled a compiled program takes the time it takes
+  under stock PCSX2**, from 39 ms less to 10 ms more; with it interpreted,
+  109 to 157 ms more. (P4 measured 307 to 456 ms more on 2026-11-11, with
+  an older build; the two measurements are not compared here.)
+
 ## G9: VU0's instructions in compiled code (Windows, 2026-11-12)
 
 The step [ADR 0018](adr/0018-vu0-instructions-carried-out-by-compiled-code.md)
@@ -1333,14 +1618,15 @@ registers they read put back first: that is not built.
 - **Speed.** 4,200 frames of logos, a prompt and a film take 25.7 s
   compiled against 22.9 s under stock PCSX2 with the software renderer, and
   15.1 s against 11.2 s with nothing drawn. Where the four seconds go has
-  not been measured. The BIOS, which is interpreted, accounts for 1.1% of
-  the EE's cycles there; translating it ahead of time is
-  [ADR 0007](adr/0007-bios-code-translated-ahead-of-time.md), not started.
+  not been measured. The BIOS, which was interpreted then, accounted for
+  1.1% of the EE's cycles there; since G8 it is compiled ahead of time but
+  for 51 instructions at boot.
   Over the level run the compiled game took 1.35 times as long as stock
   PCSX2 at G5, all of the difference in the game's own code; after the
   changes of G6 it takes 1.21 to 1.23 times as long (91.7 s against 75.6 s, 91.3 s against 74.3 s), and
   the game's own code 41.1 s against 25.8 s; after G7, 1.21 (91.8 s
-  against 76.1 s); after G9, 1.19 (89.5 s against 74.9 s). More than a
+  against 76.1 s); after G9, 1.19 (89.5 s against 74.9 s); after G8, 1.18
+  (86.9 s against 73.9 s). More than a
   third of the
   compiled code's time is now reaching memory through the core's address
   table, where PCSX2's recompiler uses one instruction and a fault ("G6",
@@ -1353,9 +1639,13 @@ registers they read put back first: that is not built.
   other. PCSX2 logs it when it does ("EE/iR5900 Recompiler Reset" in
   `core.log`), and the same-as-stock comparison would show the runs part
   there.
-- **Code outside the executable.** None has run yet. When a `.REL` module
-  does, its code has to be captured and compiled; the proof of concept left
-  that open.
+- **Code outside the executable.** What the game copies into kernel memory
+  is captured and compiled with it since G8 (`game_outside`); none of the
+  four `.REL` modules has run yet. A module's code would be captured the
+  same way, as the code it ran outside its executable, but a module loaded
+  at another address on another run would need its code taken by its
+  content rather than its place: not built. The test programs, built
+  without a capture, still interpret what ps2sdk copies into kernel memory.
 - **Further into the game:** the rest of the first level and the levels
   after it, the other menus, the multiplayer side. Each needs more of the
   controller script, and then a rebuild for whatever new code runs.

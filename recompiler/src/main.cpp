@@ -3,6 +3,7 @@
 // ps2n-recomp: the static recompiler's command line.
 
 #include "analysis.h"
+#include "bios.h"
 #include "codegen.h"
 
 #include "ps2n/assembler.h"
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -39,9 +41,28 @@ void usage() {
         "                         spread the functions over n files beside the\n"
         "                         output, <name>_part001.cpp and so on, with a\n"
         "                         header <name>.h; the output then holds the tables\n"
+        "      --outside <file.cpp>  also write the image <id>_outside: the code the\n"
+        "                         captures hold outside the executable's code (code it\n"
+        "                         copied into kernel memory, for one), followed from\n"
+        "                         where it ran. It may hold nothing\n"
         "\n"
         "  ps2n-recomp info <elf> [--capture <file>] [--no-symbols]\n"
         "      Prints what the analysis finds, without writing anything.\n"
+        "\n"
+        "  ps2n-recomp bios <BIOS image> --out-dir <dir> [--capture <file>]... [--no-comments]\n"
+        "      Translates the BIOS's EE code: the files of the ROM the EE runs, each\n"
+        "      where it runs it, as four images: bios_rom0 and bios_rom1 (the reset\n"
+        "      code and the set-up of main memory, in the ROM, through its cached\n"
+        "      mirror and at BFC00000), bios_kernel (the kernel) and bios_loader\n"
+        "      (the idle thread and the program loader). Writes <dir>/<id>.cpp for\n"
+        "      each. The code is followed from where it is entered, not swept, and\n"
+        "      --capture gives the places runs entered it (the host's -bios-capture\n"
+        "      files). What this writes is derived from the BIOS image: it belongs\n"
+        "      in the build tree, never in the repository.\n"
+        "\n"
+        "  ps2n-recomp bios-info <BIOS image> [--capture <file>]...\n"
+        "      Prints what the analysis finds in each of the BIOS's images, and how\n"
+        "      many of the captured entries it finds without being given them.\n"
         "\n"
         "  ps2n-recomp capture --out <file> <capture>...\n"
         "      Puts what several runs reported (the host's -capture files) into one\n"
@@ -67,6 +88,8 @@ struct Args {
     std::string command;
     std::vector<std::string> positional;
     std::filesystem::path out;
+    std::filesystem::path outDir;
+    std::filesystem::path outside;
     std::string id;
     std::vector<std::filesystem::path> captures;
     bool symbols = true;
@@ -87,6 +110,8 @@ Args parse(int argc, char** argv) {
             return argv[++i];
         };
         if (arg == "--out") a.out = value();
+        else if (arg == "--out-dir") a.outDir = value();
+        else if (arg == "--outside") a.outside = value();
         else if (arg == "--id") a.id = value();
         else if (arg == "--capture") a.captures.emplace_back(value());
         else if (arg == "--no-symbols") a.symbols = false;
@@ -111,10 +136,13 @@ Args parse(int argc, char** argv) {
     return a;
 }
 
-Options analysisOptions(const Args& a) {
+// What the captures say for the executable's own code. The code they hold
+// outside it is for the image of its own (--outside).
+Options analysisOptions(const Args& a, const ElfFile& elf) {
     Options o;
     o.useSymbols = a.symbols;
     for (const auto& file : a.captures) o.capture.add(loadCaptureFile(file));
+    std::erase_if(o.capture.code, [&](const Capture::Code& c) { return !inCodeRanges(elf, c.start); });
     return o;
 }
 
@@ -132,7 +160,7 @@ int compile(const Args& a) {
 
     const std::filesystem::path path = a.positional[0];
     const ElfFile elf = ElfFile::load(path);
-    const Program prog = analyze(elf, analysisOptions(a));
+    const Program prog = analyze(elf, analysisOptions(a, elf));
 
     GenerateOptions go;
     go.id = a.id.empty() ? identifierFor(path.stem().string()) : a.id;
@@ -158,13 +186,48 @@ int compile(const Args& a) {
                 stats.instructions ? 100.0 * static_cast<double>(stats.delegated) / static_cast<double>(stats.instructions) : 0.0, stats.tails,
                 stats.tailInstructions, stats.leaves, stats.guards, stats.variants);
     for (const Note& n : prog.notes) std::printf("  note: %s\n", n.message.c_str());
+
+    // The code the executable ran outside its own, as the captures hold it: an
+    // image of its own, with the executable's CRC, which the runtime uses
+    // with the executable's (ImageInfo::kind).
+    if (!a.outside.empty()) {
+        Capture captured;
+        for (const auto& file : a.captures) captured.add(loadCaptureFile(file));
+        captured.normalize();
+        std::vector<Note> notes;
+        std::vector<uint32_t> starts;
+        const ElfFile pieces = codeOutside(elf, captured, notes, starts);
+        Program other;
+        other.elf = &pieces;
+        if (!starts.empty()) {
+            Options o;
+            o.useSymbols = false;
+            o.followCode = true;
+            o.capture.entries = starts;
+            other = analyze(pieces, o);
+        }
+        GenerateOptions og;
+        og.id = go.id + "_outside";
+        og.comments = a.comments;
+        og.kind = 2;
+        og.name = pieces.name();
+        og.crc = pcsx2Crc(elf);
+        GenerateStats otherStats;
+        const std::vector<GeneratedFile> otherFiles = generateFiles(other, og, &otherStats);
+        if (a.outside.has_parent_path()) std::filesystem::create_directories(a.outside.parent_path());
+        writeFileIfChanged(a.outside, otherFiles.front().text);
+        std::printf("%s: %zu functions, %zu instructions of the code it ran outside its executable\n", og.id.c_str(), otherStats.functions,
+                    otherStats.instructions);
+        for (const Note& n : notes) std::printf("  note: %s\n", n.message.c_str());
+        for (const Note& n : other.notes) std::printf("  note: %s\n", n.message.c_str());
+    }
     return 0;
 }
 
 int info(const Args& a) {
     if (a.positional.size() != 1) throw Error("info takes one executable");
     const ElfFile elf = ElfFile::load(a.positional[0]);
-    const Program prog = analyze(elf, analysisOptions(a));
+    const Program prog = analyze(elf, analysisOptions(a, elf));
     printAnalysis(elf, prog);
 
     GenerateOptions go;
@@ -190,6 +253,130 @@ int info(const Args& a) {
                 stats.cop2, stats.vu0, stats.cop2 - stats.vu0);
     std::printf("  %zu DI compiled in one piece with the instruction after them\n", stats.delayedDisables);
     std::printf("  %zu branches that may close an idle loop\n", stats.idleLoops);
+    return 0;
+}
+
+// What runs reported, put together.
+Capture loadCaptures(const Args& a) {
+    Capture all;
+    for (const auto& file : a.captures) all.add(loadCaptureFile(file));
+    all.normalize();
+    return all;
+}
+
+// The analysis of one of the BIOS's images: its code followed from where it
+// is known to be entered (and from `more`), and, with `withCapture`, from
+// where runs entered it.
+Program analyzeBios(const BiosImage& image, const std::vector<uint32_t>& more, const Capture& capture, bool withCapture) {
+    Options o;
+    o.useSymbols = false;
+    o.followCode = true;
+    o.entries = image.entries;
+    o.entries.insert(o.entries.end(), more.begin(), more.end());
+    if (withCapture) {
+        for (uint32_t e : capture.entries)
+            if (image.code.isMapped(e)) o.capture.entries.push_back(e);
+        for (const Capture::Code& c : capture.code)
+            if (image.code.isMapped(c.start)) o.capture.code.push_back(c);
+    }
+    return analyze(image.code, o);
+}
+
+// All of the BIOS's images. The code of one goes into another (the reset
+// code into the ROM's cached mirror, and into the kernel and the loader once
+// it has copied them): where it leaves one image for another, the other is
+// entered, and followed from there too.
+std::vector<Program> analyzeBiosImages(const Bios& b, const Capture& capture, bool withCapture) {
+    std::vector<std::vector<uint32_t>> more(b.images.size());
+    std::vector<Program> progs;
+    for (;;) {
+        progs.clear();
+        for (size_t i = 0; i < b.images.size(); ++i) progs.push_back(analyzeBios(b.images[i], more[i], capture, withCapture));
+        bool grew = false;
+        for (size_t i = 0; i < b.images.size(); ++i) {
+            for (uint32_t exit : progs[i].exits) {
+                for (size_t j = 0; j < b.images.size(); ++j) {
+                    if (j == i || !b.images[j].code.isMapped(exit)) continue;
+                    if (std::find(more[j].begin(), more[j].end(), exit) != more[j].end()) continue;
+                    more[j].push_back(exit);
+                    grew = true;
+                }
+            }
+        }
+        if (!grew) return progs;
+    }
+}
+
+int bios(const Args& a) {
+    if (a.positional.size() != 1) throw Error("bios takes one BIOS image");
+    if (a.outDir.empty()) throw Error("bios needs --out-dir <dir>");
+    const Bios b = readBios(std::filesystem::path(a.positional[0]));
+    const Capture capture = loadCaptures(a);
+
+    std::filesystem::create_directories(a.outDir);
+    const std::vector<Program> progs = analyzeBiosImages(b, capture, true);
+    for (size_t i = 0; i < b.images.size(); ++i) {
+        const BiosImage& image = b.images[i];
+        const Program& prog = progs[i];
+        GenerateOptions go;
+        go.id = image.id;
+        go.comments = a.comments;
+        go.kind = 1;
+        go.name = b.name + ", " + image.what;
+        go.crc = b.crc;
+        GenerateStats stats;
+        const std::vector<GeneratedFile> files = generateFiles(prog, go, &stats);
+        writeFileIfChanged(a.outDir / (image.id + ".cpp"), files.front().text);
+        std::printf("%s: %zu functions, %zu instructions, %zu block leaders; %zu delegated; left to the interpreter: %zu places, "
+                    "and %zu likely branches when taken\n",
+                    image.id.c_str(), stats.functions, stats.instructions, stats.leaders, stats.delegated, stats.leaves, stats.guards);
+        for (const Note& n : prog.notes) std::printf("  note: %s\n", n.message.c_str());
+    }
+    return 0;
+}
+
+int biosInfo(const Args& a) {
+    if (a.positional.size() != 1) throw Error("bios-info takes one BIOS image");
+    const Bios b = readBios(std::filesystem::path(a.positional[0]));
+    const Capture capture = loadCaptures(a);
+
+    std::printf("%s: CRC %08X (of the whole ROM)\n", b.name.c_str(), b.crc);
+    const std::vector<Program> progs = analyzeBiosImages(b, capture, true);
+    const std::vector<Program> alones = analyzeBiosImages(b, capture, false);
+    for (size_t i = 0; i < b.images.size(); ++i) {
+        const BiosImage& image = b.images[i];
+        const Program& prog = progs[i];
+        std::printf("  %s: %s\n", image.id.c_str(), image.what.c_str());
+        for (const auto& r : prog.ranges) std::printf("    %s at %08X-%08X\n", r.name.c_str(), r.start, r.end);
+        std::printf("    %zu functions, %zu instructions, %zu block leaders\n", prog.functions.size(), prog.instructionCount, prog.leaderCount);
+        for (const auto& [source, count] : prog.sourceCounts) std::printf("      %6zu from %s\n", count, sourceName(source));
+
+        // How much of what runs entered the analysis finds by itself.
+        const Program& alone = alones[i];
+        size_t inside = 0, found = 0;
+        for (uint32_t e : capture.entries) {
+            if (!image.code.isMapped(e)) continue;
+            ++inside;
+            const Function* f = alone.functionContaining(e);
+            if (f && f->isLeader(e)) ++found;
+        }
+        if (inside) std::printf("    captured entries in it: %zu, of which the analysis finds %zu without being given them\n", inside, found);
+
+        GenerateOptions go;
+        go.id = "info";
+        go.kind = 1;
+        GenerateStats stats;
+        generate(prog, go, &stats);
+        std::printf("    %zu instructions delegated to the core's interpreter functions; %zu places where the rest of a block is "
+                    "left to the interpreter; %zu likely branches left to it when taken\n",
+                    stats.delegated, stats.leaves, stats.guards);
+        std::vector<std::pair<size_t, r5900::Op>> byCount;
+        for (const auto& [op, count] : stats.delegatedByOp) byCount.emplace_back(count, op);
+        std::sort(byCount.rbegin(), byCount.rend());
+        for (size_t i = 0; i < byCount.size() && i < 8; ++i)
+            std::printf("      %6zu %s\n", byCount[i].first, byCount[i].second == r5900::Op::Invalid ? "(unknown)" : r5900::mnemonic(byCount[i].second));
+        for (const Note& n : prog.notes) std::printf("    note: %s\n", n.message.c_str());
+    }
     return 0;
 }
 
@@ -274,6 +461,8 @@ int main(int argc, char** argv) {
         const Args a = parse(argc, argv);
         if (a.command == "compile") return compile(a);
         if (a.command == "info") return info(a);
+        if (a.command == "bios") return bios(a);
+        if (a.command == "bios-info") return biosInfo(a);
         if (a.command == "capture") return capture(a);
         if (a.command == "registry") return registry(a);
         if (a.command == "assemble") return assemble(a);

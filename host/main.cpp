@@ -119,7 +119,9 @@ namespace
 		bool echo = false; // copy the core's log to this process's console
 		bool selftest = false; // run the self-test instead of a program
 		bool static_code = true; // with -ee ps2n: run code compiled ahead of time where there is some
+		bool bios_static = true; // and of that, the BIOS's, when the host has it for the machine's ROM
 		std::string capture_path; // where the block starts that had to be interpreted are written
+		std::string bios_capture_path; // where the block starts formed in the BIOS are written
 		std::string trace_path; // where the record of event tests is written
 		std::string trace_against_path; // an earlier run's record, to compare this run with
 		std::optional<u64> trace_detail_from; // the event test from which the record includes the registers
@@ -245,6 +247,13 @@ namespace
 			"                     executable at which a block was interpreted, and the code\n"
 			"                     found in memory where a function had been compiled from\n"
 			"                     other code.\n"
+			"  -bios-capture <file>  With -ee ps2n: write the addresses in the BIOS at which\n"
+			"                     the interpreter formed a block, in the form of a capture\n"
+			"                     file's entries.\n"
+			"  -bios-static on|off  With -ee ps2n and -static on: run the BIOS's code\n"
+			"                     compiled ahead of time, when this host has it for the\n"
+			"                     machine's ROM (default on). Off, the interpreter runs the\n"
+			"                     BIOS.\n"
 			"  -image <id>        With -ee ps2n: of the compiled images this host is linked\n"
 			"                     with, use only the one with this id.\n"
 			"  -trace <file>      With -ee ps2n: write one line per event test (its number,\n"
@@ -370,6 +379,8 @@ namespace
 				o.selftest = true;
 			else if (is("-capture") && has_value)
 				o.capture_path = argv[++i];
+			else if (is("-bios-capture") && has_value)
+				o.bios_capture_path = argv[++i];
 			else if (is("-times") && has_value)
 				o.times_path = argv[++i];
 			else if (is("-pad") && has_value)
@@ -412,6 +423,19 @@ namespace
 				if (!o.trace_detail_from)
 				{
 					std::fputs("ps2n-host: -trace-detail takes the number of an event test\n", stderr);
+					return false;
+				}
+			}
+			else if (is("-bios-static") && has_value)
+			{
+				const char* value = argv[++i];
+				if (!std::strcmp(value, "on"))
+					o.bios_static = true;
+				else if (!std::strcmp(value, "off"))
+					o.bios_static = false;
+				else
+				{
+					std::fprintf(stderr, "ps2n-host: -bios-static takes on or off, not '%s'\n", value);
 					return false;
 				}
 			}
@@ -615,7 +639,7 @@ namespace
 		// (FileSystem::GetWin32Path in common/FileSystem.cpp). Build tools pass
 		// forward slashes, so every path is put in the platform's form here.
 		for (std::string* path : {&o.boot_path, &o.bios_path, &o.data_dir, &o.out_path, &o.times_path, &o.log_path, &o.capture_path,
-				 &o.trace_path, &o.trace_against_path, &o.sync_path, &o.sync_against_path, &o.frame_path, &o.pad_path,
+				 &o.bios_capture_path, &o.trace_path, &o.trace_against_path, &o.sync_path, &o.sync_against_path, &o.frame_path, &o.pad_path,
 				 &o.profile_path})
 			Path::ToNativePath(path);
 		return true;
@@ -1168,15 +1192,57 @@ namespace
 			static_cast<ull>(stats.interpreted_cycles_in_image), percent(stats.interpreted_cycles_in_image, total_cycles),
 			static_cast<ull>(other_cycles), percent(other_cycles, total_cycles));
 		std::fprintf(stderr,
-			"ps2n-host: interpreter: %llu instructions (%llu inside the executable's code), %llu (%.1f%%) carried out by PCSX2's"
-			" interpreter functions\n",
-			static_cast<ull>(stats.interpreted), static_cast<ull>(stats.interpreted_in_image), static_cast<ull>(stats.delegated),
-			percent(stats.delegated, stats.interpreted));
+			"ps2n-host: interpreter: %llu instructions (%llu inside the executable's code); carried out by PCSX2's interpreter"
+			" functions, for the interpreter or for compiled code (VCALLMS, VCALLMSR), %llu\n",
+			static_cast<ull>(stats.interpreted), static_cast<ull>(stats.interpreted_in_image), static_cast<ull>(stats.delegated));
 		std::fprintf(stderr,
 			"ps2n-host: interpreted outside the executable's code: %llu instructions in the kernel's segments (the BIOS), %llu below"
 			" 00100000 (the BIOS's program loader), %llu elsewhere in user memory (code the executable does not hold)\n",
 			static_cast<ull>(stats.interpreted_kernel), static_cast<ull>(stats.interpreted_loader),
 			static_cast<ull>(stats.interpreted_elsewhere));
+		{
+			// The BIOS's code, piece by piece (ps2n/romdir.h; docs/game-log.md, "G8").
+			static constexpr const char* kPlaces[ps2n::ee::kBiosPlaces] = {"the ROM", "the kernel's file", "the rest of kernel memory",
+				"RAM through its uncached mirror", "the idle thread's file", "the program loader's file", "the rest below 00100000"};
+			std::string places;
+			for (size_t p = 0; p < ps2n::ee::kBiosPlaces; p++)
+			{
+				const u64 boot = stats.bios_interpreted[0][p];
+				const u64 after = stats.bios_interpreted[1][p];
+				if (!boot && !after && !stats.bios_block_starts[p])
+					continue;
+				places += fmt::format("{}{} {} at boot and {} after ({} block starts)", places.empty() ? "" : "; ", kPlaces[p], boot,
+					after, stats.bios_block_starts[p]);
+			}
+			std::fprintf(stderr, "ps2n-host: the BIOS's compiled code: %s\n",
+				!stats.bios_images ? "none (none for this ROM in the host, or -bios-static off)" :
+				s_options.static_code ?
+									 fmt::format("{} images in use, {} functions", stats.bios_images, stats.bios_functions).c_str() :
+									 fmt::format("{} images, switched off (-static off)", stats.bios_images).c_str());
+			std::fprintf(stderr,
+				"ps2n-host: the BIOS interpreted, by where its blocks begin, at boot (until the executable's entry point) and after:"
+				" %s; instructions in blocks counted double %llu; runs of the program loader's hooked blocks %llu\n",
+				places.empty() ? "nothing" : places.c_str(), static_cast<ull>(stats.interpreted_doubled),
+				static_cast<ull>(stats.hooked_block_runs));
+
+			const auto files = [](const std::vector<ps2n::ee::BiosFileCheck>& checks) {
+				std::string text;
+				for (const ps2n::ee::BiosFileCheck& c : checks)
+				{
+					text += fmt::format("{}{} at {:08X}, ", text.empty() ? "" : "; ", c.file, c.address);
+					if (!c.words)
+						text += "not in the ROM's directory";
+					else if (!c.differing)
+						text += fmt::format("{} words, all the same", c.words);
+					else
+						text += fmt::format("{} words, {} differ, from {:08X} to {:08X}", c.words, c.differing, c.first, c.last);
+				}
+				return text.empty() ? std::string("not compared") : text;
+			};
+			std::fprintf(stderr,
+				"ps2n-host: the BIOS's files against memory: when the executable reached its entry point, %s; at the end, %s\n",
+				files(ps2n::ee::GetBiosFilesAtEntry()).c_str(), files(ps2n::ee::CompareBiosFiles()).c_str());
+		}
 		{
 			const ps2n::ee::blocks::Stats& blocks = ps2n::ee::blocks::GetStats();
 			std::fprintf(stderr,
@@ -1255,14 +1321,16 @@ namespace
 
 		const std::vector<uint32_t> missing = ps2n::ee::GetMissingEntries();
 		const std::vector<ps2n::ee::CapturedCode>& captured = ps2n::ee::GetCapturedCode();
+		const std::vector<ps2n::ee::CapturedCode> outside = ps2n::ee::GetCodeOutside();
 		if (stats.image && s_options.static_code)
 		{
-			const bool anything = !missing.empty() || !captured.empty();
+			const bool anything = !missing.empty() || !captured.empty() || !outside.empty();
 			std::fprintf(stderr,
 				"ps2n-host: %zu block starts inside the executable's code had to be interpreted; in the place of %zu functions memory"
-				" held code that nothing was compiled from%s\n",
-				missing.size(), captured.size(),
-				(anything && s_options.capture_path.empty()) ? " (pass -capture <file> to record both for the recompiler)" : "");
+				" held code that nothing was compiled from; %zu blocks of the program's ran outside its executable and the BIOS's"
+				" files, where nothing was compiled%s\n",
+				missing.size(), captured.size(), outside.size(),
+				(anything && s_options.capture_path.empty()) ? " (pass -capture <file> to record them for the recompiler)" : "");
 		}
 		if (!s_options.capture_path.empty() && stats.image)
 		{
@@ -1291,11 +1359,59 @@ namespace
 						std::fprintf(fp, "%s0x%08x,", (i % 8) ? " " : "\n  ", code.words[i]);
 					std::fputs("\n]\n", fp);
 				}
+
+				// The program's code that ran outside its executable and the
+				// BIOS's files (ps2n-recomp compile --outside).
+				for (const ps2n::ee::CapturedCode& code : outside)
+				{
+					std::fprintf(fp,
+						"\n# A block of the program's run at 0x%08x, outside its executable, where nothing was compiled.\n"
+						"[[code]]\n"
+						"start = 0x%08x\n"
+						"words = [",
+						code.start, code.start);
+					for (size_t i = 0; i < code.words.size(); i++)
+						std::fprintf(fp, "%s0x%08x,", (i % 8) ? " " : "\n  ", code.words[i]);
+					std::fputs("\n]\n", fp);
+				}
 				std::fclose(fp);
 			}
 			else
 			{
 				std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.capture_path.c_str());
+			}
+		}
+		if (!s_options.bios_capture_path.empty())
+		{
+			if (std::FILE* fp = FileSystem::OpenCFile(s_options.bios_capture_path.c_str(), "wb"))
+			{
+				std::fputs("# The addresses in the BIOS at which PS2Native's interpreter formed a block.\n"
+						   "entries = [\n",
+					fp);
+				for (const uint32_t pc : ps2n::ee::GetBiosBlockStarts())
+					std::fprintf(fp, "  0x%08x,\n", pc);
+				std::fputs("]\n", fp);
+
+				// The words of the BIOS's files that memory held otherwise, for whoever
+				// reads this file; the recompiler takes them for comments.
+				const auto words = [fp](const char* when, const std::vector<ps2n::ee::BiosFileCheck>& checks) {
+					for (const ps2n::ee::BiosFileCheck& c : checks)
+					{
+						if (!c.differing)
+							continue;
+						std::fprintf(fp, "\n# %s, %u words of %s (at %08X) differed from the ROM's file; the first %zu:\n", when,
+							c.differing, c.file, c.address, c.sample.size());
+						for (const ps2n::ee::BiosFileCheck::Word& w : c.sample)
+							std::fprintf(fp, "#   %08X  ROM %08X  memory %08X\n", w.address, w.rom, w.memory);
+					}
+				};
+				words("When the executable reached its entry point", ps2n::ee::GetBiosFilesAtEntry());
+				words("At the end", ps2n::ee::CompareBiosFiles());
+				std::fclose(fp);
+			}
+			else
+			{
+				std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.bios_capture_path.c_str());
 			}
 		}
 	}
@@ -1333,25 +1449,35 @@ namespace
 				bool trace_ok = true;
 				if (s_options.ee == EEProvider::Ps2n)
 				{
-					if (s_options.image_id.empty())
+					// Of the executables' images, all of them or the one -image
+					// names, with the image of the code it ran outside its own;
+					// the BIOS's, unless -bios-static off.
+					static std::vector<const ps2n::ee::ImageInfo*> chosen;
+					bool found = s_options.image_id.empty();
+					for (size_t i = 0; i < ps2n_image_count; i++)
 					{
-						ps2n::ee::SetImages(ps2n_images, ps2n_image_count);
+						const ps2n::ee::ImageInfo* image = ps2n_images[i];
+						if (image->kind == ps2n::ee::kImageBios)
+						{
+							if (s_options.bios_static)
+								chosen.push_back(image);
+						}
+						else if (s_options.image_id.empty() || s_options.image_id == image->id)
+						{
+							chosen.push_back(image);
+							found = true;
+						}
+						else if (image->kind == ps2n::ee::kImageOutside && image->id == s_options.image_id + "_outside")
+						{
+							chosen.push_back(image);
+						}
 					}
-					else
+					if (!found)
 					{
-						static std::vector<const ps2n::ee::ImageInfo*> chosen;
-						for (size_t i = 0; i < ps2n_image_count; i++)
-						{
-							if (s_options.image_id == ps2n_images[i]->id)
-								chosen.push_back(ps2n_images[i]);
-						}
-						if (chosen.empty())
-						{
-							std::fprintf(stderr, "ps2n-host: this host has no compiled image '%s'\n", s_options.image_id.c_str());
-							trace_ok = false;
-						}
-						ps2n::ee::SetImages(chosen.data(), chosen.size());
+						std::fprintf(stderr, "ps2n-host: this host has no compiled image '%s'\n", s_options.image_id.c_str());
+						trace_ok = false;
 					}
+					ps2n::ee::SetImages(chosen.data(), chosen.size());
 					ps2n::ee::SetStaticCodeEnabled(s_options.static_code);
 					ps2n::ee::SetHostStackBudget(
 						s_options.stack_budget ? static_cast<size_t>(*s_options.stack_budget) : kCpuThreadStackSize - kCpuThreadStackReserve);
