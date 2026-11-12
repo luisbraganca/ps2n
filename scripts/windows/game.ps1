@@ -66,6 +66,8 @@ param(
     [switch]$Mute,
     # With -Play: let the core draw its messages and performance figures over the picture.
     [switch]$Osd,
+    # Also write profile.txt among the run's files: where the CPU thread's time went (ps2n-host -profile).
+    [switch]$TimeProfile,
     # Also fingerprint and save the frame on display every so many frames (0: only the last).
     [int]$FrameEvery = 0,
     # A script of controller input for port 1 (ps2n-host -help has the format; tests\games has some).
@@ -191,6 +193,10 @@ $arguments = @(
     "-DFRAMES=$Frames", "-DSECONDS=$Seconds", '-DUNTIL=@@ no such line @@', '-DEXPECT_EXIT=2', '-DWHOLE=1', '-DTIMES=1')
 if ($Renderer -ne 'null') { $arguments += @("-DRENDERER=$Renderer", "-DUPSCALE=$Upscale", "-DFRAME_EVERY=$FrameEvery") }
 if ($Pad) { $arguments += "-DPAD=$(ForCMake (Resolve-Path -LiteralPath $Pad).Path)" }
+if ($TimeProfile) { $arguments += '-DPROFILE=1' }
+# Every run here is timed, so it is kept on the processor's fastest cores:
+# left to the system, the same run took between 75 and 150 s.
+$arguments += '-DFAST_CORES=1'
 if ($Config -eq 'lockstep') { $arguments += '-DLOCKSTEP=1' }
 # A game is held to the stock run in place and time at every sync point, and
 # in what it shows; where its registers differ, the host says which and how

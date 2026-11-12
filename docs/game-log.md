@@ -16,8 +16,8 @@ The run files, pictures included, are under the git-ignored build tree.
 | G1 The interpreter as reference | **Done for the first 4,200 frames** (2026-11-11): with everything interpreted the run is the stock run. Same console output, same picture at every frame, and the same place and cycle count at every one of the 38.5 million moments the two can be compared; the registers as well, by way of the compiled run (G3). |
 | G2 The game's code compiled | **Done** (2026-11-11): the boot executable builds into the host, 1,003,452 instructions in 64 files. |
 | G3 The compiled game | **Done for the first 4,200 frames** (2026-11-11): the compiled run is the stock run at every one of those 38.5 million moments, registers included, with the same picture at every frame; it is the interpreted run at every event test; none of the executable's code is interpreted; no code outside the executable has run. |
-| G4 Further into the game | **The scripted half reaches and plays the first level** (2026-11-11): with the same input the compiled game is where stock PCSX2 is, at the same cycle count, at every one of 93 million sync points over 17,500 frames, and shows the same picture at each of the 1,750 frames compared: menus, three and a half minutes of play, being killed, Retry. What differs is listed, and it is one thing: the sign of a zero in the FPU's registers, where the console is followed on purpose. The general registers, COP0's and VU0's are the stock run's at every sync point, and the sound hardware is in the stock run's state at each of 350 moments (2026-11-12). **It can be played** (2026-11-11, Windows): a window at the console's speed, with sound, the keyboard and a controller, checked by machine with the sound off. Not yet: someone playing it. |
-| G5 Measurement and report | Not begun. First times are below, the level run's among them (2026-11-12): the compiled game takes about a third longer than stock PCSX2 there, by times that do not repeat well enough yet to be a measurement. |
+| G4 Further into the game | **Done as far as the first level** (2026-11-12): by script, and played by the maintainer. By script (2026-11-11): with the same input the compiled game is where stock PCSX2 is, at the same cycle count, at every one of 93 million sync points over 17,500 frames, and shows the same picture at each of the 1,750 frames compared: menus, three and a half minutes of play, being killed, Retry. What differs is listed, and it is one thing: the sign of a zero in the FPU's registers, where the console is followed on purpose. The general registers, COP0's and VU0's are the stock run's at every sync point, and the sound hardware is in the stock run's state at each of 350 moments (2026-11-12). **It can be played** (2026-11-11, Windows): a window at the console's speed, with sound, the keyboard and a controller, checked by machine with the sound off. The maintainer played it into the first level on 2026-11-12: "Everything looked good." Not yet: the rest of the game. |
+| G5 Measurement and report | **Done as far as the first level** (2026-11-12): times repeat now (a run is kept on the processor's fast cores). Over the level run the compiled game takes 1.35 times as long as stock PCSX2: 100 s against 74 s. The whole difference is in the game's own code, which takes twice as long compiled as under PCSX2's recompiler; the rest of the machine takes the same time. A first look says why: the generated code keeps the registers in memory and checks every address twice. The report on compatibility, issues and limitations is at the end of "G5". |
 
 ## The steps and their pass criteria
 
@@ -64,6 +64,11 @@ scripts\windows\game.ps1 -Image $iso -Config same-as-stock -Frames 17500 -FrameE
 # The pictures a run saved, sixty to a sheet, to look a whole run over:
 scripts\windows\sheets.ps1 -Name level1 -Config same-as-stock
 
+# How long the level run takes and where the time goes (step G5): profile.txt among the run's files.
+# Every run of game.ps1 is kept on the processor's fast cores, so that its time repeats.
+scripts\windows\game.ps1 -Image $iso -Config ps2n-static -Frames 17500 -Renderer null -Pad tests\games\killzone\level1.pad -Name profile -TimeProfile
+scripts\windows\game.ps1 -Image $iso -Config stock-jit -Frames 17500 -Renderer null -Pad tests\games\killzone\level1.pad -Name profile -TimeProfile
+
 # Playing it: a window, the console's speed, sound, the keyboard and the first controller,
 # until the window is closed. Keys: arrows, W A S D, T F G H, I J K L (triangle, square,
 # cross, circle), Q E, 1 3, 2 4, Return (start), Backspace (select); Alt+Enter covers the screen.
@@ -90,8 +95,10 @@ configuration built on it; `ps2n-recomp disasm`; in the host's report, the
 places where compiled code handed over to the interpreter;
 `scripts\windows\sheets.ps1`, which puts the pictures a run saved side by
 side under their frame numbers; a fingerprint of the sound hardware beside
-that of the picture; and `-window`, the machine in a window to be played
-(step G4).
+that of the picture; `-window`, the machine in a window to be played
+(step G4); `-fast-cores`, which keeps a timed run on the processor's fast
+cores; and `-profile`, which says where the CPU thread's time went (step
+G5).
 
 ## What is on the disc
 
@@ -566,11 +573,23 @@ That is what the game is given to hear with, not what a person hears: the
 way from the SPU2 to the loudspeaker is PCSX2's own, unchanged, and nobody
 has listened.
 
-**Nobody has played it yet.** No eye has been on the moving picture, no ear
-on the sound, no hand on the controller: that is the maintainer's part of
-this step. Not done either: the window on Linux (`-window` says so there),
-vibration, a second controller, what the system's volume controls call the
-game.
+**The maintainer played it** (2026-11-12): the compiled game, with sound and
+the controller, from power-on through the menus into the first level, where
+the window was closed.
+
+| | |
+|---|---|
+| The session | 6,219 frames in 124.9 s: 49.75 a second, where the console shows 50 |
+| The executable's instructions interpreted | 0 |
+| Block starts that had to be interpreted, for the recompiler | none: the capture file is as it was, 465 entries |
+| The frame the session ended on | the first level, in the trench |
+
+Asked how the picture looked in motion, whether the sound was right and
+whether the controller answered as it should, the maintainer said:
+"Everything looked good." Read as an answer to all three.
+
+Not done: the window on Linux (`-window` says so there), vibration, a
+second controller, what the system's volume controls call the game.
 
 ### How long the level run takes (Windows, 2026-11-12)
 
@@ -592,11 +611,9 @@ included:
   sixteen runs ended at the same cycle count, and the eight whose report
   was kept whole with the sound hardware in the same state and, where a
   picture was drawn, on the same picture: it is the computer's pace that
-  changed, not the work. Why has
-  not been found out. A guess, not checked: the runs were started from a
-  program in the background, and Windows may put such work on the
-  processor's slower cores. The runs of the first 4,200 frames ("G3")
-  repeated to within a hundredth.
+  changed, not the work. The cause was found the same day, and with it the
+  remedy: "G5", "Times that repeat". The runs of the first 4,200 frames
+  ("G3") had repeated to within a hundredth.
 - **By the fastest of four, the compiled game takes a third longer than
   stock PCSX2**: 1.32 times as long with nothing drawn, 1.33 times with the
   Direct3D 12 renderer. With times that vary like these, that is an
@@ -615,6 +632,172 @@ included:
 - With nothing drawn the runs are not shorter than with Direct3D 12. That
   was not expected, and has not been looked into.
 
+## G5: measurement and report (Windows, 2026-11-12)
+
+### Times that repeat
+
+The same run of the level took between 76 and 141 s (above). The processor
+has two kinds of cores, six fast ones with two threads each and eight slow
+ones, and Windows moves a program that is not in front between them as it
+sees fit. The stock run with nothing drawn, held to one kind or left alone:
+
+| Where the run was kept | Seconds |
+|---|--:|
+| The first twelve logical processors (the fast cores) | 76.6, 75.3 |
+| The last eight (the slow cores) | 150.1 |
+| Left to Windows | 98.3, 75.4 |
+
+So `ps2n-host -fast-cores` keeps a run on the processor's fastest cores, as
+the system itself ranks them; on a processor whose cores are all alike it
+does nothing. `game.ps1` and `bench.ps1` now pass it for every run they
+time. The test suite does not: its runs are not timed, and it uses every
+core. A window in front is not moved to the slow cores, and a session there
+kept the console's pace.
+
+### The level run, timed
+
+The 17,500 frames of `level1.pad` again, every run on the fast cores, three
+rounds; seconds for the whole run:
+
+| Round | Nothing drawn, stock PCSX2 | Nothing drawn, compiled | Direct3D 12, stock PCSX2 | Direct3D 12, compiled |
+|---|--:|--:|--:|--:|
+| 1 | 74.0 | 100.1 | 75.5 | 102.1 |
+| 2 | 74.7 | 100.0 | 75.2 | 101.6 |
+| 3 | 73.9 | 100.3 | 75.7 | 101.7 |
+
+- **The times repeat**, to within 1%. All twelve runs ended at the same
+  cycle count with the sound hardware in the same state.
+- **The compiled game takes 1.35 times as long as stock PCSX2** over this
+  run, with nothing drawn and with the Direct3D 12 renderer alike: 100 s
+  against 74 s, 102 s against 75.5 s.
+- That is 175 frames a second compiled and 236 under stock PCSX2, on
+  average over the script, where the console shows 50.
+
+### Where the time goes
+
+`ps2n-host -profile` (`game.ps1 -TimeProfile`) looks where the CPU thread is
+executing about 660 times a second, from the first frame to the last, and
+says what was there. The CPU thread carries the EE, the IOP and the VUs;
+the GS has a thread of its own, which is not looked at. The level run with
+nothing drawn, in seconds of the run (the share of the samples times the
+run's length):
+
+| | Stock PCSX2, 74.3 s | Compiled, 102.6 s |
+|---|--:|--:|
+| **The game's own code**: PCSX2's EE recompiler's code, or the code compiled ahead of time | 25.8 | 43.6 |
+| PS2Native's runtime | | 7.6 |
+| PCSX2's core | 26.8 | 29.6 |
+| The code PCSX2's VU1 recompiler generated | 10.9 | 10.9 |
+| The code PCSX2's IOP recompiler generated | 4.5 | 5.0 |
+| The code PCSX2's VU0 recompiler generated | 1.3 | 1.3 |
+| Windows, drivers, other libraries | 4.4 | 4.0 |
+| Not identified | 0.5 | 0.6 |
+
+- **The whole difference is in the game's own code.** It takes 51.2 s as
+  compiled code with its runtime, and 25.8 s as the code PCSX2's recompiler
+  generates: twice as long. That is 25.4 of the 28.3 s the compiled run
+  takes longer. Another 2.7 s are in PCSX2's core, which has not been
+  broken down: the VU0 instructions of the game are carried out there by
+  PCSX2's interpreter functions for the compiled game, where stock PCSX2
+  has them in its recompiler's own code, and that is part of it.
+- Everything else is the same machine doing the same work, and takes the
+  same time: the VUs, the IOP, the sound, the rest of the core.
+- **In the compiled code, most of the time is in few places.** Of 22,668
+  functions, three have 27% of it:
+
+  | Function | Seconds | What it is |
+  |---|--:|---|
+  | `0014FD68` | 5.5 | reads the count register and adds up the time gone by, in a loop: the game waiting |
+  | `001C0190` | 4.3 | reads a counter in memory until it has moved on: the game waiting |
+  | `0050C560` | 2.0 | a long function of floating-point arithmetic |
+
+  The two that wait are 9.9 s, a tenth of the run. Stock PCSX2 runs the
+  same loops the same number of times: the runs are at the same place at
+  the same cycle count throughout.
+- **In the runtime, the largest part is the VU0 instructions**: passing one
+  on to PCSX2's function and putting the flags right afterwards
+  (`cop2Instruction`, `Cop2Operation`, `Cop2Prologue`: 2.8 s of the 7.6),
+  then the dispatcher (1.0 s) and finding the block that is running
+  (0.6 s).
+- PCSX2's VU1 recompiler spends 3.4 s of the stock run and 4.1 s of the
+  compiled run compiling (`mVUcompileJIT`), beside the 10.9 s its code
+  runs. It is one of the stand-ins of
+  [ADR 0003](adr/0003-no-jit-in-generated-games.md).
+
+What this does not say: why the compiled code takes twice as long as the
+recompiler's for the same instructions. It is one run of one game, and a
+sample is a place, not a cause.
+
+**A first look at why**, in one of the two loops where the game waits
+(`001C01B0`, twelve instructions a turn, six of them loads and stores). The
+C++ compiler made 107 host instructions of one turn:
+
+- every load and store looks its address up in the core's table twice,
+  once to see whether it is plain memory and once to reach it, with a
+  branch each time: 13 such checks a turn;
+- every register the game writes goes to memory, and is read back from
+  there when it is used: 25 instructions a turn touch the registers or the
+  table's own address in memory. After a store into the console's memory
+  the compiler reads them again, because it cannot know that the store
+  left them alone.
+
+PCSX2's recompiler keeps the registers of a block in host registers and
+reaches plain memory with one instruction. Nothing in this is the game's:
+it is how the generated code is written, the same for every function. The
+numbers are counted in the object file, not measured; what each would give
+back has to be measured when it is changed.
+
+### The report, as far as the first level
+
+**Compatibility.** Killzone (`SCES-52004`) boots from its disc image through
+the BIOS, plays its logos and intro film, goes through its menus and plays
+its first level: 17,500 frames by script, and two minutes by the
+maintainer's hand. Nothing is known not to work. Nothing beyond the first
+level has been run, nor the multiplayer side, and none of the four `.REL`
+modules has been called on yet.
+
+**Against stock PCSX2**, with the same input: the same place at the same
+cycle count at each of 93 million sync points; the same picture at each of
+1,750 frames (software renderer); the sound hardware in the same state at
+each of 350 moments; the general registers, COP0's and VU0's the same
+throughout. One difference, listed and on purpose: the sign of a zero in
+the FPU's registers, where the console is followed.
+
+**Visual and audio issues.** None known. In the window, with the renderer
+PCSX2 chooses (Direct3D 12) and sound, the maintainer found nothing wrong.
+Not compared: that renderer's pictures with the software renderer's, and
+either with a console.
+
+**What is compiled and what is not.** All of the executable's code that has
+run is compiled ahead of time: 0 of its instructions were interpreted in
+any of these runs, once the game had been rebuilt with what earlier runs
+reported (465 places in all). What is not the game's is not compiled yet: the BIOS's code is
+interpreted (0.21% of the EE's cycles in the level run,
+[ADR 0007](adr/0007-bios-code-translated-ahead-of-time.md)), and the VUs
+and the IOP run on PCSX2's recompilers, the stand-ins of
+[ADR 0003](adr/0003-no-jit-in-generated-games.md): what is built today
+still has a recompiler in it. The game's VU0 instructions are carried out
+by PCSX2's interpreter functions.
+
+**Speed.** Above: 1.35 times stock PCSX2's time over the level run, all of
+it in the game's own code; 175 frames a second on average where the
+console shows 50.
+
+**Limitations.**
+
+- Windows only. Linux has never been built or run, and the window is not
+  written for it.
+- A BIOS image is needed at run time, and the disc image.
+- Time is counted as PCSX2 `v2.9.170`'s recompiler counts it
+  ([ADR 0011](adr/0011-time-is-counted-as-pcsx2s-recompiler-counts-it.md)),
+  two of its defects included (ADR 0010, ADR 0013). Moving to another
+  PCSX2 means making the comparison again.
+- A rebuild after the game's code changed takes two minutes, the
+  executable is 194 MB, and the generated C++ 152 MB.
+- One game. Nothing here was written for it, but nothing has shown that on
+  a second one.
+- No application yet: no wizard, no packaging (Phase 4).
+
 ## Open
 
 - **VU0's instructions.** They are the one family of the game's own code
@@ -628,11 +811,16 @@ included:
   not been measured. The BIOS, which is interpreted, accounts for 1.1% of
   the EE's cycles there; translating it ahead of time is
   [ADR 0007](adr/0007-bios-code-translated-ahead-of-time.md), not started.
-  Over the level run the compiled game takes about a third longer than
-  stock PCSX2, by times that do not repeat ("How long the level run takes"
-  above). **Where the time goes has not been measured anywhere**, and
-  before step G5 can measure it, the times have to repeat: why the same run
-  takes 76 s one time and 141 s the next comes first.
+  Over the level run the compiled game takes 1.35 times as long as stock
+  PCSX2, and all of the difference is in the game's own code, which takes
+  twice as long compiled as under PCSX2's recompiler ("G5"). A first look
+  at one loop says where to begin: the generated code keeps the machine's
+  registers in memory and looks every address up twice. Changing how the
+  code is generated (registers held in local variables within a block, one
+  look at the table for each load and store, or none where the address is
+  known to be plain memory) is what it takes for PS2Native to be as fast as
+  PCSX2, and then faster. None of it has been tried, so none of it has a
+  number yet.
 - **What a longer run could meet.** PCSX2's recompiler throws all its
   blocks away when its code cache is full, and PS2Native cannot know when
   that is (execution model, "What is not reproduced"). It did not happen in
@@ -646,13 +834,14 @@ included:
 - **Further into the game:** the rest of the first level and the levels
   after it, the other menus, the multiplayer side. Each needs more of the
   controller script, and then a rebuild for whatever new code runs.
-- **Someone playing it.** The window, the sound and the controller are
-  there ("A window, sound and a controller" above) and have only been
-  checked by machine, muted. What a person sees, hears and feels in the
-  hands is the maintainer's to say: `game.ps1 -Play`, and `-Config
-  stock-jit` for stock PCSX2 beside it.
+- **Playing on.** The maintainer has played two minutes of it, into the
+  first level. Longer sessions go where no script has been: each writes
+  down what it had to interpret, for a rebuild. Stock PCSX2 opens in the
+  same window (`-Config stock-jit`) for whoever wants the two side by
+  side.
 - **The window on Linux.** Not written: `ps2n-host -window` says so there.
   `pcsx2-gsrunner` has the X11 window to go by.
-- **The pictures have only been looked at by the AI session.** The
-  maintainer has not seen them. They are in
+- **The pictures the runs saved have only been looked at by the AI
+  session.** The maintainer has seen the game itself, in the window. The
+  pictures are in
   `build\windows-clang\ps2n\tests\game\killzone\<configuration>`.

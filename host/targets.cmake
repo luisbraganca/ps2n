@@ -10,6 +10,8 @@ add_executable(ps2n-host
 	"${CMAKE_CURRENT_LIST_DIR}/host_interface.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/host_state.h"
 	"${CMAKE_CURRENT_LIST_DIR}/main.cpp"
+	"${CMAKE_CURRENT_LIST_DIR}/profile.cpp"
+	"${CMAKE_CURRENT_LIST_DIR}/profile.h"
 	"${CMAKE_CURRENT_LIST_DIR}/selftest.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/selftest.h"
 	"${CMAKE_CURRENT_LIST_DIR}/sync_trace.cpp"
@@ -33,6 +35,11 @@ target_link_libraries(ps2n-host PRIVATE
 set_target_properties(ps2n-host PROPERTIES
 	RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin"
 )
+
+# The profiler tells PS2Native's own code from PCSX2's by where its source
+# files are (host/profile.cpp).
+set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/profile.cpp" PROPERTIES
+	COMPILE_DEFINITIONS "PS2N_SOURCE_ROOT=\"${PS2N_ROOT}\"")
 
 # The PS2Native icon (assets/branding/README.md). PCSX2's own icon and file
 # description are not here to replace: its build attaches them only to its

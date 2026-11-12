@@ -12,6 +12,7 @@
 // Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+.
 
 #include "host_state.h"
+#include "profile.h"
 #include "selftest.h"
 #include "sync_trace.h"
 #include "window.h"
@@ -133,6 +134,8 @@ namespace
 		std::string frame_path; // where the last displayed frame is written, as an image
 		u32 frame_every = 0; // when not zero: the frame on display is also fingerprinted every so many frames
 		std::string pad_path; // a script of controller input for port 1
+		std::string profile_path; // where the report of where the CPU thread's time went is written
+		bool fast_cores = false; // keep the run on the processor's fastest cores, so that its time repeats
 		bool window = false; // play in a window: the console's speed, sound, the keyboard, a controller, a memory card
 		bool mute = false; // with -window: no sound
 		bool osd = false; // with -window: let the core draw its messages and figures over the picture
@@ -301,6 +304,17 @@ namespace
 			"                     for 2 frames unless said; the value, 0 to 1, is how far a\n"
 			"                     stick is pushed. The input changes at frame boundaries, so\n"
 			"                     that every run gets it at the same moments.\n"
+			"  -profile <file>    Look where the CPU thread is executing about a thousand\n"
+			"                     times a second, from the first frame to the last, and\n"
+			"                     write to this file how much of the time went to the game's\n"
+			"                     compiled code, to PS2Native's runtime, to PCSX2's core, to\n"
+			"                     the code PCSX2's recompilers generated and to the system,\n"
+			"                     with the functions that had most of it. Windows only.\n"
+			"  -fast-cores        Keep the run on the processor's fastest cores. On a\n"
+			"                     processor with fast and slow cores the system otherwise\n"
+			"                     moves a run between them, and the same run takes up to\n"
+			"                     twice as long from one time to the next. For runs that\n"
+			"                     are timed. Windows only; elsewhere it changes nothing.\n"
 			"  -until <text>      Stop once the program prints a line containing this\n"
 			"                     (default \"-- TEST END\").\n"
 			"  -frames <n>        Stop after this many frames (default 3600).\n"
@@ -360,6 +374,10 @@ namespace
 				o.times_path = argv[++i];
 			else if (is("-pad") && has_value)
 				o.pad_path = argv[++i];
+			else if (is("-profile") && has_value)
+				o.profile_path = argv[++i];
+			else if (is("-fast-cores"))
+				o.fast_cores = true;
 			else if (is("-image") && has_value)
 				o.image_id = argv[++i];
 			else if (is("-trace") && has_value)
@@ -586,13 +604,19 @@ namespace
 			std::fputs("ps2n-host: -mute and -osd are for -window\n", stderr);
 			return false;
 		}
+		if (!o.profile_path.empty() && (o.selftest || !ps2n::host::profile::Available()))
+		{
+			std::fputs("ps2n-host: -profile is for a run of a program, and is not available on this platform yet\n", stderr);
+			return false;
+		}
 
 		// On Windows the core's file functions turn an absolute path into an
 		// extended-length one (\\?\C:\...), which does not take forward slashes
 		// (FileSystem::GetWin32Path in common/FileSystem.cpp). Build tools pass
 		// forward slashes, so every path is put in the platform's form here.
 		for (std::string* path : {&o.boot_path, &o.bios_path, &o.data_dir, &o.out_path, &o.times_path, &o.log_path, &o.capture_path,
-				 &o.trace_path, &o.trace_against_path, &o.sync_path, &o.sync_against_path, &o.frame_path, &o.pad_path})
+				 &o.trace_path, &o.trace_against_path, &o.sync_path, &o.sync_against_path, &o.frame_path, &o.pad_path,
+				 &o.profile_path})
 			Path::ToNativePath(path);
 		return true;
 	}
@@ -1481,6 +1505,63 @@ namespace
 		s_cpu_thread_done.store(true);
 	}
 
+	// Keeps the process on the processor's fastest cores (-fast-cores). A
+	// processor with performance and efficiency cores runs the same work about
+	// twice as fast on the first, and the system moves a process that is not in
+	// front between them as it sees fit: the same run of a game took between 75
+	// and 150 s (docs/game-log.md, "G5"). A processor whose cores are all alike
+	// is left as it is.
+	void UseFastCores()
+	{
+#ifdef _WIN32
+		ULONG length = 0;
+		GetSystemCpuSetInformation(nullptr, 0, &length, GetCurrentProcess(), 0);
+		std::vector<u8> buffer(length);
+		if (length == 0 ||
+			!GetSystemCpuSetInformation(reinterpret_cast<PSYSTEM_CPU_SET_INFORMATION>(buffer.data()), length, &length, GetCurrentProcess(), 0))
+		{
+			std::fputs("ps2n-host: -fast-cores: the system does not say which cores it has; the run goes where it is put\n", stderr);
+			return;
+		}
+
+		// A core with a higher efficiency class is the faster one.
+		const auto each = [&buffer, length](const auto& function) {
+			for (ULONG offset = 0; offset + sizeof(SYSTEM_CPU_SET_INFORMATION) <= length;)
+			{
+				const SYSTEM_CPU_SET_INFORMATION* info = reinterpret_cast<const SYSTEM_CPU_SET_INFORMATION*>(buffer.data() + offset);
+				if (info->Size == 0)
+					break;
+				if (info->Type == CpuSetInformation)
+					function(info->CpuSet.Id, info->CpuSet.EfficiencyClass);
+				offset += info->Size;
+			}
+		};
+		BYTE fastest = 0;
+		size_t all = 0;
+		each([&fastest, &all](ULONG id, BYTE efficiency_class) {
+			fastest = std::max(fastest, efficiency_class);
+			all++;
+		});
+		std::vector<ULONG> ids;
+		each([&ids, fastest](ULONG id, BYTE efficiency_class) {
+			if (efficiency_class == fastest)
+				ids.push_back(id);
+		});
+
+		if (ids.size() == all)
+		{
+			std::fprintf(stderr, "ps2n-host: -fast-cores: the %zu logical processors are all alike\n", all);
+			return;
+		}
+		if (SetProcessDefaultCpuSets(GetCurrentProcess(), ids.data(), static_cast<ULONG>(ids.size())))
+			std::fprintf(stderr, "ps2n-host: kept to the processor's fastest cores: %zu of %zu logical processors\n", ids.size(), all);
+		else
+			std::fputs("ps2n-host: -fast-cores: the system refused; the run goes where it is put\n", stderr);
+#else
+		std::fputs("ps2n-host: -fast-cores is not available on this platform yet; the run goes where it is put\n", stderr);
+#endif
+	}
+
 	// Ends the process if the machine does not stop on its own: a guest that
 	// never reaches a frame boundary cannot be stopped from the frame callback.
 	void WatchdogMain()
@@ -1536,6 +1617,10 @@ namespace
 
 		CrashHandler::Install();
 
+		// Before any other thread exists: they all take the choice over.
+		if (s_options.fast_cores)
+			UseFastCores();
+
 		if (!InitializeConfig())
 			return EXIT_ERROR;
 		if (!s_options.pad_path.empty() && !LoadPadScript(s_options.pad_path))
@@ -1573,6 +1658,8 @@ namespace
 		// the core may create are owned by this thread; keep its message queue
 		// served while the machine runs.
 		HANDLE handle = static_cast<HANDLE>(static_cast<void*>(cpu_thread));
+		if (!s_options.profile_path.empty() && !ps2n::host::profile::Start(handle))
+			std::fputs("ps2n-host: cannot look at the CPU thread: there will be no profile\n", stderr);
 		for (;;)
 		{
 			const DWORD wait = MsgWaitForMultipleObjects(1, &handle, FALSE, INFINITE, QS_ALLINPUT);
@@ -1591,6 +1678,17 @@ namespace
 		cpu_thread.Join();
 		watchdog.join();
 		ps2n::host::window::Destroy();
+
+		if (!s_options.profile_path.empty())
+		{
+			// The CPU thread has ended: what it kept for itself can be read here.
+			ps2n::host::profile::Stop();
+			const double seconds = std::chrono::duration<double>(s_latest_frame_time - s_first_frame_time).count();
+			if (ps2n::host::profile::Write(s_options.profile_path.c_str(), s_frames ? s_frames - 1 : 0, seconds))
+				std::fprintf(stderr, "ps2n-host: where the CPU thread's time went: %s\n", s_options.profile_path.c_str());
+			else
+				std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.profile_path.c_str());
+		}
 
 		if (!WriteGuestOutput())
 			return EXIT_ERROR;
@@ -1618,11 +1716,17 @@ void ps2n::host::OnInputDeviceConnected(std::string_view identifier)
 void ps2n::host::OnGuestFrame()
 {
 	s_frames++;
-	if (s_options.window)
+	const bool profiling = !s_options.profile_path.empty();
+	if (s_options.window || profiling)
 	{
 		s_latest_frame_time = std::chrono::steady_clock::now();
 		if (s_frames == 1)
+		{
+			// From the first frame on: the machine exists now.
 			s_first_frame_time = s_latest_frame_time;
+			if (profiling)
+				ps2n::host::profile::Enable(true);
+		}
 	}
 	DrainQueue();
 
@@ -1659,6 +1763,8 @@ void ps2n::host::OnGuestFrame()
 
 	if (s_provider_replaced || parted || marker || s_time_limit_passed.load() || frames_done || s_close_requested.load())
 	{
+		if (profiling)
+			ps2n::host::profile::Enable(false);
 		CaptureFrame();
 		CaptureSound();
 		s_stop_requested = true;

@@ -24,7 +24,11 @@ ahead-of-time static recompilation. This repository is a reboot of
 **Phase 3 (the first real game: Killzone) was approved on 2026-11-11 and is
 in progress.** [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
-things stand. Phase 4 needs its own approval.
+things stand. On 2026-11-12 every step was done as far as the game's first
+level, the maintainer had played it, and the compiled game took 1.35 times
+stock PCSX2's time; what comes next (making it faster, more of the game, or
+the end of the phase) is the maintainer's to say. Phase 4 needs its own
+approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -149,6 +153,12 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   `Documents\PCSX2\bios`. Tests are skipped, not passed, without one.
 - Speed: `scripts\windows\bench.ps1 -Bios <BIOS image> -Repeat 3` runs
   `tests/programs/bench.s` under each configuration and prints the times.
+  A run that is timed is kept on the processor's fast cores (`ps2n-host
+  -fast-cores`; `bench.ps1` and `game.ps1` pass it): left to Windows, the
+  same run takes up to twice as long the next time. `game.ps1 -TimeProfile`
+  (`ps2n-host -profile`) writes where the CPU thread's time went, by kind
+  of code and by function, into `profile.txt` among the run's files.
+  `docs/game-log.md`, "G5", has what was measured.
 - The game: `scripts\windows\build.ps1 -Game <its boot executable>` compiles
   it into the host (the build tree remembers it; `-GameCapture <file>` adds
   what runs reported). `scripts\windows\game.ps1 -Image <disc image> -Config

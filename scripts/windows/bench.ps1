@@ -68,10 +68,12 @@ foreach ($name in $Config) {
         # The driver reports on its error stream, which Windows PowerShell would
         # otherwise take for a failure.
         $ErrorActionPreference = 'Continue'
+        # Timed runs are kept on the processor's fastest cores (-DFAST_CORES=1):
+        # left to the system, the same run can take twice as long the next time.
         $output = & cmake "-DHOST=$(ForCMake $hostExe)" "-DWORK_DIR=$(ForCMake $work)" `
             "-DDLL_DIR=$(ForCMake (Join-Path $root 'deps\windows-x64\deps\bin'))" "-DELF=$(ForCMake $elf)" `
             "-DEE=$($p[0])" "-DIOP=$($p[1])" "-DVU=$($p[2])" "-DSTATIC=$($p[3])" -DIMAGE=bench `
-            -DSECONDS=900 -DFRAMES=1000000 -P (Join-Path $root 'tests\guest_test.cmake') 2>&1 | ForEach-Object { "$_" }
+            -DSECONDS=900 -DFRAMES=1000000 -DFAST_CORES=1 -P (Join-Path $root 'tests\guest_test.cmake') 2>&1 | ForEach-Object { "$_" }
         $ErrorActionPreference = 'Stop'
         if ($LASTEXITCODE -ne 0) {
             $output | ForEach-Object { Write-Host $_ }

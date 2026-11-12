@@ -69,6 +69,10 @@
 #   TIMES      also write times.txt in the scratch directory: the program's
 #              output with the frame and EE cycle count at which each line was
 #              printed (ps2n-host -times), to see where two runs part in time
+#   PROFILE    also write profile.txt in the scratch directory: where the CPU
+#              thread's time went (ps2n-host -profile; Windows only)
+#   FAST_CORES keep the run on the processor's fastest cores, so that its time
+#              repeats (ps2n-host -fast-cores): for runs that are timed
 #   SYNC       also write sync.txt in the scratch directory: the run's record of
 #              sync points (ps2n-host -sync), which a stock run can write too
 #   SYNC_AGAINST  the sync.txt of an earlier run, to compare this run with; what
@@ -291,6 +295,12 @@ if(DEFINED PAD AND NOT "${PAD}" STREQUAL "")
 endif()
 if(DEFINED TIMES AND TIMES)
 	list(APPEND limits -times "${WORK_DIR}/times.txt")
+endif()
+if(DEFINED PROFILE AND PROFILE)
+	list(APPEND limits -profile "${WORK_DIR}/profile.txt")
+endif()
+if(DEFINED FAST_CORES AND FAST_CORES)
+	list(APPEND limits -fast-cores)
 endif()
 
 if(DEFINED SYNC AND SYNC)

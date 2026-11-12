@@ -61,8 +61,8 @@ page.
 | 463 places, 5,079 instructions, then none | game-log.md, "G3", "One rebuild is enough" |
 | 38,478,822 moments, 3 GB, 4,199 frames, 47,705,744 event tests, 1.11% | game-log.md, "G3", "4,200 frames, with the button press" |
 | 22.9 s and 25.7 s, 11.2 s and 15.1 s, and the two runs of each | game-log.md, "G3" and "Open" |
-| "About a third longer" over the first level, and that the times do not repeat well | game-log.md, "G4", "How long the level run takes" |
-| G4: "opens in a window, with sound, the keyboard and a controller, on Windows" | game-log.md, "G4", "A window, sound and a controller" |
+| 100 s and 74 s for the run into the first level; "twice as long" for the game's own code | game-log.md, "G5", "The level run, timed" and "Where the time goes" |
+| G4: "played by the maintainer in a window, with sound and a controller, on Windows" | game-log.md, "G4", "A window, sound and a controller" |
 | 59 of 63 test programs | game-log.md, "The timing difference", "What was measured" |
 | 453 tests, 42 cases, 153 s | game-log.md, "G4", "The compiled game against stock PCSX2" |
 | The longer run: three and a half minutes of the first level, 93,221,937 moments, 1,750 pictures compared | game-log.md, "G4", "The compiled game against stock PCSX2" |
