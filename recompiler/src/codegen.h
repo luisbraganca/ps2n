@@ -49,6 +49,9 @@ struct GenerateStats {
     size_t guards = 0;             // likely branches left to it when taken, for what is in their delay slot
     size_t cop2 = 0;               // COP2 instructions, which the runtime carries out whole
     size_t delayedDisables = 0;    // DI compiled in one piece with the instruction after it
+    size_t onLocals = 0;           // instructions that work on the local variables registers are kept in
+    size_t labelsHolding = 0;      // labels at which the locals hold registers, whichever way the label is reached
+    size_t registersAtLabels = 0;  // and how many, over all those labels
     size_t variants = 0;           // other versions of functions, from code an earlier run found in memory
     size_t idleLoops = 0;          // branches that may close an idle loop, whose time is skipped
 };

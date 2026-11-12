@@ -7,6 +7,7 @@
 #include "ps2n/waitloop.h"
 
 #include <algorithm>
+#include <bit>
 #include <initializer_list>
 #include <sstream>
 
@@ -14,7 +15,7 @@ namespace ps2n::recomp {
 
 using namespace r5900;
 
-const char* const kGeneratorName = "ps2n-recomp 0.3.0";
+const char* const kGeneratorName = "ps2n-recomp 0.4.0";
 
 namespace {
 
@@ -123,29 +124,13 @@ std::string semanticCall(const Insn& in) {
 #undef FT
 }
 
-// $zero reads as a literal, so that the C++ compiler sees the constant.
-std::string gprU64(uint32_t r) { return r ? strprintf("ru64(%s)", kRegNames[r]) : "uint64_t{0}"; }
-std::string gprS64(uint32_t r) { return r ? strprintf("rs64(%s)", kRegNames[r]) : "int64_t{0}"; }
-
-// Whether the branch `in` is taken. The same conditions as RunRecBranch() in
-// runtime/ee_provider.cpp.
-std::string branchCondition(const Insn& in) {
-    switch (in.op) {
-    case Op::BEQ: case Op::BEQL: return gprU64(in.rs()) + " == " + gprU64(in.rt());
-    case Op::BNE: case Op::BNEL: return gprU64(in.rs()) + " != " + gprU64(in.rt());
-    case Op::BLEZ: case Op::BLEZL: return gprS64(in.rs()) + " <= 0";
-    case Op::BGTZ: case Op::BGTZL: return gprS64(in.rs()) + " > 0";
-    case Op::BLTZ: case Op::BLTZL: case Op::BLTZAL: case Op::BLTZALL: return gprS64(in.rs()) + " < 0";
-    case Op::BGEZ: case Op::BGEZL: case Op::BGEZAL: case Op::BGEZALL: return gprS64(in.rs()) + " >= 0";
-    case Op::BC0F: case Op::BC0FL: return "!cop0Condition()";
-    case Op::BC0T: case Op::BC0TL: return "cop0Condition()";
-    case Op::BC1F: case Op::BC1FL: return "!fpuCondition()";
-    case Op::BC1T: case Op::BC1TL: return "fpuCondition()";
-    case Op::BC2F: case Op::BC2FL: return "!cop2Condition()";
-    case Op::BC2T: case Op::BC2TL: return "cop2Condition()";
-    default: return {};
-    }
-}
+// The general registers an instruction that is carried out through register
+// numbers may read, and those it may write: the ones its fields name. The
+// fields of some instructions name other things (a floating-point register,
+// a shift amount), so both sets can be too large, which costs a little and
+// breaks nothing.
+uint32_t fieldMask(const Insn& in) { return ((1u << in.rs()) | (1u << in.rt()) | (1u << in.rd())) & ~1u; }
+uint32_t writtenMask(const Insn& in) { return ((1u << in.rt()) | (1u << in.rd())) & ~1u; }
 
 // A COP2 instruction, LQC2 or SQC2: what the runtime carries out whole,
 // because when VU0 is brought up to date first depends on the block.
@@ -189,16 +174,88 @@ struct LeaderIndex {
     }
 };
 
+// Which registers a function's local variables hold at some point of its code
+// (`valid`), and which of those hold a value the core does not have yet
+// (`dirty`): the general registers by number, and the FPU's (bit 32: its
+// accumulator). recomp.h, "registers in local variables", says what the
+// generated code does with them.
+struct Locals {
+    uint32_t valid = 0, dirty = 0;
+    uint64_t fvalid = 0, fdirty = 0;
+    bool operator==(const Locals&) const = default;
+    bool empty() const { return !valid && !fvalid; }
+};
+
+// What the locals hold where each label of a function is entered, the same
+// whichever way it is entered: by the code before it, by a jump, from outside
+// the function. Labels not listed hold nothing.
+using LabelStates = std::map<uint32_t, Locals>;
+
+// The ways into each label a pass of the generator found, with what the
+// locals held on each.
+using Arrivals = std::map<uint32_t, std::vector<Locals>>;
+
+// What a pass found, for the next one: the state of each label, and which
+// registers the code from each label on reads before it writes them or the
+// locals forget them (in `valid` and `fvalid`).
+struct LabelInfo {
+    LabelStates states;
+    LabelStates needs;
+    bool operator==(const LabelInfo&) const = default;
+};
+
+// The state of each label from the ways into it: what the code after the
+// label reads, of what every way in holds. A way in that holds nothing (after
+// a call of another function, which may have changed any register) is left
+// out, and takes from the core what the label holds, as an entry from outside
+// the function does. Nothing is held as changed: a way in puts what it
+// changed back first. (Holding what any way in holds, the others taking it
+// from the core, was measured too, and was slower: game log, G6.)
+LabelStates statesFrom(const Arrivals& arrivals, const LabelStates& needs) {
+    LabelStates states;
+    for (const auto& [address, ways] : arrivals) {
+        const auto need = needs.find(address);
+        if (need == needs.end()) continue;
+        Locals state;
+        bool first = true;
+        for (const Locals& way : ways) {
+            if (way.empty()) continue;
+            state.valid = first ? way.valid : (state.valid & way.valid);
+            state.fvalid = first ? way.fvalid : (state.fvalid & way.fvalid);
+            first = false;
+        }
+        state.valid &= need->second.valid;
+        state.fvalid &= need->second.fvalid;
+        if (!first && !state.empty()) states[address] = state;
+    }
+    return states;
+}
+
+// How many times a function is generated at most to find its labels' states
+// before it is generated for good. Each pass starts from what the one before
+// found, and what a label's code reads travels back one label a pass; any
+// states make correct code, so where they have not settled by then the last
+// ones are used.
+constexpr int kStatePasses = 3;
+
 class FunctionEmitter {
 public:
     // `variant`: which of the function's variants to compile, or -1 for the
-    // function as the executable has it.
+    // function as the executable has it. `info`: what the pass before found
+    // of its labels.
     FunctionEmitter(const Program& p, const LeaderIndex& leaders, const Function& f, int variant, const GenerateOptions& o,
-                    GenerateStats& s)
-        : p_(p), leaders_(leaders), f_(f), variant_(variant), opt_(o), stats_(s), index_(p.indexOf(f)) {}
+                    GenerateStats& s, const LabelInfo& info)
+        : p_(p), leaders_(leaders), f_(f), variant_(variant), opt_(o), stats_(s), index_(p.indexOf(f)), atLabel_(info.states),
+          needIn_(info.needs) {}
+
+    // What this pass found: the ways into each label, and what the code from
+    // each label on reads first.
+    const Arrivals& arrivals() const { return arrivals_; }
+    const LabelStates& needs() const { return needs_; }
 
     std::string emit() {
         emitBody();
+        endRegion();
 
         std::string out;
         if (variant_ < 0)
@@ -208,19 +265,44 @@ public:
             out = strprintf("// %s  %08X-%08X  variant %d: other code a run found there\n", f_.displayName().c_str(), f_.start, f_.end,
                             variant_);
         // Local to the translation unit when there is only one.
-        out += std::string(opt_.parts > 1 ? "" : "static ") + "uint32_t " + fnName(f_, variant_) + "(uint32_t pc)\n{\n";
+        out += std::string(opt_.parts > 1 ? "" : "static ") + "uint32_t PS2N_CC " + fnName(f_, variant_) + "(uint32_t pc)\n{\n";
         // The eighths of a cycle counted in the block so far; where the block
-        // began; what the runtime said of it (recomp.h).
+        // began; what the runtime said of it; the cycle count (recomp.h).
         out += "\tuint32_t acc = 0;\n";
         out += "\t[[maybe_unused]] uint32_t ps2n_start = 0;\n";
-        out += "\tuint32_t ps2n_end = 0;\n";
+        out += "\t[[maybe_unused]] uint32_t ps2n_end = 0;\n";
+        out += "\t[[maybe_unused]] uint64_t ps2n_cycle = cpuRegs.cycle;\n";
+        // The general registers the function keeps in local variables for a
+        // while, and what its loads and stores need (recomp.h, "registers in
+        // local variables").
+        if (declared_) {
+            std::string locals;
+            for (uint32_t r = 1; r < 32; ++r)
+                if (declared_ & (1u << r)) locals += strprintf("%s g%u = 0", locals.empty() ? "" : ",", r);
+            out += "\tuint64_t" + locals + ";\n";
+        }
+        if (fdeclared_) {
+            std::string locals;
+            for (uint32_t r = 0; r <= kAcc; ++r)
+                if (fdeclared_ & (uint64_t{1} << r)) locals += (locals.empty() ? " " : ", ") + fname(r) + " = 0";
+            out += "\tuint32_t" + locals + ";\n";
+        }
+        if (usesTable_) out += "\tconst vtlb_private::VTLBVirtual* const ps2n_vmap = addressTable();\n";
+        if (usesUnused_) out += "\t[[maybe_unused]] uint64_t ps2n_unused = 0;\n";
         if (needsDispatch_) out += "ps2n_dispatch:\n";
+        // A call enters at the start; any other entry is the runtime's doing
+        // and rare. Without this the switch searches its cases every time.
+        // Marked likely, the compiler takes the rest of the function for
+        // colder and inlines a few of the FPU's semantics less; measured, the
+        // run is faster with the mark than without (game log, G6).
+        out += "\tif (pc == " + hex(f_.start) + ") [[likely]]\n\t\tgoto " + entry(f_.start) + ";\n";
         out += "\tswitch (pc)\n\t{\n";
-        for (uint32_t a : f_.leaders) out += "\t\tcase " + hex(a) + ": goto " + label(a) + ";\n";
+        for (uint32_t a : f_.leaders) out += "\t\tcase " + hex(a) + ": goto " + entry(a) + ";\n";
         if (needsDispatch_) out += "\t\tdefault: PS2N_JUMP(ps2n::ee::jump, pc);\n";
         else out += strprintf("\t\tdefault: ps2n::ee::badEntry(image, %u, pc);\n", index_);
         out += "\t}\n";
         out += body_;
+        out += entries_;
         out += "}\n";
         return out;
     }
@@ -277,6 +359,480 @@ private:
         line("}");
     }
 
+    // ---- registers in local variables ------------------------------------------
+    // Within straight-line code the function keeps general registers in its
+    // locals g1 to g31 (recomp.h says why, and what the generated code does
+    // with them). Here is what the generator knows at the point it is
+    // emitting: which locals hold their register's value, and which of those
+    // hold a value the core does not have yet. After anything that may change
+    // a register behind the function's back no local holds anything; at a
+    // label they hold what the label's state says ("the state at labels",
+    // below).
+    uint32_t valid_ = 0;
+    uint32_t dirty_ = 0;
+    uint32_t declared_ = 0;      // every register that has a local in this function
+    bool usesTable_ = false;     // ps2n_vmap, for loads and stores
+    bool usesUnused_ = false;    // ps2n_unused, for a load into $zero
+
+    // The FPU's registers the same way, in the locals f0 to f31 and, for the
+    // accumulator, facc: bit 32 of these sets. A local holds the register's 32
+    // bits.
+    static constexpr uint32_t kAcc = 32;
+    uint64_t fvalid_ = 0;
+    uint64_t fdirty_ = 0;
+    uint64_t fdeclared_ = 0;
+
+    Locals locals() const { return {valid_, dirty_, fvalid_, fdirty_}; }
+    void restore(const Locals& l) {
+        valid_ = l.valid;
+        dirty_ = l.dirty;
+        fvalid_ = l.fvalid;
+        fdirty_ = l.fdirty;
+    }
+
+    // Register `r` as a value: its local, taken from the core first when it
+    // does not hold the register. $zero reads as a literal, so that the C++
+    // compiler sees the constant.
+    std::string use(uint32_t r) {
+        if (r == 0) return "uint64_t{0}";
+        const uint32_t bit = 1u << r;
+        if (!(fresh_ & bit)) demand_ |= bit;
+        if (!(valid_ & bit)) {
+            line(strprintf("PS2N_GET(%u);", r));
+            valid_ |= bit;
+            declared_ |= bit;
+        }
+        return strprintf("g%u", r);
+    }
+    std::string useSigned(uint32_t r) { return r ? "static_cast<int64_t>(" + use(r) + ")" : std::string("int64_t{0}"); }
+
+    // The local that takes a new value of register `r`, which is not $zero.
+    std::string def(uint32_t r) {
+        const uint32_t bit = 1u << r;
+        fresh_ |= bit;
+        valid_ |= bit;
+        dirty_ |= bit;
+        declared_ |= bit;
+        return strprintf("g%u", r);
+    }
+
+    // FPU register `r` (kAcc: the accumulator) as a value, and the local that
+    // takes a new value of it.
+    static std::string fname(uint32_t r) { return r == kAcc ? std::string("facc") : strprintf("f%u", r); }
+    std::string fuse(uint32_t r) {
+        const uint64_t bit = uint64_t{1} << r;
+        if (!(ffresh_ & bit)) fdemand_ |= bit;
+        if (!(fvalid_ & bit)) {
+            line(r == kAcc ? std::string("PS2N_GET_ACC();") : strprintf("PS2N_GET_F(%u);", r));
+            fvalid_ |= bit;
+            fdeclared_ |= bit;
+        }
+        return fname(r);
+    }
+    std::string fdef(uint32_t r) {
+        const uint64_t bit = uint64_t{1} << r;
+        ffresh_ |= bit;
+        fvalid_ |= bit;
+        fdirty_ |= bit;
+        fdeclared_ |= bit;
+        return fname(r);
+    }
+
+    // The statements that put back the changed general registers among `mask`
+    // and the changed FPU registers among `fmask`.
+    std::string putText(uint32_t mask = ~0u, uint64_t fmask = ~uint64_t{0}) const {
+        std::string s;
+        for (uint32_t r = 1; r < 32; ++r)
+            if (dirty_ & mask & (1u << r)) s += strprintf("%sPS2N_PUT(%u);", s.empty() ? "" : " ", r);
+        for (uint32_t r = 0; r < 32; ++r)
+            if (fdirty_ & fmask & (uint64_t{1} << r)) s += strprintf("%sPS2N_PUT_F(%u);", s.empty() ? "" : " ", r);
+        if (fdirty_ & fmask & (uint64_t{1} << kAcc)) s += std::string(s.empty() ? "" : " ") + "PS2N_PUT_ACC();";
+        return s;
+    }
+
+    // Puts those back: the core has them then. Before anything outside the
+    // function looks at a register.
+    void put(uint32_t mask = ~0u, uint64_t fmask = ~uint64_t{0}) {
+        const std::string s = putText(mask, fmask);
+        if (!s.empty()) line(s);
+        dirty_ &= ~mask;
+        fdirty_ &= ~fmask;
+    }
+
+    // The same on a path that leaves from here (inside an `if` that ends in a
+    // return or a jump): the path that goes on still has them to put back.
+    void putOnTheWayOut() {
+        const std::string s = putText();
+        if (!s.empty()) line(s);
+    }
+
+    // The changed registers as the argument of PS2N_LOAD and PS2N_STORE, which
+    // put them back only when the address turns out not to be plain memory.
+    std::string putArgument() const {
+        std::string s = putText();
+        if (s.empty()) return "(void)0";
+        s.pop_back();   // the macro adds the last semicolon
+        return s;
+    }
+
+    // The locals no longer hold the general registers among `mask`, nor the
+    // FPU's among `fmask`: something outside the function may have changed
+    // them. What was changed in them has been put back before.
+    void forget(uint32_t mask = ~0u, uint64_t fmask = ~uint64_t{0}) {
+        fresh_ |= mask;
+        ffresh_ |= fmask;
+        valid_ &= ~mask;
+        dirty_ &= ~mask;
+        fvalid_ &= ~fmask;
+        fdirty_ &= ~fmask;
+    }
+
+    // ---- the state at labels ------------------------------------------------------
+    // A label is entered in the same state whichever way it is entered
+    // (LabelStates): every way in brings the locals to it first, and an entry
+    // from outside the function takes what the label holds from the core
+    // (`E_` before the label's address, after the function's code). Nothing
+    // is held as changed at a label.
+    const LabelStates& atLabel_;
+    const LabelStates& needIn_;
+    Arrivals arrivals_;
+    std::string entries_;
+
+    // What the code from the last label on reads before it writes it or the
+    // locals forget it (`demand_`, `fdemand_`), and what it has written or
+    // forgotten so far (`fresh_`, `ffresh_`). A label holds only what is
+    // read there: anything else it held would be taken from the core for
+    // nothing on the ways in that do not hold it.
+    LabelStates needs_;
+    uint32_t region_ = 0;
+    bool inRegion_ = false;
+    uint32_t demand_ = 0, fresh_ = 0;
+    uint64_t fdemand_ = 0, ffresh_ = 0;
+
+    Locals needAt(uint32_t a) const {
+        const auto it = needIn_.find(a);
+        return it == needIn_.end() ? Locals{} : it->second;
+    }
+
+    // The code from label `a` on begins.
+    void beginRegion(uint32_t a) {
+        endRegion();
+        region_ = a;
+        inRegion_ = true;
+        demand_ = fresh_ = 0;
+        fdemand_ = ffresh_ = 0;
+    }
+    void endRegion() {
+        if (inRegion_) needs_[region_] = Locals{demand_, 0, fdemand_, 0};
+        inRegion_ = false;
+    }
+
+    // What the locals hold where label `a` is entered.
+    Locals stateAt(uint32_t a) const {
+        const auto it = atLabel_.find(a);
+        return it == atLabel_.end() ? Locals{} : it->second;
+    }
+
+    // The statements that take the registers among `mask` and `fmask` from
+    // the core.
+    std::string getText(uint32_t mask, uint64_t fmask) {
+        std::string s;
+        for (uint32_t r = 1; r < 32; ++r)
+            if (mask & (1u << r)) s += strprintf("%sPS2N_GET(%u);", s.empty() ? "" : " ", r);
+        for (uint32_t r = 0; r < 32; ++r)
+            if (fmask & (uint64_t{1} << r)) s += strprintf("%sPS2N_GET_F(%u);", s.empty() ? "" : " ", r);
+        if (fmask & (uint64_t{1} << kAcc)) s += std::string(s.empty() ? "" : " ") + "PS2N_GET_ACC();";
+        declared_ |= mask & ~1u;
+        fdeclared_ |= fmask;
+        return s;
+    }
+
+    // Takes those the locals do not hold yet: they hold them then.
+    void take(uint32_t mask, uint64_t fmask) {
+        const std::string s = getText(mask & ~valid_ & ~1u, fmask & ~fvalid_);
+        if (!s.empty()) line(s);
+        valid_ |= mask & ~1u;
+        fvalid_ |= fmask;
+    }
+
+    // Brings the locals from what they hold here to what label `a` holds, and
+    // records this way into it: what was changed goes to the core, what the
+    // label does not hold is no longer held, and what it holds and this way
+    // does not is taken from the core.
+    void arrive(uint32_t a) {
+        arrivals_[a].push_back(locals());
+        // What the code after that label reads first, this code reads first,
+        // unless it has written it.
+        const Locals need = needAt(a);
+        demand_ |= need.valid & ~fresh_;
+        fdemand_ |= need.fvalid & ~ffresh_;
+        const Locals want = stateAt(a);
+        const uint32_t fresh = fresh_;
+        const uint64_t ffresh = ffresh_;
+        put();
+        forget(~want.valid, ~want.fvalid);
+        take(want.valid, want.fvalid);
+        fresh_ = fresh;     // (this way out is not the code that goes on here)
+        ffresh_ = ffresh;
+    }
+
+    // Where an entry from outside at label `a` goes: the label itself, or the
+    // way in that first takes from the core what the locals hold there.
+    std::string entry(uint32_t a) const { return stateAt(a).empty() ? label(a) : strprintf("E_%08X", a); }
+
+    // Whether the branch `in` is taken. The same conditions as RunRecBranch()
+    // in runtime/ee_provider.cpp. Takes the registers it compares first.
+    std::string branchCondition(const Insn& in) {
+        const auto pair = [&](const char* comparison) {
+            const std::string a = use(in.rs());
+            const std::string b = use(in.rt());
+            return a + comparison + b;
+        };
+        switch (in.op) {
+        case Op::BEQ: case Op::BEQL: return pair(" == ");
+        case Op::BNE: case Op::BNEL: return pair(" != ");
+        case Op::BLEZ: case Op::BLEZL: return useSigned(in.rs()) + " <= 0";
+        case Op::BGTZ: case Op::BGTZL: return useSigned(in.rs()) + " > 0";
+        case Op::BLTZ: case Op::BLTZL: case Op::BLTZAL: case Op::BLTZALL: return useSigned(in.rs()) + " < 0";
+        case Op::BGEZ: case Op::BGEZL: case Op::BGEZAL: case Op::BGEZALL: return useSigned(in.rs()) + " >= 0";
+        case Op::BC0F: case Op::BC0FL: return "!cop0Condition()";
+        case Op::BC0T: case Op::BC0TL: return "cop0Condition()";
+        case Op::BC1F: case Op::BC1FL: return "!fpuCondition()";
+        case Op::BC1T: case Op::BC1TL: return "fpuCondition()";
+        case Op::BC2F: case Op::BC2FL: return "!cop2Condition()";
+        case Op::BC2T: case Op::BC2TL: return "cop2Condition()";
+        default: return {};
+        }
+    }
+
+    // The return address a call leaves in register `r`.
+    void link(uint32_t r, uint32_t address) {
+        if (r) line(def(r) + " = " + hex(address) + ";");
+    }
+
+    // An instruction that only computes a general register from others, or
+    // loads or stores one: carried out on the locals (ps2n::ee::val, and
+    // PS2N_LOAD and PS2N_STORE in recomp.h). False when `in` is not one of
+    // those; nothing has been emitted then. `after`: the eighths the end of a
+    // block has to count if it ends after this instruction.
+    bool emitOnLocals(const Insn& in, uint32_t after, bool delaySlot, const char* note) {
+        const uint32_t rs = in.rs(), rt = in.rt(), rd = in.rd();
+
+        // `value` becomes register `dest`. For $zero it is dropped: computing
+        // it has no other effect.
+        const auto assign = [&](uint32_t dest, const std::string& value) {
+            if (dest == 0) line("", &in, note);
+            else line(def(dest) + " = " + value + ";", &in, note);
+        };
+        const auto fromTwo = [&](const char* fn, uint32_t dest, uint32_t first, uint32_t second) {
+            if (dest == 0) return assign(0, {});
+            const std::string a = use(first);
+            const std::string b = use(second);
+            assign(dest, strprintf("val::%s(%s, %s)", fn, a.c_str(), b.c_str()));
+        };
+        const auto fromOne = [&](const char* fn, uint32_t dest, uint32_t source, const std::string& immediate) {
+            if (dest == 0) return assign(0, {});
+            const std::string a = use(source);
+            assign(dest, strprintf("val::%s(%s, %s)", fn, a.c_str(), immediate.c_str()));
+        };
+
+        // A load of a `type` widened as an `as`, and a store of a `type`. The
+        // changed registers are put back only if the address is not plain
+        // memory, and they are the ones changed before this instruction.
+        const auto address = [&]() {
+            const std::string base = use(rs);
+            return strprintf("static_cast<uint32_t>(%s) + static_cast<uint32_t>(%d)", base.c_str(), in.simm());
+        };
+        const auto load = [&](const char* as, const char* type) {
+            const std::string at = address();
+            const std::string puts = putArgument();
+            usesTable_ = true;
+            if (rt == 0) usesUnused_ = true;
+            // After a read that may be of an EE timer register the block may
+            // end; such a read is followed by a leader.
+            const bool mayEnd = !delaySlot && isNarrowLoad(in) && p_.entryAt(in.addr + 4);
+            if (mayEnd) {
+                open();
+                line("bool ends = false;");
+            }
+            const std::string dest = rt ? def(rt) : std::string("ps2n_unused");
+            line(strprintf("PS2N_LOAD%s(%s%s, %s, %s, %s, %s, %s);", mayEnd ? "_ENDS" : "", mayEnd ? "ends, " : "", dest.c_str(), as, type,
+                           at.c_str(), hex(in.addr).c_str(), puts.c_str()),
+                 &in, note);
+            if (mayEnd) {
+                endAfterLoad(after, in.addr + 4);
+                close();
+            }
+        };
+        const auto store = [&](const char* type) {
+            const std::string at = address();
+            const std::string value = use(rt);
+            usesTable_ = true;
+            line(strprintf("PS2N_STORE(%s, %s, %s, %s, %s);", type, at.c_str(), value.c_str(), hex(in.addr).c_str(), putArgument().c_str()), &in,
+                 note);
+        };
+
+        const std::string simm = std::to_string(in.simm());
+        const std::string uimm = strprintf("0x%Xu", in.uimm());
+        const std::string sa = strprintf("%uu", in.sa());
+
+        switch (in.op) {
+#define PS2N_RD_RS_RT(op) \
+    case Op::op:          \
+        fromTwo(#op, rd, rs, rt); \
+        return true;
+#define PS2N_RT_RS_SIMM(op) \
+    case Op::op:            \
+        fromOne(#op, rt, rs, simm); \
+        return true;
+#define PS2N_RT_RS_UIMM(op) \
+    case Op::op:            \
+        fromOne(#op, rt, rs, uimm); \
+        return true;
+#define PS2N_RD_RT_SA(op) \
+    case Op::op:          \
+        fromOne(#op, rd, rt, sa); \
+        return true;
+#define PS2N_RD_RT_RS(op) \
+    case Op::op:          \
+        fromTwo(#op, rd, rt, rs); \
+        return true;
+            PS2N_RD_RS_RT(ADD) PS2N_RD_RS_RT(ADDU) PS2N_RD_RS_RT(SUB) PS2N_RD_RS_RT(SUBU)
+            PS2N_RD_RS_RT(DADD) PS2N_RD_RS_RT(DADDU) PS2N_RD_RS_RT(DSUB) PS2N_RD_RS_RT(DSUBU)
+            PS2N_RD_RS_RT(AND) PS2N_RD_RS_RT(OR) PS2N_RD_RS_RT(XOR) PS2N_RD_RS_RT(NOR)
+            PS2N_RD_RS_RT(SLT) PS2N_RD_RS_RT(SLTU)
+            PS2N_RT_RS_SIMM(ADDI) PS2N_RT_RS_SIMM(ADDIU) PS2N_RT_RS_SIMM(DADDI) PS2N_RT_RS_SIMM(DADDIU)
+            PS2N_RT_RS_SIMM(SLTI) PS2N_RT_RS_SIMM(SLTIU)
+            PS2N_RT_RS_UIMM(ANDI) PS2N_RT_RS_UIMM(ORI) PS2N_RT_RS_UIMM(XORI)
+            PS2N_RD_RT_SA(SLL) PS2N_RD_RT_SA(SRL) PS2N_RD_RT_SA(SRA)
+            PS2N_RD_RT_SA(DSLL) PS2N_RD_RT_SA(DSRL) PS2N_RD_RT_SA(DSRA)
+            PS2N_RD_RT_SA(DSLL32) PS2N_RD_RT_SA(DSRL32) PS2N_RD_RT_SA(DSRA32)
+            PS2N_RD_RT_RS(SLLV) PS2N_RD_RT_RS(SRLV) PS2N_RD_RT_RS(SRAV)
+            PS2N_RD_RT_RS(DSLLV) PS2N_RD_RT_RS(DSRLV) PS2N_RD_RT_RS(DSRAV)
+#undef PS2N_RD_RS_RT
+#undef PS2N_RT_RS_SIMM
+#undef PS2N_RT_RS_UIMM
+#undef PS2N_RD_RT_SA
+#undef PS2N_RD_RT_RS
+        case Op::LUI:
+            assign(rt, "val::LUI(" + uimm + ")");
+            return true;
+        case Op::MOVZ:
+        case Op::MOVN: {
+            // The destination keeps its value unless the condition holds.
+            if (rd == 0) {
+                assign(0, {});
+                return true;
+            }
+            const std::string old = use(rd);
+            const std::string a = use(rs);
+            const std::string b = use(rt);
+            assign(rd, strprintf("val::%s(%s, %s, %s)", in.op == Op::MOVZ ? "MOVZ" : "MOVN", old.c_str(), a.c_str(), b.c_str()));
+            return true;
+        }
+        case Op::LB: load("int8_t", "mem8_t"); return true;
+        case Op::LBU: load("uint8_t", "mem8_t"); return true;
+        case Op::LH: load("int16_t", "mem16_t"); return true;
+        case Op::LHU: load("uint16_t", "mem16_t"); return true;
+        case Op::LW: load("int32_t", "mem32_t"); return true;
+        case Op::LWU: load("uint32_t", "mem32_t"); return true;
+        case Op::LD: load("uint64_t", "mem64_t"); return true;
+        case Op::SB: store("mem8_t"); return true;
+        case Op::SH: store("mem16_t"); return true;
+        case Op::SW: store("mem32_t"); return true;
+        case Op::SD: store("mem64_t"); return true;
+        default: break;
+        }
+
+        // The FPU's instructions, on its registers' locals (ps2n::ee::val in
+        // ops_fpu.h). The flags of FCR31 stay in the core: the functions that
+        // have any write them there.
+        const uint32_t fs = in.fs(), ft = in.ft(), fd = in.fd();
+        const auto fassign = [&](uint32_t dest, const std::string& value) { line(fdef(dest) + " = " + value + ";", &in, note); };
+        const auto fromRegisters = [&](const char* fn, uint32_t dest) {
+            const std::string a = fuse(fs);
+            const std::string b = fuse(ft);
+            fassign(dest, strprintf("val::%s(%s, %s)", fn, a.c_str(), b.c_str()));
+        };
+        const auto fromRegister = [&](const char* fn, uint32_t dest, uint32_t source) {
+            const std::string a = fuse(source);
+            fassign(dest, strprintf("val::%s(%s)", fn, a.c_str()));
+        };
+        const auto withAccumulator = [&](const char* fn, uint32_t dest) {
+            const std::string acc = fuse(kAcc);
+            const std::string a = fuse(fs);
+            const std::string b = fuse(ft);
+            fassign(dest, strprintf("val::%s(%s, %s, %s)", fn, acc.c_str(), a.c_str(), b.c_str()));
+        };
+        const auto compare = [&](const char* fn) {
+            const std::string a = fuse(fs);
+            const std::string b = fuse(ft);
+            line(strprintf("fpu::setCondition(val::%s(%s, %s));", fn, a.c_str(), b.c_str()), &in, note);
+        };
+
+        switch (in.op) {
+        case Op::ADD_S: fromRegisters("ADD_S", fd); return true;
+        case Op::SUB_S: fromRegisters("SUB_S", fd); return true;
+        case Op::MUL_S: fromRegisters("MUL_S", fd); return true;
+        case Op::DIV_S: fromRegisters("DIV_S", fd); return true;
+        case Op::RSQRT_S: fromRegisters("RSQRT_S", fd); return true;
+        case Op::MAX_S: fromRegisters("MAX_S", fd); return true;
+        case Op::MIN_S: fromRegisters("MIN_S", fd); return true;
+        // The same arithmetic, into the accumulator.
+        case Op::ADDA_S: fromRegisters("ADD_S", kAcc); return true;
+        case Op::SUBA_S: fromRegisters("SUB_S", kAcc); return true;
+        case Op::MULA_S: fromRegisters("MUL_S", kAcc); return true;
+        case Op::MADD_S: withAccumulator("MADD_S", fd); return true;
+        case Op::MSUB_S: withAccumulator("MSUB_S", fd); return true;
+        case Op::MADDA_S: withAccumulator("MADDA_S", kAcc); return true;
+        case Op::MSUBA_S: withAccumulator("MSUB_S", kAcc); return true;
+        case Op::SQRT_S: fromRegister("SQRT_S", fd, ft); return true;
+        case Op::ABS_S: fromRegister("ABS_S", fd, fs); return true;
+        case Op::NEG_S: fromRegister("NEG_S", fd, fs); return true;
+        case Op::CVT_W_S: fromRegister("CVT_W_S", fd, fs); return true;
+        case Op::CVT_S_W: fromRegister("CVT_S_W", fd, fs); return true;
+        case Op::MOV_S: {
+            const std::string a = fuse(fs);
+            fassign(fd, a);
+            return true;
+        }
+        case Op::C_F_S: line("fpu::setCondition(false);", &in, note); return true;
+        case Op::C_EQ_S: compare("C_EQ_S"); return true;
+        case Op::C_LT_S: compare("C_LT_S"); return true;
+        case Op::C_LE_S: compare("C_LE_S"); return true;
+        case Op::MFC1: {
+            if (rt == 0) {
+                assign(0, {});
+                return true;
+            }
+            const std::string a = fuse(fs);
+            assign(rt, "val::MFC1(" + a + ")");
+            return true;
+        }
+        case Op::MTC1: {
+            const std::string a = use(rt);
+            fassign(fs, "val::MTC1(" + a + ")");
+            return true;
+        }
+        case Op::LWC1: {
+            const std::string at = address();
+            const std::string puts = putArgument();
+            usesTable_ = true;
+            line(strprintf("PS2N_LOAD_F(%s, %s, %s, %s);", fdef(ft).c_str(), at.c_str(), hex(in.addr).c_str(), puts.c_str()), &in, note);
+            return true;
+        }
+        case Op::SWC1: {
+            const std::string at = address();
+            const std::string value = fuse(ft);
+            usesTable_ = true;
+            line(strprintf("PS2N_STORE(mem32_t, %s, %s, %s, %s);", at.c_str(), value.c_str(), hex(in.addr).c_str(), putArgument().c_str()), &in,
+                 note);
+            return true;
+        }
+        default: return false;
+        }
+    }
+
     // ---- pieces -------------------------------------------------------------
     // An instruction that is neither control flow nor one that ends a block,
     // after `before` eighths not yet in `acc`. Returns the eighths not in
@@ -293,9 +849,12 @@ private:
 
         // The runtime does all of it: when VU0 is brought up to date first,
         // and whether the cycles so far are added before that, depend on the
-        // block the instruction is in.
+        // block the instruction is in. It reads the registers it needs from
+        // the core, and writes the one a transfer from VU0 is for.
         if (isCop2(in)) {
+            put();
             line(strprintf("PS2N_COP2(acc, %uu, %s);", cost, hex(in.addr).c_str()), &in, note);
+            forget(writtenMask(in), 0);
             stats_.cop2++;
             return 0;
         }
@@ -308,38 +867,71 @@ private:
 
         const std::string call = semanticCall(in);
         if (call.empty()) {
-            line(strprintf("%s(%s, %s);", delaySlot ? "delegateInDelaySlot" : "delegate", hex(in.addr).c_str(), hex(in.raw).c_str()), &in, note);
+            // The core's function may read and write any register.
+            put();
+            line(strprintf("%s(%s, %s);", delaySlot ? "PS2N_DELEGATE_IN_SLOT" : "PS2N_DELEGATE", hex(in.addr).c_str(), hex(in.raw).c_str()), &in,
+                 note);
+            forget();
             stats_.delegated++;
             stats_.delegatedByOp[in.op]++;
             return after;
         }
 
+        if (emitOnLocals(in, after, delaySlot, note)) {
+            stats_.onLocals++;
+            return after;
+        }
+
+        // Carried out through register numbers, on the core's copy of the
+        // registers: it has to have what the instruction may read, and the
+        // locals no longer hold what it may write. For one of the FPU's
+        // instructions that is every FPU register.
+        const uint64_t fpu = in.is(F_FPU) ? ~uint64_t{0} : 0;
+        put(fieldMask(in), fpu);
         if (in.is(F_LOAD | F_STORE)) {
             // The runtime is told when the access is about to touch memory
             // that is not plain. After a read that may be of an EE timer
             // register the block may end; such a read is followed by a leader.
-            const std::string access = strprintf("%s, %d, %s", kRegNames[in.rs()], in.simm(), hex(in.addr).c_str());
+            const std::string access = strprintf("%s, %d, %s, %s", kRegNames[in.rs()], in.simm(), hex(in.addr).c_str(), call.c_str());
             if (!delaySlot && isNarrowLoad(in) && p_.entryAt(in.addr + 4)) {
                 open();
-                line("const bool ends = PS2N_MEMORY_ENDS(" + access + ");");
-                line(call + ";", &in, note);
-                line("if (ends) [[unlikely]]");
-                open();
-                line(strprintf("PS2N_BLOCK_END(acc, %uu, %s);", after, hex(in.addr + 4).c_str()));
-                transfer(in.addr + 4);
-                close();
+                line("bool ends = false;");
+                line("PS2N_ACCESS_ENDS(ends, " + access + ");", &in, note);
+                forget(writtenMask(in), fpu);
+                endAfterLoad(after, in.addr + 4);
                 close();
                 return after;
             }
-            line("PS2N_MEMORY(" + access + ");");
+            line("PS2N_ACCESS(" + access + ");", &in, note);
+            forget(writtenMask(in), fpu);
+            return after;
         }
         line(call + ";", &in, note);
+        forget(writtenMask(in), fpu);
+        // The moves to and from COP0 call into the core, which is free to let
+        // time pass (it does not, in PCSX2 v2.9.170).
+        if (in.is(F_COP0)) line("PS2N_TIME();");
         return after;
+    }
+
+    // After a read that may have been of an EE timer register (`ends`, set by
+    // the runtime): the block ends there, and goes on at `next`. The code
+    // after this goes on with the locals as they were.
+    void endAfterLoad(uint32_t eighths, uint32_t next) {
+        line("if (ends) [[unlikely]]");
+        open();
+        const Locals here = locals();
+        blockEnd(eighths, hex(next));
+        transfer(next);
+        restore(here);
+        close();
     }
 
     // The interpreter carries out the rest of the block, from `at`.
     void leave(uint32_t at, const Insn* in, const char* why) {
+        put();
         line(strprintf("return leave(%s, acc + %uu, ps2n_start);", hex(at).c_str(), pending_), in, why);
+        forget();
         stats_.leaves++;
         pending_ = 0;
         reachable_ = false;
@@ -348,7 +940,13 @@ private:
 
     // The end of a block. `loop`: the branch ending it goes back (when `back`
     // holds) to a place from which the code up to here may be an idle loop.
+    // The core gets the changed registers first, for the event test that may
+    // follow. The locals go on holding them: an event test after which the
+    // code goes on at `next` has not changed a register (one that takes an
+    // interrupt changes where the code goes on instead, and the function
+    // returns).
     void blockEnd(uint32_t eighths, const std::string& next, const char* back = "true", bool loop = false) {
+        put();
         if (loop) line(strprintf("PS2N_BLOCK_END_LOOP(acc, %uu, %s, %s);", eighths, next.c_str(), back));
         else line(strprintf("PS2N_BLOCK_END(acc, %uu, %s);", eighths, next.c_str()));
     }
@@ -386,12 +984,18 @@ private:
         return true;
     }
 
-    // A jump to `target`, where a block begins.
+    // A jump to `target`, where a block begins. The code after it is another
+    // way, and goes on with the locals as they were.
     void transfer(uint32_t target) {
         if (target >= f_.start && target < f_.end && f_.isLeader(target)) {
+            const Locals here = locals();
+            arrive(target);
             line("goto " + label(target) + ";");
+            restore(here);
             return;
         }
+        // Out of the function: the core gets what was changed.
+        putOnTheWayOut();
         if (const Function* g = p_.entryAt(target)) {
             line("PS2N_JUMP(" + fnName(g->start) + ", " + hex(target) + ");");
             return;
@@ -400,10 +1004,13 @@ private:
         line("return " + hex(target) + ";");
     }
 
-    // A call of `target` that returns to `ret`, after the end of a block.
+    // A call of `target` that returns to `ret`, after the end of a block. The
+    // callee may change any register: afterwards the locals hold nothing.
     void call(uint32_t target, uint32_t ret) {
+        put();
         if (const Function* g = p_.entryAt(target)) line("PS2N_CALL(" + fnName(g->start) + ", " + hex(target) + ", " + hex(ret) + ");");
         else line("PS2N_CALL_DYNAMIC(" + hex(target) + ", " + hex(ret) + ");");
+        forget();
     }
 
     // What a block does when it begins at leader `a` of this function.
@@ -429,14 +1036,18 @@ private:
             // The call is made and the block ends; or it is one PCSX2's
             // recompiler does not make, and the block ends all the same, cut
             // short after it with a fixed cost counted. The runtime does
-            // either.
+            // either. The kernel reads and writes the registers in the core.
+            put();
             line(strprintf("PS2N_SYSCALL(acc, %uu, %s, %s);", pending_ + cycles(in.op), hex(a).c_str(), hex(in.raw).c_str()), &in);
+            forget();
             pending_ = 0;
             blockStart_ = true;
             return a + 4;
         }
         if (isSystem(in)) {
+            put();
             line(strprintf("PS2N_SYSTEM(acc, %uu, %s, %s);", pending_ + cycles(in.op), hex(a).c_str(), hex(in.raw).c_str()), &in);
+            forget();
             pending_ = 0;
             blockStart_ = true;
             return a + 4;
@@ -486,12 +1097,13 @@ private:
             // only then is it left to the interpreter. This is what GCC makes
             // of a division: "beql divisor, $zero, 1f; break 7; 1:".
             open();
-            if (in.isCall()) line("setLink(RA, " + hex(next) + ");");
+            if (in.isCall()) link(31, next);
             line("const bool taken = " + branchCondition(in) + ";", &in);
             line("if (taken)");
-            ++depth_;
+            open();
+            putOnTheWayOut();
             line(strprintf("return leave(%s, acc + %uu, ps2n_start);", hex(a).c_str(), pending_), &ds, "delay slot, not compiled");
-            --depth_;
+            close();
             blockEnd(cost, hex(next));
             close();
             stats_.guards++;
@@ -538,7 +1150,7 @@ private:
             break;
         }
         case Op::JAL: {
-            line("setLink(RA, " + hex(next) + ");");
+            link(31, next);
             const uint32_t rest = slot();
             blockEnd(rest, hex(in.jumpTarget()), "true", loop);
             call(in.jumpTarget(), next);
@@ -546,7 +1158,8 @@ private:
         }
         case Op::JR: {
             open();
-            line(strprintf("const uint32_t target = ru32(%s);", kRegNames[in.rs()]));
+            const std::string to = use(in.rs());
+            line(strprintf("const uint32_t target = static_cast<uint32_t>(%s);", to.c_str()));
             const uint32_t rest = slot();
             blockEnd(rest, "target");
             if (in.rs() == 31) {
@@ -564,55 +1177,65 @@ private:
         }
         case Op::JALR: {
             open();
-            line(strprintf("const uint32_t target = ru32(%s);", kRegNames[in.rs()]));
-            if (in.rd()) line(strprintf("setLink(%s, %s);", kRegNames[in.rd()], hex(next).c_str()));
+            const std::string to = use(in.rs());
+            line(strprintf("const uint32_t target = static_cast<uint32_t>(%s);", to.c_str()));
+            link(in.rd(), next);
             const uint32_t rest = slot();
             blockEnd(rest, "target");
             line("PS2N_CALL_DYNAMIC(target, " + hex(next) + ");");
+            forget();
             close();
             break;
         }
         default: {   // the conditional branches
             const uint32_t target = in.branchTarget();
-            const bool link = in.isCall();
+            const bool linked = in.isCall();
             // The link is written before the register is compared, as PCSX2's
             // recompiler does it.
             if (in.isUnconditionalBranch()) {
-                if (link) line("setLink(RA, " + hex(next) + ");");
+                if (linked) link(31, next);
                 const uint32_t rest = slot();
                 blockEnd(rest, hex(target), "true", loop);
-                if (link) {
+                if (linked) {
                     call(target, next);
                 } else {
                     transfer(target);
                     falls = false;
                 }
             } else if (in.isLikely()) {
-                // The delay slot only runs, and only counts, when the branch is taken.
+                // The delay slot only runs, and only counts, when the branch is
+                // taken. Either way the block ends, and what the locals hold
+                // is put back on both sides: on the taken side after the
+                // delay slot, with what that changed.
                 open();
-                if (link) line("setLink(RA, " + hex(next) + ");");
+                if (linked) link(31, next);
                 line("const bool taken = " + branchCondition(in) + ";");
+                const Locals before = locals();
                 line("if (taken)");
                 open();
                 const uint32_t rest = slot();
                 blockEnd(rest, hex(target), "true", loop);
-                if (link) call(target, next);
+                if (linked) call(target, next);
                 else transfer(target);
                 close();
+                restore(before);
                 line("else");
                 open();
                 blockEnd(cost, hex(next));
                 close();
                 close();
+                // After a call on the taken side both sides go on at `next`,
+                // and the callee may have changed any register.
+                if (linked) forget();
             } else {
                 open();
-                if (link) line("setLink(RA, " + hex(next) + ");");
+                if (linked) link(31, next);
                 line("const bool taken = " + branchCondition(in) + ";");
                 const uint32_t rest = slot();
                 blockEnd(rest, "taken ? " + hex(target) + " : " + hex(next), "taken", loop);
                 line("if (taken)");
                 open();
-                if (link) call(target, next);
+                if (linked) call(target, next);
                 else transfer(target);
                 close();
                 close();
@@ -646,6 +1269,12 @@ private:
         uint32_t a = f_.start;
         while (a < f_.end) {
             if (f_.isLeader(a)) {
+                // The label can be reached from elsewhere: the code before it,
+                // if it goes on into it, first brings the locals to what the
+                // label holds.
+                const Locals want = stateAt(a);
+                if (reachable_) arrive(a);
+                beginRegion(a);
                 if (reachable_ && !blockStart_) {
                     // Reached in the middle of a block. If this is where the
                     // runtime cut the block short it ends here and another
@@ -662,6 +1291,13 @@ private:
                 } else {
                     body_ += label(a) + ":\n";
                     blockStart(a);
+                }
+                restore(want);
+                if (!want.empty()) {
+                    // The way in from outside the function.
+                    entries_ += strprintf("E_%08X:\n\t%s\n\tgoto %s;\n", a, getText(want.valid, want.fvalid).c_str(), label(a).c_str());
+                    stats_.labelsHolding++;
+                    stats_.registersAtLabels += static_cast<size_t>(std::popcount(want.valid) + std::popcount(want.fvalid));
                 }
                 pending_ = 0;
                 reachable_ = true;
@@ -700,8 +1336,11 @@ private:
             if (p_.entryAt(a)) {
                 line(strprintf("if ((ps2n_end & kBlockEndMask) == %s)", hex(a).c_str()));
                 open();
+                const Locals here = locals();
+                put();
                 line(strprintf("PS2N_SPLIT_END(acc, %uu, %s);", pending_, hex(a).c_str()));
                 transfer(a);
+                restore(here);
                 close();
             }
             const uint32_t before = a;
@@ -715,6 +1354,24 @@ private:
         }
     }
 };
+
+// Function `f`, or its variant `variant`, as C++. It is generated a few times
+// first, each time with the labels' states the time before found, to settle
+// what the locals hold at each label; then once more, counted in `stats`.
+std::string emitFunction(const Program& prog, const LeaderIndex& leaders, const Function& f, int variant, const GenerateOptions& options,
+                         GenerateStats& stats) {
+    LabelInfo info;
+    for (int pass = 0; pass < kStatePasses; ++pass) {
+        GenerateStats scratch;
+        FunctionEmitter trial(prog, leaders, f, variant, options, scratch, info);
+        trial.emit();
+        LabelInfo next{statesFrom(trial.arrivals(), trial.needs()), trial.needs()};
+        if (next == info) break;
+        info = std::move(next);
+    }
+    FunctionEmitter emitter(prog, leaders, f, variant, options, stats, info);
+    return emitter.emit();
+}
 
 } // namespace
 
@@ -779,9 +1436,9 @@ std::vector<GeneratedFile> generateFiles(const Program& prog, const GenerateOpti
     std::string declarations;
     for (const Function& f : prog.functions) {
         const char* linkage = split ? "" : "static ";
-        declarations += linkage + ("uint32_t " + fnName(f, -1)) + "(uint32_t pc);\n";
+        declarations += linkage + ("uint32_t PS2N_CC " + fnName(f, -1)) + "(uint32_t pc);\n";
         for (size_t v = 0; v < f.variants.size(); ++v)
-            declarations += linkage + ("uint32_t " + fnName(f, static_cast<int>(v))) + "(uint32_t pc);\n";
+            declarations += linkage + ("uint32_t PS2N_CC " + fnName(f, static_cast<int>(v))) + "(uint32_t pc);\n";
     }
 
     // The functions of each part: in address order, and of about the same
@@ -814,8 +1471,7 @@ std::vector<GeneratedFile> generateFiles(const Program& prog, const GenerateOpti
         std::string& out = bodies[std::min<uint64_t>(options.parts - 1, instructionsBefore * options.parts / instructionsInAll)];
         instructionsBefore += (f.end - f.start) / 4;
 
-        FunctionEmitter emitter(prog, leaderIndex, f, -1, options, stats);
-        out += emitter.emit();
+        out += emitFunction(prog, leaderIndex, f, -1, options, stats);
         out += "\n";
 
         const uint32_t firstLeader = leaderCount;
@@ -830,8 +1486,7 @@ std::vector<GeneratedFile> generateFiles(const Program& prog, const GenerateOpti
             // Counted apart: a variant is not more of the program, it is the
             // same place in it again.
             GenerateStats variantStats;
-            FunctionEmitter variantEmitter(prog, leaderIndex, f, static_cast<int>(v), options, variantStats);
-            out += variantEmitter.emit();
+            out += emitFunction(prog, leaderIndex, f, static_cast<int>(v), options, variantStats);
             out += "\n";
 
             const std::string name = strprintf("variant_hashes_%u", variantCount);

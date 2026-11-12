@@ -18,6 +18,24 @@
 #include <cstddef>
 #include <cstdint>
 
+// The calling convention of compiled functions. Under clang they keep no
+// registers for their caller (preserve_none). A compiled function holds
+// nothing in host registers across a call of another that it does not take
+// again from the core afterwards, so saving registers for it is wasted; and
+// the eight a function saved on entry and restored on leaving were most of
+// what a call between compiled functions cost. The runtime's own functions
+// keep the platform's convention, so a compiled function may still keep
+// values in registers across a call of the runtime. Elsewhere, and with a
+// compiler that does not have the attribute, it is the platform's own.
+#if defined(__clang__) && defined(__has_attribute)
+#if __has_attribute(preserve_none)
+#define PS2N_CC __attribute__((preserve_none))
+#endif
+#endif
+#ifndef PS2N_CC
+#define PS2N_CC
+#endif
+
 namespace ps2n::ee
 {
 	// A guest function compiled ahead of time.
@@ -31,7 +49,7 @@ namespace ps2n::ee
 	//
 	// kUnwind is returned in place of a PC when every compiled frame has to be
 	// left whatever the PC is. The dispatcher then continues at cpuRegs.pc.
-	using StaticFn = uint32_t (*)(uint32_t pc);
+	using StaticFn = uint32_t(PS2N_CC*)(uint32_t pc);
 	inline constexpr uint32_t kUnwind = 1; // never the address of an instruction
 
 	struct FunctionInfo
@@ -93,10 +111,15 @@ namespace ps2n::ee
 	//    rounded down, never less than one. At some instructions the count so
 	//    far is added before the block ends (PS2N_FLUSH); the remainder stays.
 	//
-	// The function keeps three things in locals: `acc`, the eighths counted
+	// The function keeps four things in locals: `acc`, the eighths counted
 	// since the block began or since the last PS2N_FLUSH, apart from those the
 	// recompiler has folded into the macros' arguments; `ps2n_start`, the
-	// address the block began at; `ps2n_end`, the word described below.
+	// address the block began at; `ps2n_end`, the word described below; and
+	// `ps2n_cycle`, the core's cycle count. The count in the core is always
+	// right: whenever the function adds to its own it writes the sum there,
+	// and after anything that may have changed the core's it takes it again
+	// (PS2N_TIME). What the local saves is reading the count back from memory
+	// at the end of every block, which is where a short loop spends its time.
 	inline uint32_t blockCycles(uint32_t eighths)
 	{
 		const uint32_t cycles = eighths >> 3;
@@ -111,17 +134,15 @@ namespace ps2n::ee
 	inline constexpr uint32_t kBlockIdleLoop = 2; // its branch back to its own start skips to the next event
 	inline constexpr uint32_t kBlockEndMask = ~3u;
 
-	// Whether the core has an event to handle.
+	// Whether the core has an event to handle; the second form for a caller
+	// that has the cycle count at hand.
 	inline bool eventDue()
 	{
 		return static_cast<int64_t>(cpuRegs.cycle - cpuRegs.nextEventCycle) >= 0;
 	}
-
-	// Whether `address` is anything other than plain memory: a device's
-	// registers, or nothing at all.
-	inline bool notPlainMemory(uint32_t address)
+	inline bool eventDueAt(uint64_t cycle)
 	{
-		return vtlb_private::vtlbdata.vmap[address >> vtlb_private::VTLB_PAGE_BITS].isHandler(address);
+		return static_cast<int64_t>(cycle - cpuRegs.nextEventCycle) >= 0;
 	}
 
 	// ---- runtime entry points for compiled code ------------------------------
@@ -183,7 +204,8 @@ namespace ps2n::ee
 
 	// A jump whose target is only known at run time and is not one of the
 	// jumping function's own blocks. Returns the PC to continue at, or kUnwind.
-	uint32_t jump(uint32_t pc);
+	// It has compiled functions' calling convention: they jump to it.
+	uint32_t PS2N_CC jump(uint32_t pc);
 
 	// Leaves compiled code in the middle of the block that began at `start`:
 	// the interpreter carries out the rest of it, from `pc`, with `eighths`
@@ -214,8 +236,13 @@ namespace ps2n::ee
 
 // ---- what generated code is written with --------------------------------------
 // These are macros only so that the `return` inside them leaves the generated
-// function, and so that they can use its locals `ps2n_start` and `ps2n_end`.
-// `acc_` is the function's `acc`.
+// function, and so that they can use its locals `ps2n_start`, `ps2n_end` and
+// `ps2n_cycle`. `acc_` is the function's `acc`.
+
+// The function's copy of the cycle count, taken again: after every call out
+// of the function that comes back into it, since any of them may have let
+// time pass.
+#define PS2N_TIME() ps2n_cycle = cpuRegs.cycle
 
 // A jump to another compiled function. Without the attribute it still works,
 // but may leave a host frame behind for each such jump.
@@ -228,7 +255,9 @@ namespace ps2n::ee
 #endif
 
 // At a label, where a block begins: leader `index_` of the image, address
-// `addr_`. `blocks` is the image's table.
+// `addr_`. `blocks` is the image's table. (What the runtime answers goes
+// through a variable of its own: were `ps2n_end` handed over, it would have
+// to live in memory, and every block would begin by writing it there.)
 #define PS2N_BLOCK_START(index_, addr_) \
 	do \
 	{ \
@@ -236,9 +265,12 @@ namespace ps2n::ee
 		ps2n_end = blocks[index_]; \
 		if (ps2n_end == 0) [[unlikely]] \
 		{ \
-			const uint32_t ps2n_pc = ::ps2n::ee::blockStart(image, index_, 0, &ps2n_end); \
-			if (ps2n_end == 0) \
+			uint32_t ps2n_block = 0; \
+			const uint32_t ps2n_pc = ::ps2n::ee::blockStart(image, index_, 0, &ps2n_block); \
+			if (ps2n_block == 0) \
 				return ps2n_pc; \
+			ps2n_end = ps2n_block; \
+			PS2N_TIME(); \
 		} \
 	} while (0)
 
@@ -247,9 +279,12 @@ namespace ps2n::ee
 	do \
 	{ \
 		ps2n_start = (addr_); \
-		const uint32_t ps2n_pc = ::ps2n::ee::blockStart(image, index_, 1 + (variant_), &ps2n_end); \
-		if (ps2n_end == 0) \
+		uint32_t ps2n_block = 0; \
+		const uint32_t ps2n_pc = ::ps2n::ee::blockStart(image, index_, 1 + (variant_), &ps2n_block); \
+		if (ps2n_block == 0) \
 			return ps2n_pc; \
+		ps2n_end = ps2n_block; \
+		PS2N_TIME(); \
 	} while (0)
 
 // The block was cut short at `next_`, a label reached from the instruction
@@ -258,13 +293,15 @@ namespace ps2n::ee
 #define PS2N_SPLIT_END(acc_, eighths_, next_) \
 	do \
 	{ \
-		cpuRegs.cycle += ::ps2n::ee::blockCycles((acc_) + (eighths_)); \
+		ps2n_cycle += ::ps2n::ee::blockCycles((acc_) + (eighths_)); \
+		cpuRegs.cycle = ps2n_cycle; \
 		(acc_) = 0; \
-		if ((ps2n_end & ::ps2n::ee::kBlockTestsAtSplit) && ::ps2n::ee::eventDue()) [[unlikely]] \
+		if ((ps2n_end & ::ps2n::ee::kBlockTestsAtSplit) && ::ps2n::ee::eventDueAt(ps2n_cycle)) [[unlikely]] \
 		{ \
 			const uint32_t ps2n_next = ::ps2n::ee::eventTest(next_); \
 			if (ps2n_next != (next_)) \
 				return ps2n_next; \
+			PS2N_TIME(); \
 		} \
 	} while (0)
 
@@ -274,13 +311,15 @@ namespace ps2n::ee
 	do \
 	{ \
 		const uint32_t ps2n_expected = (next_); \
-		cpuRegs.cycle += ::ps2n::ee::blockCycles((acc_) + (eighths_)); \
+		ps2n_cycle += ::ps2n::ee::blockCycles((acc_) + (eighths_)); \
+		cpuRegs.cycle = ps2n_cycle; \
 		(acc_) = 0; \
-		if (::ps2n::ee::eventDue()) [[unlikely]] \
+		if (::ps2n::ee::eventDueAt(ps2n_cycle)) [[unlikely]] \
 		{ \
 			const uint32_t ps2n_next = ::ps2n::ee::eventTest(ps2n_expected); \
 			if (ps2n_next != ps2n_expected) \
 				return ps2n_next; \
+			PS2N_TIME(); \
 		} \
 	} while (0)
 
@@ -291,9 +330,10 @@ namespace ps2n::ee
 	do \
 	{ \
 		const uint32_t ps2n_expected = (next_); \
-		cpuRegs.cycle += ::ps2n::ee::blockCycles((acc_) + (eighths_)); \
+		ps2n_cycle += ::ps2n::ee::blockCycles((acc_) + (eighths_)); \
+		cpuRegs.cycle = ps2n_cycle; \
 		(acc_) = 0; \
-		bool ps2n_test = ::ps2n::ee::eventDue(); \
+		bool ps2n_test = ::ps2n::ee::eventDueAt(ps2n_cycle); \
 		if ((back_) && (ps2n_end & ::ps2n::ee::kBlockIdleLoop)) \
 		{ \
 			if (!ps2n_test) \
@@ -305,6 +345,7 @@ namespace ps2n::ee
 			const uint32_t ps2n_next = ::ps2n::ee::eventTest(ps2n_expected); \
 			if (ps2n_next != ps2n_expected) \
 				return ps2n_next; \
+			PS2N_TIME(); \
 		} \
 	} while (0)
 
@@ -315,7 +356,8 @@ namespace ps2n::ee
 	do \
 	{ \
 		const uint32_t ps2n_eighths = (acc_) + (eighths_); \
-		cpuRegs.cycle += ::ps2n::ee::blockCycles(ps2n_eighths); \
+		ps2n_cycle += ::ps2n::ee::blockCycles(ps2n_eighths); \
+		cpuRegs.cycle = ps2n_cycle; \
 		(acc_) = ps2n_eighths & 7u; \
 	} while (0)
 
@@ -326,6 +368,7 @@ namespace ps2n::ee
 		const uint32_t ps2n_pc = fn_(target_); \
 		if (ps2n_pc != (ret_)) \
 			return ps2n_pc; \
+		PS2N_TIME(); \
 	} while (0)
 
 // A call whose target is only known at run time.
@@ -335,6 +378,7 @@ namespace ps2n::ee
 		const uint32_t ps2n_pc = ::ps2n::ee::dispatch(target_); \
 		if (ps2n_pc != (ret_)) \
 			return ps2n_pc; \
+		PS2N_TIME(); \
 	} while (0)
 
 // A jump to an entry of another compiled function.
@@ -348,6 +392,7 @@ namespace ps2n::ee
 		(acc_) = 0; \
 		if (ps2n_pc != (pc_) + 4) \
 			return ps2n_pc; \
+		PS2N_TIME(); \
 	} while (0)
 
 // SYSCALL at `pc_`, which ends the block whether the call is made or not.
@@ -358,19 +403,206 @@ namespace ps2n::ee
 		(acc_) = 0; \
 		if (ps2n_pc != (pc_) + 4) \
 			return ps2n_pc; \
+		PS2N_TIME(); \
 	} while (0)
 
 // A COP2 instruction, LQC2 or SQC2 at `pc_`.
-#define PS2N_COP2(acc_, eighths_, pc_) (acc_) = ::ps2n::ee::cop2Instruction(pc_, ps2n_start, (acc_) + (eighths_))
+#define PS2N_COP2(acc_, eighths_, pc_) \
+	do \
+	{ \
+		(acc_) = ::ps2n::ee::cop2Instruction(pc_, ps2n_start, (acc_) + (eighths_)); \
+		PS2N_TIME(); \
+	} while (0)
 
-// Before the load or store at `pc_` of the address in general register
-// `base_` plus `offset_`. The second form is an expression, for a load after
-// which the block may end: true when it does.
-#define PS2N_MEMORY(base_, offset_, pc_) \
+// An instruction the core's interpreter function carries out, at `pc_`; the
+// second form for one in a delay slot.
+#define PS2N_DELEGATE(pc_, code_) \
+	do \
+	{ \
+		::ps2n::ee::delegate(pc_, code_); \
+		PS2N_TIME(); \
+	} while (0)
+#define PS2N_DELEGATE_IN_SLOT(pc_, code_) \
+	do \
+	{ \
+		::ps2n::ee::delegateInDelaySlot(pc_, code_); \
+		PS2N_TIME(); \
+	} while (0)
+
+// The load or store `op_` at `pc_`, carried out through register numbers, of
+// the address in general register `base_` plus `offset_`. (The loads and
+// stores of whole general registers are not written this way: PS2N_LOAD and
+// PS2N_STORE, below.) The runtime is told first when it is about to touch
+// memory that is not plain. `op_` is written out on both sides so that on the
+// plain side the compiler already has the answer to what kind of memory it
+// is, and asks only once. The second form is for a load after which the
+// block may end: `ends_` is set when it does.
+#define PS2N_ACCESS(base_, offset_, pc_, op_) \
 	do \
 	{ \
 		if (::ps2n::ee::notPlainMemory(::ps2n::ee::ru32(base_) + static_cast<uint32_t>(offset_))) [[unlikely]] \
+		{ \
 			::ps2n::ee::memoryFault(pc_, ps2n_start); \
+			op_; \
+			PS2N_TIME(); \
+		} \
+		else \
+		{ \
+			op_; \
+		} \
 	} while (0)
-#define PS2N_MEMORY_ENDS(base_, offset_, pc_) \
-	(::ps2n::ee::notPlainMemory(::ps2n::ee::ru32(base_) + static_cast<uint32_t>(offset_)) && ::ps2n::ee::memoryFault(pc_, ps2n_start))
+#define PS2N_ACCESS_ENDS(ends_, base_, offset_, pc_, op_) \
+	do \
+	{ \
+		if (::ps2n::ee::notPlainMemory(::ps2n::ee::ru32(base_) + static_cast<uint32_t>(offset_))) [[unlikely]] \
+		{ \
+			(ends_) = ::ps2n::ee::memoryFault(pc_, ps2n_start); \
+			op_; \
+			PS2N_TIME(); \
+		} \
+		else \
+		{ \
+			op_; \
+		} \
+	} while (0)
+
+// ---- registers in local variables ---------------------------------------------
+// A generated function keeps the registers it works on in local variables,
+// which the C++ compiler can keep in host registers: nothing else can reach
+// them, so a store into the console's memory does not make it read them
+// again. The general registers are `g1` to `g31`, bits 0-63 of each; the
+// FPU's are `f0` to `f31` and, for its accumulator, `facc`, 32 bits each. The
+// generator knows at every point which locals hold a register's value and
+// which of those differ from the core's copy. It puts the changed ones back
+// (PS2N_PUT, PS2N_PUT_F, PS2N_PUT_ACC) before anything outside the function
+// can look at a register or change one: the end of a block (an event test
+// may follow), a call, an instruction carried out through register numbers.
+// It takes a register (PS2N_GET, PS2N_GET_F, PS2N_GET_ACC) when the local
+// does not hold it. After a call of another function, which may change any
+// register, the locals hold nothing. At a label they hold what every way
+// into it holds, and none of it changed: each way in brings them to that
+// first, and an entry from outside the function (`E_` and the label's
+// address) takes it from the core.
+#define PS2N_GPR(n_) cpuRegs.GPR.r[n_].UD[0]
+#define PS2N_GET(n_) g##n_ = PS2N_GPR(n_)
+#define PS2N_PUT(n_) PS2N_GPR(n_) = g##n_
+#define PS2N_GET_F(n_) f##n_ = fpuRegs.fpr[n_].UL
+#define PS2N_PUT_F(n_) fpuRegs.fpr[n_].UL = f##n_
+#define PS2N_GET_ACC() facc = fpuRegs.ACC.UL
+#define PS2N_PUT_ACC() fpuRegs.ACC.UL = facc
+
+namespace ps2n::ee
+{
+	// Whether `address` is anything other than plain memory: a device's
+	// registers, or nothing at all.
+	inline bool notPlainMemory(uint32_t address)
+	{
+		return vtlb_private::vtlbdata.vmap[address >> vtlb_private::VTLB_PAGE_BITS].isHandler(address);
+	}
+
+	// The address table of the core, for a function to keep the address of
+	// (`ps2n_vmap`). The table's entries change as the kernel maps memory;
+	// where the table is does not, for as long as the machine exists.
+	inline const vtlb_private::VTLBVirtual* addressTable()
+	{
+		return vtlb_private::vtlbdata.vmap;
+	}
+
+	// A load from, and a store to, plain memory through its table entry.
+	template <typename T>
+	inline T plainRead(const vtlb_private::VTLBVirtual entry, uint32_t address)
+	{
+		T value;
+		std::memcpy(&value, reinterpret_cast<const void*>(entry.assumePtr(address)), sizeof(T));
+		return value;
+	}
+	template <typename T>
+	inline void plainWrite(const vtlb_private::VTLBVirtual entry, uint32_t address, T value)
+	{
+		std::memcpy(reinterpret_cast<void*>(entry.assumePtr(address)), &value, sizeof(T));
+	}
+} // namespace ps2n::ee
+
+
+// A value read from memory as an `as_` (int8_t for LB, uint8_t for LBU, and
+// so on), widened to a general register.
+#define PS2N_WIDEN(as_, value_) static_cast<uint64_t>(static_cast<int64_t>(static_cast<as_>(value_)))
+
+// A load at `pc_` into the local `dst_`: a `T_` (mem8_t to mem64_t) read at
+// `addr_` and widened as an `as_`. The address table is looked at once. When
+// the address is not plain memory, the registers the generator knows to be
+// changed are put back first (`put_`, a list of PS2N_PUT), the runtime is
+// told, and the core's own function does the read. PS2N_LOAD_ENDS is for a
+// load after which the block may end: `ends_` is set when it does.
+// PS2N_LOAD_F is a load of 32 bits into the local of an FPU register.
+#define PS2N_LOAD(dst_, as_, T_, addr_, pc_, put_) \
+	do \
+	{ \
+		const uint32_t ps2n_a = (addr_); \
+		const vtlb_private::VTLBVirtual ps2n_e = ps2n_vmap[ps2n_a >> vtlb_private::VTLB_PAGE_BITS]; \
+		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
+		{ \
+			put_; \
+			::ps2n::ee::memoryFault(pc_, ps2n_start); \
+			(dst_) = PS2N_WIDEN(as_, vtlb_memRead<T_>(ps2n_a)); \
+			PS2N_TIME(); \
+		} \
+		else \
+		{ \
+			(dst_) = PS2N_WIDEN(as_, ::ps2n::ee::plainRead<T_>(ps2n_e, ps2n_a)); \
+		} \
+	} while (0)
+#define PS2N_LOAD_ENDS(ends_, dst_, as_, T_, addr_, pc_, put_) \
+	do \
+	{ \
+		const uint32_t ps2n_a = (addr_); \
+		const vtlb_private::VTLBVirtual ps2n_e = ps2n_vmap[ps2n_a >> vtlb_private::VTLB_PAGE_BITS]; \
+		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
+		{ \
+			put_; \
+			(ends_) = ::ps2n::ee::memoryFault(pc_, ps2n_start); \
+			(dst_) = PS2N_WIDEN(as_, vtlb_memRead<T_>(ps2n_a)); \
+			PS2N_TIME(); \
+		} \
+		else \
+		{ \
+			(dst_) = PS2N_WIDEN(as_, ::ps2n::ee::plainRead<T_>(ps2n_e, ps2n_a)); \
+		} \
+	} while (0)
+#define PS2N_LOAD_F(dst_, addr_, pc_, put_) \
+	do \
+	{ \
+		const uint32_t ps2n_a = (addr_); \
+		const vtlb_private::VTLBVirtual ps2n_e = ps2n_vmap[ps2n_a >> vtlb_private::VTLB_PAGE_BITS]; \
+		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
+		{ \
+			put_; \
+			::ps2n::ee::memoryFault(pc_, ps2n_start); \
+			(dst_) = vtlb_memRead<mem32_t>(ps2n_a); \
+			PS2N_TIME(); \
+		} \
+		else \
+		{ \
+			(dst_) = ::ps2n::ee::plainRead<mem32_t>(ps2n_e, ps2n_a); \
+		} \
+	} while (0)
+
+// A store at `pc_` of the low bits of `value_` as a `T_` at `addr_`, in the
+// same way.
+#define PS2N_STORE(T_, addr_, value_, pc_, put_) \
+	do \
+	{ \
+		const uint32_t ps2n_a = (addr_); \
+		const vtlb_private::VTLBVirtual ps2n_e = ps2n_vmap[ps2n_a >> vtlb_private::VTLB_PAGE_BITS]; \
+		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
+		{ \
+			put_; \
+			::ps2n::ee::memoryFault(pc_, ps2n_start); \
+			vtlb_memWrite<T_>(ps2n_a, static_cast<T_>(value_)); \
+			PS2N_TIME(); \
+		} \
+		else \
+		{ \
+			::ps2n::ee::plainWrite<T_>(ps2n_e, ps2n_a, static_cast<T_>(value_)); \
+		} \
+	} while (0)

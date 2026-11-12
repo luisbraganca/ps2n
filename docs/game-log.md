@@ -18,6 +18,7 @@ The run files, pictures included, are under the git-ignored build tree.
 | G3 The compiled game | **Done for the first 4,200 frames** (2026-11-11): the compiled run is the stock run at every one of those 38.5 million moments, registers included, with the same picture at every frame; it is the interpreted run at every event test; none of the executable's code is interpreted; no code outside the executable has run. |
 | G4 Further into the game | **Done as far as the first level** (2026-11-12): by script, and played by the maintainer. By script (2026-11-11): with the same input the compiled game is where stock PCSX2 is, at the same cycle count, at every one of 93 million sync points over 17,500 frames, and shows the same picture at each of the 1,750 frames compared: menus, three and a half minutes of play, being killed, Retry. What differs is listed, and it is one thing: the sign of a zero in the FPU's registers, where the console is followed on purpose. The general registers, COP0's and VU0's are the stock run's at every sync point, and the sound hardware is in the stock run's state at each of 350 moments (2026-11-12). **It can be played** (2026-11-11, Windows): a window at the console's speed, with sound, the keyboard and a controller, checked by machine with the sound off. The maintainer played it into the first level on 2026-11-12: "Everything looked good." Not yet: the rest of the game. |
 | G5 Measurement and report | **Done as far as the first level** (2026-11-12): times repeat now (a run is kept on the processor's fast cores). Over the level run the compiled game takes 1.35 times as long as stock PCSX2: 100 s against 74 s. The whole difference is in the game's own code, which takes twice as long compiled as under PCSX2's recompiler; the rest of the machine takes the same time. A first look says why: the generated code keeps the registers in memory and checks every address twice. The report on compatibility, issues and limitations is at the end of "G5". |
+| G6 Speed | **Under way** (2026-11-12, [ADR 0015](adr/0015-a-speed-step-before-phase-3-ends.md)): seven changes to how the code is generated, each measured. The level run takes 1.21 to 1.23 times stock PCSX2's time (91.7 s against 75.6 s, and 91.3 s against 74.3 s, each pair timed together), where it took 1.35, and is still the stock run (the same place and time at each of 93 million sync points, the same picture and sound state at each of 1,750 frames) and the interpreted run (47.7 million event tests). The game's own code takes 41.1 s against 25.8 s under PCSX2's recompiler. Four further attempts were measured and taken out again. Where it stands is in "G6" below. |
 
 ## The steps and their pass criteria
 
@@ -29,6 +30,7 @@ The run files, pictures included, are under the git-ignored build tree.
 | G3 The compiled game | The same run with the executable's code compiled. Code the executable does not hold (the modules the game loads) is captured and compiled as well. | The compiled run is the interpreted run at every event test. The same frames. After rebuilding with what was captured, no instruction of the game's own code is interpreted. |
 | G4 Further into the game | Title screen, menus, a level, with scripted input. A window, sound and a controller, so that the maintainer can play. | With the same input, the compiled game gets where stock PCSX2 gets. What differs is listed. |
 | G5 Measurement and report | Speed against stock PCSX2 on the same scenes with the same renderer. Where the time goes: compiled code, the interpreter, the rest of the machine. Compatibility, visual issues, limitations. | Numbers reported as measured, whatever they are. |
+| G6 Speed ([ADR 0015](adr/0015-a-speed-step-before-phase-3-ends.md)) | The generated code made faster, beginning with what G5 found: one look at the address table for each load and store, and the registers held in local variables within a block. Each change measured by itself, on the level run and with the profile. | The compiled game is still the stock run and the interpreted run, and every test passes, after each change. What each change gave back is reported as measured. The aim: the game's own code no slower than under PCSX2's recompiler. |
 
 The brief's rules for this phase: reusable solutions, no game-specific
 hardcoding unless unavoidable, and no wizard or packaging yet.
@@ -798,6 +800,294 @@ console shows 50.
   a second one.
 - No application yet: no wizard, no packaging (Phase 4).
 
+## G6: speed (Windows, 2026-11-12)
+
+The step [ADR 0015](adr/0015-a-speed-step-before-phase-3-ends.md) added:
+the generated code made faster, one change at a time, each measured by
+itself. The measure is G5's: the 17,500 frames of `level1.pad` with nothing
+drawn, on the processor's fast cores, three rounds, and the profile of one
+more run. Stock PCSX2 takes 74.2 s for it (G5). Every round below ended at
+the cycle count the stock run ends at (103,213,332,030) with the sound
+hardware in the same state, and interpreted none of the executable's code.
+
+### What each change gave
+
+| | Change | Seconds, three rounds | Mean | Against stock PCSX2 |
+|---|---|---|--:|--:|
+| | Before (G5) | 100.1, 100.0, 100.3 | 100.1 | 1.35 |
+| 1 | One look at the address table for each load and store | 96.7, 96.1, 95.7 | 96.2 | 1.30 |
+| 2 | General registers in local variables within straight-line code | 94.5, 95.0, 95.1 | 94.9 | 1.28 |
+| 3 | The cycle count in a local variable; what a block's start learns no longer kept in memory | 94.1, 94.0, 94.3 | 94.1 | 1.27 |
+| 4 | The runtime remembers where it found a VU0 instruction's step | 92.5, 92.3, 93.3 | 92.7 | 1.25 |
+| 5 | The FPU's registers in local variables | 93.1, 92.0, 92.0 | 92.4 | 1.25 |
+| 6 | Calls between compiled functions: no registers saved, the start tested first | 91.9, 92.0, 91.0 | 91.6 | 1.23 |
+| 7 | Registers held in locals across labels, where every way in holds them | 91.1, 90.3, 90.7 | 90.7 | 1.22 |
+| | The same, rebuilt with line tables only (below), again | 91.6, 91.2, 91.2 | 91.3 | 1.23 |
+| | The same code once more, the generator's version raised to 0.4.0 | 92.0, 91.7, 92.9 | 92.2 | |
+| | Again, right after stock PCSX2 was timed at 75.9, 75.7, 75.2 s | 91.2, 91.5, 92.4 | 91.7 | 1.21 |
+
+**How far these numbers can be trusted.** Within three rounds of one build
+the times differ by up to 1.2 s. The last four rows are the same generated
+code, and their means range from 90.7 s to 92.2 s. Part of that is the
+build (each relink lays the host out differently); part is the machine:
+stock PCSX2 took 74.3, 74.4 and 74.3 s, and an hour later 75.9, 75.7 and
+75.2 s. So a change worth less than about a second is not
+shown by these numbers to have helped, and changes 3 to 7 are each near
+that edge; what holds is the whole, measured against a stock run timed
+beside it: from 1.35 times stock PCSX2's time at G5 (100.1 s against
+74.2 s) to 1.21 (91.7 s against 75.6 s), with the game the stock run
+throughout (below).
+
+What each is:
+
+1. **One look at the address table.** A load or store asked the core's
+   table twice whether its address was plain memory: once to tell the
+   runtime if it was not, once to reach it. Now once (`PS2N_ACCESS`,
+   `PS2N_LOAD`, `PS2N_STORE` in `runtime/include/ps2n/recomp.h`). The loop
+   G5 looked at went from 107 host instructions a turn to 71. 3.9 s.
+2. **Registers in local variables.** Within straight-line code a generated
+   function keeps the general registers it works on in local variables,
+   which the C++ compiler keeps in host registers, and puts the changed
+   ones back before anything outside the function can look: the end of a
+   block, a call of the runtime, an instruction that is carried out through
+   register numbers (execution model, "Registers in local variables"). At a
+   label no local holds anything. 649,561 of the executable's 1,003,452
+   instructions (64.7%) are carried out this way. The loop went to about 50 host
+   instructions a turn; the run gained less than that promised. 1.3 s.
+3. **The cycle count in a local variable.** Every block ends by adding its
+   cycles to the core's count and comparing the sum with the time of the
+   next event. The function now keeps the count in a local, writes each
+   sum to the core and takes the count again only after a call that may
+   have moved it (`PS2N_TIME`), so that a short loop no longer waits for
+   the count to come back from memory at every turn. And what a block's
+   start learns from the runtime's table went through a variable whose
+   address was handed to the runtime, which kept it in memory: every block
+   began with a store. 0.8 s.
+4. **The runtime's shortcut for VU0 instructions.** The game's VU0
+   instructions go through the runtime one by one (158 million in this
+   run), and for each the runtime looked up the block that was running and
+   the instruction's place in it. It now remembers where it found each of
+   the last few thousand, for as long as no block is formed or thrown away
+. **The FPU's registers in local variables.** The FPU's instructions
+   took their operands from the core's registers in memory and wrote their
+   results back there, so a chain of them waited on memory at every link.
+   They now work on locals, as the general registers do
+   (`f0 = val::ADD_S(f1, f2)`, `facc = val::MADDA_S(facc, f1, f2)`; the
+. **Cheaper calls between compiled functions.** Every compiled function
+   saved eight host registers when it was entered and restored them when it
+   left, because the platform's convention says a function must keep them
+   for its caller; nothing a compiled function holds in host registers
+   lives across such a call. Under clang the functions now have a
+   convention that keeps none (`preserve_none`, `PS2N_CC` in `recomp.h`).
+   And a call, which enters at the function's start, no longer goes through
+   the search the entry `switch` makes over all the function's blocks: the
+. **Registers held across labels.** At a label the locals held nothing:
+   every register was put back before it and taken from the core again
+   after it. In a loop that happens at every turn, and on the loop's
+   critical path, for a value written to memory a few instructions before
+   has to come back from there: the profile's hottest instructions, in the
+   loop of `0014FD68`, were waiting for exactly that. Now a label holds
+   what the code after it reads, where every way into it holds that; a way
+   in that holds nothing (the return from a call) takes it from the core,
+   and so does an entry from outside the function, through a way in of its
+   own (`E_` and the label's address). The generator works the labels out
+   over a few passes over each function. What was changed still goes to
+   the core at every block's end, for the event test that may follow; the
+   register stays in its local. 79,343 of the executable's 197,808 block
+   leaders hold registers. 0.9 s.
+
+The whole suite passed after each of changes 1, 2, 3, 5, 6 and 7 (453 tests);
+change 4 was tested with change 5. The game's own comparisons, with the
+stock run at every sync point and with the interpreted run at every event
+test, were made on the last of them:
+
+- **Against stock PCSX2, over the whole level script** (17,500 frames,
+  `level1.pad`, 20 minutes for both runs): the same place at the same cycle
+  count at each of 93,221,937 sync points; the same picture at each of the
+  1,750 frames compared; the sound hardware in the same state at each of
+  the 1,750 moments compared. The registers differ where they did at G4 and
+  nowhere else: the FPU's, at 964 sync points, the first at sync point
+  57,130,066, where the console is followed on purpose ("What differs, and
+  why").
+- **Against the interpreted run** (4,200 frames, `start.pad`, 5 minutes):
+  the same at each of the 47,705,744 event tests, as at G3.
+
+### Tried and taken out again: main memory without the address table
+
+A third of the compiled code's time is spent reaching memory (below), so
+the next thing tried was to leave the address table out of it: the runtime
+measured, in the table itself, the range in which the table maps main
+memory in its usual place, measured it again whenever the core reported a
+mapping changed, and a load or store whose address was in that range read
+and wrote main memory directly, with one comparison in the place of the
+look at the table. It was built twice and measured against the 92.7 s of
+change 4:
+
+| What reached memory directly | Seconds, three rounds | Mean | The executable |
+|---|---|--:|--:|
+| (Change 4, for comparison: nothing) | 92.5, 92.3, 93.3 | 92.7 | 188 MB |
+| Every load and store | 96.0, 95.9, 95.8 | 95.9 | 215 MB |
+| Only the loads and stores of general registers the generator writes out | 93.4, 93.6, 94.0 | 93.7 | 210 MB |
+
+Both were slower than what they replaced, so the change is not in the code.
+What it showed is worth keeping:
+
+- **The kernel leaves the first 512 KB of the address space unmapped for
+  programs.** Once the BIOS has set its TLB up, the table has main memory
+  in place from `00080000` to `02000000` and a handler below: a load
+  through a null pointer finds no memory there. A first build that
+  took main memory to begin at address zero found none in place at all and
+  ran every access the long way (109.5 s). The range has to have two ends.
+- **The loads themselves did get faster**: in the profile of the first
+  build the loads of general registers had 16% fewer samples than after
+  change 3 (4,088 against 4,880). But the instructions carried out through
+  register numbers, the FPU's loads and stores among them, had 40% more
+  (3,198 against 2,284), and nearly everything else a few percent more.
+- **The code grew by an eighth**, because each access now carried the look
+  at the table as well, beside the direct path. Fewer host instructions on
+  the path taken did not make up for that. It says something about where
+  the time is: in a program of a million instructions, how much code the
+  host has to get through counts for as much as how many instructions each
+  access costs.
+
+Not tried: the same with the look at the table as a call of one shared
+function, which would make the code smaller than it is now, not larger.
+
+### Tried and taken out again: memory through PCSX2's fast-memory area
+
+After change 7 the next thing tried was the largest part left, reaching
+memory. PCSX2 keeps a second mapping of the console's whole address space
+in the host's, its fast-memory area, in which plain memory is mapped and
+devices' pages are not; its recompiler reaches memory there with one
+instruction and lets an access to a device's page fault. Compiled code did
+the same: each load and store became one instruction at the area's base
+plus the address, written as `asm goto` and listed in a table of fix-ups
+(a section of its own) with the label of its long way, the address table
+as before; a handler the runtime installed after PCSX2's own sent a
+faulting instruction to its long way; and addresses whose top four bits
+say "devices" (1, 9, B) went the long way at once, so that a loop reading
+a device's register does not fault every time.
+
+It worked: the whole suite passed (453 tests; in 64 of its runs an access
+faulted and went the long way, correctly), and the waiting loop of
+`001C0190` lost its six looks at the table. It was not faster: 92.2, 91.6
+and 91.8 s against 91.3 s. In the profile the loads and stores did take
+less time (6,167 samples against 7,142), and nearly everything else took
+more by as much, the runtime's code and PCSX2's core included: the
+executable grew from 184 MB to 229 MB, every access now carrying the fast
+instruction and its long way both, and the table 10 MB of its own. The
+waiting loop took no less time at all (1,565 samples against 1,503): its
+time is in the loop's dependence on what it read and wrote the turn
+before, not in the arithmetic of the address. Taken out. Three changes of
+this kind have now shown the same thing: in a program of a million
+instructions, how much code the host
+has to get through counts as much as how many instructions each access
+costs.
+
+### Tried and taken out again: a label holding what any way into it holds
+
+After change 7, `0014FD68`'s loop still took two registers from the core
+at every turn: they are read in the loop, but a way into the loop's labels
+(the return from a call the loop makes now and then) does not hold them,
+and a label held only what every way in holds. The other rule was tried:
+a label holds what its code reads if any way in holds it, and a way that
+does not takes it from the core before it goes in. 90,911 leaders held
+registers (242,352 in all) instead of 79,343 (142,252), and the run took
+91.3, 91.2, 91.8 s, 0.7 s longer than with change 7: the ways that now take
+registers they would not have needed cost more than the loops gained.
+
+### Tried and taken out again: the start test without its mark
+
+The start test of change 6 is marked `[[likely]]`. The profile after it
+showed `val::ADD_S`, `SUB_S`, `MUL_S`, `MADD_S` and `DIV_S` as functions of
+their own in the runtime, called from compiled code, where before they had
+been inlined: a trial compile of one of the game's files, with and without
+the mark, showed the mark to be the cause (the compiler takes the rest of
+the function for colder and inlines less there; the calling convention
+had nothing to do with it). Without the mark the run took 91.1, 91.3,
+91.7 s, 0.7 s longer than with it. The mark stays.
+
+### The profiler and the size of the debugging information
+
+After change 7 the profiler could no longer read the host's debugging
+information (DbgHelp: "file system or network error reading pdb"; 578 MB).
+Generated code is now compiled with line tables and the functions' names
+only (`-gline-tables-only`, `tests/tests.cmake`), which is all the profiler
+reads: the PDB is 254 MB, a file of generated code compiles in 8 s instead
+of 11, and the machine code is the same (one file compared: 1,276,251 bytes
+of code either way).
+
+### Tried and not built: moving the paths almost never taken out of the way
+
+The paths a function almost never takes (a load from a device's registers,
+a block the runtime has to be asked about, an event to handle) are written
+out inline, beside the path it takes, and make the code larger. Clang can
+move such paths out of a function (`-hot-cold-split`), given the runtime's
+entry points marked as rarely called. Tried on one of the game's 64 files,
+it moved 22 KB of its 1.26 MB of code, 1.8%: after such a call the path
+rejoins the one taken, and only the call itself can be moved. Not worth a
+build.
+
+### Where the time is now
+
+The profile of the last build (91.3 s, 60,445 samples), beside G5's:
+
+| | G5, stock PCSX2 | G5, compiled | G6, compiled |
+|---|--:|--:|--:|
+| **The game's own code**: PCSX2's EE recompiler's code, or the code compiled ahead of time | 25.8 | 43.6 | 33.1 |
+| PS2Native's runtime | | 7.6 | 8.0 |
+| PCSX2's core | 26.8 | 29.6 | 28.9 |
+| The code PCSX2's recompilers for the VUs and the IOP generated | 16.7 | 17.2 | 16.9 |
+| Windows, drivers, other libraries | 4.4 | 4.0 | 3.9 |
+
+The game's own code with its runtime took 51.2 s at G5 and takes 41.1 s
+now, against 25.8 s as the code PCSX2's recompiler generates. (Some of the
+FPU's semantics are now called, not inlined, after change 6, and count as
+the runtime's.)
+
+Since change 2 the profile also says what kind of generated line a sample
+in the compiled code fell on, and which instructions had the most samples
+(`host/profile.cpp`; the compiler moves and merges instructions, so this is
+a guide, not a count). Of the 33.1 s:
+
+| Kind of generated line | Share | Seconds |
+|---|--:|--:|
+| Loads into general and FPU registers | 25.3% | 8.4 |
+| FPU arithmetic and comparisons | 17.3% | 5.7 |
+| The start of a block: what the runtime knows of it | 9.7% | 3.2 |
+| The end of a block: its cycles, the test for events | 9.1% | 3.0 |
+| Stores of general and FPU registers | 7.4% | 2.4 |
+| A function's entry and exit | 5.8% | 1.9 |
+| Registers put back from locals | 5.6% | 1.9 |
+| Arithmetic on locals | 5.4% | 1.8 |
+| Loads and stores through register numbers (the 128-bit ones, and others) | 4.0% | 1.3 |
+| Registers taken from the core into locals | 2.7% | 0.9 |
+| Everything else | 7.7% | 2.5 |
+
+- **More than a third is reaching memory** (12.1 s). The instructions with
+  the most samples, in the loops where the game waits, are waiting for the
+  address table's entry before the access, and then for the data. PCSX2's
+  recompiler reaches plain memory with one instruction through a second
+  mapping of the whole address space, and lets an access that is not
+  plain memory fault (then patches its own code). Doing the same in
+  compiled code was tried next, and was not faster: the accesses got
+  cheaper and everything else slower, with the larger code ("Tried and
+  taken out again", below).
+- **A sixth is the FPU's arithmetic** (5.7 s). It works on locals now; what
+  is left is the arithmetic itself, the same host operations PCSX2's
+  recompiler emits to reproduce the EE's rounding and clamping, and the
+  clamping settings, which PCSX2's recompiler reads when it compiles and
+  the generated code at every instruction.
+- **A fifth is where blocks begin and end** (6.2 s): what counting time
+  exactly as PCSX2's recompiler does costs
+  ([ADR 0011](adr/0011-time-is-counted-as-pcsx2s-recompiler-counts-it.md)).
+  PCSX2's own code pays for the ends too, not for the starts.
+- The two functions in which the game waits are 5.9 s (`0014FD68`,
+  `001C0190`), from 9.9 s at G5.
+- In the runtime, the largest part is still the VU0 instructions, which go
+  to PCSX2's interpreter functions one by one (`cop2Instruction`,
+  `Cop2Operation`: 2.4 s), then the dispatcher (1.0 s).
+
 ## Open
 
 - **VU0's instructions.** They are the one family of the game's own code
@@ -811,16 +1101,14 @@ console shows 50.
   not been measured. The BIOS, which is interpreted, accounts for 1.1% of
   the EE's cycles there; translating it ahead of time is
   [ADR 0007](adr/0007-bios-code-translated-ahead-of-time.md), not started.
-  Over the level run the compiled game takes 1.35 times as long as stock
-  PCSX2, and all of the difference is in the game's own code, which takes
-  twice as long compiled as under PCSX2's recompiler ("G5"). A first look
-  at one loop says where to begin: the generated code keeps the machine's
-  registers in memory and looks every address up twice. Changing how the
-  code is generated (registers held in local variables within a block, one
-  look at the table for each load and store, or none where the address is
-  known to be plain memory) is what it takes for PS2Native to be as fast as
-  PCSX2, and then faster. None of it has been tried, so none of it has a
-  number yet.
+  Over the level run the compiled game took 1.35 times as long as stock
+  PCSX2 at G5, all of the difference in the game's own code; after the
+  changes of G6 it takes 1.21 to 1.23 times as long (91.7 s against 75.6 s, 91.3 s against 74.3 s), and
+  the game's own code 41.1 s against 25.8 s. More than a third of the
+  compiled code's time is now reaching memory through the core's address
+  table, where PCSX2's recompiler uses one instruction and a fault ("G6",
+  "Where the time is now"). The 4,200-frame times above are from G3 and
+  have not been taken again since.
 - **What a longer run could meet.** PCSX2's recompiler throws all its
   blocks away when its code cache is full, and PS2Native cannot know when
   that is (execution model, "What is not reproduced"). It did not happen in

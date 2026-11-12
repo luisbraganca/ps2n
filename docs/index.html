@@ -427,7 +427,7 @@
 						<tr><th scope="row">PS2Native</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.5393;--i:3"><span class="bar__fill"></span><span class="bar__val">15.1 s</span><span class="bar__tip" role="tooltip"><b>15.1 s</b> PS2Native, nothing drawn. Two runs: 15.1 s and 15.2 s</span></div></td></tr>
 					</tbody>
 				</table>
-				<p class="chart__note">These frames are logos, a prompt and a film. A run into the first level takes 100 s compiled where stock PCSX2 takes 74 s. The whole difference is in the game's own code, which takes twice as long compiled as it does under PCSX2's recompiler; the rest of the machine takes the same time. A first look says why: the generated code keeps the console's registers in memory and checks every address twice. <span class="when">2026-11-12</span></p>
+				<p class="chart__note">These frames are logos, a prompt and a film, measured on 2026-11-11. A run into the first level took 100 s compiled where stock PCSX2 takes 74 s, the whole difference in the game's own code. A first speed step, seven changes to how the code is generated, each measured, brought it to 91 s: the game's own code takes 41 s compiled against 26 s under PCSX2's recompiler, and more than a third of the compiled code's time is now reaching memory. <span class="when">2026-11-12</span></p>
 			</section>
 
 			<section class="chart" data-reveal style="--d:120" aria-labelledby="chart-loops">
@@ -586,6 +586,7 @@
 					<li class="is-done"><b><span class="g">G3</span>The compiled game</b>Done for the first 4,200 frames</li>
 					<li class="is-done"><b><span class="g">G4</span>Further into the game</b>Done as far as the first level: by script, and played by the maintainer in a window, with sound and a controller, on Windows</li>
 					<li class="is-done"><b><span class="g">G5</span>Measurement and report</b>Done as far as the first level: 1.35 times stock PCSX2's time, all of it in the game's own code</li>
+					<li><b><span class="g">G6</span>Speed</b>In progress: the run into the first level takes 1.21 to 1.23 times stock PCSX2's time, from 1.35, and is still the stock run</li>
 				</ul>
 			</li>
 			<li class="phase" data-reveal>

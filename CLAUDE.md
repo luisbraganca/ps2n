@@ -26,8 +26,10 @@ in progress.** [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
 level, the maintainer had played it, and the compiled game took 1.35 times
-stock PCSX2's time; what comes next (making it faster, more of the game, or
-the end of the phase) is the maintainer's to say. Phase 4 needs its own
+stock PCSX2's time. The maintainer then chose a speed step inside the phase
+(G6, ADR 0015); after its first changes the compiled game takes 1.21 to 1.23
+times stock PCSX2's time. What comes next (more speed, more of the game, or the
+end of the phase) is the maintainer's to say. Phase 4 needs its own
 approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
@@ -111,6 +113,13 @@ Decisions:
   (`docs/.nojekyll`). The documentation stays where it is; the site is
   `docs/index.html`, `docs/404.html` and `docs/site/`. The page says only
   what the logs say, with dates, and shows nothing from a game or a BIOS.
+- [ADR 0015](docs/adr/0015-a-speed-step-before-phase-3-ends.md): a speed
+  step inside Phase 3 (G6) before the phase ends. The generated code is
+  made faster one change at a time, each measured on the level run and
+  with the profile; the compiled game stays the stock run. What comes
+  after the two changes named is decided by the profile and reported; a
+  change of another kind (to how time is counted, to what is compared with
+  stock PCSX2) is put to the maintainer first.
 
 ## Layout, build and test
 
@@ -157,8 +166,15 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   -fast-cores`; `bench.ps1` and `game.ps1` pass it): left to Windows, the
   same run takes up to twice as long the next time. `game.ps1 -TimeProfile`
   (`ps2n-host -profile`) writes where the CPU thread's time went, by kind
-  of code and by function, into `profile.txt` among the run's files.
-  `docs/game-log.md`, "G5", has what was measured.
+  of code and by function, into `profile.txt` among the run's files; for
+  the compiled code also by kind of generated line, and its hottest
+  instructions by function and offset, to read beside the function's
+  disassembly (`llvm-objdump --disassemble-symbols`, in the Visual Studio
+  install's `VC\Tools\Llvm\x64\bin`). Over the level run, two builds of
+  the same code, or the same build an hour apart, can differ by a second:
+  a change worth less than that does not show, and a ratio needs a stock
+  run timed beside it. `docs/game-log.md`, "G5" and "G6", has what was
+  measured.
 - The game: `scripts\windows\build.ps1 -Game <its boot executable>` compiles
   it into the host (the build tree remembers it; `-GameCapture <file>` adds
   what runs reported). `scripts\windows\game.ps1 -Image <disc image> -Config

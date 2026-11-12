@@ -377,3 +377,11 @@ target_include_directories(ps2n-test-images PRIVATE
 )
 target_link_libraries(ps2n-test-images PRIVATE ps2n-runtime PCSX2_FLAGS)
 target_link_libraries(ps2n-host PRIVATE ps2n-test-images)
+# Generated code needs no debugging information but the functions' names and
+# line tables, which is what the profiler reads (ps2n-host -profile). With all
+# of it, the game's code made the host's PDB too large for the system's
+# symbol handler to read (578 MB); it also takes longer to compile and link.
+# The machine code is the same either way.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+	target_compile_options(ps2n-test-images PRIVATE -gline-tables-only)
+endif()

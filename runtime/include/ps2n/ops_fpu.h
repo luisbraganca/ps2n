@@ -222,10 +222,11 @@ namespace ps2n::ee::ops
 			return toBits(clampResult(multiply(s, t)));
 		}
 
-		// The product MADD and MSUB add to or subtract from ACC. A plain
-		// MULSS, without the game fix; in the Extra mode the product and ACC
-		// are clamped as results are.
-		inline void productAndAcc(uint32_t s, uint32_t t, uint32_t* product, uint32_t* acc)
+		// The product MADD and MSUB add to or subtract from the accumulator
+		// (`accumulator`: its bits). A plain MULSS, without the game fix; in
+		// the Extra mode the product and the accumulator are clamped as
+		// results are.
+		inline void productAndAcc(uint32_t accumulator, uint32_t s, uint32_t t, uint32_t* product, uint32_t* acc)
 		{
 			if (clampOperands())
 			{
@@ -233,7 +234,7 @@ namespace ps2n::ee::ops
 				t = clampOperand(t);
 			}
 			__m128 p = _mm_mul_ss(opaque(fromBits(s)), opaque(fromBits(t)));
-			__m128 a = fromBits(fpuRegs.ACC.UL);
+			__m128 a = fromBits(accumulator);
 			if (clampOperands())
 			{
 				a = clampResult(a);
@@ -246,24 +247,24 @@ namespace ps2n::ee::ops
 		// The two orders are the recompiler's (FPU_ADD(product, ACC) for
 		// MADD.S, FPU_ADD(ACC, product) for MADDA.S). They only differ in the
 		// clamp mode None, when both are NaNs: the first one comes out.
-		inline uint32_t madd(uint32_t s, uint32_t t)
+		inline uint32_t madd(uint32_t accumulator, uint32_t s, uint32_t t)
 		{
 			uint32_t product, acc;
-			productAndAcc(s, t, &product, &acc);
+			productAndAcc(accumulator, s, t, &product, &acc);
 			return toBits(clampResult(addSub(product, acc, false)));
 		}
 
-		inline uint32_t madda(uint32_t s, uint32_t t)
+		inline uint32_t madda(uint32_t accumulator, uint32_t s, uint32_t t)
 		{
 			uint32_t product, acc;
-			productAndAcc(s, t, &product, &acc);
+			productAndAcc(accumulator, s, t, &product, &acc);
 			return toBits(clampResult(addSub(acc, product, false)));
 		}
 
-		inline uint32_t msub(uint32_t s, uint32_t t)
+		inline uint32_t msub(uint32_t accumulator, uint32_t s, uint32_t t)
 		{
 			uint32_t product, acc;
-			productAndAcc(s, t, &product, &acc);
+			productAndAcc(accumulator, s, t, &product, &acc);
 			return toBits(clampResult(addSub(acc, product, true)));
 		}
 
@@ -278,9 +279,178 @@ namespace ps2n::ee::ops
 		inline __m128 comparand(uint32_t x) { return opaque(fromBits(clampBySign(x))); }
 	} // namespace fpu
 
+	namespace fpu
+	{
+		// MAX.S and MIN.S: operands PCSX2 clamps, or +0 and -0.
+		inline void noteMaxMin(int32_t s, int32_t t)
+		{
+			const uint32_t us = static_cast<uint32_t>(s), ut = static_cast<uint32_t>(t);
+			if ((((us | ut) & ~kSign) == 0 && us != ut) || clampedByPcsx2(us) || clampedByPcsx2(ut)) [[unlikely]]
+				console_followed[1]++;
+		}
+	} // namespace fpu
+} // namespace ps2n::ee::ops
+
+// ---- the instructions, on values ----------------------------------------------------
+// A register's 32 bits in, the result's out. Compiled code computes with these
+// while it holds the FPU's registers in local variables (recomp.h), and the
+// functions further down, which work on the core's registers, are made of
+// them: each instruction is defined once. Those that have flags write them to
+// FCR31 in the core.
+namespace ps2n::ee::val
+{
 	// ---- moves ----------------------------------------------------------------
-	inline void MFC1(uint32_t rt, uint32_t fs) { setS32(rt, fpuRegs.fpr[fs].SL); }
-	inline void MTC1(uint32_t rt, uint32_t fs) { fpuRegs.fpr[fs].UL = ru32(rt); }
+	inline uint64_t MFC1(uint32_t fs) { return sext32(fs); }
+	inline uint32_t MTC1(uint64_t rt) { return static_cast<uint32_t>(rt); }
+
+	// ---- on the bits, as the console ---------------------------------------------
+	inline uint32_t ABS_S(uint32_t s)
+	{
+		if (ops::fpu::clampedByPcsx2(s)) [[unlikely]]
+			ops::fpu::console_followed[0]++;
+		return s & ~ops::fpu::kSign;
+	}
+	inline uint32_t NEG_S(uint32_t s)
+	{
+		if (ops::fpu::clampedByPcsx2(s)) [[unlikely]]
+			ops::fpu::console_followed[0]++;
+		return s ^ ops::fpu::kSign;
+	}
+
+	// The EE's floats order like sign-and-magnitude integers.
+	inline uint32_t MAX_S(uint32_t fs, uint32_t ft)
+	{
+		const int32_t s = static_cast<int32_t>(fs), t = static_cast<int32_t>(ft);
+		ops::fpu::noteMaxMin(s, t);
+		return static_cast<uint32_t>((s < 0 && t < 0) ? (s < t ? s : t) : (s > t ? s : t));
+	}
+	inline uint32_t MIN_S(uint32_t fs, uint32_t ft)
+	{
+		const int32_t s = static_cast<int32_t>(fs), t = static_cast<int32_t>(ft);
+		ops::fpu::noteMaxMin(s, t);
+		return static_cast<uint32_t>((s < 0 && t < 0) ? (s > t ? s : t) : (s < t ? s : t));
+	}
+
+	// ---- arithmetic -------------------------------------------------------------
+	// ADDA.S, SUBA.S and MULA.S are these with the accumulator as destination.
+	inline uint32_t ADD_S(uint32_t s, uint32_t t) { return ops::fpu::add(s, t); }
+	inline uint32_t SUB_S(uint32_t s, uint32_t t) { return ops::fpu::sub(s, t); }
+	inline uint32_t MUL_S(uint32_t s, uint32_t t) { return ops::fpu::mul(s, t); }
+
+	// With the accumulator's bits first. MADDA.S gives the accumulator's new
+	// bits; MSUBA.S is MSUB.S with the accumulator as destination.
+	inline uint32_t MADD_S(uint32_t acc, uint32_t s, uint32_t t) { return ops::fpu::madd(acc, s, t); }
+	inline uint32_t MSUB_S(uint32_t acc, uint32_t s, uint32_t t) { return ops::fpu::msub(acc, s, t); }
+	inline uint32_t MADDA_S(uint32_t acc, uint32_t s, uint32_t t) { return ops::fpu::madda(acc, s, t); }
+
+	// Division rounds as the core's "FPU division" control register says
+	// (to nearest by default, where everything else rounds toward zero). A
+	// zero divisor gives the largest float with the sign of the quotient, and
+	// the invalid flag for 0/0, the division-by-zero flag otherwise.
+	inline uint32_t DIV_S(uint32_t s, uint32_t t)
+	{
+		namespace fpu = ops::fpu;
+		const fpu::ScopedControl control(EmuConfig.Cpu.FPUDivFPCR.bitmask);
+
+		fpuRegs.fprc[31] &= ~(fpu::kFlagI | fpu::kFlagD);
+		if (fpu::isZero(t))
+		{
+			fpuRegs.fprc[31] |= fpu::isZero(s) ? (fpu::kFlagI | fpu::kFlagSI) : (fpu::kFlagD | fpu::kFlagSD);
+			return ((s ^ t) & fpu::kSign) | fpu::kMax;
+		}
+
+		uint32_t a = s, b = t;
+		if (fpu::clampOperands())
+		{
+			a = fpu::clampOperand(a);
+			b = fpu::clampOperand(b);
+		}
+		const __m128 quotient = _mm_div_ss(fpu::opaque(fpu::fromBits(a)), fpu::opaque(fpu::fromBits(b)));
+		return fpu::toBits(fpu::opaque(fpu::clampResult(quotient)));
+	}
+
+	// The square root of the magnitude, rounded to nearest; a negative operand
+	// (including -0) sets the invalid flag.
+	inline uint32_t SQRT_S(uint32_t t)
+	{
+		namespace fpu = ops::fpu;
+		FPControlRegister nearest = EmuConfig.Cpu.FPUFPCR;
+		nearest.SetRoundMode(FPRoundMode::Nearest);
+		const fpu::ScopedControl control(nearest.bitmask);
+
+		fpuRegs.fprc[31] &= ~(fpu::kFlagI | fpu::kFlagD);
+		if (t & fpu::kSign)
+		{
+			fpuRegs.fprc[31] |= fpu::kFlagI | fpu::kFlagSI;
+			t &= ~fpu::kSign;
+		}
+
+		__m128 v = fpu::opaque(fpu::fromBits(t));
+		if (fpu::clampResults())
+			v = _mm_min_ss(v, fpu::fromBits(fpu::kMax));
+		v = _mm_sqrt_ss(fpu::opaque(v));
+		if (fpu::clampOperands())
+			v = fpu::clampResult(v);
+		return fpu::toBits(fpu::opaque(v));
+	}
+
+	// d / sqrt(|t|), under the standing control register.
+	inline uint32_t RSQRT_S(uint32_t d, uint32_t t)
+	{
+		namespace fpu = ops::fpu;
+
+		fpuRegs.fprc[31] &= ~(fpu::kFlagI | fpu::kFlagD);
+		if (t & fpu::kSign)
+		{
+			fpuRegs.fprc[31] |= fpu::kFlagI | fpu::kFlagSI;
+			t &= ~fpu::kSign;
+		}
+
+		if (fpu::isZero(t))
+		{
+			fpuRegs.fprc[31] |= fpu::isZero(d) ? (fpu::kFlagI | fpu::kFlagSI) : (fpu::kFlagD | fpu::kFlagSD);
+			return (d & fpu::kSign) | fpu::kMax;
+		}
+
+		__m128 root = fpu::opaque(fpu::fromBits(t));
+		if (fpu::clampOperands())
+		{
+			root = _mm_min_ss(root, fpu::fromBits(fpu::kMax));
+			d = fpu::clampOperand(d);
+		}
+		root = _mm_sqrt_ss(fpu::opaque(root));
+		const __m128 quotient = _mm_div_ss(fpu::opaque(fpu::fromBits(d)), fpu::opaque(root));
+		return fpu::toBits(fpu::clampResult(quotient));
+	}
+
+	// ---- conversions --------------------------------------------------------------
+	// From a 32-bit integer, rounded as the control register says.
+	inline uint32_t CVT_S_W(uint32_t s)
+	{
+		return ops::fpu::toBits(_mm_cvtsi32_ss(_mm_setzero_ps(), ops::fpu::opaque(static_cast<int32_t>(s))));
+	}
+
+	// To a 32-bit integer, truncating; what is too large saturates.
+	inline uint32_t CVT_W_S(uint32_t s)
+	{
+		int32_t result = _mm_cvttss_si32(ops::fpu::opaque(ops::fpu::fromBits(s))); // 0x80000000 for what it cannot represent
+		if (static_cast<int32_t>(s) >= 0x4F000000)
+			result = 0x7FFFFFFF;
+		return static_cast<uint32_t>(result);
+	}
+
+	// ---- comparisons: the condition, which the instruction puts in FCR31 ------------
+	inline bool C_EQ_S(uint32_t s, uint32_t t) { return _mm_ucomieq_ss(ops::fpu::comparand(s), ops::fpu::comparand(t)) != 0; }
+	inline bool C_LT_S(uint32_t s, uint32_t t) { return _mm_ucomilt_ss(ops::fpu::comparand(s), ops::fpu::comparand(t)) != 0; }
+	inline bool C_LE_S(uint32_t s, uint32_t t) { return _mm_ucomile_ss(ops::fpu::comparand(s), ops::fpu::comparand(t)) != 0; }
+} // namespace ps2n::ee::val
+
+// ---- the instructions, on the core's registers ----------------------------------------
+namespace ps2n::ee::ops
+{
+	// ---- moves ----------------------------------------------------------------
+	inline void MFC1(uint32_t rt, uint32_t fs) { setU64(rt, val::MFC1(fpuRegs.fpr[fs].UL)); }
+	inline void MTC1(uint32_t rt, uint32_t fs) { fpuRegs.fpr[fs].UL = val::MTC1(ru64(rt)); }
 
 	// FCR31 reads with its always-zero bits clear and its always-one bits set;
 	// every control register below 16 reads as FCR0. Only FCR31 can be written,
@@ -301,177 +471,42 @@ namespace ps2n::ee::ops
 	inline void MOV_S(uint32_t fd, uint32_t fs) { fpuRegs.fpr[fd].UL = fpuRegs.fpr[fs].UL; }
 
 	// ---- on the bits, as the console ---------------------------------------------
-	inline void ABS_S(uint32_t fd, uint32_t fs)
-	{
-		const uint32_t s = fpuRegs.fpr[fs].UL;
-		if (fpu::clampedByPcsx2(s)) [[unlikely]]
-			fpu::console_followed[0]++;
-		fpuRegs.fpr[fd].UL = s & ~fpu::kSign;
-	}
-	inline void NEG_S(uint32_t fd, uint32_t fs)
-	{
-		const uint32_t s = fpuRegs.fpr[fs].UL;
-		if (fpu::clampedByPcsx2(s)) [[unlikely]]
-			fpu::console_followed[0]++;
-		fpuRegs.fpr[fd].UL = s ^ fpu::kSign;
-	}
-
-	namespace fpu
-	{
-		// MAX.S and MIN.S: operands PCSX2 clamps, or +0 and -0.
-		inline void noteMaxMin(int32_t s, int32_t t)
-		{
-			const uint32_t us = static_cast<uint32_t>(s), ut = static_cast<uint32_t>(t);
-			if ((((us | ut) & ~kSign) == 0 && us != ut) || clampedByPcsx2(us) || clampedByPcsx2(ut)) [[unlikely]]
-				console_followed[1]++;
-		}
-	} // namespace fpu
-
-	// The EE's floats order like sign-and-magnitude integers.
-	inline void MAX_S(uint32_t fd, uint32_t fs, uint32_t ft)
-	{
-		const int32_t s = fpuRegs.fpr[fs].SL, t = fpuRegs.fpr[ft].SL;
-		fpu::noteMaxMin(s, t);
-		fpuRegs.fpr[fd].SL = (s < 0 && t < 0) ? (s < t ? s : t) : (s > t ? s : t);
-	}
-	inline void MIN_S(uint32_t fd, uint32_t fs, uint32_t ft)
-	{
-		const int32_t s = fpuRegs.fpr[fs].SL, t = fpuRegs.fpr[ft].SL;
-		fpu::noteMaxMin(s, t);
-		fpuRegs.fpr[fd].SL = (s < 0 && t < 0) ? (s > t ? s : t) : (s < t ? s : t);
-	}
+	inline void ABS_S(uint32_t fd, uint32_t fs) { fpuRegs.fpr[fd].UL = val::ABS_S(fpuRegs.fpr[fs].UL); }
+	inline void NEG_S(uint32_t fd, uint32_t fs) { fpuRegs.fpr[fd].UL = val::NEG_S(fpuRegs.fpr[fs].UL); }
+	inline void MAX_S(uint32_t fd, uint32_t fs, uint32_t ft) { fpuRegs.fpr[fd].UL = val::MAX_S(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
+	inline void MIN_S(uint32_t fd, uint32_t fs, uint32_t ft) { fpuRegs.fpr[fd].UL = val::MIN_S(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
 
 	// ---- arithmetic -------------------------------------------------------------
-	inline void ADD_S(uint32_t fd, uint32_t fs, uint32_t ft) { fpuRegs.fpr[fd].UL = fpu::add(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
-	inline void SUB_S(uint32_t fd, uint32_t fs, uint32_t ft) { fpuRegs.fpr[fd].UL = fpu::sub(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
-	inline void MUL_S(uint32_t fd, uint32_t fs, uint32_t ft) { fpuRegs.fpr[fd].UL = fpu::mul(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
-	inline void ADDA_S(uint32_t fs, uint32_t ft) { fpuRegs.ACC.UL = fpu::add(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
-	inline void SUBA_S(uint32_t fs, uint32_t ft) { fpuRegs.ACC.UL = fpu::sub(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
-	inline void MULA_S(uint32_t fs, uint32_t ft) { fpuRegs.ACC.UL = fpu::mul(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
-	inline void MADD_S(uint32_t fd, uint32_t fs, uint32_t ft) { fpuRegs.fpr[fd].UL = fpu::madd(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
-	inline void MSUB_S(uint32_t fd, uint32_t fs, uint32_t ft) { fpuRegs.fpr[fd].UL = fpu::msub(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
-	inline void MADDA_S(uint32_t fs, uint32_t ft) { fpuRegs.ACC.UL = fpu::madda(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
-	inline void MSUBA_S(uint32_t fs, uint32_t ft) { fpuRegs.ACC.UL = fpu::msub(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
-
-	// Division rounds as the core's "FPU division" control register says
-	// (to nearest by default, where everything else rounds toward zero). A
-	// zero divisor gives the largest float with the sign of the quotient, and
-	// the invalid flag for 0/0, the division-by-zero flag otherwise.
-	inline void DIV_S(uint32_t fd, uint32_t fs, uint32_t ft)
+	inline void ADD_S(uint32_t fd, uint32_t fs, uint32_t ft) { fpuRegs.fpr[fd].UL = val::ADD_S(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
+	inline void SUB_S(uint32_t fd, uint32_t fs, uint32_t ft) { fpuRegs.fpr[fd].UL = val::SUB_S(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
+	inline void MUL_S(uint32_t fd, uint32_t fs, uint32_t ft) { fpuRegs.fpr[fd].UL = val::MUL_S(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
+	inline void ADDA_S(uint32_t fs, uint32_t ft) { fpuRegs.ACC.UL = val::ADD_S(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
+	inline void SUBA_S(uint32_t fs, uint32_t ft) { fpuRegs.ACC.UL = val::SUB_S(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
+	inline void MULA_S(uint32_t fs, uint32_t ft) { fpuRegs.ACC.UL = val::MUL_S(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
+	inline void MADD_S(uint32_t fd, uint32_t fs, uint32_t ft)
 	{
-		const uint32_t s = fpuRegs.fpr[fs].UL, t = fpuRegs.fpr[ft].UL;
-		const fpu::ScopedControl control(EmuConfig.Cpu.FPUDivFPCR.bitmask);
-
-		fpuRegs.fprc[31] &= ~(fpu::kFlagI | fpu::kFlagD);
-		uint32_t result;
-		if (fpu::isZero(t))
-		{
-			fpuRegs.fprc[31] |= fpu::isZero(s) ? (fpu::kFlagI | fpu::kFlagSI) : (fpu::kFlagD | fpu::kFlagSD);
-			result = ((s ^ t) & fpu::kSign) | fpu::kMax;
-		}
-		else
-		{
-			uint32_t a = s, b = t;
-			if (fpu::clampOperands())
-			{
-				a = fpu::clampOperand(a);
-				b = fpu::clampOperand(b);
-			}
-			const __m128 quotient = _mm_div_ss(fpu::opaque(fpu::fromBits(a)), fpu::opaque(fpu::fromBits(b)));
-			result = fpu::toBits(fpu::opaque(fpu::clampResult(quotient)));
-		}
-		fpuRegs.fpr[fd].UL = result;
+		fpuRegs.fpr[fd].UL = val::MADD_S(fpuRegs.ACC.UL, fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL);
 	}
-
-	// The square root of the magnitude, rounded to nearest; a negative operand
-	// (including -0) sets the invalid flag.
-	inline void SQRT_S(uint32_t fd, uint32_t ft)
+	inline void MSUB_S(uint32_t fd, uint32_t fs, uint32_t ft)
 	{
-		uint32_t t = fpuRegs.fpr[ft].UL;
-		FPControlRegister nearest = EmuConfig.Cpu.FPUFPCR;
-		nearest.SetRoundMode(FPRoundMode::Nearest);
-		const fpu::ScopedControl control(nearest.bitmask);
-
-		fpuRegs.fprc[31] &= ~(fpu::kFlagI | fpu::kFlagD);
-		if (t & fpu::kSign)
-		{
-			fpuRegs.fprc[31] |= fpu::kFlagI | fpu::kFlagSI;
-			t &= ~fpu::kSign;
-		}
-
-		__m128 v = fpu::opaque(fpu::fromBits(t));
-		if (fpu::clampResults())
-			v = _mm_min_ss(v, fpu::fromBits(fpu::kMax));
-		v = _mm_sqrt_ss(fpu::opaque(v));
-		if (fpu::clampOperands())
-			v = fpu::clampResult(v);
-		fpuRegs.fpr[fd].UL = fpu::toBits(fpu::opaque(v));
+		fpuRegs.fpr[fd].UL = val::MSUB_S(fpuRegs.ACC.UL, fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL);
 	}
+	inline void MADDA_S(uint32_t fs, uint32_t ft) { fpuRegs.ACC.UL = val::MADDA_S(fpuRegs.ACC.UL, fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
+	inline void MSUBA_S(uint32_t fs, uint32_t ft) { fpuRegs.ACC.UL = val::MSUB_S(fpuRegs.ACC.UL, fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
 
-	// fs / sqrt(|ft|), under the standing control register.
-	inline void RSQRT_S(uint32_t fd, uint32_t fs, uint32_t ft)
-	{
-		uint32_t d = fpuRegs.fpr[fs].UL, t = fpuRegs.fpr[ft].UL;
-
-		fpuRegs.fprc[31] &= ~(fpu::kFlagI | fpu::kFlagD);
-		if (t & fpu::kSign)
-		{
-			fpuRegs.fprc[31] |= fpu::kFlagI | fpu::kFlagSI;
-			t &= ~fpu::kSign;
-		}
-
-		uint32_t result;
-		if (fpu::isZero(t))
-		{
-			fpuRegs.fprc[31] |= fpu::isZero(d) ? (fpu::kFlagI | fpu::kFlagSI) : (fpu::kFlagD | fpu::kFlagSD);
-			result = (d & fpu::kSign) | fpu::kMax;
-		}
-		else
-		{
-			__m128 root = fpu::opaque(fpu::fromBits(t));
-			if (fpu::clampOperands())
-			{
-				root = _mm_min_ss(root, fpu::fromBits(fpu::kMax));
-				d = fpu::clampOperand(d);
-			}
-			root = _mm_sqrt_ss(fpu::opaque(root));
-			const __m128 quotient = _mm_div_ss(fpu::opaque(fpu::fromBits(d)), fpu::opaque(root));
-			result = fpu::toBits(fpu::clampResult(quotient));
-		}
-		fpuRegs.fpr[fd].UL = result;
-	}
+	inline void DIV_S(uint32_t fd, uint32_t fs, uint32_t ft) { fpuRegs.fpr[fd].UL = val::DIV_S(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
+	inline void SQRT_S(uint32_t fd, uint32_t ft) { fpuRegs.fpr[fd].UL = val::SQRT_S(fpuRegs.fpr[ft].UL); }
+	inline void RSQRT_S(uint32_t fd, uint32_t fs, uint32_t ft) { fpuRegs.fpr[fd].UL = val::RSQRT_S(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL); }
 
 	// ---- conversions --------------------------------------------------------------
-	// From a 32-bit integer, rounded as the control register says.
-	inline void CVT_S_W(uint32_t fd, uint32_t fs)
-	{
-		fpuRegs.fpr[fd].UL = fpu::toBits(_mm_cvtsi32_ss(_mm_setzero_ps(), fpu::opaque(fpuRegs.fpr[fs].SL)));
-	}
-
-	// To a 32-bit integer, truncating; what is too large saturates.
-	inline void CVT_W_S(uint32_t fd, uint32_t fs)
-	{
-		const uint32_t s = fpuRegs.fpr[fs].UL;
-		int32_t result = _mm_cvttss_si32(fpu::opaque(fpu::fromBits(s))); // 0x80000000 for what it cannot represent
-		if (static_cast<int32_t>(s) >= 0x4F000000)
-			result = 0x7FFFFFFF;
-		fpuRegs.fpr[fd].SL = result;
-	}
+	inline void CVT_S_W(uint32_t fd, uint32_t fs) { fpuRegs.fpr[fd].UL = val::CVT_S_W(fpuRegs.fpr[fs].UL); }
+	inline void CVT_W_S(uint32_t fd, uint32_t fs) { fpuRegs.fpr[fd].UL = val::CVT_W_S(fpuRegs.fpr[fs].UL); }
 
 	// ---- comparisons ----------------------------------------------------------------
 	inline void C_F_S(uint32_t, uint32_t) { fpu::setCondition(false); }
-	inline void C_EQ_S(uint32_t fs, uint32_t ft)
-	{
-		fpu::setCondition(_mm_ucomieq_ss(fpu::comparand(fpuRegs.fpr[fs].UL), fpu::comparand(fpuRegs.fpr[ft].UL)) != 0);
-	}
-	inline void C_LT_S(uint32_t fs, uint32_t ft)
-	{
-		fpu::setCondition(_mm_ucomilt_ss(fpu::comparand(fpuRegs.fpr[fs].UL), fpu::comparand(fpuRegs.fpr[ft].UL)) != 0);
-	}
-	inline void C_LE_S(uint32_t fs, uint32_t ft)
-	{
-		fpu::setCondition(_mm_ucomile_ss(fpu::comparand(fpuRegs.fpr[fs].UL), fpu::comparand(fpuRegs.fpr[ft].UL)) != 0);
-	}
+	inline void C_EQ_S(uint32_t fs, uint32_t ft) { fpu::setCondition(val::C_EQ_S(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL)); }
+	inline void C_LT_S(uint32_t fs, uint32_t ft) { fpu::setCondition(val::C_LT_S(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL)); }
+	inline void C_LE_S(uint32_t fs, uint32_t ft) { fpu::setCondition(val::C_LE_S(fpuRegs.fpr[fs].UL, fpuRegs.fpr[ft].UL)); }
 
 	// ---- load and store ---------------------------------------------------------------
 	inline void LWC1(uint32_t ft, uint32_t base, int32_t off) { fpuRegs.fpr[ft].UL = read32(effAddr(base, off)); }

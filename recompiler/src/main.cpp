@@ -173,6 +173,10 @@ int info(const Args& a) {
     generate(prog, go, &stats);
     std::printf("  %zu instructions delegated to the core's interpreter functions (%.1f%%)\n", stats.delegated,
                 stats.instructions ? 100.0 * static_cast<double>(stats.delegated) / static_cast<double>(stats.instructions) : 0.0);
+    std::printf("  %zu instructions work on local variables holding the registers (%.1f%%; with what is compiled twice)\n", stats.onLocals,
+                stats.instructions ? 100.0 * static_cast<double>(stats.onLocals) / static_cast<double>(stats.instructions) : 0.0);
+    std::printf("  %zu block leaders where the locals go on holding registers (%zu registers in all)\n", stats.labelsHolding,
+                stats.registersAtLabels);
     std::vector<std::pair<size_t, r5900::Op>> byCount;
     for (const auto& [op, count] : stats.delegatedByOp) byCount.emplace_back(count, op);
     std::sort(byCount.rbegin(), byCount.rend());

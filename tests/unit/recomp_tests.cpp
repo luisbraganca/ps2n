@@ -95,10 +95,10 @@ TEST_CASE(generated_code_counts_time_in_blocks) {
 
     // addiu 9 + beq 11 + nop 9 eighths of a cycle; both ways the block ends
     // after the delay slot.
-    CHECK_CONTAINS(code, "const bool taken = ru64(A0) == uint64_t{0};");
+    CHECK_CONTAINS(code, "const bool taken = g4 == uint64_t{0};");
     CHECK_CONTAINS(code, "PS2N_BLOCK_END(acc, 29u, taken ? 0x00100014u : 0x0010000Cu);");
     // The link is written before the delay slot, the block ends before the call.
-    CHECK_CONTAINS(code, "setLink(RA, 0x00100014u);");
+    CHECK_CONTAINS(code, "g31 = 0x00100014u;");
     CHECK_CONTAINS(code, "PS2N_BLOCK_END(acc, 18u, 0x00100028u);");
     CHECK_CONTAINS(code, "PS2N_CALL(fn_00100028, 0x00100028u, 0x00100014u);");
     // A system call ends its block, made or not: the runtime counts the
@@ -112,7 +112,7 @@ TEST_CASE(generated_code_counts_time_in_blocks) {
     CHECK_CONTAINS(code, "L_00100018:\n\tPS2N_BLOCK_START(3, 0x00100018u);");
     CHECK_CONTAINS(code, "L_00100028:\n\tPS2N_BLOCK_START(4, 0x00100028u);");
     // The target of a return is read before the delay slot runs.
-    CHECK_CONTAINS(code, "const uint32_t target = ru32(RA);");
+    CHECK_CONTAINS(code, "const uint32_t target = static_cast<uint32_t>(g31);");
     CHECK_CONTAINS(code, "PS2N_BLOCK_END(acc, 18u, target);");
     CHECK_CONTAINS(code, "return target;");
     // Every block leader is an entry.
@@ -225,7 +225,7 @@ _start: div   $a0, $a1             # 00100000
     const std::string code = generateFor(elf, &stats);
     CHECK_EQ(stats.guards, size_t{1});
     CHECK_EQ(stats.leaves, size_t{0});
-    CHECK_CONTAINS(code, "const bool taken = ru64(A1) == uint64_t{0};");
+    CHECK_CONTAINS(code, "const bool taken = g5 == uint64_t{0};");
     CHECK_CONTAINS(code, "return leave(0x00100004u, acc + 112u, ps2n_start);");   // the division's 112, the branch not yet counted
     CHECK_CONTAINS(code, "PS2N_BLOCK_END(acc, 123u, 0x0010000Cu);");   // not taken: the delay slot does not run
 }
@@ -277,7 +277,7 @@ _start: di                         # 00100000
     const std::string code = generateFor(elf, &stats);
     CHECK_EQ(stats.leaves, size_t{0});
     CHECK_EQ(stats.delayedDisables, size_t{1});
-    const size_t after = code.find("ADDIU(V0, ZERO, 1);");
+    const size_t after = code.find("g2 = val::ADDIU(uint64_t{0}, 1);");
     const size_t effect = code.find("DI();");
     CHECK(after != std::string::npos && effect != std::string::npos && after < effect);
     // di 7 + addiu 9 + jr 9 + nop 9 eighths: DI is counted where it stands.
@@ -339,7 +339,7 @@ _start: jr    $t0                  # 00100000
         nop                        # 00100004
 )");
     const std::string code = generateFor(elf);
-    CHECK_CONTAINS(code, "const uint32_t target = ru32(T0);");
+    CHECK_CONTAINS(code, "const uint32_t target = static_cast<uint32_t>(g8);");
     CHECK_CONTAINS(code, "pc = target;");
     CHECK_CONTAINS(code, "goto ps2n_dispatch;");
     CHECK_CONTAINS(code, "default: PS2N_JUMP(ps2n::ee::jump, pc);");
@@ -375,8 +375,8 @@ _start: tlbwi                      # 00100000
     GenerateStats stats;
     const std::string code = generateFor(elf, &stats);
     CHECK_EQ(stats.delegated, size_t{2});
-    CHECK_CONTAINS(code, "delegate(0x00100000u, 0x");
-    CHECK_CONTAINS(code, "delegateInDelaySlot(0x00100008u, 0x");
+    CHECK_CONTAINS(code, "PS2N_DELEGATE(0x00100000u, 0x");
+    CHECK_CONTAINS(code, "PS2N_DELEGATE_IN_SLOT(0x00100008u, 0x");
 }
 
 TEST_CASE(cop0_moves_call_their_semantics_and_hints_do_nothing) {
@@ -450,11 +450,11 @@ _start: lui   $v0, 0x1000          # 00100000
     GenerateOptions go;
     go.id = "test";
     const std::string code = generate(prog, go);
-    CHECK_CONTAINS(code, "const bool ends = PS2N_MEMORY_ENDS(V0, 0, 0x00100004u);");
+    CHECK_CONTAINS(code, "PS2N_LOAD_ENDS(ends, g3, int32_t, mem32_t, static_cast<uint32_t>(g2) + static_cast<uint32_t>(0), 0x00100004u, PS2N_PUT(2));");
     CHECK_CONTAINS(code, "if (ends) [[unlikely]]");
     CHECK_CONTAINS(code, "PS2N_BLOCK_END(acc, 23u, 0x00100008u);");
-    CHECK_CONTAINS(code, "PS2N_MEMORY(SP, 16, 0x00100008u);\n\tSW(V1, SP, 16);");
-    CHECK_CONTAINS(code, "PS2N_MEMORY(A1, 0, 0x00100010u);");
+    CHECK_CONTAINS(code, "PS2N_STORE(mem32_t, static_cast<uint32_t>(g29) + static_cast<uint32_t>(16), g3, 0x00100008u, (void)0);");
+    CHECK_CONTAINS(code, "PS2N_LOAD(g4, int32_t, mem32_t, static_cast<uint32_t>(g5) + static_cast<uint32_t>(0), 0x00100010u, (void)0);");
 }
 
 TEST_CASE(a_block_is_never_carried_across_a_page_boundary_unasked) {
@@ -495,13 +495,19 @@ _start: add.s $f0, $f1, $f2        # 00100000
     GenerateStats stats;
     const std::string code = generateFor(elf, &stats);
     CHECK_EQ(stats.delegated, size_t{0});
-    CHECK_CONTAINS(code, "ADD_S(0, 1, 2);");
-    CHECK_CONTAINS(code, "LWC1(3, SP, 16);");
-    CHECK_CONTAINS(code, "C_LT_S(1, 2);");
+    CHECK_CONTAINS(code, "f0 = val::ADD_S(f1, f2);");
+    CHECK_CONTAINS(code, "PS2N_LOAD_F(f3, static_cast<uint32_t>(g29) + static_cast<uint32_t>(16), 0x00100004u, PS2N_PUT_F(0));");
+    CHECK_CONTAINS(code, "fpu::setCondition(val::C_LT_S(f1, f2));");
     CHECK_CONTAINS(code, "const bool taken = fpuCondition();");
-    CHECK_CONTAINS(code, "MFC1(V0, 0);");
-    CHECK_CONTAINS(code, "SQRT_S(4, 5);");
-    CHECK_CONTAINS(code, "MADD_S(6, 7, 8);");
+    CHECK_CONTAINS(code, "g2 = val::MFC1(f0);");
+    CHECK_CONTAINS(code, "f4 = val::SQRT_S(f5);");
+    CHECK_CONTAINS(code, "f6 = val::MADD_S(facc, f7, f8);");
+    // The FPU's registers are held in locals as the general ones are, and put
+    // back with them at the end of the block.
+    CHECK_CONTAINS(code, "PS2N_GET_F(1);");
+    CHECK_CONTAINS(code, "PS2N_GET_ACC();");
+    CHECK_CONTAINS(code, "PS2N_PUT(2); PS2N_PUT_F(0); PS2N_PUT_F(3);");
+    CHECK_CONTAINS(code, "uint32_t f0 = 0, f1 = 0, f2 = 0, f3 = 0, f4 = 0, f5 = 0, f6 = 0, f7 = 0, f8 = 0, facc = 0;");
     // The square root is carried into the code after the label, unless the
     // block was cut short there; the block ends with the return and the
     // multiply-add in its delay slot.
@@ -593,8 +599,8 @@ TEST_CASE(a_large_program_is_spread_over_several_files) {
     CHECK_CONTAINS(files[1].text, "#pragma once");
     CHECK_CONTAINS(files[1].text, "extern const ps2n::ee::ImageInfo image;");
     CHECK_CONTAINS(files[1].text, "extern uint32_t blocks[5];");
-    CHECK_CONTAINS(files[1].text, "\nuint32_t fn_00100000(uint32_t pc);");
-    CHECK_CONTAINS(files[1].text, "\nuint32_t fn_00100028(uint32_t pc);");
+    CHECK_CONTAINS(files[1].text, "\nuint32_t PS2N_CC fn_00100000(uint32_t pc);");
+    CHECK_CONTAINS(files[1].text, "\nuint32_t PS2N_CC fn_00100028(uint32_t pc);");
 
     // The main file holds the tables and no function.
     CHECK_CONTAINS(files[0].text, "#include \"test.h\"");
@@ -606,16 +612,16 @@ TEST_CASE(a_large_program_is_spread_over_several_files) {
     // The functions follow each other in address order: eight instructions in
     // the first part, two in the second. A call across parts is the same call.
     CHECK_CONTAINS(files[2].text, "#include \"test.h\"");
-    CHECK_CONTAINS(files[2].text, "\nuint32_t fn_00100000(uint32_t pc)\n{");
+    CHECK_CONTAINS(files[2].text, "\nuint32_t PS2N_CC fn_00100000(uint32_t pc)\n{");
     CHECK_CONTAINS(files[2].text, "PS2N_CALL(fn_00100028, 0x00100028u, 0x00100014u);");
     CHECK(!contains(files[2].text, "fn_00100028(uint32_t pc)\n{"));
-    CHECK_CONTAINS(files[3].text, "\nuint32_t fn_00100028(uint32_t pc)\n{");
+    CHECK_CONTAINS(files[3].text, "\nuint32_t PS2N_CC fn_00100028(uint32_t pc)\n{");
 
     // One part is one file, with everything local to it, as before.
     CHECK(generatedSuffixes(1) == std::vector<std::string>{".cpp"});
     CHECK(generatedSuffixes(2) == (std::vector<std::string>{".cpp", ".h", "_part001.cpp", "_part002.cpp"}));
     const std::string single = generateFor(elf);
-    CHECK_CONTAINS(single, "static uint32_t fn_00100000(uint32_t pc)\n{");
+    CHECK_CONTAINS(single, "static uint32_t PS2N_CC fn_00100000(uint32_t pc)\n{");
     CHECK_THROWS(generate(prog, go));   // generate() is for one part
 }
 
@@ -661,7 +667,7 @@ _start: lui   $v0, 0x10            # 00100000
     // same, for when PCSX2's setting switches the skip off.
     const std::string code = generateFor(elf);
     CHECK_CONTAINS(code, "L_00100004:\n\tPS2N_BLOCK_START(1, 0x00100004u);");
-    CHECK_CONTAINS(code, "ADDIU(V0, V0, -1);");
+    CHECK_CONTAINS(code, "g2 = val::ADDIU(g2, -1);");
 }
 
 TEST_CASE(what_is_not_a_timeout_loop) {
@@ -781,10 +787,10 @@ answer: jr    $ra                  # 00100010
     // The function and its variant. The variant always asks the runtime
     // whether the block that begins is its code.
     CHECK_CONTAINS(code, "PS2N_BLOCK_START(2, 0x00100010u);");
-    CHECK_CONTAINS(code, "static uint32_t fn_00100010_v0(uint32_t pc)");
+    CHECK_CONTAINS(code, "static uint32_t PS2N_CC fn_00100010_v0(uint32_t pc)");
     CHECK_CONTAINS(code, "PS2N_BLOCK_START_VARIANT(2, 0x00100010u, 0);");
-    CHECK_CONTAINS(code, "ADDIU(V0, ZERO, 1);");
-    CHECK_CONTAINS(code, "ADDIU(V0, ZERO, 2);");
+    CHECK_CONTAINS(code, "g2 = val::ADDIU(uint64_t{0}, 1);");
+    CHECK_CONTAINS(code, "g2 = val::ADDIU(uint64_t{0}, 2);");
     // Callers are compiled against the function; the runtime passes them on.
     CHECK_CONTAINS(code, "PS2N_CALL(fn_00100010, 0x00100010u, 0x00100008u);");
 
@@ -796,6 +802,107 @@ answer: jr    $ra                  # 00100010
     CHECK_CONTAINS(code, strprintf("static const uint64_t variant_hashes_0[] = {\n\t0x%016llXull,", static_cast<unsigned long long>(hash.value)));
     CHECK_CONTAINS(code, "{&fn_00100010_v0, variant_hashes_0},");
     CHECK_CONTAINS(code, "&fn_00100010, 2, 1, 0, 1},");   // its one leader is the image's third; one variant, the first
+}
+
+TEST_CASE(registers_are_kept_in_locals_within_straight_line_code) {
+    const ElfFile elf = assemble(R"(
+        .text
+        .globl _start
+_start: addiu $v0, $zero, 5        # 00100000
+        addu  $v1, $v0, $a0        # 00100004
+        mult  $v1, $a1             # 00100008
+        sw    $v1, 0($sp)          # 0010000C
+        jr    $ra                  # 00100010
+        nop                        # 00100014
+)");
+    GenerateStats stats;
+    const std::string code = generateFor(elf, &stats);
+    // The function has a local for each register it works on.
+    CHECK_CONTAINS(code, "uint64_t g2 = 0, g3 = 0, g4 = 0, g29 = 0, g31 = 0;");
+    // Computed on the locals: $zero is a literal, and a register is taken
+    // from the core the first time it is read.
+    CHECK_CONTAINS(code, "g2 = val::ADDIU(uint64_t{0}, 5);");
+    CHECK_CONTAINS(code, "PS2N_GET(4);\n\tg3 = val::ADDU(g2, g4);");
+    // An instruction carried out through register numbers works on the
+    // core's copy: what it may read is put back first, and nothing else.
+    CHECK_CONTAINS(code, "PS2N_PUT(3);\n\tMULT(ZERO, V1, A1);");
+    // The local still holds what was put back. A store names the registers
+    // to put back should its address not be plain memory.
+    CHECK_CONTAINS(code, "PS2N_STORE(mem32_t, static_cast<uint32_t>(g29) + static_cast<uint32_t>(0), g3, 0x0010000Cu, PS2N_PUT(2));");
+    // A function with loads or stores keeps the address table in a local.
+    CHECK_CONTAINS(code, "\tconst vtlb_private::VTLBVirtual* const ps2n_vmap = addressTable();\n");
+    // The block's end puts back what is still changed, before the event test.
+    CHECK_CONTAINS(code, "PS2N_PUT(2);\n\t\tPS2N_BLOCK_END(acc,");
+    CHECK_EQ(stats.onLocals, size_t{3});
+}
+
+TEST_CASE(a_likely_branch_puts_the_registers_back_on_both_sides) {
+    const ElfFile elf = assemble(R"(
+        .text
+        .globl _start
+_start: addiu $v0, $zero, 1        # 00100000
+        beql  $a0, $zero, 1f       # 00100004
+        addiu $v1, $zero, 2        # 00100008
+        nop                        # 0010000C
+1:      jr    $ra                  # 00100010
+        nop                        # 00100014
+)");
+    const std::string code = generateFor(elf);
+    // Taken: after the delay slot, with what it changed.
+    CHECK_CONTAINS(code, "PS2N_PUT(2); PS2N_PUT(3);\n\t\t\tPS2N_BLOCK_END(acc,");
+    // Not taken: the delay slot did not run.
+    CHECK_CONTAINS(code, "else\n\t\t{\n\t\t\tPS2N_PUT(2);\n\t\t\tPS2N_BLOCK_END(acc,");
+}
+
+TEST_CASE(a_label_holds_only_what_every_way_into_it_holds) {
+    const ElfFile elf = assemble(R"(
+        .text
+        .globl _start
+_start: bne   $a0, $zero, 1f       # 00100000
+        nop                        # 00100004
+        addiu $v0, $v0, 1          # 00100008
+1:      addiu $v0, $v0, 2          # 0010000C
+        jr    $ra                  # 00100010
+        nop                        # 00100014
+)");
+    GenerateStats stats;
+    const std::string code = generateFor(elf, &stats);
+    // The code after the label reads $v0, but the branch, which can reach the
+    // label as well, does not hold it: the label holds nothing. What the code
+    // before it changed is put back, and the code after it takes the
+    // register again.
+    CHECK_CONTAINS(code, "g2 = val::ADDIU(g2, 1);");
+    CHECK_CONTAINS(code, "PS2N_PUT(2);\n\tif ((ps2n_end & kBlockEndMask) != 0x0010000Cu)");
+    CHECK_CONTAINS(code, "M_0010000C:\n\tPS2N_GET(2);\n\tg2 = val::ADDIU(g2, 2);");
+    CHECK_EQ(stats.labelsHolding, size_t{0});
+}
+
+TEST_CASE(a_loop_keeps_what_it_reads_in_locals_across_its_label) {
+    const ElfFile elf = assemble(R"(
+        .text
+        .globl _start
+_start: lw    $a1, 0($a0)          # 00100000
+1:      lw    $v0, 4($a1)          # 00100004
+        addiu $a1, $a1, 8          # 00100008
+        bne   $v0, $zero, 1b       # 0010000C
+        nop                        # 00100010
+        jr    $ra                  # 00100014
+        nop                        # 00100018
+)");
+    GenerateStats stats;
+    const std::string code = generateFor(elf, &stats);
+    // Both ways into the loop's label hold $a1, and the loop reads it: the
+    // label holds it. What was changed is put back at the block's end, as
+    // ever, but the loop does not take it from the core again.
+    CHECK_CONTAINS(code, "M_00100004:\n\tPS2N_LOAD(g2, int32_t, mem32_t, static_cast<uint32_t>(g5) + static_cast<uint32_t>(4),");
+    CHECK_CONTAINS(code, "PS2N_PUT(2); PS2N_PUT(5);\n\t\tPS2N_BLOCK_END(acc, 43u, taken ? 0x00100004u : 0x00100014u);");
+    // An entry from outside the function takes it from the core first.
+    CHECK_CONTAINS(code, "case 0x00100004u: goto E_00100004;");
+    CHECK_CONTAINS(code, "E_00100004:\n\tPS2N_GET(5);\n\tgoto L_00100004;");
+    // A call enters at the start, where nothing is held.
+    CHECK_CONTAINS(code, "if (pc == 0x00100000u) [[likely]]\n\t\tgoto L_00100000;");
+    CHECK_EQ(stats.labelsHolding, size_t{1});
+    CHECK_EQ(stats.registersAtLabels, size_t{1});
 }
 
 TEST_CASE(registry_lists_the_images) {

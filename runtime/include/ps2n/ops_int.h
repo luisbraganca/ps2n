@@ -32,15 +32,77 @@
 
 #include <cstdint>
 
+// ---- on values ------------------------------------------------------------------
+// The arithmetic of the instructions that do nothing but compute a general
+// register from others: functions of the registers' values, bits 0-63, to
+// the value of the destination. Generated code calls these on the local
+// variables it keeps registers in (docs/execution-model.md, "Registers in
+// local variables"); the forms that take register numbers, below, are made of
+// them, so that each instruction is defined once.
+namespace ps2n::ee::val
+{
+	// arithmetic
+	inline uint64_t ADDU(uint64_t rs, uint64_t rt) { return sext32(static_cast<uint32_t>(rs) + static_cast<uint32_t>(rt)); }
+	inline uint64_t SUBU(uint64_t rs, uint64_t rt) { return sext32(static_cast<uint32_t>(rs) - static_cast<uint32_t>(rt)); }
+	inline uint64_t ADDIU(uint64_t rs, int32_t imm) { return sext32(static_cast<uint32_t>(rs) + static_cast<uint32_t>(imm)); }
+	inline uint64_t DADDU(uint64_t rs, uint64_t rt) { return rs + rt; }
+	inline uint64_t DSUBU(uint64_t rs, uint64_t rt) { return rs - rt; }
+	inline uint64_t DADDIU(uint64_t rs, int32_t imm) { return rs + static_cast<uint64_t>(static_cast<int64_t>(imm)); }
+
+	// The forms that trap on overflow on the console do not here, as in
+	// PCSX2's recompiler: they wrap, as the unsigned forms do.
+	inline uint64_t ADD(uint64_t rs, uint64_t rt) { return ADDU(rs, rt); }
+	inline uint64_t SUB(uint64_t rs, uint64_t rt) { return SUBU(rs, rt); }
+	inline uint64_t ADDI(uint64_t rs, int32_t imm) { return ADDIU(rs, imm); }
+	inline uint64_t DADD(uint64_t rs, uint64_t rt) { return DADDU(rs, rt); }
+	inline uint64_t DSUB(uint64_t rs, uint64_t rt) { return DSUBU(rs, rt); }
+	inline uint64_t DADDI(uint64_t rs, int32_t imm) { return DADDIU(rs, imm); }
+
+	// logical, compare
+	inline uint64_t AND(uint64_t rs, uint64_t rt) { return rs & rt; }
+	inline uint64_t OR(uint64_t rs, uint64_t rt) { return rs | rt; }
+	inline uint64_t XOR(uint64_t rs, uint64_t rt) { return rs ^ rt; }
+	inline uint64_t NOR(uint64_t rs, uint64_t rt) { return ~(rs | rt); }
+	inline uint64_t ANDI(uint64_t rs, uint32_t imm) { return rs & imm; }
+	inline uint64_t ORI(uint64_t rs, uint32_t imm) { return rs | imm; }
+	inline uint64_t XORI(uint64_t rs, uint32_t imm) { return rs ^ imm; }
+	inline uint64_t LUI(uint32_t imm) { return sext32(imm << 16); }
+	inline uint64_t SLT(uint64_t rs, uint64_t rt) { return static_cast<int64_t>(rs) < static_cast<int64_t>(rt) ? 1 : 0; }
+	inline uint64_t SLTU(uint64_t rs, uint64_t rt) { return rs < rt ? 1 : 0; }
+	inline uint64_t SLTI(uint64_t rs, int32_t imm) { return static_cast<int64_t>(rs) < imm ? 1 : 0; }
+	inline uint64_t SLTIU(uint64_t rs, int32_t imm) { return rs < static_cast<uint64_t>(static_cast<int64_t>(imm)) ? 1 : 0; }
+
+	// The conditional moves: the destination keeps `rd` unless the condition holds.
+	inline uint64_t MOVZ(uint64_t rd, uint64_t rs, uint64_t rt) { return rt == 0 ? rs : rd; }
+	inline uint64_t MOVN(uint64_t rd, uint64_t rs, uint64_t rt) { return rt != 0 ? rs : rd; }
+
+	// shifts
+	inline uint64_t SLL(uint64_t rt, uint32_t sa) { return sext32(static_cast<uint32_t>(rt) << (sa & 31)); }
+	inline uint64_t SRL(uint64_t rt, uint32_t sa) { return sext32(static_cast<uint32_t>(rt) >> (sa & 31)); }
+	inline uint64_t SRA(uint64_t rt, uint32_t sa) { return static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(rt) >> (sa & 31))); }
+	inline uint64_t SLLV(uint64_t rt, uint64_t rs) { return SLL(rt, static_cast<uint32_t>(rs)); }
+	inline uint64_t SRLV(uint64_t rt, uint64_t rs) { return SRL(rt, static_cast<uint32_t>(rs)); }
+	inline uint64_t SRAV(uint64_t rt, uint64_t rs) { return SRA(rt, static_cast<uint32_t>(rs)); }
+	inline uint64_t DSLL(uint64_t rt, uint32_t sa) { return rt << (sa & 31); }
+	inline uint64_t DSRL(uint64_t rt, uint32_t sa) { return rt >> (sa & 31); }
+	inline uint64_t DSRA(uint64_t rt, uint32_t sa) { return static_cast<uint64_t>(static_cast<int64_t>(rt) >> (sa & 31)); }
+	inline uint64_t DSLL32(uint64_t rt, uint32_t sa) { return rt << ((sa & 31) + 32); }
+	inline uint64_t DSRL32(uint64_t rt, uint32_t sa) { return rt >> ((sa & 31) + 32); }
+	inline uint64_t DSRA32(uint64_t rt, uint32_t sa) { return static_cast<uint64_t>(static_cast<int64_t>(rt) >> ((sa & 31) + 32)); }
+	inline uint64_t DSLLV(uint64_t rt, uint64_t rs) { return rt << (static_cast<uint32_t>(rs) & 63); }
+	inline uint64_t DSRLV(uint64_t rt, uint64_t rs) { return rt >> (static_cast<uint32_t>(rs) & 63); }
+	inline uint64_t DSRAV(uint64_t rt, uint64_t rs) { return static_cast<uint64_t>(static_cast<int64_t>(rt) >> (static_cast<uint32_t>(rs) & 63)); }
+} // namespace ps2n::ee::val
+
 namespace ps2n::ee::ops
 {
 	// ---- arithmetic -----------------------------------------------------------
-	inline void ADDU(uint32_t rd, uint32_t rs, uint32_t rt) { setU32(rd, ru32(rs) + ru32(rt)); }
-	inline void SUBU(uint32_t rd, uint32_t rs, uint32_t rt) { setU32(rd, ru32(rs) - ru32(rt)); }
-	inline void ADDIU(uint32_t rt, uint32_t rs, int32_t imm) { setU32(rt, ru32(rs) + static_cast<uint32_t>(imm)); }
-	inline void DADDU(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, ru64(rs) + ru64(rt)); }
-	inline void DSUBU(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, ru64(rs) - ru64(rt)); }
-	inline void DADDIU(uint32_t rt, uint32_t rs, int32_t imm) { setU64(rt, ru64(rs) + static_cast<uint64_t>(static_cast<int64_t>(imm))); }
+	inline void ADDU(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, val::ADDU(ru64(rs), ru64(rt))); }
+	inline void SUBU(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, val::SUBU(ru64(rs), ru64(rt))); }
+	inline void ADDIU(uint32_t rt, uint32_t rs, int32_t imm) { setU64(rt, val::ADDIU(ru64(rs), imm)); }
+	inline void DADDU(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, val::DADDU(ru64(rs), ru64(rt))); }
+	inline void DSUBU(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, val::DSUBU(ru64(rs), ru64(rt))); }
+	inline void DADDIU(uint32_t rt, uint32_t rs, int32_t imm) { setU64(rt, val::DADDIU(ru64(rs), imm)); }
 
 	inline void ADD(uint32_t rd, uint32_t rs, uint32_t rt) { ADDU(rd, rs, rt); }
 	inline void SUB(uint32_t rd, uint32_t rs, uint32_t rt) { SUBU(rd, rs, rt); }
@@ -50,48 +112,37 @@ namespace ps2n::ee::ops
 	inline void DADDI(uint32_t rt, uint32_t rs, int32_t imm) { DADDIU(rt, rs, imm); }
 
 	// ---- logical / compare ----------------------------------------------------
-	inline void AND(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, ru64(rs) & ru64(rt)); }
-	inline void OR(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, ru64(rs) | ru64(rt)); }
-	inline void XOR(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, ru64(rs) ^ ru64(rt)); }
-	inline void NOR(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, ~(ru64(rs) | ru64(rt))); }
-	inline void ANDI(uint32_t rt, uint32_t rs, uint32_t imm) { setU64(rt, ru64(rs) & imm); }
-	inline void ORI(uint32_t rt, uint32_t rs, uint32_t imm) { setU64(rt, ru64(rs) | imm); }
-	inline void XORI(uint32_t rt, uint32_t rs, uint32_t imm) { setU64(rt, ru64(rs) ^ imm); }
-	inline void LUI(uint32_t rt, uint32_t imm) { setU32(rt, imm << 16); }
-	inline void SLT(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, rs64(rs) < rs64(rt) ? 1 : 0); }
-	inline void SLTU(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, ru64(rs) < ru64(rt) ? 1 : 0); }
-	inline void SLTI(uint32_t rt, uint32_t rs, int32_t imm) { setU64(rt, rs64(rs) < imm ? 1 : 0); }
-	inline void SLTIU(uint32_t rt, uint32_t rs, int32_t imm)
-	{
-		setU64(rt, ru64(rs) < static_cast<uint64_t>(static_cast<int64_t>(imm)) ? 1 : 0);
-	}
-	inline void MOVZ(uint32_t rd, uint32_t rs, uint32_t rt)
-	{
-		if (ru64(rt) == 0)
-			setU64(rd, ru64(rs));
-	}
-	inline void MOVN(uint32_t rd, uint32_t rs, uint32_t rt)
-	{
-		if (ru64(rt) != 0)
-			setU64(rd, ru64(rs));
-	}
+	inline void AND(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, val::AND(ru64(rs), ru64(rt))); }
+	inline void OR(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, val::OR(ru64(rs), ru64(rt))); }
+	inline void XOR(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, val::XOR(ru64(rs), ru64(rt))); }
+	inline void NOR(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, val::NOR(ru64(rs), ru64(rt))); }
+	inline void ANDI(uint32_t rt, uint32_t rs, uint32_t imm) { setU64(rt, val::ANDI(ru64(rs), imm)); }
+	inline void ORI(uint32_t rt, uint32_t rs, uint32_t imm) { setU64(rt, val::ORI(ru64(rs), imm)); }
+	inline void XORI(uint32_t rt, uint32_t rs, uint32_t imm) { setU64(rt, val::XORI(ru64(rs), imm)); }
+	inline void LUI(uint32_t rt, uint32_t imm) { setU64(rt, val::LUI(imm)); }
+	inline void SLT(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, val::SLT(ru64(rs), ru64(rt))); }
+	inline void SLTU(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, val::SLTU(ru64(rs), ru64(rt))); }
+	inline void SLTI(uint32_t rt, uint32_t rs, int32_t imm) { setU64(rt, val::SLTI(ru64(rs), imm)); }
+	inline void SLTIU(uint32_t rt, uint32_t rs, int32_t imm) { setU64(rt, val::SLTIU(ru64(rs), imm)); }
+	inline void MOVZ(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, val::MOVZ(ru64(rd), ru64(rs), ru64(rt))); }
+	inline void MOVN(uint32_t rd, uint32_t rs, uint32_t rt) { setU64(rd, val::MOVN(ru64(rd), ru64(rs), ru64(rt))); }
 
 	// ---- shifts ---------------------------------------------------------------
-	inline void SLL(uint32_t rd, uint32_t rt, uint32_t sa) { setU32(rd, ru32(rt) << (sa & 31)); }
-	inline void SRL(uint32_t rd, uint32_t rt, uint32_t sa) { setU32(rd, ru32(rt) >> (sa & 31)); }
-	inline void SRA(uint32_t rd, uint32_t rt, uint32_t sa) { setS32(rd, rs32(rt) >> (sa & 31)); }
-	inline void SLLV(uint32_t rd, uint32_t rt, uint32_t rs) { setU32(rd, ru32(rt) << (ru32(rs) & 31)); }
-	inline void SRLV(uint32_t rd, uint32_t rt, uint32_t rs) { setU32(rd, ru32(rt) >> (ru32(rs) & 31)); }
-	inline void SRAV(uint32_t rd, uint32_t rt, uint32_t rs) { setS32(rd, rs32(rt) >> (ru32(rs) & 31)); }
-	inline void DSLL(uint32_t rd, uint32_t rt, uint32_t sa) { setU64(rd, ru64(rt) << (sa & 31)); }
-	inline void DSRL(uint32_t rd, uint32_t rt, uint32_t sa) { setU64(rd, ru64(rt) >> (sa & 31)); }
-	inline void DSRA(uint32_t rd, uint32_t rt, uint32_t sa) { setU64(rd, static_cast<uint64_t>(rs64(rt) >> (sa & 31))); }
-	inline void DSLL32(uint32_t rd, uint32_t rt, uint32_t sa) { setU64(rd, ru64(rt) << ((sa & 31) + 32)); }
-	inline void DSRL32(uint32_t rd, uint32_t rt, uint32_t sa) { setU64(rd, ru64(rt) >> ((sa & 31) + 32)); }
-	inline void DSRA32(uint32_t rd, uint32_t rt, uint32_t sa) { setU64(rd, static_cast<uint64_t>(rs64(rt) >> ((sa & 31) + 32))); }
-	inline void DSLLV(uint32_t rd, uint32_t rt, uint32_t rs) { setU64(rd, ru64(rt) << (ru32(rs) & 63)); }
-	inline void DSRLV(uint32_t rd, uint32_t rt, uint32_t rs) { setU64(rd, ru64(rt) >> (ru32(rs) & 63)); }
-	inline void DSRAV(uint32_t rd, uint32_t rt, uint32_t rs) { setU64(rd, static_cast<uint64_t>(rs64(rt) >> (ru32(rs) & 63))); }
+	inline void SLL(uint32_t rd, uint32_t rt, uint32_t sa) { setU64(rd, val::SLL(ru64(rt), sa)); }
+	inline void SRL(uint32_t rd, uint32_t rt, uint32_t sa) { setU64(rd, val::SRL(ru64(rt), sa)); }
+	inline void SRA(uint32_t rd, uint32_t rt, uint32_t sa) { setU64(rd, val::SRA(ru64(rt), sa)); }
+	inline void SLLV(uint32_t rd, uint32_t rt, uint32_t rs) { setU64(rd, val::SLLV(ru64(rt), ru64(rs))); }
+	inline void SRLV(uint32_t rd, uint32_t rt, uint32_t rs) { setU64(rd, val::SRLV(ru64(rt), ru64(rs))); }
+	inline void SRAV(uint32_t rd, uint32_t rt, uint32_t rs) { setU64(rd, val::SRAV(ru64(rt), ru64(rs))); }
+	inline void DSLL(uint32_t rd, uint32_t rt, uint32_t sa) { setU64(rd, val::DSLL(ru64(rt), sa)); }
+	inline void DSRL(uint32_t rd, uint32_t rt, uint32_t sa) { setU64(rd, val::DSRL(ru64(rt), sa)); }
+	inline void DSRA(uint32_t rd, uint32_t rt, uint32_t sa) { setU64(rd, val::DSRA(ru64(rt), sa)); }
+	inline void DSLL32(uint32_t rd, uint32_t rt, uint32_t sa) { setU64(rd, val::DSLL32(ru64(rt), sa)); }
+	inline void DSRL32(uint32_t rd, uint32_t rt, uint32_t sa) { setU64(rd, val::DSRL32(ru64(rt), sa)); }
+	inline void DSRA32(uint32_t rd, uint32_t rt, uint32_t sa) { setU64(rd, val::DSRA32(ru64(rt), sa)); }
+	inline void DSLLV(uint32_t rd, uint32_t rt, uint32_t rs) { setU64(rd, val::DSLLV(ru64(rt), ru64(rs))); }
+	inline void DSRLV(uint32_t rd, uint32_t rt, uint32_t rs) { setU64(rd, val::DSRLV(ru64(rt), ru64(rs))); }
+	inline void DSRAV(uint32_t rd, uint32_t rt, uint32_t rs) { setU64(rd, val::DSRAV(ru64(rt), ru64(rs))); }
 
 	// ---- HI/LO, multiply, divide ----------------------------------------------
 	// Pipeline 0 uses bits 0-63 of HI and LO, pipeline 1 (the "...1"

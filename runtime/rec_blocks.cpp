@@ -584,10 +584,13 @@ namespace
 				*block.cache = 0;
 			const auto victim = it++;
 			s_retired.push_back(s_blocks.extract(victim));
+			ps2n::ee::blocks::epoch++;
 			s_stats.cleared++;
 		}
 	}
 } // namespace
+
+uint64_t ps2n::ee::blocks::epoch = 1;
 
 const Stats& ps2n::ee::blocks::GetStats()
 {
@@ -687,6 +690,7 @@ void ps2n::ee::blocks::Reset()
 	}
 	s_blocks.clear();
 	s_retired.clear();
+	epoch++;
 	s_faulting.clear();
 	s_forming = nullptr;
 	s_max_address = 0;
@@ -707,6 +711,7 @@ Block* ps2n::ee::blocks::Find(u32 pc)
 Block* ps2n::ee::blocks::Form(u32 startpc)
 {
 	Allocate();
+	epoch++;
 
 	const u32 hw_start = Physical(startpc);
 	if (hw_start == kNowhere)
@@ -950,7 +955,10 @@ Block* ps2n::ee::blocks::FindRunning(u32 start)
 
 void ps2n::ee::blocks::Collect()
 {
+	if (s_retired.empty()) [[likely]]
+		return;
 	s_retired.clear();
+	epoch++;
 }
 
 void ps2n::ee::blocks::Clear(u32 addr, u32 words)

@@ -1526,12 +1526,39 @@ uint32_t ps2n::ee::syscallInstruction(uint32_t pc, uint32_t code, uint32_t start
 	return MustUnwind() ? kUnwind : cpuRegs.pc;
 }
 
+namespace
+{
+	// The step compiled code asked for the last time at each of so many
+	// places, so that a COP2 instruction that comes round again in the same
+	// block finds its step without looking the block up. An answer holds for
+	// as long as no block has been formed or thrown away since.
+	struct StepSite
+	{
+		u32 pc = 0;
+		u32 start = 0;
+		u64 epoch = 0; // never the blocks' own, which begins at one
+		Step* step = nullptr;
+	};
+	constexpr size_t kStepSites = 4096;
+	StepSite s_step_sites[kStepSites];
+
+	__fi Step& StepAt(u32 start, u32 pc)
+	{
+		StepSite& site = s_step_sites[(pc >> 2) & (kStepSites - 1)];
+		if (site.pc == pc && site.start == start && site.epoch == blocks::epoch) [[likely]]
+			return *site.step;
+
+		const StepRef ref = FindStep(start, pc);
+		if (ref.index < 0) [[unlikely]]
+			NoSuchStep(start, pc);
+		site = {pc, start, blocks::epoch, &ref.block->steps[ref.index]};
+		return *site.step;
+	}
+} // namespace
+
 uint32_t ps2n::ee::cop2Instruction(uint32_t pc, uint32_t start, uint32_t eighths)
 {
-	const StepRef ref = FindStep(start, pc);
-	if (ref.index < 0) [[unlikely]]
-		NoSuchStep(start, pc);
-	Step& step = ref.block->steps[ref.index];
+	Step& step = StepAt(start, pc);
 
 	// As RunRecStep() does it; the instruction's own count is in `eighths`.
 	if (step.info & blocks::kFlush)
@@ -1617,7 +1644,7 @@ uint32_t ps2n::ee::dispatch(uint32_t pc)
 	return cpuRegs.pc;
 }
 
-uint32_t ps2n::ee::jump(uint32_t pc)
+uint32_t PS2N_CC ps2n::ee::jump(uint32_t pc)
 {
 	// To the start of a compiled function: a call that will not come back
 	// here (a tail call). The function runs on top of this frame's caller,

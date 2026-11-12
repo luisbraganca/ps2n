@@ -55,13 +55,14 @@ page.
 | On the page | From |
 |---|---|
 | The phases and their states | `CLAUDE.md`, "Status" |
-| Steps G0 to G5 and their states | [game-log.md](../game-log.md), the table at the top |
+| Steps G0 to G6 and their states | [game-log.md](../game-log.md), the table at the top |
 | 1,003,452 instructions, 22,668 functions | game-log.md, "What is on the disc" |
 | 1.8 s, 152.4 MB, 119 s | game-log.md, "G2" |
 | 463 places, 5,079 instructions, then none | game-log.md, "G3", "One rebuild is enough" |
 | 38,478,822 moments, 3 GB, 4,199 frames, 47,705,744 event tests, 1.11% | game-log.md, "G3", "4,200 frames, with the button press" |
 | 22.9 s and 25.7 s, 11.2 s and 15.1 s, and the two runs of each | game-log.md, "G3" and "Open" |
 | 100 s and 74 s for the run into the first level; "twice as long" for the game's own code | game-log.md, "G5", "The level run, timed" and "Where the time goes" |
+| 91 s, 1.21 to 1.23 times and 1.35 for the run into the first level; 41 s and 26 s for the game's own code; "more than a third" reaching memory; "seven changes" | game-log.md, "G6", "What each change gave" and "Where the time is now" |
 | G4: "played by the maintainer in a window, with sound and a controller, on Windows" | game-log.md, "G4", "A window, sound and a controller" |
 | 59 of 63 test programs | game-log.md, "The timing difference", "What was measured" |
 | 453 tests, 42 cases, 153 s | game-log.md, "G4", "The compiled game against stock PCSX2" |

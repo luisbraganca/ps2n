@@ -33,9 +33,13 @@ code is right and this file needs fixing.
   block, the block as it would have compiled it. Nothing in it generates
   code.
 
-There is no guest state outside the core. Registers are `cpuRegs` and
-`fpuRegs`, memory is the core's, reached through its address table (vtlb). A
-compiled function's host frame holds nothing that matters, which is what makes
+There is no guest state outside the core, but for the length of a stretch
+of straight-line compiled code. Registers are `cpuRegs` and `fpuRegs`,
+memory is the core's, reached through its address table (vtlb). A compiled
+function keeps general registers in local variables while it computes with
+them, and puts them back before anything else can look ("Registers in local
+variables" below). So whenever compiled code calls out, and whenever it
+returns, its host frame holds nothing that matters, which is what makes
 every unwinding below safe.
 
 ## Time is counted as PCSX2's recompiler counts it
@@ -164,7 +168,7 @@ Where a block begins is decided by execution, and where it ends by history,
 so generated code cannot have either built in. It can know this much: a
 block only begins at a *leader* (a label of a generated function), and only
 ends at a leader or after an instruction that ends one. Each generated
-function keeps three locals:
+function keeps four locals:
 
 - `acc`: the eighths counted since the block began or since cycles were last
   added, apart from those the recompiler has folded into the next macro's
@@ -172,7 +176,14 @@ function keeps three locals:
 - `ps2n_start`: the address the current block began at;
 - `ps2n_end`: the address at which the record says the block ends, with two
   flags in its low bits (a test for events if it is cut short there; an idle
-  loop).
+  loop);
+- `ps2n_cycle`: the core's cycle count. The core's own is always right:
+  whenever the function adds a block's cycles to its copy it writes the sum
+  to `cpuRegs.cycle`, and after every call out of the function that comes
+  back into it (an event test, another function, the runtime, the core's
+  function for an instruction) it takes the core's count again
+  (`PS2N_TIME`). The copy only spares reading the count back from memory
+  at the end of every block.
 
 What the generated code does with them:
 
@@ -192,9 +203,9 @@ What the generated code does with them:
   cycles so far.
 - **What depends on the block** is asked of the runtime, which looks up the
   step in the record: `PS2N_SYSCALL` (made or not), `PS2N_COP2` (what
-  happens to VU0 first, and whether cycles are added), `PS2N_MEMORY` (only
-  when a load or store hits memory that is not plain: rule 13, and for a
-  timer read rule 1).
+  happens to VU0 first, and whether cycles are added), and the loads and
+  stores, `PS2N_LOAD`, `PS2N_STORE` and `PS2N_ACCESS` (only when one hits
+  memory that is not plain: rule 13, and for a timer read rule 1).
 - **`DI`** is compiled in one piece with the instruction after it, which
   runs first (rule 8), when that is a plain instruction at which no block
   can begin; in a delay slot it takes effect at once.
@@ -205,6 +216,74 @@ What the generated code does with them:
   before an instruction at which a block can begin. The host reports where
   it happened and how often ("compiled code handed over to the
   interpreter").
+
+### Registers in local variables
+
+The core's registers are in memory, where everything can reach them. Code
+that reads and writes them there for every instruction is slow, and the C++
+compiler cannot help: after a store into the console's memory it has to
+assume the registers changed. So a generated function keeps the registers
+it works on in local variables, which nothing else can reach and the
+compiler keeps in host registers
+([ADR 0015](adr/0015-a-speed-step-before-phase-3-ends.md)): the general
+registers in `g1` to `g31`, bits 0 to 63 of each, and the FPU's in `f0` to
+`f31` and `facc` (its accumulator), 32 bits each.
+
+The generator knows, at every point of the code it writes, which locals
+hold their register's value and which of those hold a value the core does
+not have yet. From that:
+
+- **A register is taken from the core** (`PS2N_GET`, `PS2N_GET_F`,
+  `PS2N_GET_ACC`) the first time straight-line code reads it. `$zero` is a
+  literal.
+- **The instructions that only compute a general register from others**
+  (the arithmetic, the logic, the comparisons, the shifts, the conditional
+  moves) work on the locals: `g2 = val::ADDU(g4, g5)`. Their arithmetic is
+  in `ps2n::ee::val` ([ops_int.h](../runtime/include/ps2n/ops_int.h)); the
+  functions the interpreter uses are made of the same, so each instruction
+  is still defined once.
+- **The FPU's instructions** work on its registers' locals in the same way:
+  `f0 = val::ADD_S(f1, f2)`, `facc = val::MADDA_S(facc, f1, f2)`
+  ([ops_fpu.h](../runtime/include/ps2n/ops_fpu.h)). A comparison writes its
+  condition to FCR31 in the core, where the branch that follows reads it,
+  and so do the flags of a division or a square root: those stay in the
+  core. `MFC1` and `MTC1` move between a general register's local and an
+  FPU register's.
+- **The loads and stores of a general register or an FPU register** take
+  the address from a local and look at the core's address table once
+  (`PS2N_LOAD`, `PS2N_LOAD_F`, `PS2N_STORE`). Only when the address is not
+  plain memory are the changed registers put back, the runtime told, and
+  the core's own function called.
+- **Every other instruction is carried out through register numbers**, on
+  the core's copy, as before. The changed registers its fields name are put
+  back first (`PS2N_PUT`), and the locals no longer hold the ones it may
+  write. For one of the FPU's that is every FPU register (two are left:
+  the moves to and from its control registers).
+- **Everything changed is put back** before the end of a block, where an
+  event test may follow; before a label, which other code can reach; before
+  a call; before the runtime carries out a COP2 instruction, a system
+  instruction or what the recompiler does not translate; and before the
+  interpreter takes over. After a call, a system instruction or a
+  delegated one the locals hold nothing; after a COP2 instruction, nothing
+  of what it may write.
+- **After the end of a block the locals go on holding what they held.** An
+  event test after which the code goes on where it was going has changed
+  no register: one that takes an interrupt changes where the code goes on
+  instead, and then the function returns. The registers are in the core
+  for the event test all the same, which is where the comparisons with
+  stock PCSX2 and with the interpreter read them (the IOP runs, and a sync
+  point is recorded, only inside it).
+- **A label holds what the code after it reads**, of what the ways into
+  it hold. Every way in brings the locals to the label's state first: it
+  puts back what it changed, and takes from the core what the label holds
+  and it does not. An entry from outside the function, through the
+  `switch` at its top, does the same through a way in of its own, after
+  the function's code (`E_` and the label's address). The generator works
+  the states out by generating each function a few times: what each
+  label's code reads, and what each way in held, the time before.
+- Bits 64 to 127 of a register never leave the core.
+
+What this buys is measured in the game log, step G6.
 
 Blocks compiled code cannot carry out are interpreted where compiled code
 asks about them: one that counts double (rule 3), a hooked block, one cut
@@ -259,8 +338,17 @@ A generated function is `uint32_t fn(uint32_t pc)`:
 
 - `pc` is where to enter: the function's start or any other block leader. The
   function begins with a `switch (pc)` over all of them. Every block leader
-  is an entry, because any block can be where an interrupt returns to.
+  is an entry, because any block can be where an interrupt returns to. A
+  call enters at the start, so that is tested first, before the switch.
 - The return value is the PC at which execution continues.
+- Under clang the functions have a calling convention of their own
+  (`PS2N_CC`, clang's `preserve_none`): they keep no host registers for
+  their caller. Nothing a compiled function holds in host registers lives
+  across a call of another one (it is in the core or taken from there
+  again), so the eight registers every function saved on entry and restored
+  on leaving were wasted work. The runtime's functions, which compiled code
+  calls, keep the platform's convention. With another compiler `PS2N_CC` is
+  empty.
 
 Calls and returns:
 

@@ -22,6 +22,7 @@
 #include <cstring>
 #include <map>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -134,7 +135,104 @@ namespace ps2n::host::profile
 		{
 			Kind kind;
 			std::string name;
+			std::string file; // for the game's compiled code: the generated file and line the instruction is from
+			u32 line = 0;
+			u64 offset = 0; // and how far into its function the instruction is
 		};
+
+		// The lines of the generated files, read as they are needed, to say what
+		// kind of line a sample in the game's compiled code fell on.
+		std::unordered_map<std::string, std::vector<std::string>> s_sources;
+
+		const std::string* SourceLine(const std::string& file, u32 line)
+		{
+			auto it = s_sources.find(file);
+			if (it == s_sources.end())
+			{
+				std::vector<std::string> lines;
+				if (std::FILE* fp = std::fopen(file.c_str(), "rb"))
+				{
+					std::string text;
+					char buffer[65536];
+					size_t got;
+					while ((got = std::fread(buffer, 1, sizeof(buffer), fp)) > 0)
+						text.append(buffer, got);
+					std::fclose(fp);
+
+					size_t start = 0;
+					while (start <= text.size())
+					{
+						size_t end = text.find('\n', start);
+						if (end == std::string::npos)
+							end = text.size();
+						lines.emplace_back(text, start, end - start);
+						start = end + 1;
+					}
+				}
+				it = s_sources.emplace(file, std::move(lines)).first;
+			}
+			return (line >= 1 && line <= it->second.size()) ? &it->second[line - 1] : nullptr;
+		}
+
+		// What a line of generated code is, by how it begins
+		// (recompiler/src/codegen.cpp writes them; runtime/include/ps2n/recomp.h
+		// says what each does).
+		std::string KindOfLine(const std::string* text)
+		{
+			if (!text)
+				return "(the line could not be read)";
+
+			size_t at = text->find_first_not_of(" \t");
+			if (at == std::string::npos)
+				return "(an empty line)";
+			const std::string_view line(text->data() + at, text->size() - at);
+			const auto begins = [&line](const char* with) { return line.rfind(with, 0) == 0; };
+
+			if (begins("PS2N_BLOCK_START"))
+				return "the start of a block: what the runtime knows of it";
+			if (begins("PS2N_BLOCK_END") || begins("PS2N_SPLIT_END") || begins("if ((ps2n_end") || begins("acc +=") || begins("bool ends") ||
+				begins("if (ends)"))
+				return "the end of a block: its cycles, the test for events";
+			if (begins("PS2N_LOAD"))
+				return "loads into general registers, on locals";
+			if (begins("PS2N_STORE"))
+				return "stores of general registers, on locals";
+			if (begins("PS2N_ACCESS"))
+				return "loads and stores through register numbers";
+			if (begins("PS2N_GET"))
+				return "registers taken from the core into locals";
+			if (begins("PS2N_PUT"))
+				return "registers put back from locals";
+			if (begins("PS2N_COP2"))
+				return "COP2 instructions: the call of the runtime";
+			if (begins("PS2N_CALL") || begins("PS2N_JUMP") || begins("return") || begins("goto") || begins("switch") || begins("case") ||
+				begins("default") || begins("pc =") || begins("if (pc ==") || begins("E_"))
+				return "calls, jumps, returns, the entry switch";
+			if (begins("const bool taken") || begins("if (taken)") || begins("const uint32_t target") || begins("else"))
+				return "branches: the condition, the target";
+			if (begins("PS2N_FLUSH") || begins("PS2N_SYSCALL") || begins("PS2N_SYSTEM") || begins("PS2N_DELEGATE") || begins("PS2N_TIME"))
+				return "cycles added in a block, system instructions, delegated ones";
+			if (begins("uint32_t fn_") || begins("static uint32_t fn_") || begins("uint32_t acc") || begins("uint64_t g") ||
+				begins("const vtlb_private") || begins("[[maybe_unused]]") || begins("uint32_t ps2n_end") || begins("{") || begins("}"))
+				return "a function's entry and exit";
+			if (line.size() > 1 && line[0] == 'g' && line[1] >= '0' && line[1] <= '9')
+				return "arithmetic on locals";
+			if ((line.size() > 1 && line[0] == 'f' && line[1] >= '0' && line[1] <= '9') || begins("facc"))
+				return "FPU arithmetic on locals";
+			if (begins("fpu::setCondition"))
+				return "FPU comparisons on locals";
+			if (begins("PS2N_GET_F") || begins("PS2N_GET_ACC"))
+				return "registers taken from the core into locals";
+			if (begins("PS2N_PUT_F") || begins("PS2N_PUT_ACC"))
+				return "registers put back from locals";
+
+			// Anything else is an instruction carried out through register numbers:
+			// named after its function, up to the bracket.
+			const size_t bracket = line.find('(');
+			if (bracket != std::string_view::npos && bracket > 0 && bracket < 16)
+				return "through register numbers: " + std::string(line.substr(0, bracket));
+			return "(another kind of line)";
+		}
 
 		Place Identify(HANDLE process, u64 address)
 		{
@@ -166,13 +264,15 @@ namespace ps2n::host::profile
 				if (!named)
 					return {kCore, "(a function of the host without a name)"};
 				const std::string name(symbol->Name);
-				if (name.find("ps2n_image_") != std::string::npos)
-					return {kGame, name};
-
 				IMAGEHLP_LINE64 line = {};
 				line.SizeOfStruct = sizeof(line);
 				DWORD column = 0;
-				if (SymGetLineFromAddr64(process, address, &column, &line) && line.FileName)
+				const bool located = SymGetLineFromAddr64(process, address, &column, &line) && line.FileName;
+				if (name.find("ps2n_image_") != std::string::npos)
+					return {kGame, name, located ? std::string(line.FileName) : std::string(), located ? static_cast<u32>(line.LineNumber) : 0,
+						static_cast<u64>(displacement)};
+
+				if (located)
 				{
 					std::string file(line.FileName);
 					for (char& c : file)
@@ -323,6 +423,17 @@ namespace ps2n::host::profile
 
 		u64 by_kind[kKindCount] = {};
 		std::unordered_map<std::string, std::pair<Kind, u64>> by_name;
+		std::unordered_map<std::string, u64> by_line_kind; // within the game's compiled code
+		// The game's compiled code, instruction by instruction: where in which
+		// function, how often, and the generated line it came from.
+		struct Hot
+		{
+			u64 count;
+			std::string where;
+			std::string kind;
+			std::string text;
+		};
+		std::vector<Hot> hot;
 		for (const auto& [address, count] : by_address)
 		{
 			const Place place = symbols ? Identify(process, address) : Place{kUnknown, "(no symbols)"};
@@ -330,7 +441,23 @@ namespace ps2n::host::profile
 			auto& entry = by_name[place.name];
 			entry.first = place.kind;
 			entry.second += count;
+			if (place.kind == kGame)
+			{
+				const std::string* text = place.file.empty() ? nullptr : SourceLine(place.file, place.line);
+				const std::string kind = place.file.empty() ? std::string("(no line known)") : KindOfLine(text);
+				by_line_kind[kind] += count;
+
+				char where[256];
+				std::snprintf(where, sizeof(where), "%s+0x%llx", place.name.c_str(), static_cast<unsigned long long>(place.offset));
+				std::string line = text ? *text : std::string();
+				const size_t first = line.find_first_not_of(" \t");
+				line = (first == std::string::npos) ? std::string() : line.substr(first);
+				if (line.size() > 110)
+					line = line.substr(0, 110) + "...";
+				hot.push_back({count, where, kind, line});
+			}
 		}
+		s_sources.clear();
 		if (initialized)
 			SymCleanup(process);
 
@@ -349,6 +476,38 @@ namespace ps2n::host::profile
 		{
 			std::fprintf(fp, "  %6.2f%%  %9llu  %s\n", 100.0 * static_cast<double>(by_kind[kind]) / total,
 				static_cast<unsigned long long>(by_kind[kind]), kKindNames[kind]);
+		}
+
+		// The game's compiled code, by what its lines are. A sample is filed under
+		// the line of the generated file its instruction came from, as the
+		// debugging information has it; the compiler moves and merges
+		// instructions, so this is a guide, not a count.
+		if (by_kind[kGame])
+		{
+			std::vector<std::pair<std::string, u64>> lines(by_line_kind.begin(), by_line_kind.end());
+			std::sort(lines.begin(), lines.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+			std::fputs("\nThe game's compiled code, by the kind of generated line (share of that code, of the run, samples):\n", fp);
+			for (size_t i = 0; i < lines.size() && i < 40; i++)
+			{
+				std::fprintf(fp, "  %6.2f%%  %6.2f%%  %9llu  %s\n", 100.0 * static_cast<double>(lines[i].second) / static_cast<double>(by_kind[kGame]),
+					100.0 * static_cast<double>(lines[i].second) / total, static_cast<unsigned long long>(lines[i].second), lines[i].first.c_str());
+			}
+		}
+
+		// The instructions of the game's compiled code that had most of the
+		// samples, by function and offset: to be read beside the function's
+		// disassembly (llvm-objdump --disassemble-symbols), which says what each
+		// instruction is. A sample falls on the instruction the processor was
+		// about to complete, which is often the one after the one waiting.
+		if (!hot.empty())
+		{
+			std::sort(hot.begin(), hot.end(), [](const Hot& a, const Hot& b) { return a.count > b.count; });
+			std::fputs("\nThe instructions of the game's compiled code with most of the samples (share of the run, samples, where, kind, line):\n", fp);
+			for (size_t i = 0; i < hot.size() && i < 80; i++)
+			{
+				std::fprintf(fp, "  %6.2f%%  %7llu  %-44s  [%s]  %s\n", 100.0 * static_cast<double>(hot[i].count) / total,
+					static_cast<unsigned long long>(hot[i].count), hot[i].where.c_str(), hot[i].kind.c_str(), hot[i].text.c_str());
+			}
 		}
 
 		// Within each kind, the functions that had most of the samples.
