@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Accepted; in progress |
+| Status | Accepted; done (ended by the maintainer, 2026-11-12) |
 | Date | 2026-11-12 |
 | Decided by | Maintainer, on the session's recommendation |
 
@@ -80,3 +80,12 @@ How they were read:
   runs are new runs: the whole suite, and the game's comparisons with the
   stock run and with the interpreted run, are made again after each
   change.
+
+## The end of the step
+
+On 2026-11-12, after seven changes had brought the level run from 1.35 to
+1.21-1.23 times stock PCSX2's time, with the game still the stock run, and
+four further attempts had been measured and taken out again
+([game-log.md](../game-log.md), "G6"), the session recommended ending the
+step there. The maintainer's words: "Yes it does end here." What came next
+is [ADR 0016](0016-vu0-instructions-with-semantics-of-ps2natives-own.md).

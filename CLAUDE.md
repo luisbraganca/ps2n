@@ -27,10 +27,12 @@ criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
 level, the maintainer had played it, and the compiled game took 1.35 times
 stock PCSX2's time. The maintainer then chose a speed step inside the phase
-(G6, ADR 0015); after its first changes the compiled game takes 1.21 to 1.23
-times stock PCSX2's time. What comes next (more speed, more of the game, or the
-end of the phase) is the maintainer's to say. Phase 4 needs its own
-approval.
+(G6, ADR 0015), which ended on 2026-11-12 with the compiled game at 1.21 to
+1.23 times stock PCSX2's time. The next step, G7 (ADR 0016), was done on
+2026-11-12: the game's VU0 instructions have semantics of PS2Native's own,
+which the self-test holds to PCSX2's recompiler, and the level run is still
+the stock run, at 1.21 times its time. What comes next is the maintainer's
+to say. Phase 4 needs its own approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -120,6 +122,15 @@ Decisions:
   after the two changes named is decided by the profile and reported; a
   change of another kind (to how time is counted, to what is compared with
   stock PCSX2) is put to the maintainer first.
+- [ADR 0016](docs/adr/0016-vu0-instructions-with-semantics-of-ps2natives-own.md):
+  the speed step ended where it stood on 2026-11-12. The next step, G7:
+  the VU0 instructions in EE code carried out by semantics of PS2Native's
+  own, following PCSX2's recompiler (microVU in macro mode) as ADR 0005
+  has it, in place of PCSX2's interpreter functions. What the recompiler
+  itself hands to a function of the core (`VCALLMS`, `VCALLMSR`) stays
+  that function; when VU0 is brought up to date, and which flags reach the
+  registers, stay as the recompiler decides them for the block. Done on
+  2026-11-12 (`runtime/include/ps2n/ops_vu0.h`).
 
 ## Layout, build and test
 

@@ -29,6 +29,7 @@
 
 #include "ps2n/codehash.h"
 #include "ps2n/ops_int.h"
+#include "ps2n/ops_vu0.h"
 #include "ps2n/r5900.h"
 #include "ps2n/rec_rules.h"
 #include "ps2n/recomp.h"
@@ -85,7 +86,6 @@ namespace
 	bool s_executing = false;
 	bool s_cycle_rate_reported = false;
 	bool s_full_clamp_reported = false;
-	bool s_overflow_fix_reported = false;
 
 	// Every block is to be thrown away before the next one is formed (the
 	// recompiler's eeRecNeedsReset).
@@ -485,6 +485,47 @@ namespace
 #undef RD
 	}
 
+	// A VU0 instruction (COP2 with rs from 020) by PS2Native's semantics, with
+	// `flags` saying where its flags reach VU0's flag registers (vu0::kStatus,
+	// vu0::kMac). Returns false for VCALLMS, VCALLMSR and what PS2Native's
+	// decoder does not know, which are PCSX2's functions.
+	bool ExecuteVu0(const Insn& in, u32 flags)
+	{
+		// Named in full: PCSX2's VU interpreter has functions of the same names
+		// in the global namespace.
+#define VUFLAGS flags
+#define DEST in.dest()
+#define FD in.fd()
+#define FS in.fs()
+#define FT in.ft()
+#define BC in.bc()
+#define FSF in.fsf()
+#define FTF in.ftf()
+#define IMM5 in.imm5()
+#define S(op, fn, args) \
+	case Op::op: \
+		ps2n::ee::ops::fn args; \
+		return true;
+
+		switch (in.op)
+		{
+#include "ps2n/r5900_sem_cop2.inc"
+			default:
+				return false;
+		}
+
+#undef S
+#undef IMM5
+#undef FTF
+#undef FSF
+#undef BC
+#undef FT
+#undef FS
+#undef FD
+#undef DEST
+#undef VUFLAGS
+	}
+
 	// ---- carrying out the recompiler's blocks ------------------------------------
 	// recSafeExitExecution(): execution is to stop at an event test, and one is
 	// to come at the end of the block being carried out. Inside an event test,
@@ -608,46 +649,9 @@ namespace
 		}
 	}
 
-	// What PCSX2's recompiler leaves in VU0's status and MAC flag registers
-	// after a VU0 instruction that writes them, where PCSX2's interpreter
-	// function for the instruction, which has just carried it out, leaves
-	// something else. `status` and `mac`: the registers before the instruction.
-	// The recompiler's code is microVU in macro mode (setupMacroOp and
-	// endMacroOp in x86/microVU_Macro.inl, mVUupdateFlags in
-	// x86/microVU_Upper.inl, mVU_DIV and its like in x86/microVU_Lower.inl);
-	// the interpreter's is VU_MAC_UPDATE and VU_STAT_UPDATE in pcsx2/VUflags.cpp
-	// and the SYNC functions in pcsx2/VUops.cpp.
-	//
-	//  - The registers change only where the block says the flags reach them
-	//    (blocks::kCop2Status, kCop2Mac). The interpreter writes both at every
-	//    instruction.
-	//  - The overflow and underflow flags are never set: microVU does not
-	//    compute them (but for a game fix, which is not reproduced). So the
-	//    status register gets the instruction's zero and sign flags, adds
-	//    them to its sticky zero and sign flags, clears overflow and underflow
-	//    and keeps the rest; the MAC register gets the zero and sign flags of
-	//    each component. The interpreter sets overflow for any result whose
-	//    exponent is all ones.
-	//  - VDIV, VSQRT and VRSQRT set the invalid and division flags and add
-	//    them to their sticky flags. The interpreter replaces the sticky ones.
-	void FollowRecompilerFlags(const Step& step, int writes, u32 status, u32 mac)
-	{
-		const u32 flags = VU0.statusflag; // the interpreter's flags of this instruction alone
-
-		if (writes == blocks::kWritesStatus)
-		{
-			// VDIV, VSQRT, VRSQRT.
-			VU0.VI[REG_STATUS_FLAG].UL = (status & ~0x30u) | (flags & 0x30u) | ((flags & 0x30u) << 6);
-			return;
-		}
-
-		VU0.VI[REG_STATUS_FLAG].UL =
-			(step.info & blocks::kCop2Status) ? ((status & 0xFF0u) | (flags & 0x3u) | ((flags & 0x3u) << 6)) : status;
-		VU0.VI[REG_MAC_FLAG].UL = (step.info & blocks::kCop2Mac) ? (VU0.macflag & 0x00FFu) : mac;
-	}
-
 	// A COP2 instruction, LQC2 or SQC2 itself, with nothing more done about
-	// VU0: PCSX2's interpreter functions wait for VU0 by rules of their own.
+	// VU0 (Cop2Prologue has done that). A VU0 instruction's flags reach VU0's
+	// flag registers where the block says (blocks::kCop2Status, kCop2Mac).
 	void Cop2Operation(const Step& step)
 	{
 		using namespace ps2n::ee::ops;
@@ -681,9 +685,18 @@ namespace
 		}
 		else
 		{
-			// A VU0 instruction: PCSX2's function for it, reached past the one
-			// that would run VU0's micro program to its end first. VCALLMS and
-			// VCALLMSR are the same function in the recompiler.
+			// A VU0 instruction: PS2Native's semantics (ps2n/ops_vu0.h).
+			if (rs >= 020)
+			{
+				const u32 flags = ((step.info & blocks::kCop2Status) ? ps2n::ee::vu0::kStatus : 0u) |
+								  ((step.info & blocks::kCop2Mac) ? ps2n::ee::vu0::kMac : 0u);
+				if (ExecuteVu0(in, flags)) [[likely]]
+					return;
+			}
+
+			// VCALLMS and VCALLMSR: PCSX2's function, which the recompiler
+			// calls too (the one past the function that would run VU0's micro
+			// program to its end first).
 			cpuRegs.code = code;
 			cpuRegs.pc = in.addr + 4;
 			s_stats.delegated++;
@@ -693,22 +706,7 @@ namespace
 				R5900::GetInstruction(code).interpret();
 				return;
 			}
-
-			// The function computes as PCSX2's VU interpreter does, which is not
-			// in every respect what its recompiler makes of the instruction. The
-			// flags are where a game has been seen to meet the difference.
-			const int writes = blocks::Cop2Flags(code);
-			const u32 status = VU0.VI[REG_STATUS_FLAG].UL;
-			const u32 mac = VU0.VI[REG_MAC_FLAG].UL;
-			// The interpreter keeps a copy of the clip flags to work on; the
-			// recompiler works on the register.
-			if (writes & blocks::kWritesClip)
-				VU0.clipflag = VU0.VI[REG_CLIP_FLAG].UL;
-
 			Int_COP2SPECIAL1PrintTable[code & 63]();
-
-			if (writes & (blocks::kWritesStatus | blocks::kWritesMac))
-				FollowRecompilerFlags(step, writes, status, mac);
 		}
 	}
 
@@ -1181,13 +1179,6 @@ namespace
 			Console.Warning("ps2n: the EE clamp mode Full is not implemented. FPU instructions are carried out by PCSX2's"
 							" interpreter functions, and no code compiled ahead of time is used.");
 		}
-		if (EmuConfig.Gamefixes.VUOverflowHack && !s_overflow_fix_reported)
-		{
-			s_overflow_fix_reported = true;
-			Console.Warning("ps2n: PCSX2's VU overflow game fix is not implemented for VU0's instructions in EE code (COP2):"
-							" they never set the overflow flags");
-		}
-
 		if (s_blocks_need_reset)
 		{
 			s_blocks_need_reset = false;
@@ -1387,7 +1378,12 @@ std::vector<ps2n::ee::Handover> ps2n::ee::GetHandovers()
 
 bool ps2n::ee::ExecuteOwn(uint32_t code, uint32_t pc)
 {
-	return ::ExecuteOwn(Insn(code, pc));
+	const Insn in(code, pc);
+	// A VU0 instruction as in a block of that one instruction, at whose end
+	// its flags reach both flag registers.
+	if (in.opcode() == 022 && in.rs() >= 020)
+		return ExecuteVu0(in, ps2n::ee::vu0::kStatus | ps2n::ee::vu0::kMac);
+	return ::ExecuteOwn(in);
 }
 
 // ---- for compiled code -----------------------------------------------------------

@@ -13,15 +13,18 @@
 //   SIMM UIMM IMM5     sign-extended 16-bit / zero-extended 16-bit / signed 5-bit immediates
 //   FD FS FT           FPU or VU register numbers (sa / rd / rt fields)
 //   DEST BC FSF FTF    VU dest mask, broadcast component, fs/ft component selectors
-//   MSADDR PERF        VCALLMS byte address, perf-counter register selector
+//   VUFLAGS            where a VU0 instruction's flags reach VU0's flag registers (ps2n/ops_vu0.h)
+//   PERF               perf-counter register selector
 //   CREG               the number of a COP0 register (rd field)
 //
 // Instructions without a row (branches, jumps, SYSCALL, BREAK, traps, ERET,
-// SYNC/CACHE/PREF) are handled by the control-flow code of each consumer.
+// SYNC/CACHE/PREF) are handled by the control-flow code of each consumer;
+// VCALLMS and VCALLMSR by PCSX2's own function (r5900_sem_cop2.inc).
 
 
 #include "ps2n/r5900_sem_int.inc"
 #include "ps2n/r5900_sem_mmi.inc"
 #include "ps2n/r5900_sem_cop0.inc"
 #include "ps2n/r5900_sem_cop1.inc"
+#include "ps2n/r5900_sem_cop2_ctl.inc"
 #include "ps2n/r5900_sem_cop2.inc"

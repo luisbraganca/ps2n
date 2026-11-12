@@ -18,8 +18,10 @@ add_library(ps2n-runtime STATIC
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ops_fpu.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ops_int.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ops_mmi.h"
+	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ops_vu0.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/recomp.h"
 	"${CMAKE_CURRENT_LIST_DIR}/ops_cop2.cpp"
+	"${CMAKE_CURRENT_LIST_DIR}/ops_vu0.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/rec_blocks.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/rec_blocks.h"
 

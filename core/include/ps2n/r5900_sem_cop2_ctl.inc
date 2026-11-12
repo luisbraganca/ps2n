@@ -5,7 +5,7 @@
 // or memory. Each row is the move alone; what is done about VU0 first is
 // decided for each instruction from its block (ps2n/ops_cop2.h), so generated
 // code does not call these but hands the instruction to the runtime
-// (PS2N_COP2). The rest of COP2 is in r5900_sem_cop2.inc.
+// (PS2N_COP2). The VU0 instructions are in r5900_sem_cop2.inc.
 
 S(QMFC2, QMFC2, (RT, FS))
 S(CFC2, CFC2, (RT, FS))

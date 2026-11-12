@@ -150,10 +150,13 @@ unless another file is named):
     `x86/iR5900Analysis.cpp`). Of a run of such instructions only the last
     counts, and the sticky flags collect from those alone. And the
     recompiler's VU0 code never sets the overflow and underflow flags
-    (`mVUupdateFlags`, `x86/microVU_Upper.inl`). The VU0 instructions are
-    still carried out by PCSX2's interpreter functions, which set every flag
-    at every instruction; the runtime puts the two registers right after
-    each (`FollowRecompilerFlags` in `runtime/ee_provider.cpp`).
+    (`mVUupdateFlags`, `x86/microVU_Upper.inl`). PS2Native's VU0
+    instructions ([ops_vu0.h](../runtime/include/ps2n/ops_vu0.h)) compute
+    their flags as that code does and are told by the runtime, from the
+    block, which registers they reach (`vu0::kStatus`, `vu0::kMac`). Between
+    two instructions of a block microVU may leave the status register in a
+    layout of its own; PS2Native keeps the console's layout throughout
+    (where that can show: "What is not reproduced").
 
 ### The interpreter
 
@@ -312,20 +315,26 @@ record keeps such a block usable until the next event test
   code). `RecConsts` follows the common cases.
 - A system instruction or a coprocessor branch in a delay slot. The host
   counts them ("other things in delay slots that are not reproduced").
-- `GoemonTlbHack`, a fix for one game, and PCSX2's VU overflow fix for
-  another (with it set the provider warns: VU0's instructions in EE code
-  still never set the overflow flags).
-- What the VU0 instructions compute. It is PCSX2's VU interpreter's, with
-  the flags put right as rule 16 says. Known to differ from its recompiler:
-  `VRSQRT` of zero by zero (the flags and the result) and `VSQRT` of -0
-  (the invalid flag).
+- `GoemonTlbHack`, a fix for one game.
+- What microVU's register allocator carries from one VU0 instruction to the
+  next inside a block. It can leave an operand clamped in a host register
+  that the next instruction reads, in the Extra clamp modes; and what a
+  `VOPMULA` with a single component computes depends on what it holds
+  ([ops_vu0.h](../runtime/include/ps2n/ops_vu0.h)). PS2Native's VU0
+  instructions are the recompiler's for a block of that instruction alone.
+- The status register in microVU's own layout between two VU0 instructions
+  of a block (rule 16). Should VU0 run its micro program in between, when
+  the block brings VU0 up to date, microVU writes the register in the
+  console's layout where VU0 stops (`mVUendProgram`,
+  `x86/microVU_Branch.inl`), and its code for the second instruction reads
+  that as its own layout, where PS2Native reads it as what it is.
 - Where PS2Native's instruction semantics deliberately follow the console
   and not the recompiler
   ([ADR 0005](adr/0005-never-further-from-the-console-than-pcsx2.md)), a run
   differs from stock PCSX2 in what is computed, and from there possibly in
   time.
 
-None of the first four has been seen to make a run differ: see "Comparing
+None of the others has been seen to make a run differ: see "Comparing
 two runs" for how that is tested. The last has: in a game, `MIN.S` of -0
 and +0 leaves -0 in the register here and on the console, and +0 under
 stock PCSX2 (the game log, step G4). The host counts how often the four
@@ -478,10 +487,11 @@ general registers ([ops_int.h](../runtime/include/ps2n/ops_int.h)); the FPU
 its registers and of the performance counters, `DI`, and `SYNC`, `PREF` and
 `CACHE` ([ops_cop0.h](../runtime/include/ps2n/ops_cop0.h)); of COP2, the
 transfers between VU0's registers and the EE's registers or memory
-([ops_cop2.h](../runtime/include/ps2n/ops_cop2.h)). Delegated: the rest of
-COP0 (the TLB instructions, `ERET`, `EI`), and the VU0 instructions
-themselves, whose arithmetic is PCSX2's interpreter's and not its
-recompiler's.
+([ops_cop2.h](../runtime/include/ps2n/ops_cop2.h)) and the VU0 instructions
+([ops_vu0.h](../runtime/include/ps2n/ops_vu0.h)). Delegated: the rest of
+COP0 (the TLB instructions, `ERET`, `EI`), and `VCALLMS` and `VCALLMSR`,
+which start a micro program on VU0 and for which PCSX2's recompiler calls
+the same function of the core.
 
 Which behavior a function reproduces is stated at the top of its header. The
 rule ([ADR 0005](adr/0005-never-further-from-the-console-than-pcsx2.md)):

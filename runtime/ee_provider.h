@@ -179,7 +179,8 @@ namespace ps2n::ee
 
 	/// Carries out one instruction with PS2Native's own semantics, on the
 	/// core's registers and memory. Returns false, having done nothing, when
-	/// there are none for it: control flow, and what is still delegated.
-	/// For tests.
+	/// there are none for it: control flow, and what is still delegated. A
+	/// VU0 instruction is carried out as in a block of that one instruction:
+	/// its flags reach both of VU0's flag registers. For tests.
 	bool ExecuteOwn(uint32_t code, uint32_t pc);
 } // namespace ps2n::ee

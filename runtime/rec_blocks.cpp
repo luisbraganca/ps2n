@@ -210,9 +210,9 @@ namespace
 	// at the block's end. So of a run of such instructions only the last
 	// counts, and the sticky flags only ever collect from those. One entry per
 	// instruction: kCop2Status, kCop2Mac or neither. (The clip flags are written
-	// by every instruction that writes them; and where in the block the status
-	// register is kept in microVU's own layout is not something a block lets
-	// anything see.)
+	// by every instruction that writes them. Where in the block microVU keeps
+	// the status register in a layout of its own is not reproduced: the
+	// execution model, "What is not reproduced".)
 	void Cop2FlagPass(const std::vector<u32>& words, std::vector<u16>& out)
 	{
 		const size_t n = words.size();

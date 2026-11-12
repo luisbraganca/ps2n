@@ -127,8 +127,12 @@ namespace
 		u32 fcr31;
 		u32 vi[32]; // VU0's integer registers (0 to 15) and control registers (16 to 31)
 		u32 vf[32][4]; // VU0's floating-point registers: x, y, z, w. The first is constant
+		u32 vu_acc[4]; // VU0's accumulator
 		u32 clip_copy; // the copy of the clip flag that PCSX2's VU interpreter works on
 		u32 micro_status[4]; // the copies of the status flags that PCSX2's VU recompiler works on
+		u32 micro0; // the first word of VU0's micro memory, where the I-bit game fix finds VIADDI's immediate
+		u8 vu0_mem[0x1000]; // VU0's data memory
+		u8 vu1_regs[1024]; // VU1's floating-point and integer registers, which VU0 reaches from address 0x400
 		// COP0. The count register is kept as what a read of it would have given
 		// at the moment the state was put into the machine: the core brings the
 		// register itself up to date only now and then.
@@ -155,8 +159,14 @@ namespace
 			VU0.VI[i].UL = s.vi[i];
 		for (u32 i = 0; i < 32; i++)
 			std::memcpy(VU0.VF[i].UL, s.vf[i], sizeof(s.vf[i]));
+		std::memcpy(VU0.ACC.UL, s.vu_acc, sizeof(s.vu_acc));
 		VU0.clipflag = s.clip_copy;
 		std::memcpy(VU0.micro_statusflags, s.micro_status, sizeof(s.micro_status));
+		std::memcpy(VU0.Micro, &s.micro0, sizeof(s.micro0));
+		std::memcpy(VU0.Mem, s.vu0_mem, sizeof(s.vu0_mem));
+		static_assert(sizeof(VU1.VF) + sizeof(VU1.VI) == sizeof(s.vu1_regs));
+		std::memcpy(VU1.VF, s.vu1_regs, sizeof(VU1.VF));
+		std::memcpy(VU1.VI, s.vu1_regs + sizeof(VU1.VF), sizeof(VU1.VI));
 		std::memcpy(cpuRegs.CP0.r, s.cp0, sizeof(s.cp0));
 		s_apply_cycle = cpuRegs.cycle;
 		cpuRegs.lastCOP0Cycle = cpuRegs.cycle - s.count_age;
@@ -182,8 +192,13 @@ namespace
 			s->vi[i] = VU0.VI[i].UL;
 		for (u32 i = 0; i < 32; i++)
 			std::memcpy(s->vf[i], VU0.VF[i].UL, sizeof(s->vf[i]));
+		std::memcpy(s->vu_acc, VU0.ACC.UL, sizeof(s->vu_acc));
 		s->clip_copy = VU0.clipflag;
 		std::memcpy(s->micro_status, VU0.micro_statusflags, sizeof(s->micro_status));
+		std::memcpy(&s->micro0, VU0.Micro, sizeof(s->micro0));
+		std::memcpy(s->vu0_mem, VU0.Mem, sizeof(s->vu0_mem));
+		std::memcpy(s->vu1_regs, VU1.VF, sizeof(VU1.VF));
+		std::memcpy(s->vu1_regs + sizeof(VU1.VF), VU1.VI, sizeof(VU1.VI));
 		std::memcpy(s->cp0, cpuRegs.CP0.r, sizeof(s->cp0));
 		// What a read would have given when the state was put in: the register
 		// counts cycles, and each oracle has let a different number pass since.
@@ -273,6 +288,37 @@ namespace
 				out += buf;
 			}
 		}
+		if (std::memcmp(want.vu_acc, got.vu_acc, sizeof(want.vu_acc)) != 0)
+		{
+			std::snprintf(buf, sizeof(buf), "      VU0's ACC (x y z w): oracle %08x %08x %08x %08x, PS2Native %08x %08x %08x %08x\n", want.vu_acc[0],
+				want.vu_acc[1], want.vu_acc[2], want.vu_acc[3], got.vu_acc[0], got.vu_acc[1], got.vu_acc[2], got.vu_acc[3]);
+			out += buf;
+		}
+		if (want.micro0 != got.micro0)
+		{
+			std::snprintf(buf, sizeof(buf), "      VU0's micro memory at 0: oracle %08x, PS2Native %08x\n", want.micro0, got.micro0);
+			out += buf;
+		}
+		for (u32 i = 0; i < sizeof(want.vu0_mem); i++)
+		{
+			if (want.vu0_mem[i] != got.vu0_mem[i])
+			{
+				std::snprintf(buf, sizeof(buf), "      VU0's data memory at %03x: oracle %02x, PS2Native %02x (first differing byte)\n", i,
+					want.vu0_mem[i], got.vu0_mem[i]);
+				out += buf;
+				break;
+			}
+		}
+		for (u32 i = 0; i < sizeof(want.vu1_regs); i++)
+		{
+			if (want.vu1_regs[i] != got.vu1_regs[i])
+			{
+				std::snprintf(buf, sizeof(buf), "      VU1's registers at quadword %u, byte %u: oracle %02x, PS2Native %02x (first differing byte)\n",
+					i / 16, i % 16, want.vu1_regs[i], got.vu1_regs[i]);
+				out += buf;
+				break;
+			}
+		}
 		if (!tolerance.clip_copy_ignored && want.clip_copy != got.clip_copy)
 		{
 			std::snprintf(buf, sizeof(buf), "      the VU interpreter's clip flag: oracle %08x, PS2Native %08x\n", want.clip_copy,
@@ -347,6 +393,44 @@ namespace
 		return mask;
 	}
 
+	// The VU0 instructions in EE code: COP2 with rs from 020 (ops_vu0.h), not
+	// the transfers, branches, loads and stores.
+	bool IsVu0(Op op)
+	{
+		return (r5900::info(op).match & 0xFE000000u) == 0x4A000000u;
+	}
+
+	// The operand bits of a VU0 instruction, whose operand letters mean other
+	// fields than elsewhere: an `f` after X or Y is a single component.
+	u32 Vu0OperandMask(const r5900::OpInfo& oi)
+	{
+		u32 mask = (oi.flags & r5900::F_VUDEST) ? 0x01E00000u : 0; // the component mask
+		char previous = 0;
+		for (const char* p = oi.operands; *p; previous = *p++)
+		{
+			switch (*p)
+			{
+				case 'V': case 'e': case '5': mask |= 0x000007C0u; break; // fd, id, the immediate of VIADDI
+				case 'X': mask |= 0x0000F800u; break; // fs
+				case 'Y': case 'n': mask |= 0x001F0000u; break; // ft, it
+				case 'b':
+					if (previous == 'Y')
+						mask |= 0x00000003u; // the broadcast component
+					break;
+				case 'f':
+					if (previous == 'X')
+						mask |= 0x00600000u; // fsf
+					else if (previous == 'Y')
+						mask |= 0x01800000u; // ftf
+					else
+						mask |= 0x0000F800u; // is
+					break;
+				default: break; // A, Q, I, R, the w of VCLIPw, punctuation
+			}
+		}
+		return mask;
+	}
+
 	bool IsFpu(Op op)
 	{
 		return (r5900::info(op).flags & r5900::F_FPU) != 0;
@@ -391,6 +475,12 @@ namespace
 		// and loads COP0's TagLo register from it. Its recompiler does nothing
 		// (ops_cop0.h).
 		if (op == Op::CACHE)
+			return true;
+
+		// VU0's instructions follow the recompiler (ops_vu0.h), whose flags,
+		// clamps, special cases and integer registers PCSX2's interpreter
+		// does differently.
+		if (IsVu0(op))
 			return true;
 
 		// The FPU follows the recompiler, whose arithmetic, comparisons,
@@ -521,7 +611,8 @@ namespace
 	{
 		Tally tally;
 		const r5900::OpInfo& oi = r5900::info(op);
-		const u32 mask = OperandMask(oi);
+		const bool vu0_op = IsVu0(op);
+		const u32 mask = vu0_op ? Vu0OperandMask(oi) : OperandMask(oi);
 		const bool memory = (oi.flags & (r5900::F_LOAD | r5900::F_STORE)) != 0;
 		const bool cop0_op = (oi.flags & r5900::F_COP0) != 0;
 
@@ -535,6 +626,11 @@ namespace
 			cpuRegs.lastCOP0Cycle = cpuRegs.cycle;
 			cpuRegs.lastPERFCycle[0] = cpuRegs.lastPERFCycle[1] = cpuRegs.cycle;
 		};
+
+		// The VUs' memories as they stand, for the instructions that do not
+		// touch them.
+		State machine_vu;
+		Capture(&machine_vu);
 
 		for (u32 trial = 0; trial < trials; trial++)
 		{
@@ -583,17 +679,44 @@ namespace
 			for (u32 i = 16; i < 32; i++)
 				start.vi[i] = rng.Interesting32();
 			start.vi[REG_VPU_STAT] = 0;
-			// Its floating-point registers: any bits, they are only moved here. The
-			// first stays what the machine has it as (0, 0, 0, 1).
+			start.vi[REG_I] = rng.Float();
+			start.vi[REG_Q] = rng.Float();
+			// Its floating-point registers and accumulator: floats of every kind.
+			// The first register stays what the machine has it as (0, 0, 0, 1).
 			std::memcpy(start.vf[0], VU0.VF[0].UL, sizeof(start.vf[0]));
 			for (u32 i = 1; i < 32; i++)
 			{
 				for (u32& component : start.vf[i])
-					component = rng.Interesting32();
+					component = rng.Float();
 			}
+			for (u32& component : start.vu_acc)
+				component = rng.Float();
 			start.clip_copy = rng.Next32();
 			for (u32& copy : start.micro_status)
 				copy = rng.Next32();
+			// VU0's data memory, and VU1's registers, which VU0's instructions
+			// reach from 0x400 up: any bits, only moved. Neither VU is running.
+			// For the other instructions, as the machine has them.
+			if (vu0_op)
+			{
+				start.micro0 = rng.Next32();
+				for (u32 i = 0; i < sizeof(start.vu0_mem); i += 8)
+				{
+					const u64 v = rng.Next();
+					std::memcpy(&start.vu0_mem[i], &v, sizeof(v));
+				}
+				for (u32 i = 0; i < sizeof(start.vu1_regs); i += 8)
+				{
+					const u64 v = rng.Next();
+					std::memcpy(&start.vu1_regs[i], &v, sizeof(v));
+				}
+			}
+			else
+			{
+				start.micro0 = machine_vu.micro0;
+				std::memcpy(start.vu0_mem, machine_vu.vu0_mem, sizeof(start.vu0_mem));
+				std::memcpy(start.vu1_regs, machine_vu.vu1_regs, sizeof(start.vu1_regs));
+			}
 			for (u8& b : start.scratch)
 				b = static_cast<u8>(rng.Next32());
 
@@ -703,8 +826,9 @@ namespace
 			// depends on the order the recompiler happened to give them.
 			tolerance.any_nan_equal = (oracle == Oracle::Recompiler && !EmuConfig.Cpu.Recompiler.fpuOverflow);
 			// Each PCSX2 implementation keeps a copy of some VU0 flags that the
-			// other knows nothing of. PS2Native's CTC2 writes both (ops_cop2.h).
-			tolerance.clip_copy_ignored = (oracle == Oracle::Recompiler);
+			// other knows nothing of. PS2Native writes the recompiler's
+			// (ops_cop2.h).
+			tolerance.clip_copy_ignored = (oracle == Oracle::Interpreter);
 			tolerance.micro_status_ignored = (oracle == Oracle::Interpreter);
 			const std::string difference = Difference(theirs, ours, tolerance);
 			if (!difference.empty())
@@ -724,6 +848,18 @@ namespace
 						std::fprintf(stderr, "      before: $vi%u = %08x, the VU interpreter's clip flag = %08x\n", (word >> 11) & 31,
 							start.vi[(word >> 11) & 31], start.clip_copy);
 					}
+					if (vu0_op)
+					{
+						for (const u32 r : {(word >> 11) & 31, (word >> 16) & 31})
+						{
+							std::fprintf(stderr, "      before: $vf%u = %08x %08x %08x %08x, $vi%u = %08x\n", r, start.vf[r][0], start.vf[r][1],
+								start.vf[r][2], start.vf[r][3], r & 15, start.vi[r & 15]);
+						}
+						std::fprintf(stderr,
+							"      before: ACC = %08x %08x %08x %08x, I = %08x, Q = %08x, R = %08x, status = %08x, MAC = %08x, clip = %08x\n",
+							start.vu_acc[0], start.vu_acc[1], start.vu_acc[2], start.vu_acc[3], start.vi[REG_I], start.vi[REG_Q], start.vi[REG_R],
+							start.vi[REG_STATUS_FLAG], start.vi[REG_MAC_FLAG], start.vi[REG_CLIP_FLAG]);
+					}
 					for (u32 i = 0; i < 32; i++)
 					{
 						const bool used = i == ((word >> 21) & 31) || i == ((word >> 16) & 31);
@@ -739,13 +875,14 @@ namespace
 	}
 
 	// The instructions PS2Native has semantics of its own for: the tables
-	// ExecuteOwn() in runtime/ee_provider.cpp is built from.
+	// ExecuteOwn() and ExecuteVu0() in runtime/ee_provider.cpp are built from.
 	const Op kOwnOps[] = {
 #define S(op, fn, args) Op::op,
 #include "ps2n/r5900_sem_int.inc"
 #include "ps2n/r5900_sem_cop1.inc"
 #include "ps2n/r5900_sem_mmi.inc"
 #include "ps2n/r5900_sem_cop2_ctl.inc"
+#include "ps2n/r5900_sem_cop2.inc"
 #include "ps2n/r5900_sem_cop0.inc"
 #undef S
 	};
@@ -825,6 +962,51 @@ namespace
 		}
 		EmuConfig.Cpu.Recompiler.SetEEClampMode(standing);
 		recCpu.Reset();
+
+		// VU0's instructions in PCSX2's other VU clamp modes, and with the three
+		// game fixes that change what they compute: once in the mode the
+		// machine stands in, once in the mode None (Killzone's settings, the
+		// clamp mode None and the I-bit fix, are covered so).
+		std::vector<Op> vu0;
+		for (const Op op : all)
+		{
+			if (IsVu0(op))
+				vu0.push_back(op);
+		}
+		auto& rec = EmuConfig.Cpu.Recompiler;
+		auto& fixes = EmuConfig.Gamefixes;
+		const bool overflow = rec.vu0Overflow, extra = rec.vu0ExtraOverflow, sign = rec.vu0SignOverflow;
+		const bool ibit = fixes.IbitHack, add_sub = fixes.VuAddSubHack, vu_overflow = fixes.VUOverflowHack;
+		const auto set_vu = [&](bool o, bool e, bool s, bool game_fixes) {
+			rec.vu0Overflow = o;
+			rec.vu0ExtraOverflow = e;
+			rec.vu0SignOverflow = s;
+			fixes.IbitHack = game_fixes || ibit;
+			fixes.VuAddSubHack = game_fixes || add_sub;
+			fixes.VUOverflowHack = game_fixes || vu_overflow;
+			recCpu.Reset();
+		};
+		static const struct
+		{
+			bool overflow, extra, sign, game_fixes;
+			const char* what;
+		} kVuModes[] = {
+			{false, false, false, false, "VU0 with clamp mode None"},
+			{true, false, false, false, "VU0 with clamp mode Normal"},
+			{true, true, false, false, "VU0 with clamp mode Extra"},
+			{true, true, true, false, "VU0 with clamp mode Extra + Preserve Sign"},
+			{false, false, false, true, "VU0 with clamp mode None and the I-bit, VU add/sub and VU overflow game fixes"},
+		};
+		for (const auto& mode : kVuModes)
+		{
+			if (mode.overflow == overflow && mode.extra == extra && mode.sign == sign && !mode.game_fixes)
+				continue; // the standing mode, checked above
+			set_vu(mode.overflow, mode.extra, mode.sign, mode.game_fixes);
+			failures += CheckOps(vu0, Oracle::Recompiler, options.jit_trials, mode.what, rng);
+		}
+		set_vu(overflow, extra, sign, true);
+		failures += CheckOps(vu0, Oracle::Recompiler, options.jit_trials, "VU0 with the I-bit, VU add/sub and VU overflow game fixes", rng);
+		set_vu(overflow, extra, sign, false);
 
 		return failures;
 	}
@@ -929,8 +1111,9 @@ int ps2n::selftest::Run(const Options& options)
 	// The EE's FP control register on this thread, as when the machine runs:
 	// the FPU semantics and both oracles compute under it.
 	FPControlRegister::SetCurrent(EmuConfig.Cpu.FPUFPCR);
-	std::fprintf(stderr, "selftest: EE clamp mode %u, FP control register %08x (division %08x)\n",
-		EmuConfig.Cpu.Recompiler.GetEEClampMode(), EmuConfig.Cpu.FPUFPCR.bitmask, EmuConfig.Cpu.FPUDivFPCR.bitmask);
+	std::fprintf(stderr, "selftest: EE clamp mode %u, VU clamp mode %u, FP control register %08x (division %08x)\n",
+		EmuConfig.Cpu.Recompiler.GetEEClampMode(), EmuConfig.Cpu.Recompiler.GetVUClampMode(), EmuConfig.Cpu.FPUFPCR.bitmask,
+		EmuConfig.Cpu.FPUDivFPCR.bitmask);
 
 	int failures = 0;
 	failures += CheckTables(options, rng);

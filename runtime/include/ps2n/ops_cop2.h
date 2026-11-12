@@ -4,7 +4,7 @@
 // EE's general registers or memory. CFC2 and CTC2 move a VU0 integer or
 // control register; QMFC2 and QMTC2 move all 128 bits of a VU0 floating-point
 // register; LQC2 and SQC2 load and store one. The VU0 instructions themselves
-// are still carried out by PCSX2's interpreter functions.
+// are in ops_vu0.h.
 //
 // These functions are the move alone. Whether VU0 is brought up to date
 // first, and how far, PCSX2's recompiler decides for each instruction from
@@ -40,9 +40,10 @@
 //    for, which clear the reset VU's half of the register (the console
 //    agrees: it reads back 0 after writing all ones). The recompiler resets
 //    first and stores afterwards.
-//  - CTC2 to the clip flag register also sets the copy of the clip flag that
-//    PCSX2's interpreter functions work on, because the VU0 instructions are
-//    still carried out by those functions.
+//
+// CTC2 to the clip flag register writes the register alone, as the
+// recompiler does; PCSX2's interpreter also sets a copy of it that only its
+// own VU0 functions read.
 //
 // Where neither matches the console, both do the same and so does this: the
 // clip flag register keeps 32 bits (24 on the console), CMSAR0 keeps 32 (16),

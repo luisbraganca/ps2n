@@ -18,7 +18,8 @@ The run files, pictures included, are under the git-ignored build tree.
 | G3 The compiled game | **Done for the first 4,200 frames** (2026-11-11): the compiled run is the stock run at every one of those 38.5 million moments, registers included, with the same picture at every frame; it is the interpreted run at every event test; none of the executable's code is interpreted; no code outside the executable has run. |
 | G4 Further into the game | **Done as far as the first level** (2026-11-12): by script, and played by the maintainer. By script (2026-11-11): with the same input the compiled game is where stock PCSX2 is, at the same cycle count, at every one of 93 million sync points over 17,500 frames, and shows the same picture at each of the 1,750 frames compared: menus, three and a half minutes of play, being killed, Retry. What differs is listed, and it is one thing: the sign of a zero in the FPU's registers, where the console is followed on purpose. The general registers, COP0's and VU0's are the stock run's at every sync point, and the sound hardware is in the stock run's state at each of 350 moments (2026-11-12). **It can be played** (2026-11-11, Windows): a window at the console's speed, with sound, the keyboard and a controller, checked by machine with the sound off. The maintainer played it into the first level on 2026-11-12: "Everything looked good." Not yet: the rest of the game. |
 | G5 Measurement and report | **Done as far as the first level** (2026-11-12): times repeat now (a run is kept on the processor's fast cores). Over the level run the compiled game takes 1.35 times as long as stock PCSX2: 100 s against 74 s. The whole difference is in the game's own code, which takes twice as long compiled as under PCSX2's recompiler; the rest of the machine takes the same time. A first look says why: the generated code keeps the registers in memory and checks every address twice. The report on compatibility, issues and limitations is at the end of "G5". |
-| G6 Speed | **Under way** (2026-11-12, [ADR 0015](adr/0015-a-speed-step-before-phase-3-ends.md)): seven changes to how the code is generated, each measured. The level run takes 1.21 to 1.23 times stock PCSX2's time (91.7 s against 75.6 s, and 91.3 s against 74.3 s, each pair timed together), where it took 1.35, and is still the stock run (the same place and time at each of 93 million sync points, the same picture and sound state at each of 1,750 frames) and the interpreted run (47.7 million event tests). The game's own code takes 41.1 s against 25.8 s under PCSX2's recompiler. Four further attempts were measured and taken out again. Where it stands is in "G6" below. |
+| G6 Speed | **Done** (2026-11-12, ended there by the maintainer; [ADR 0015](adr/0015-a-speed-step-before-phase-3-ends.md)): seven changes to how the code is generated, each measured. The level run takes 1.21 to 1.23 times stock PCSX2's time (91.7 s against 75.6 s, and 91.3 s against 74.3 s, each pair timed together), where it took 1.35, and is still the stock run (the same place and time at each of 93 million sync points, the same picture and sound state at each of 1,750 frames) and the interpreted run (47.7 million event tests). The game's own code takes 41.1 s against 25.8 s under PCSX2's recompiler. Four further attempts were measured and taken out again. Where it stands is in "G6" below. |
+| G7 VU0's instructions | **Done** (2026-11-12, [ADR 0016](adr/0016-vu0-instructions-with-semantics-of-ps2natives-own.md)): the game's VU0 instructions have semantics of PS2Native's own, all but `VCALLMS` and `VCALLMSR`, which stay PCSX2's function as in its recompiler. The self-test finds them to be PCSX2's recompiler's in every case it tried: 1,968,000 cases, in each VU clamp mode and with the game fixes that change them, Killzone's configuration among them. The two known differences (`VRSQRT` of zero by zero, `VSQRT` of -0) are closed. The level run is still the stock run, VU0's registers the same at each of 93 million sync points, and the interpreted run; its time did not change that the measurement can show (1.21 times stock PCSX2's). Where it stands is in "G7" below. |
 
 ## The steps and their pass criteria
 
@@ -31,6 +32,7 @@ The run files, pictures included, are under the git-ignored build tree.
 | G4 Further into the game | Title screen, menus, a level, with scripted input. A window, sound and a controller, so that the maintainer can play. | With the same input, the compiled game gets where stock PCSX2 gets. What differs is listed. |
 | G5 Measurement and report | Speed against stock PCSX2 on the same scenes with the same renderer. Where the time goes: compiled code, the interpreter, the rest of the machine. Compatibility, visual issues, limitations. | Numbers reported as measured, whatever they are. |
 | G6 Speed ([ADR 0015](adr/0015-a-speed-step-before-phase-3-ends.md)) | The generated code made faster, beginning with what G5 found: one look at the address table for each load and store, and the registers held in local variables within a block. Each change measured by itself, on the level run and with the profile. | The compiled game is still the stock run and the interpreted run, and every test passes, after each change. What each change gave back is reported as measured. The aim: the game's own code no slower than under PCSX2's recompiler. |
+| G7 VU0's instructions ([ADR 0016](adr/0016-vu0-instructions-with-semantics-of-ps2natives-own.md)) | The VU0 instructions in the game's EE code (COP2 in macro mode) carried out by semantics of PS2Native's own, following PCSX2's recompiler (microVU) as every other family does, in place of PCSX2's interpreter functions. Each compared with the recompiler on random and boundary operands, in each VU clamp mode and with the game fixes that change them (`ps2n-host -selftest`). Not with the interpreter, which computes the flags, the clamps and the special cases differently. | Every VU0 instruction has semantics of PS2Native's own, which the self-test finds to be the recompiler's on every case tried, or the console's where a recording shows the recompiler wrong; what is left is listed with its cause. The two known differences (`VRSQRT` of zero by zero, `VSQRT` of -0) closed. Every test passes, and the game is still the stock run, VU0's registers included, and the interpreted run. The level run's time measured. |
 
 The brief's rules for this phase: reusable solutions, no game-specific
 hardcoding unless unavoidable, and no wizard or packaging yet.
@@ -130,7 +132,8 @@ about two seconds):
 - Most of the COP2 instructions are transfers, which are PS2Native's own
   semantics: `lqc2` 2,081, `sqc2` 886, `qmtc2` 301, `qmfc2` 217. The VU0
   instructions among them are carried out by PCSX2's interpreter functions:
-  `vmadda` 352 and `vcallms` 230 are the most frequent.
+  `vmadda` 352 and `vcallms` 230 are the most frequent. (Since G7 they are
+  PS2Native's own, all but `vcallms` and `vcallmsr`.)
 - Of the 536 places left to the interpreter, 472 are words the decoder does
   not know. All 472 lie in one stretch of 36 KB (`00408000`-`00410FFF`) and
   look like VU micro programs kept in the executable as data, which the
@@ -500,7 +503,8 @@ What is known of the VU0 instructions that is still PCSX2's interpreter's
 and not its recompiler's: `vrsqrt` of zero by zero (the flags and the
 result), and `vsqrt` of -0 (the invalid flag). In these 17,500 frames
 neither has left a trace: VU0's registers, its flags among them, are the
-stock run's at every sync point.
+stock run's at every sync point. (Both closed at G7, where the VU0
+instructions became PS2Native's own.)
 
 ### A window, sound and a controller (Windows, 2026-11-11)
 
@@ -868,12 +872,14 @@ What each is:
    run), and for each the runtime looked up the block that was running and
    the instruction's place in it. It now remembers where it found each of
    the last few thousand, for as long as no block is formed or thrown away
-. **The FPU's registers in local variables.** The FPU's instructions
+   (`StepAt()` in `runtime/ee_provider.cpp`). 1.4 s.
+5. **The FPU's registers in local variables.** The FPU's instructions
    took their operands from the core's registers in memory and wrote their
    results back there, so a chain of them waited on memory at every link.
    They now work on locals, as the general registers do
    (`f0 = val::ADD_S(f1, f2)`, `facc = val::MADDA_S(facc, f1, f2)`; the
-. **Cheaper calls between compiled functions.** Every compiled function
+   functions the interpreter uses are made of the same). 0.3 s.
+6. **Cheaper calls between compiled functions.** Every compiled function
    saved eight host registers when it was entered and restored them when it
    left, because the platform's convention says a function must keep them
    for its caller; nothing a compiled function holds in host registers
@@ -881,7 +887,8 @@ What each is:
    convention that keeps none (`preserve_none`, `PS2N_CC` in `recomp.h`).
    And a call, which enters at the function's start, no longer goes through
    the search the entry `switch` makes over all the function's blocks: the
-. **Registers held across labels.** At a label the locals held nothing:
+   start is tested first. 0.8 s.
+7. **Registers held across labels.** At a label the locals held nothing:
    every register was put back before it and taken from the core again
    after it. In a loop that happens at every turn, and on the loop's
    critical path, for a value written to memory a few instructions before
@@ -1088,13 +1095,156 @@ a guide, not a count). Of the 33.1 s:
   to PCSX2's interpreter functions one by one (`cop2Instruction`,
   `Cop2Operation`: 2.4 s), then the dispatcher (1.0 s).
 
+## G7: VU0's instructions (Windows, 2026-11-12)
+
+The step [ADR 0016](adr/0016-vu0-instructions-with-semantics-of-ps2natives-own.md)
+added: the VU0 instructions in the game's EE code, which PCSX2's interpreter
+functions carried out until now, given semantics of PS2Native's own that
+follow PCSX2's recompiler, as every other family's do.
+
+### What was built
+
+- **`runtime/ops_vu0.cpp`** ([ops_vu0.h](../runtime/include/ps2n/ops_vu0.h)):
+  the 82 VU0 instructions PS2Native's decoder knows, all but `VCALLMS` and
+  `VCALLMSR`, as microVU compiles them in macro mode: the same host SSE
+  instructions on the same operands in the same order, under the EE's
+  control register, with microVU's clamps in each of PCSX2's VU clamp modes,
+  its special cases, its flags, and the three game fixes that change what
+  these instructions compute (the I-bit fix, the VU add/sub fix, the VU
+  overflow fix). The floating-point operations are written as inline
+  assembly, so that the C++ compiler can neither swap the operands of an
+  addition or a multiplication (which decides which of two NaNs comes out)
+  nor compute one itself (it would round to nearest and keep denormals).
+  Each component is computed in its own lane, all four at once; microVU
+  computes a single component in the first lane of a register, with the
+  same operations, so the results are the same.
+- **The runtime calls them** where it called PCSX2's interpreter functions
+  (`Cop2Operation` in `runtime/ee_provider.cpp`), and tells them what the
+  block decides: whether the instruction's flags reach the status and MAC
+  registers (execution model, rule 16). What put the interpreter's flags
+  right after each instruction (`FollowRecompilerFlags`) is gone.
+- **`VCALLMS` and `VCALLMSR` stay PCSX2's function**, which its recompiler
+  calls too. The micro programs they start run on PCSX2's VU0 recompiler,
+  a stand-in of [ADR 0003](adr/0003-no-jit-in-generated-games.md), as
+  before.
+- **`CTC2` to the clip flag register** writes the register alone, as the
+  recompiler does. It also wrote the copy of the register that only
+  PCSX2's interpreter functions read, for as long as they carried out
+  `VCLIP`.
+- **PCSX2's VU overflow game fix** is reproduced for these instructions; the
+  provider no longer warns that it is not.
+
+### The self-test
+
+`ps2n-host -selftest` gives every one of the 82 VU0 instructions (`VCALLMS`
+and `VCALLMSR` are not among them) random and boundary operands: VU0's
+registers and accumulator filled with floats of every kind, its data
+memory and VU1's registers with random bits. It holds what PS2Native's
+function leaves to what
+PCSX2's recompiler leaves, compiling a block of the instruction alone for
+each case: VU0's registers, accumulator and data memory, VU1's
+floating-point and integer registers (which VU0 reaches from address
+0x400), the EE's registers and memory. Not to PCSX2's interpreter, which
+computes these differently. In each configuration of the core that changes
+what these instructions compute:
+
+| Configuration | Cases | Differing |
+|---|--:|--:|
+| VU clamp mode Normal (PCSX2's default) | 32,800 | 0 |
+| VU clamp mode None | 32,800 | 0 |
+| VU clamp mode Extra | 32,800 | 0 |
+| VU clamp mode Extra + Preserve Sign | 32,800 | 0 |
+| Clamp mode None, with the I-bit, VU add/sub and VU overflow game fixes (Killzone's configuration, below) | 32,800 | 0 |
+| Clamp mode Normal, with the three game fixes | 32,800 | 0 |
+
+That is 400 cases an instruction in each, as the suite runs it; a run with
+4,000 an instruction (1,968,000 cases; the whole self-test took 49 s) found
+no difference either.
+The first build differed from the recompiler in one thing: with no
+component named in their mask, `VSQI` and `VSQD` store all four (the
+default case of microVU's `mVUsaveReg`), and then read VF00 as a cleared
+register. That is in now.
+
+What following the recompiler means where it is not the console (all of it
+in [ops_vu0.h](../runtime/include/ps2n/ops_vu0.h)): the host's rounding and
+denormals under the EE's control register; no overflow or underflow flags;
+clamping as the VU clamp mode says, except an operand read from VF00 and
+the result computed in its place; a register minus itself is +0; `VMAX`
+and `VMINI` compare as signed magnitudes; a zero divisor gives the largest
+float, and the invalid and division flags are microVU's; `VCLIP` reads a
+denormal as +0; the integer registers are 16 bits wide; `VOPMULA` and
+`VOPMSUB` with a single component in the mask compute what microVU
+computes then, which is not the console's outer product. The two
+differences from the recompiler known before (`VRSQRT` of zero by zero:
+the flags and the result; `VSQRT` of -0: the invalid flag) are among the
+cases the self-test holds to the recompiler now: they are closed.
+
+### The game
+
+PCSX2's game database sets two things for Killzone that concern these
+instructions, and `ps2n-host` applies them as PCSX2 does: the VU clamp mode
+None, so that nothing of VU0's is clamped, and the I-bit game fix, with
+which microVU takes `VIADDI`'s immediate from the first word of VU0's micro
+memory. Both are among the configurations above.
+
+- **Against stock PCSX2, over the whole level script** (17,500 frames,
+  `level1.pad`, 20 minutes for both runs): the same place at the same cycle
+  count at each of 93,221,937 sync points, the same picture at each of the
+  1,750 frames compared, the sound hardware in the same state at each of the
+  1,750 moments compared. VU0's registers, its flags among them, are the
+  stock run's at every sync point. The one difference is the one of G4 and
+  G6: the FPU's registers, at 964 sync points, the first at sync point
+  57,130,066, where the console is followed on purpose.
+- **Against the interpreted run** (4,200 frames, `start.pad`, 5 minutes):
+  the same at each of the 47,705,744 event tests, with the same fingerprint
+  of the whole run as at G6 (`F99B5EFD472E87EC`).
+- **What is still PCSX2's function**: of the level run's VU0 instructions,
+  `vcallms` (49,922,683 times) and `vcallmsr` (1,598,148), as in PCSX2's
+  recompiler. Until now all 158,299,586 went to PCSX2's functions (G4);
+  the other 106,778,755 are PS2Native's now.
+
+### The time
+
+The level run as at G5 and G6 (17,500 frames, nothing drawn, the
+processor's fast cores), timed twice, each time beside stock PCSX2:
+
+| | Seconds, three rounds | Mean |
+|---|---|--:|
+| Stock PCSX2 | 74.1, 73.6, 73.4 | 73.7 |
+| Compiled, PS2Native's VU0 instructions | 88.7, 91.7, 91.0 | 90.5 |
+| Again, the two in turn, on a quiet machine: stock PCSX2 | 75.5, 75.7, 77.0 | 76.1 |
+| Compiled | 91.4, 90.9, 93.1 | 91.8 |
+
+The second set is the one to go by: 1.21 times stock PCSX2's time, each
+pair 1.20 or 1.21, where G6 ended at 1.21 to 1.23, so no change that these
+numbers can show. During the second and third compiled rounds of the
+first set another Claude session was starting on the same machine, and
+those two rounds are the slowest of that set; it gave 1.23. Every round
+ended at the stock run's cycle count with the sound hardware in the same
+state, and interpreted none of the executable's code. The profile of one
+more run says
+why nothing changed: the VU0 instructions' time moved, it did not shrink.
+PCSX2's core lost its VU interpreter functions (28.2 s against 28.9 s at
+G6), PS2Native's runtime gained their replacement (8.8 s against 8.0 s).
+What costs is not the arithmetic but the way to it, as before: each of the
+158 million instructions is handed by the compiled code to the runtime,
+which finds its step in the block the recompiler would have formed, does
+what that block does about VU0 first, and dispatches on the instruction
+(`cop2Instruction` 1,160 samples, `Cop2Operation` 405, `ExecuteVu0` 118;
+of the arithmetic, `FMACa` has 166 and each of the others 61 or fewer).
+The way to make that cheaper would be for the generated code to call the
+semantics itself where its block says what to do about VU0; that is not
+built.
+
 ## Open
 
-- **VU0's instructions.** They are the one family of the game's own code
-  that is not PS2Native's: 158 million calls of PCSX2's interpreter
-  functions in 17,500 frames, each through the runtime. Semantics of
-  PS2Native's own, following PCSX2's recompiler, would close the two known
-  differences above and take those calls out of the level's time.
+- **What is left of VU0 in the game's EE code.** Since G7 its instructions
+  are PS2Native's, but for `VCALLMS` and `VCALLMSR`, which start a micro
+  program and stay PCSX2's function, as in its recompiler. The micro
+  programs run on PCSX2's VU0 recompiler, a stand-in of
+  [ADR 0003](adr/0003-no-jit-in-generated-games.md). Each VU0 instruction
+  still goes through the runtime (158 million in the level run), which is
+  where its time is ("G7", "The time").
 - **Speed.** 4,200 frames of logos, a prompt and a film take 25.7 s
   compiled against 22.9 s under stock PCSX2 with the software renderer, and
   15.1 s against 11.2 s with nothing drawn. Where the four seconds go has
@@ -1104,7 +1254,8 @@ a guide, not a count). Of the 33.1 s:
   Over the level run the compiled game took 1.35 times as long as stock
   PCSX2 at G5, all of the difference in the game's own code; after the
   changes of G6 it takes 1.21 to 1.23 times as long (91.7 s against 75.6 s, 91.3 s against 74.3 s), and
-  the game's own code 41.1 s against 25.8 s. More than a third of the
+  the game's own code 41.1 s against 25.8 s; after G7, 1.21 (91.8 s
+  against 76.1 s). More than a third of the
   compiled code's time is now reaching memory through the core's address
   table, where PCSX2's recompiler uses one instruction and a fault ("G6",
   "Where the time is now"). The 4,200-frame times above are from G3 and

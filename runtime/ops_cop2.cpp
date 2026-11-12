@@ -98,12 +98,6 @@ void ps2n::ee::ops::CTC2(uint32_t rt, uint32_t fs)
 			break;
 		}
 
-		case REG_CLIP_FLAG:
-			// The interpreter: the copy its VU0 macro functions work on.
-			VU0.clipflag = value;
-			VU0.VI[REG_CLIP_FLAG].UL = value;
-			break;
-
 		case REG_FBRST:
 			// The interpreter and the console: stored first, then the resets,
 			// each of which clears its VU's half of the register again.
