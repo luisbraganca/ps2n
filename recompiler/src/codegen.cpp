@@ -15,7 +15,7 @@ namespace ps2n::recomp {
 
 using namespace r5900;
 
-const char* const kGeneratorName = "ps2n-recomp 0.6.0";
+const char* const kGeneratorName = "ps2n-recomp 0.7.0";
 
 namespace {
 
@@ -562,8 +562,8 @@ private:
         if (!s.empty()) line(s);
     }
 
-    // The changed registers as the argument of PS2N_LOAD and PS2N_STORE, which
-    // put them back only when the address turns out not to be plain memory.
+    // The changed registers as the argument of a macro that puts them back
+    // only on the way it seldom takes (PS2N_COP2_MOVE).
     std::string putArgument() const {
         std::string s = putText();
         if (s.empty()) return "(void)0";
@@ -733,8 +733,9 @@ private:
         };
 
         // A load of a `type` widened as an `as`, and a store of a `type`. The
-        // changed registers are put back only if the address is not plain
-        // memory, and they are the ones changed before this instruction.
+        // registers the locals hold stay there even when the address turns
+        // out not to be plain memory: nothing on that way reads the EE's
+        // registers (recomp.h, PS2N_LOAD).
         const auto address = [&]() {
             const std::string base = use(rs);
             return strprintf("static_cast<uint32_t>(%s) + static_cast<uint32_t>(%d)", base.c_str(), in.simm());
@@ -746,8 +747,7 @@ private:
         const bool fixed = inFixedLoop(in.addr);
         const auto load = [&](const char* as, const char* type) {
             const std::string at = address();
-            std::string puts = putArgument();
-            if (fixed) puts = (puts == "(void)0" ? std::string() : puts + "; ") + "ps2n_same = false";
+            const std::string slow = fixed ? std::string("ps2n_same = false") : std::string("(void)0");
             usesTable_ = true;
             if (rt == 0) usesUnused_ = true;
             // After a read that may be of an EE timer register the block may
@@ -759,7 +759,7 @@ private:
             }
             const std::string dest = rt ? def(rt) : std::string("ps2n_unused");
             line(strprintf("PS2N_LOAD%s(%s%s, %s, %s, %s, %s, %s);", mayEnd ? "_ENDS" : "", mayEnd ? "ends, " : "", dest.c_str(), as, type,
-                           at.c_str(), hex(in.addr).c_str(), puts.c_str()),
+                           at.c_str(), hex(in.addr).c_str(), slow.c_str()),
                  &in, note);
             if (mayEnd) {
                 endAfterLoad(after, in.addr + 4);
@@ -770,8 +770,7 @@ private:
             const std::string at = address();
             const std::string value = use(rt);
             usesTable_ = true;
-            line(strprintf("PS2N_STORE%s(%s, %s, %s, %s, %s);", fixed ? "_SAME" : "", type, at.c_str(), value.c_str(), hex(in.addr).c_str(),
-                           putArgument().c_str()),
+            line(strprintf("PS2N_STORE%s(%s, %s, %s, %s, (void)0);", fixed ? "_SAME" : "", type, at.c_str(), value.c_str(), hex(in.addr).c_str()),
                  &in, note);
         };
 
@@ -919,17 +918,15 @@ private:
         }
         case Op::LWC1: {
             const std::string at = address();
-            const std::string puts = putArgument();
             usesTable_ = true;
-            line(strprintf("PS2N_LOAD_F(%s, %s, %s, %s);", fdef(ft).c_str(), at.c_str(), hex(in.addr).c_str(), puts.c_str()), &in, note);
+            line(strprintf("PS2N_LOAD_F(%s, %s, %s, (void)0);", fdef(ft).c_str(), at.c_str(), hex(in.addr).c_str()), &in, note);
             return true;
         }
         case Op::SWC1: {
             const std::string at = address();
             const std::string value = fuse(ft);
             usesTable_ = true;
-            line(strprintf("PS2N_STORE(mem32_t, %s, %s, %s, %s);", at.c_str(), value.c_str(), hex(in.addr).c_str(), putArgument().c_str()), &in,
-                 note);
+            line(strprintf("PS2N_STORE(mem32_t, %s, %s, %s, (void)0);", at.c_str(), value.c_str(), hex(in.addr).c_str()), &in, note);
             return true;
         }
         default: return false;

@@ -514,7 +514,7 @@ _start: lui   $v0, 0x1000          # 00100000
     GenerateOptions go;
     go.id = "test";
     const std::string code = generate(prog, go);
-    CHECK_CONTAINS(code, "PS2N_LOAD_ENDS(ends, g3, int32_t, mem32_t, static_cast<uint32_t>(g2) + static_cast<uint32_t>(0), 0x00100004u, PS2N_PUT(2));");
+    CHECK_CONTAINS(code, "PS2N_LOAD_ENDS(ends, g3, int32_t, mem32_t, static_cast<uint32_t>(g2) + static_cast<uint32_t>(0), 0x00100004u, (void)0);");
     CHECK_CONTAINS(code, "if (ends) [[unlikely]]");
     CHECK_CONTAINS(code, "PS2N_BLOCK_END(acc, 23u, 0x00100008u);");
     CHECK_CONTAINS(code, "PS2N_STORE(mem32_t, static_cast<uint32_t>(g29) + static_cast<uint32_t>(16), g3, 0x00100008u, (void)0);");
@@ -560,7 +560,7 @@ _start: add.s $f0, $f1, $f2        # 00100000
     const std::string code = generateFor(elf, &stats);
     CHECK_EQ(stats.delegated, size_t{0});
     CHECK_CONTAINS(code, "f0 = val::ADD_S(f1, f2);");
-    CHECK_CONTAINS(code, "PS2N_LOAD_F(f3, static_cast<uint32_t>(g29) + static_cast<uint32_t>(16), 0x00100004u, PS2N_PUT_F(0));");
+    CHECK_CONTAINS(code, "PS2N_LOAD_F(f3, static_cast<uint32_t>(g29) + static_cast<uint32_t>(16), 0x00100004u, (void)0);");
     CHECK_CONTAINS(code, "fpu::setCondition(val::C_LT_S(f1, f2));");
     CHECK_CONTAINS(code, "const bool taken = fpuCondition();");
     CHECK_CONTAINS(code, "g2 = val::MFC1(f0);");
@@ -932,9 +932,10 @@ _start: addiu $v0, $zero, 5        # 00100000
     // An instruction carried out through register numbers works on the
     // core's copy: what it may read is put back first, and nothing else.
     CHECK_CONTAINS(code, "PS2N_PUT(3);\n\tMULT(ZERO, V1, A1);");
-    // The local still holds what was put back. A store names the registers
-    // to put back should its address not be plain memory.
-    CHECK_CONTAINS(code, "PS2N_STORE(mem32_t, static_cast<uint32_t>(g29) + static_cast<uint32_t>(0), g3, 0x0010000Cu, PS2N_PUT(2));");
+    // The local still holds what was put back. A store puts nothing back,
+    // not even should its address not be plain memory: nothing on that way
+    // reads the EE's registers.
+    CHECK_CONTAINS(code, "PS2N_STORE(mem32_t, static_cast<uint32_t>(g29) + static_cast<uint32_t>(0), g3, 0x0010000Cu, (void)0);");
     // A function with loads or stores keeps the address table in a local.
     CHECK_CONTAINS(code, "\tconst vtlb_private::VTLBVirtual* const ps2n_vmap = addressTable();\n");
     // The block's end puts back what is still changed, before the event test.

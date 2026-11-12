@@ -40,6 +40,8 @@
 #   STATIC     with EE=ps2n: on or off, whether compiled code is used (default on)
 #   BIOS_STATIC  with EE=ps2n: off to leave the BIOS to the interpreter even
 #              where the host has it compiled (ps2n-host -bios-static off)
+#   CALL_SITES  with EE=ps2n: off to send every call through a register to the
+#              runtime's dispatcher (ps2n-host -call-sites off)
 #   IMAGE      with EE=ps2n or LOCKSTEP: the id of the compiled image to use
 #   STACK_BUDGET  with LOCKSTEP: the host's -stack-budget for the compiled run
 #   CAPTURE_EXPECTED  with EE=ps2n: a capture file; what the run reports for
@@ -443,6 +445,9 @@ if(EE STREQUAL "ps2n")
 	endif()
 	if(DEFINED BIOS_STATIC AND BIOS_STATIC STREQUAL "off")
 		list(APPEND static -bios-static off)
+	endif()
+	if(DEFINED CALL_SITES AND CALL_SITES STREQUAL "off")
+		list(APPEND static -call-sites off)
 	endif()
 	if(DEFINED TRACE AND TRACE)
 		list(APPEND static -trace "${WORK_DIR}/run.trace")

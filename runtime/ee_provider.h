@@ -34,6 +34,13 @@ namespace ps2n::ee
 	/// which a run must be indistinguishable from. On by default.
 	void SetStaticCodeEnabled(bool enabled);
 
+	/// Whether dispatch() remembers the compiled function it found for a call
+	/// whose target is only known at run time, so that compiled code makes the
+	/// next call there itself (callSites in ps2n/recomp.h). On by default; off,
+	/// every such call goes through dispatch(), as before there were any: to
+	/// time the two in one build.
+	void SetCallSitesEnabled(bool enabled);
+
 	/// How much host stack compiled code may use below the point where the
 	/// core calls Execute(). A guest call is a host call, so the thread that
 	/// runs the core needs a large stack, and the provider has to know how

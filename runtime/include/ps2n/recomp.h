@@ -249,6 +249,21 @@ namespace ps2n::ee
 	// register through an address the recompiler knew.
 	bool memoryFault(uint32_t pc, uint32_t start);
 
+	// A load or store of a general or an FPU register (PS2N_LOAD, PS2N_STORE)
+	// whose address turned out not to be plain memory: memoryFault(), then the
+	// core's own function for the access, in one call where there were two.
+	// Every load and store carries this way, which compiled code almost never
+	// takes, beside the one it takes, and the less code there is of it, the
+	// less the host has to get through (game log, "G6", "G10").
+	// slowReadEnds() also says, as memoryFault() does, whether the block ends
+	// after the load.
+	template <typename T>
+	T slowRead(uint32_t address, uint32_t pc, uint32_t start);
+	template <typename T>
+	T slowReadEnds(uint32_t address, uint32_t pc, uint32_t start, bool* ends);
+	template <typename T>
+	void slowWrite(uint32_t address, T value, uint32_t pc, uint32_t start);
+
 	// An instruction PS2Native has no semantics of its own for yet, carried out
 	// by the core's interpreter function for it. The second form is for an
 	// instruction in a delay slot.
@@ -266,6 +281,24 @@ namespace ps2n::ee
 	// compiled or not, as far as a compiled function goes or until interpreted
 	// code reaches compiled code. Returns the PC to continue at, or kUnwind.
 	uint32_t dispatch(uint32_t pc);
+
+	// Where dispatch() last found compiled code for such a call, by its
+	// target: the function to enter there. Compiled code looks here first
+	// (PS2N_CALL_DYNAMIC) and calls the function itself when the target is
+	// the one remembered, which spares it the call of the runtime and its
+	// lookup; otherwise dispatch() does what it always did, and remembers what
+	// it found. An empty place holds a function that hands the call to
+	// dispatch(), so that a target that happens to match it is still right.
+	// What a place holds stays good for as long as the images in use and the
+	// core's settings are what they were when dispatch() put it there: the
+	// runtime empties every place whenever either may change.
+	struct CallSite
+	{
+		uint32_t pc;
+		StaticFn fn;
+	};
+	inline constexpr size_t kCallSites = size_t{1} << 14;
+	extern CallSite callSites[kCallSites];
 
 	// A jump whose target is only known at run time and is not one of the
 	// jumping function's own blocks. Returns the PC to continue at, or kUnwind.
@@ -474,11 +507,18 @@ namespace ps2n::ee
 		PS2N_TIME(); \
 	} while (0)
 
-// A call whose target is only known at run time.
+// A call whose target is only known at run time: the compiled function
+// dispatch() last found there (callSites), or dispatch().
 #define PS2N_CALL_DYNAMIC(target_, ret_) \
 	do \
 	{ \
-		const uint32_t ps2n_pc = ::ps2n::ee::dispatch(target_); \
+		const uint32_t ps2n_target = (target_); \
+		const ::ps2n::ee::CallSite& ps2n_site = ::ps2n::ee::callSites[(ps2n_target >> 2) & (::ps2n::ee::kCallSites - 1)]; \
+		uint32_t ps2n_pc; \
+		if (ps2n_site.pc == ps2n_target) [[likely]] \
+			ps2n_pc = ps2n_site.fn(ps2n_target); \
+		else \
+			ps2n_pc = ::ps2n::ee::dispatch(ps2n_target); \
 		if (ps2n_pc != (ret_)) \
 			return ps2n_pc; \
 		PS2N_TIME(); \
@@ -725,21 +765,34 @@ namespace ps2n::ee
 
 // A load at `pc_` into the local `dst_`: a `T_` (mem8_t to mem64_t) read at
 // `addr_` and widened as an `as_`. The address table is looked at once. When
-// the address is not plain memory, the registers the generator knows to be
-// changed are put back first (`put_`, a list of PS2N_PUT), the runtime is
-// told, and the core's own function does the read. PS2N_LOAD_ENDS is for a
-// load after which the block may end: `ends_` is set when it does.
-// PS2N_LOAD_F is a load of 32 bits into the local of an FPU register.
-#define PS2N_LOAD(dst_, as_, T_, addr_, pc_, put_) \
+// the address is not plain memory, the runtime makes the read (slowRead): it
+// is told, and the core's own function does it. `slow_` comes first on that
+// way: nothing, or in a loop that may reach a fixed point the mark that this
+// time round was not one that changed nothing (PS2N_BLOCK_END_FIXED).
+//
+// The registers the function holds in locals stay there on that way, changed
+// or not: nothing on it reads the EE's registers. The runtime looks at its
+// record of blocks, and the core's function for a device's register at that
+// device; it raises no exception, as PS2Native's provider is not PCSX2's
+// interpreter (vtlb_Miss in pcsx2/vtlb.cpp). PCSX2's recompiler does the
+// same: before such a call it writes back only the registers it holds in
+// host registers that the call may overwrite (iFlushCall(FLUSH_FULLVTLB) in
+// x86/ix86-32/recVTLB.cpp), so the core's functions there never see the
+// EE's registers whole either. Putting them back made each load and store's
+// rarely taken way most of its code (game log, "G10").
+//
+// PS2N_LOAD_ENDS is for a load after which the block may end: `ends_` is set
+// when it does. PS2N_LOAD_F is a load of 32 bits into the local of an FPU
+// register.
+#define PS2N_LOAD(dst_, as_, T_, addr_, pc_, slow_) \
 	do \
 	{ \
 		const uint32_t ps2n_a = (addr_); \
 		const vtlb_private::VTLBVirtual ps2n_e = ps2n_vmap[ps2n_a >> vtlb_private::VTLB_PAGE_BITS]; \
 		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
 		{ \
-			put_; \
-			::ps2n::ee::memoryFault(pc_, ps2n_start); \
-			(dst_) = PS2N_WIDEN(as_, vtlb_memRead<T_>(ps2n_a)); \
+			slow_; \
+			(dst_) = PS2N_WIDEN(as_, ::ps2n::ee::slowRead<T_>(ps2n_a, pc_, ps2n_start)); \
 			PS2N_TIME(); \
 		} \
 		else \
@@ -747,16 +800,15 @@ namespace ps2n::ee
 			(dst_) = PS2N_WIDEN(as_, ::ps2n::ee::plainRead<T_>(ps2n_e, ps2n_a)); \
 		} \
 	} while (0)
-#define PS2N_LOAD_ENDS(ends_, dst_, as_, T_, addr_, pc_, put_) \
+#define PS2N_LOAD_ENDS(ends_, dst_, as_, T_, addr_, pc_, slow_) \
 	do \
 	{ \
 		const uint32_t ps2n_a = (addr_); \
 		const vtlb_private::VTLBVirtual ps2n_e = ps2n_vmap[ps2n_a >> vtlb_private::VTLB_PAGE_BITS]; \
 		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
 		{ \
-			put_; \
-			(ends_) = ::ps2n::ee::memoryFault(pc_, ps2n_start); \
-			(dst_) = PS2N_WIDEN(as_, vtlb_memRead<T_>(ps2n_a)); \
+			slow_; \
+			(dst_) = PS2N_WIDEN(as_, ::ps2n::ee::slowReadEnds<T_>(ps2n_a, pc_, ps2n_start, &(ends_))); \
 			PS2N_TIME(); \
 		} \
 		else \
@@ -764,16 +816,15 @@ namespace ps2n::ee
 			(dst_) = PS2N_WIDEN(as_, ::ps2n::ee::plainRead<T_>(ps2n_e, ps2n_a)); \
 		} \
 	} while (0)
-#define PS2N_LOAD_F(dst_, addr_, pc_, put_) \
+#define PS2N_LOAD_F(dst_, addr_, pc_, slow_) \
 	do \
 	{ \
 		const uint32_t ps2n_a = (addr_); \
 		const vtlb_private::VTLBVirtual ps2n_e = ps2n_vmap[ps2n_a >> vtlb_private::VTLB_PAGE_BITS]; \
 		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
 		{ \
-			put_; \
-			::ps2n::ee::memoryFault(pc_, ps2n_start); \
-			(dst_) = vtlb_memRead<mem32_t>(ps2n_a); \
+			slow_; \
+			(dst_) = ::ps2n::ee::slowRead<mem32_t>(ps2n_a, pc_, ps2n_start); \
 			PS2N_TIME(); \
 		} \
 		else \
@@ -783,17 +834,16 @@ namespace ps2n::ee
 	} while (0)
 
 // A store at `pc_` of the low bits of `value_` as a `T_` at `addr_`, in the
-// same way.
-#define PS2N_STORE(T_, addr_, value_, pc_, put_) \
+// same way (slowWrite).
+#define PS2N_STORE(T_, addr_, value_, pc_, slow_) \
 	do \
 	{ \
 		const uint32_t ps2n_a = (addr_); \
 		const vtlb_private::VTLBVirtual ps2n_e = ps2n_vmap[ps2n_a >> vtlb_private::VTLB_PAGE_BITS]; \
 		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
 		{ \
-			put_; \
-			::ps2n::ee::memoryFault(pc_, ps2n_start); \
-			vtlb_memWrite<T_>(ps2n_a, static_cast<T_>(value_)); \
+			slow_; \
+			::ps2n::ee::slowWrite<T_>(ps2n_a, static_cast<T_>(value_), pc_, ps2n_start); \
 			PS2N_TIME(); \
 		} \
 		else \
@@ -805,17 +855,16 @@ namespace ps2n::ee
 // The same in a loop that may reach a fixed point (PS2N_BLOCK_END_FIXED): a
 // store of a value other than the one memory holds, or to memory that is not
 // plain, keeps this time round from being one that changed nothing.
-#define PS2N_STORE_SAME(T_, addr_, value_, pc_, put_) \
+#define PS2N_STORE_SAME(T_, addr_, value_, pc_, slow_) \
 	do \
 	{ \
 		const uint32_t ps2n_a = (addr_); \
 		const vtlb_private::VTLBVirtual ps2n_e = ps2n_vmap[ps2n_a >> vtlb_private::VTLB_PAGE_BITS]; \
 		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
 		{ \
-			put_; \
+			slow_; \
 			ps2n_same = false; \
-			::ps2n::ee::memoryFault(pc_, ps2n_start); \
-			vtlb_memWrite<T_>(ps2n_a, static_cast<T_>(value_)); \
+			::ps2n::ee::slowWrite<T_>(ps2n_a, static_cast<T_>(value_), pc_, ps2n_start); \
 			PS2N_TIME(); \
 		} \
 		else \

@@ -120,6 +120,7 @@ namespace
 		bool selftest = false; // run the self-test instead of a program
 		bool static_code = true; // with -ee ps2n: run code compiled ahead of time where there is some
 		bool bios_static = true; // and of that, the BIOS's, when the host has it for the machine's ROM
+		bool call_sites = true; // compiled code makes a call through a register itself where dispatch() found its target before
 		std::string capture_path; // where the block starts that had to be interpreted are written
 		std::string bios_capture_path; // where the block starts formed in the BIOS are written
 		std::string trace_path; // where the record of event tests is written
@@ -137,6 +138,7 @@ namespace
 		u32 frame_every = 0; // when not zero: the frame on display is also fingerprinted every so many frames
 		std::string pad_path; // a script of controller input for port 1
 		std::string profile_path; // where the report of where the CPU thread's time went is written
+		std::string code_size_path; // where the report of how much host code the compiled images became is written
 		u32 profile_from = 1; // the frame from which the profile looks (startup left out when later than 1)
 		std::vector<u32> marks; // frames at which the wall-clock time is noted, for the report
 		bool fast_cores = false; // keep the run on the processor's fastest cores, so that its time repeats
@@ -263,6 +265,10 @@ namespace
 			"                     compiled ahead of time, when this host has it for the\n"
 			"                     machine's ROM (default on). Off, the interpreter runs the\n"
 			"                     BIOS.\n"
+			"  -call-sites on|off  With -ee ps2n: compiled code makes a call through a\n"
+			"                     register itself where the runtime found its target\n"
+			"                     before (default on). Off, every such call goes through\n"
+			"                     the runtime's dispatcher: to time the two in one build.\n"
 			"  -image <id>        With -ee ps2n: of the compiled images this host is linked\n"
 			"                     with, use only the one with this id.\n"
 			"  -trace <file>      With -ee ps2n: write one line per event test (its number,\n"
@@ -349,6 +355,10 @@ namespace
 			"  -selftest-trials <n>  Random cases per instruction against PCSX2's\n"
 			"                     recompiler (default 400); ten times as many against\n"
 			"                     its interpreter.\n"
+			"  -code-size <file>  Instead of booting a file, write to this file how much\n"
+			"                     host code each compiled image this host holds became,\n"
+			"                     by the kind of generated line, from the host's own\n"
+			"                     debugging information. Needs nothing else. Windows only.\n"
 			"\n"
 			"Exit code: 0 marker seen, 1 error, 2 frame limit, 3 time limit, 4 usage.\n",
 			stderr);
@@ -402,6 +412,8 @@ namespace
 				o.pad_path = argv[++i];
 			else if (is("-profile") && has_value)
 				o.profile_path = argv[++i];
+			else if (is("-code-size") && has_value)
+				o.code_size_path = argv[++i];
 			else if ((is("-profile-from") || is("-mark")) && has_value)
 			{
 				const bool mark = is("-mark");
@@ -465,6 +477,19 @@ namespace
 				else
 				{
 					std::fprintf(stderr, "ps2n-host: -bios-static takes on or off, not '%s'\n", value);
+					return false;
+				}
+			}
+			else if (is("-call-sites") && has_value)
+			{
+				const char* value = argv[++i];
+				if (!std::strcmp(value, "on"))
+					o.call_sites = true;
+				else if (!std::strcmp(value, "off"))
+					o.call_sites = false;
+				else
+				{
+					std::fprintf(stderr, "ps2n-host: -call-sites takes on or off, not '%s'\n", value);
 					return false;
 				}
 			}
@@ -617,6 +642,17 @@ namespace
 				std::fprintf(stderr, "ps2n-host: more than one file to boot ('%s')\n", arg);
 				return false;
 			}
+		}
+
+		// A report on the host itself, which runs no machine.
+		if (!o.code_size_path.empty())
+		{
+			if (!o.boot_path.empty() || o.selftest || o.window || !o.profile_path.empty() || !ps2n::host::profile::Available())
+			{
+				std::fputs("ps2n-host: -code-size takes nothing else, and is not available on this platform yet\n", stderr);
+				return false;
+			}
+			return true;
 		}
 
 		if ((o.boot_path.empty() && !o.selftest) || o.bios_path.empty() || o.data_dir.empty())
@@ -1515,6 +1551,7 @@ namespace
 					}
 					ps2n::ee::SetImages(chosen.data(), chosen.size());
 					ps2n::ee::SetStaticCodeEnabled(s_options.static_code);
+					ps2n::ee::SetCallSitesEnabled(s_options.call_sites);
 					ps2n::ee::SetHostStackBudget(
 						s_options.stack_budget ? static_cast<size_t>(*s_options.stack_budget) : kCpuThreadStackSize - kCpuThreadStackReserve);
 					if (!s_options.trace_path.empty() && !ps2n::ee::StartTrace(s_options.trace_path.c_str()))
@@ -1790,6 +1827,27 @@ namespace
 		{
 			PrintUsage();
 			return EXIT_USAGE;
+		}
+
+		// How much host code the compiled images became: no machine needed.
+		if (!s_options.code_size_path.empty())
+		{
+			std::vector<ps2n::host::profile::ImageCode> images;
+			for (size_t i = 0; i < ps2n_image_count; i++)
+			{
+				const ps2n::ee::ImageInfo& image = *ps2n_images[i];
+				u64 instructions = 0;
+				for (u32 f = 0; f < image.function_count; f++)
+					instructions += (image.functions[f].end - image.functions[f].start) / 4;
+				images.push_back({image.id, instructions});
+			}
+			if (!ps2n::host::profile::WriteCodeSize(s_options.code_size_path.c_str(), images))
+			{
+				std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.code_size_path.c_str());
+				return EXIT_ERROR;
+			}
+			std::fprintf(stderr, "ps2n-host: how much host code the compiled images became: %s\n", s_options.code_size_path.c_str());
+			return EXIT_MARKER;
 		}
 
 		CrashHandler::Install();

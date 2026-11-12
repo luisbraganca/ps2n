@@ -41,8 +41,11 @@ PCSX2's time. G10 (ADR 0019), performance as the maintainer's research lays
 it out, is under way in the worktree `..\ps2n-vu0` (branch `perf`): with
 profile-guided optimization of the generated code and loops that have
 reached a fixed point skipped, the level run takes 1.07 times stock
-PCSX2's time (play alone 1.08), still the stock run. Phase 4 needs its own
-approval.
+PCSX2's time (play alone 1.08), still the stock run. In the main tree
+beside it (ADR 0021), measured without profile-guided optimization: calls
+through a register made by compiled code itself, and the way a load or
+store seldom takes made short (the game's code 14% smaller), take play from
+1.18 to 1.14 times stock PCSX2's time. Phase 4 needs its own approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -174,6 +177,15 @@ Decisions:
   Claude, no `Claude-Session` line. The history was rewritten on
   2026-11-12 to remove them (messages only; files, authors and dates
   unchanged) and force-pushed. Mentions of the file `CLAUDE.md` are fine.
+- [ADR 0021](docs/adr/0021-two-sessions-on-step-g10.md): two sessions on
+  G10 at once, the maintainer's choice: the second in the main tree, the
+  first in its worktree, each with its own changes, saying "go" and "done"
+  around every timing. The second's: calls through a register made by
+  compiled code (`callSites`, `PS2N_CALL_DYNAMIC`), `ps2n-host -code-size`,
+  the way a load or store seldom takes made short (one runtime call, no
+  registers put back): play 1.18 to 1.14 times stock PCSX2's time without
+  profile-guided optimization; the FPU's settings read once per function
+  tried and taken out.
 
 ## Layout, build and test
 
@@ -238,7 +250,14 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   script), `llvm-profdata merge` (in the Visual Studio install's
   `VC\Tools\Llvm\x64\bin`), then `build.ps1 -Pgo use -PgoData <file>`; the
   counts stay in the build tree, and are made again after the generated
-  code changes ("G10", "Profile-guided optimization").
+  code changes ("G10", "Profile-guided optimization"). How much host code
+  each kind of generated line became: `ps2n-host -code-size <file>` (from
+  the host's own debugging information; no machine, about 20 s). To try a
+  change to a header on one generated file, compile that file alone with
+  the flags `build\windows-clang\build.ninja` gives it (without `/Yu` and
+  `/Fp`) and an include directory searched first, into a scratch folder
+  outside the build, and read `llvm-size -A` of the object. `game.ps1 -CallSites off` times one
+  build with calls through a register sent to the runtime's dispatcher.
 - The game: `scripts\windows\build.ps1 -Game <its boot executable>` compiles
   it into the host (the build tree remembers it; `-GameCapture <file>` adds
   what runs reported). `scripts\windows\game.ps1 -Image <disc image> -Config

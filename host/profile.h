@@ -3,6 +3,8 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 // Where a run's time goes (ps2n-host -profile): about a thousand times a
 // second the host looks where the CPU thread is executing, and after the run
@@ -31,4 +33,18 @@ namespace ps2n::host::profile
 	/// functions that had most of them. `frames` and `seconds` are those looked
 	/// at, from frame `first_frame` on, for the report's first lines.
 	bool Write(const char* path, uint32_t first_frame, uint32_t frames, double seconds);
+
+	/// A compiled image the host holds: its id (ImageInfo::id) and how many
+	/// guest instructions its functions have.
+	struct ImageCode
+	{
+		std::string id;
+		uint64_t instructions;
+	};
+
+	/// Writes how much host code the generated files of each image became
+	/// (ps2n-host -code-size), by the kind of generated line, from the host's
+	/// own debugging information: the functions' sizes, and the line tables.
+	/// Needs no machine.
+	bool WriteCodeSize(const char* path, const std::vector<ImageCode>& images);
 } // namespace ps2n::host::profile

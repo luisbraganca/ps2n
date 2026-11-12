@@ -270,10 +270,33 @@ namespace
 	constexpr u8 kBodyNone = blocks::kBodyNone;
 	constexpr u8 kBodyUnknown = blocks::kBodyUnknown;
 
+	// Whether dispatch() fills ps2n::ee::callSites (SetCallSitesEnabled).
+	bool s_call_sites_enabled = true;
+
+	// What an empty place of ps2n::ee::callSites holds: the call goes to
+	// dispatch(), as it would without them.
+	uint32_t PS2N_CC CallThroughDispatch(uint32_t pc)
+	{
+		return ps2n::ee::dispatch(pc);
+	}
+
+	// Empties the places where dispatch() remembers the compiled function it
+	// found for a call (ps2n/recomp.h). None may outlive a change of what
+	// Lookup() would answer: of the images in use, of whether compiled code
+	// runs at all, of the core's settings. Every compiled function is entered
+	// through Lookup() first, and every way that puts an image in use comes
+	// here, so the places are emptied before compiled code first reads them.
+	void FlushCallSites()
+	{
+		for (ps2n::ee::CallSite& site : ps2n::ee::callSites)
+			site = {0xFFFFFFFFu, &CallThroughDispatch};
+	}
+
 	void FlushCache()
 	{
 		for (CacheEntry& e : s_cache)
 			e = {0xFFFFFFFFu, -1, nullptr};
+		FlushCallSites();
 	}
 
 	// Inside the executable's code.
@@ -1415,6 +1438,10 @@ namespace
 	// be.
 	void ProviderReset()
 	{
+		// The settings may be what changed: whether compiled code runs at all
+		// depends on one of them (Lookup()).
+		FlushCallSites();
+
 		if (s_executing)
 		{
 			s_blocks_need_reset = true;
@@ -1549,6 +1576,13 @@ void ps2n::ee::SetImages(const ImageInfo* const* images, size_t count)
 void ps2n::ee::SetStaticCodeEnabled(bool enabled)
 {
 	s_static_enabled = enabled;
+	FlushCache();
+}
+
+void ps2n::ee::SetCallSitesEnabled(bool enabled)
+{
+	s_call_sites_enabled = enabled;
+	FlushCallSites();
 }
 
 void ps2n::ee::SetHostStackBudget(size_t bytes)
@@ -1936,6 +1970,42 @@ bool ps2n::ee::memoryFault(uint32_t pc, uint32_t start)
 	return (step.info & blocks::kEndsBlock) != 0;
 }
 
+template <typename T>
+T ps2n::ee::slowRead(uint32_t address, uint32_t pc, uint32_t start)
+{
+	memoryFault(pc, start);
+	return vtlb_memRead<T>(address);
+}
+
+template <typename T>
+T ps2n::ee::slowReadEnds(uint32_t address, uint32_t pc, uint32_t start, bool* ends)
+{
+	*ends = memoryFault(pc, start);
+	return vtlb_memRead<T>(address);
+}
+
+template <typename T>
+void ps2n::ee::slowWrite(uint32_t address, T value, uint32_t pc, uint32_t start)
+{
+	memoryFault(pc, start);
+	vtlb_memWrite<T>(address, value);
+}
+
+// The sizes in which compiled code loads and stores general and FPU registers
+// (PS2N_LOAD, PS2N_STORE).
+template mem8_t ps2n::ee::slowRead<mem8_t>(uint32_t, uint32_t, uint32_t);
+template mem16_t ps2n::ee::slowRead<mem16_t>(uint32_t, uint32_t, uint32_t);
+template mem32_t ps2n::ee::slowRead<mem32_t>(uint32_t, uint32_t, uint32_t);
+template mem64_t ps2n::ee::slowRead<mem64_t>(uint32_t, uint32_t, uint32_t);
+template mem8_t ps2n::ee::slowReadEnds<mem8_t>(uint32_t, uint32_t, uint32_t, bool*);
+template mem16_t ps2n::ee::slowReadEnds<mem16_t>(uint32_t, uint32_t, uint32_t, bool*);
+template mem32_t ps2n::ee::slowReadEnds<mem32_t>(uint32_t, uint32_t, uint32_t, bool*);
+template mem64_t ps2n::ee::slowReadEnds<mem64_t>(uint32_t, uint32_t, uint32_t, bool*);
+template void ps2n::ee::slowWrite<mem8_t>(uint32_t, mem8_t, uint32_t, uint32_t);
+template void ps2n::ee::slowWrite<mem16_t>(uint32_t, mem16_t, uint32_t, uint32_t);
+template void ps2n::ee::slowWrite<mem32_t>(uint32_t, mem32_t, uint32_t, uint32_t);
+template void ps2n::ee::slowWrite<mem64_t>(uint32_t, mem64_t, uint32_t, uint32_t);
+
 namespace
 {
 	__fi void Delegate(u32 pc, u32 code, u32 branch)
@@ -1971,10 +2041,22 @@ void ps2n::ee::delegateInDelaySlot(uint32_t pc, uint32_t code)
 	Delegate(pc, code, 0);
 }
 
+// Where dispatch() remembers the compiled function it found for a call whose
+// target is only known at run time (PS2N_CALL_DYNAMIC). Emptied by
+// FlushCallSites(), which every way that puts an image in use goes through,
+// before compiled code can first read it.
+ps2n::ee::CallSite ps2n::ee::callSites[ps2n::ee::kCallSites];
+
 uint32_t ps2n::ee::dispatch(uint32_t pc)
 {
 	if (const StaticFn fn = Lookup(pc))
+	{
+		// The next call there goes to the function from compiled code itself
+		// (PS2N_CALL_DYNAMIC).
+		if (s_call_sites_enabled)
+			callSites[(pc >> 2) & (kCallSites - 1)] = {pc, fn};
 		return fn(pc);
+	}
 
 	// Interpret until compiled code is reached again. Its caller then decides,
 	// by the PC, whether that is where it expected to continue.

@@ -290,6 +290,73 @@ namespace ps2n::host::profile
 			}
 			return {kSystem, std::string(module.ModuleName) + "!" + (named ? symbol->Name : "(no name)")};
 		}
+
+		// ---- how much host code the generated files became (-code-size) ----------
+		// A line record of the host's debugging information: where its code
+		// begins, and the file and line it was compiled from. What an inlined
+		// function does is on the line of its call (CodeView's line tables), so
+		// in compiled code that is the generated line, as for the profile.
+		struct LineRecord
+		{
+			u64 address;
+			u32 file; // index into LineRecords::files
+			u32 line;
+		};
+		struct LineRecords
+		{
+			std::vector<LineRecord> records;
+			std::unordered_map<std::string, u32> index;
+			std::vector<std::string> files;
+		};
+
+		BOOL CALLBACK OneLineRecord(PSRCCODEINFO info, PVOID context)
+		{
+			LineRecords& lines = *static_cast<LineRecords*>(context);
+			const auto [it, added] = lines.index.try_emplace(info->FileName, static_cast<u32>(lines.files.size()));
+			if (added)
+				lines.files.emplace_back(info->FileName);
+			lines.records.push_back({info->Address, it->second, info->LineNumber});
+			return TRUE;
+		}
+
+		// A function compiled ahead of time, from its symbol: where it is, how
+		// large, and the image it belongs to (the namespace ps2n_image_<id>).
+		struct CompiledFunction
+		{
+			u64 address;
+			u64 size;
+			std::string image;
+		};
+
+		BOOL CALLBACK OneSymbol(PSYMBOL_INFO symbol, ULONG, PVOID context)
+		{
+			constexpr ULONG kFunction = 5; // SymTagFunction
+			constexpr std::string_view kPrefix = "ps2n_image_";
+			if (symbol->Tag != kFunction || symbol->Size == 0)
+				return TRUE;
+			const std::string_view name(symbol->Name, symbol->NameLen);
+			if (name.substr(0, kPrefix.size()) != kPrefix)
+				return TRUE;
+			const size_t colons = name.find("::", kPrefix.size());
+			if (colons == std::string_view::npos)
+				return TRUE;
+			static_cast<std::vector<CompiledFunction>*>(context)->push_back(
+				{symbol->Address, symbol->Size, std::string(name.substr(kPrefix.size(), colons - kPrefix.size()))});
+			return TRUE;
+		}
+
+		std::string Thousands(u64 n)
+		{
+			const std::string digits = std::to_string(n);
+			std::string out;
+			for (size_t i = 0; i < digits.size(); i++)
+			{
+				if (i && (digits.size() - i) % 3 == 0)
+					out.push_back(',');
+				out.push_back(digits[i]);
+			}
+			return out;
+		}
 	} // namespace
 
 	bool Available()
@@ -542,6 +609,156 @@ namespace ps2n::host::profile
 		std::fclose(fp);
 		return true;
 	}
+
+	bool WriteCodeSize(const char* path, const std::vector<ImageCode>& images)
+	{
+		// The host's debugging information, as Write() reads it (ps2n-host.pdb,
+		// beside the executable).
+		const HANDLE process = GetCurrentProcess();
+		std::string messages;
+		SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_FAIL_CRITICAL_ERRORS | SYMOPT_DEBUG | SYMOPT_LOAD_LINES);
+		const bool initialized = SymInitialize(process, nullptr, TRUE) != FALSE;
+		if (!initialized && GetLastError() != ERROR_INVALID_PARAMETER)
+		{
+			std::fprintf(stderr, "ps2n-host: the system's symbol handler cannot be set up (error %lu)\n", GetLastError());
+			return false;
+		}
+		SymRegisterCallback64(process, SymbolMessages, static_cast<ULONG64>(reinterpret_cast<uintptr_t>(&messages)));
+
+		const DWORD64 base = reinterpret_cast<DWORD64>(GetModuleHandleW(nullptr));
+		std::vector<CompiledFunction> functions;
+		LineRecords lines;
+		const bool enumerated = SymEnumSymbols(process, base, "*", OneSymbol, &functions) &&
+								SymEnumLines(process, base, nullptr, nullptr, OneLineRecord, &lines);
+		const DWORD error = enumerated ? 0 : GetLastError();
+		if (initialized)
+			SymCleanup(process);
+		if (!enumerated || functions.empty() || lines.records.empty())
+		{
+			std::fprintf(stderr,
+				"ps2n-host: the host's debugging information gave %zu compiled functions and %zu line records (error %lu)\n",
+				functions.size(), lines.records.size(), static_cast<unsigned long>(error));
+			return false;
+		}
+
+		std::sort(functions.begin(), functions.end(), [](const CompiledFunction& a, const CompiledFunction& b) { return a.address < b.address; });
+		std::sort(lines.records.begin(), lines.records.end(), [](const LineRecord& a, const LineRecord& b) { return a.address < b.address; });
+
+		// Which of the files are generated ones: those under ps2n/generated in
+		// the build tree.
+		std::vector<char> generated(lines.files.size());
+		for (size_t i = 0; i < lines.files.size(); i++)
+		{
+			std::string file = lines.files[i];
+			for (char& c : file)
+				c = (c == '\\') ? '/' : static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+			generated[i] = file.find("/ps2n/generated/") != std::string::npos;
+		}
+
+		// By image, and over all of them: the functions, their bytes, and the
+		// bytes by the kind of line they were compiled from. A line record's
+		// bytes run to the next record of the same function, or to its end.
+		struct Tally
+		{
+			u64 functions = 0;
+			u64 bytes = 0;
+			std::unordered_map<std::string, u64> by_kind;
+		};
+		std::map<std::string, Tally> by_image;
+		Tally all;
+		const auto add = [&all](Tally& t, const std::string& kind, u64 bytes) {
+			t.by_kind[kind] += bytes;
+			all.by_kind[kind] += bytes;
+		};
+		for (const CompiledFunction& f : functions)
+		{
+			Tally& t = by_image[f.image];
+			t.functions++;
+			t.bytes += f.size;
+			all.functions++;
+			all.bytes += f.size;
+
+			const u64 end = f.address + f.size;
+			auto it = std::lower_bound(lines.records.begin(), lines.records.end(), f.address,
+				[](const LineRecord& r, u64 address) { return r.address < address; });
+			if (it == lines.records.end() || it->address >= end)
+			{
+				add(t, "(no line record)", f.size);
+				continue;
+			}
+			if (it->address > f.address)
+				add(t, "(before the first line record)", it->address - f.address);
+			for (; it != lines.records.end() && it->address < end; ++it)
+			{
+				const auto next = std::next(it);
+				const u64 stop = (next != lines.records.end() && next->address < end) ? next->address : end;
+				if (stop == it->address)
+					continue;
+				const std::string kind =
+					generated[it->file] ? KindOfLine(SourceLine(lines.files[it->file], it->line)) : std::string("(a line of another file)");
+				add(t, kind, stop - it->address);
+			}
+		}
+		s_sources.clear();
+
+		std::FILE* fp = std::fopen(path, "wb");
+		if (!fp)
+			return false;
+
+		std::unordered_map<std::string, u64> instructions;
+		for (const ImageCode& image : images)
+			instructions[image.id] = image.instructions;
+		const auto instructionsOf = [&instructions](const std::string& id) -> u64 {
+			const auto it = instructions.find(id);
+			return it == instructions.end() ? 0 : it->second;
+		};
+		u64 all_instructions = 0;
+		for (const auto& [id, t] : by_image)
+			all_instructions += instructionsOf(id);
+
+		std::fputs("# How much host code the generated files became (ps2n-host -code-size), from the host's debugging information:\n"
+				   "# each compiled function's size, and from the line tables which generated line each piece of it came from.\n"
+				   "# A line record's bytes run to the next record of its function, or to the function's end. The C++ compiler\n"
+				   "# moves and merges instructions, and what a macro does, its slow path included, is on the line that names it.\n\n",
+			fp);
+
+		std::vector<std::pair<std::string, const Tally*>> order;
+		for (const auto& [id, t] : by_image)
+			order.push_back({id, &t});
+		std::sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.second->bytes > b.second->bytes; });
+
+		std::fputs("By image: functions, guest instructions, bytes of host code, bytes a guest instruction\n", fp);
+		const auto row = [fp](const std::string& name, u64 count, u64 guest, u64 bytes) {
+			std::fprintf(fp, "  %-36s %9s %11s %13s %8.1f\n", name.c_str(), Thousands(count).c_str(), Thousands(guest).c_str(),
+				Thousands(bytes).c_str(), guest ? static_cast<double>(bytes) / static_cast<double>(guest) : 0.0);
+		};
+		for (const auto& [id, t] : order)
+			row(id, t->functions, instructionsOf(id), t->bytes);
+		row("(all of them)", all.functions, all_instructions, all.bytes);
+
+		// By the kind of line: over all the images, and for each image of at
+		// least a megabyte of code.
+		const auto kinds = [fp](const std::string& title, const Tally& t, u64 guest) {
+			std::vector<std::pair<std::string, u64>> list(t.by_kind.begin(), t.by_kind.end());
+			std::sort(list.begin(), list.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+			std::fprintf(fp, "\n%s, by the kind of generated line (share, bytes, bytes a guest instruction):\n", title.c_str());
+			for (const auto& [kind, bytes] : list)
+			{
+				std::fprintf(fp, "  %6.2f%%  %13s  %7.2f  %s\n", t.bytes ? 100.0 * static_cast<double>(bytes) / static_cast<double>(t.bytes) : 0.0,
+					Thousands(bytes).c_str(), guest ? static_cast<double>(bytes) / static_cast<double>(guest) : 0.0, kind.c_str());
+			}
+		};
+		kinds("All the images", all, all_instructions);
+		for (const auto& [id, t] : order)
+		{
+			if (t->bytes < 1000000)
+				break;
+			kinds("The image " + id, *t, instructionsOf(id));
+		}
+
+		std::fclose(fp);
+		return true;
+	}
 } // namespace ps2n::host::profile
 
 #else // not written for this platform yet
@@ -567,6 +784,11 @@ namespace ps2n::host::profile
 	}
 
 	bool Write(const char* path, uint32_t first_frame, uint32_t frames, double seconds)
+	{
+		return false;
+	}
+
+	bool WriteCodeSize(const char* path, const std::vector<ImageCode>& images)
 	{
 		return false;
 	}

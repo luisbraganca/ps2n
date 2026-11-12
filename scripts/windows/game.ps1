@@ -85,6 +85,8 @@ param(
     [string]$Capture = '',
     # off: the BIOS on the interpreter even where the host has it compiled (ps2n-host -bios-static off), to time the two.
     [ValidateSet('on', 'off')][string]$BiosStatic = 'on',
+    # off: every call through a register goes through the runtime's dispatcher (ps2n-host -call-sites off), to time the two.
+    [ValidateSet('on', 'off')][string]$CallSites = 'on',
     [string]$BuildDir = 'build\windows-clang'
 )
 
@@ -137,7 +139,7 @@ if ($Play) {
 
     $hostArgs = @('-bios', (Join-Path $biosDir $biosFile.Name), '-data', (Join-Path $session 'data'),
         '-log', (Join-Path $session 'core.log'), '-out', (Join-Path $session 'guest.txt'), '-frame', (Join-Path $session 'frame.png'),
-        '-ee', $p[0], '-iop', $p[1], '-vu', $p[2], '-static', $p[3], '-bios-static', $BiosStatic, '-image', 'game', '-until', '@@ no such line @@', '-window')
+        '-ee', $p[0], '-iop', $p[1], '-vu', $p[2], '-static', $p[3], '-bios-static', $BiosStatic, '-call-sites', $CallSites, '-image', 'game', '-until', '@@ no such line @@', '-window')
     if ($PSBoundParameters.ContainsKey('Renderer')) { $hostArgs += @('-renderer', $Renderer) }
     if ($Upscale -ne 1) { $hostArgs += @('-upscale', "$Upscale") }
     if ($Mute) { $hostArgs += '-mute' }
@@ -197,7 +199,7 @@ $work = Join-Path $build "ps2n\tests\game\$Name\$Config"
 $arguments = @(
     "-DHOST=$(ForCMake $hostExe)", "-DWORK_DIR=$(ForCMake $work)",
     "-DDLL_DIR=$(ForCMake (Join-Path $root 'deps\windows-x64\deps\bin'))", "-DELF=$(ForCMake $imagePath)",
-    "-DEE=$($p[0])", "-DIOP=$($p[1])", "-DVU=$($p[2])", "-DSTATIC=$($p[3])", "-DBIOS_STATIC=$BiosStatic", '-DIMAGE=game',
+    "-DEE=$($p[0])", "-DIOP=$($p[1])", "-DVU=$($p[2])", "-DSTATIC=$($p[3])", "-DBIOS_STATIC=$BiosStatic", "-DCALL_SITES=$CallSites", '-DIMAGE=game',
     "-DFRAMES=$Frames", "-DSECONDS=$Seconds", '-DUNTIL=@@ no such line @@', '-DEXPECT_EXIT=2', '-DWHOLE=1', '-DTIMES=1')
 if ($Renderer -ne 'null') { $arguments += @("-DRENDERER=$Renderer", "-DUPSCALE=$Upscale", "-DFRAME_EVERY=$FrameEvery") }
 if ($Pad) { $arguments += "-DPAD=$(ForCMake (Resolve-Path -LiteralPath $Pad).Path)" }

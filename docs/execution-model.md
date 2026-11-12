@@ -303,8 +303,15 @@ not have yet. From that:
 - **The loads and stores of a general register or an FPU register** take
   the address from a local and look at the core's address table once
   (`PS2N_LOAD`, `PS2N_LOAD_F`, `PS2N_STORE`). Only when the address is not
-  plain memory are the changed registers put back, the runtime told, and
-  the core's own function called.
+  plain memory is the runtime called, once (`slowRead`, `slowWrite`): it is
+  told, and the core's own function makes the access. The locals keep the
+  registers they hold on that way, changed or not, because nothing on it
+  reads the EE's registers: the runtime looks at its record of blocks, the
+  core's function at the device, and no exception is raised there. PCSX2's
+  recompiler does the same: before such a call it writes back only the
+  registers it holds in host registers the call may overwrite. Putting them
+  back made that seldom-taken way most of every load and store's code (the
+  game log, "G10").
 - **Every other instruction is carried out through register numbers**, on
   the core's copy, as before. The changed registers its fields name are put
   back first (`PS2N_PUT`), and the locals no longer hold the ones it may
@@ -420,7 +427,12 @@ Calls and returns:
   `[[clang::musttail]]`).
 - `jalr` and `jal` to an address without compiled code go through
   `ps2n::ee::dispatch(pc)`, which runs compiled code if there is some and
-  otherwise interprets until compiled code is reached again.
+  otherwise interprets until compiled code is reached again. Where it finds
+  compiled code it remembers the function by the target (`callSites` in
+  `recomp.h`), and the next call there is made by compiled code itself,
+  without the runtime (`PS2N_CALL_DYNAMIC`). The runtime empties those
+  places whenever the images in use, whether compiled code runs, or the
+  core's settings may change.
 - `jr` through another register sets `pc` and goes back to the function's own
   entry switch (a switch table lands on one of its blocks); the default case
   is `ps2n::ee::jump(pc)`: a tail call if `pc` is the start of a compiled
