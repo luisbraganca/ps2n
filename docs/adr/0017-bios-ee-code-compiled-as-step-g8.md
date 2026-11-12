@@ -71,7 +71,7 @@ How they were read:
   beside a packaged game belongs to packaging, in Phase 4 (ADR 0007,
   "Consequences").
 - **G7 was committed before G8 began**, so that the two steps do not share a
-  commit. The session that did G7 committed it (`8fb7797`), as recommended.
+  commit. The session that did G7 committed it (`53e68ae`), as recommended.
 
 ## What does not change
 

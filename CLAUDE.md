@@ -153,6 +153,11 @@ Decisions:
   G8 in the main tree; the two sessions agree before timing anything, and
   whichever step is committed second is rebased onto the first. Done on
   2026-11-12.
+- [ADR 0020](docs/adr/0020-no-claude-references-in-commit-messages.md):
+  no commit message references Claude: no `Co-Authored-By` line naming
+  Claude, no `Claude-Session` line. The history was rewritten on
+  2026-11-12 to remove them (messages only; files, authors and dates
+  unchanged) and force-pushed. Mentions of the file `CLAUDE.md` are fine.
 
 ## Layout, build and test
 
@@ -304,6 +309,11 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   measurement.
 - Do not commit unless asked. Do not push to GitHub or delete repositories
   without explicit authorization. Ask before installing software.
+- Commit messages never reference Claude: leave out the `Co-Authored-By`
+  and `Claude-Session` lines a session adds by default
+  ([ADR 0020](docs/adr/0020-no-claude-references-in-commit-messages.md)).
+  The maintainer dates each commit a few minutes after the one before it
+  (author and committer date alike): ask how many if they have not said.
 - No BIOS images, game data, or code generated from a game or from a BIOS in
   the repository.
 - PCSX2 (GPL-3.0+) may be reused with attribution. AnyPS5 is GPL-2.0-only:
