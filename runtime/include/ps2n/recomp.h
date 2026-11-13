@@ -196,6 +196,11 @@ namespace ps2n::ee
 	// runtime does it all. Returns the eighths that remain counted.
 	uint32_t cop2Instruction(uint32_t pc, uint32_t start, uint32_t eighths);
 
+	// VCALLMS or VCALLMSR at `pc`, whose word is `code`: PCSX2's function for
+	// it, which starts a micro program on VU0. The cycles of the block so far
+	// have been added (PS2N_VCALLMS).
+	void vcallms(uint32_t pc, uint32_t code);
+
 	// What PCSX2's recompiler decided about an instruction of its block, as
 	// the runtime records it (blocks::StepInfo in runtime/rec_blocks.h): the
 	// bits compiled code looks at.
@@ -204,8 +209,11 @@ namespace ps2n::ee
 	inline constexpr uint32_t kStepCop2Finish = 1u << 8; // VU0's micro program is run to its end first
 	inline constexpr uint32_t kStepCop2Status = 1u << 13; // the instruction's flags reach VU0's status register
 	inline constexpr uint32_t kStepCop2Mac = 1u << 14; // and its MAC register
-	// What makes a VU0 instruction the runtime's to carry out (cop2Instruction).
-	inline constexpr uint32_t kStepCop2First = kStepFlush | kStepCop2Sync | kStepCop2Finish;
+	// What makes a COP2 instruction the runtime's to carry out (cop2Instruction)
+	// when VU0 is running a micro program: then there is something to do about
+	// VU0 first (Cop2Prologue in runtime/ee_provider.cpp). When it is not,
+	// there is nothing, and compiled code goes on by itself (PS2N_COP2_ASKS).
+	inline constexpr uint32_t kStepCop2Vu0First = kStepCop2Sync | kStepCop2Finish;
 	// PS2N_VU0_FLAGS turns the two flag bits into vu0::kStatus and vu0::kMac.
 	static_assert((kStepCop2Status >> 13) == vu0::kStatus && (kStepCop2Mac >> 13) == vu0::kMac);
 
@@ -557,43 +565,83 @@ namespace ps2n::ee
 		PS2N_TIME(); \
 	} while (0)
 
+// Whether a COP2 instruction whose record says `ps2n_info` is the runtime's
+// to carry out: its block has VU0 brought up to date first, and VU0 is
+// running a micro program. Otherwise nothing is done about VU0 first
+// (Cop2Prologue in runtime/ee_provider.cpp looks at the same bit before
+// anything else), and compiled code goes on by itself: it adds the cycles of
+// the block so far where the block says (PS2N_COP2_CYCLES), as
+// cop2Instruction() does first, and carries the instruction out.
+#define PS2N_COP2_ASKS() \
+	((ps2n_info & ::ps2n::ee::kStepCop2Vu0First) != 0 && (VU0.VI[REG_VPU_STAT].UL & 1u) != 0)
+#define PS2N_COP2_CYCLES(acc_, eighths_) \
+	do \
+	{ \
+		if (ps2n_info & ::ps2n::ee::kStepFlush) \
+		{ \
+			const uint32_t ps2n_eighths = (acc_) + (eighths_); \
+			ps2n_cycle += ::ps2n::ee::blockCycles(ps2n_eighths); \
+			cpuRegs.cycle = ps2n_cycle; \
+			(acc_) = ps2n_eighths & 7u; \
+		} \
+		else \
+		{ \
+			(acc_) += (eighths_); \
+		} \
+	} while (0)
+
 // A VU0 instruction at `pc_`: `call_`, a function of ps2n::ee::vu0
-// (ps2n/ops_vu0.h) with the instruction's fields. Unless the block it is in
-// has something done about VU0 first, or its cycles so far added, compiled
-// code carries it out itself; it touches no register of the EE's.
-// PS2N_VU0_FLAGS, in `call_`: where the block lets its flags go.
+// (ps2n/ops_vu0.h) with the instruction's fields. Unless the runtime has
+// something to do about VU0 first (PS2N_COP2_ASKS), compiled code carries it
+// out itself; it touches no register of the EE's. PS2N_VU0_FLAGS, in
+// `call_`: where the block lets its flags go.
 #define PS2N_VU0_FLAGS ((ps2n_info >> 13) & 3u)
 #define PS2N_VU0(acc_, eighths_, pc_, call_) \
 	do \
 	{ \
 		const uint32_t ps2n_info = ::ps2n::ee::cop2Info(pc_, ps2n_start); \
-		if (ps2n_info & ::ps2n::ee::kStepCop2First) [[unlikely]] \
+		if (PS2N_COP2_ASKS()) [[unlikely]] \
 		{ \
 			(acc_) = ::ps2n::ee::cop2Instruction(pc_, ps2n_start, (acc_) + (eighths_)); \
 			PS2N_TIME(); \
 		} \
 		else \
 		{ \
-			(acc_) += (eighths_); \
+			PS2N_COP2_CYCLES(acc_, eighths_); \
 			::ps2n::ee::vu0::call_; \
 		} \
 	} while (0)
 
+// VCALLMS or VCALLMSR at `pc_`, whose word is `code_`. PCSX2's recompiler
+// adds the cycles of the block so far before either, in every block, and
+// calls the interpreter's function (INTERPRETATE_COP2_FUNC in
+// x86/microVU_Macro.inl); the runtime's record of the block says nothing
+// else of them. The function starts a micro program on VU0 and touches no
+// register of the EE's, so nothing is put back for it.
+#define PS2N_VCALLMS(acc_, eighths_, pc_, code_) \
+	do \
+	{ \
+		PS2N_FLUSH(acc_, eighths_); \
+		::ps2n::ee::vcallms(pc_, code_); \
+		PS2N_TIME(); \
+	} while (0)
+
 // A transfer between VU0's registers and the general registers or memory at
-// `pc_` (QMFC2, QMTC2, LQC2, SQC2): `move_`, which compiled code makes
-// itself, unless the block it is in has VU0 brought up to date first or its
-// cycles so far added, as PS2N_VU0 decides. Then the runtime carries it out
-// whole, as PS2N_COP2 does, with the changed registers put back first
-// (`put_`) and the general register it writes taken from the core again
-// afterwards (`get_`). The move is the runtime's (ps2n/ops_cop2.h): the
-// locals of the general registers hold their bits 0 to 63, and bits 64 to
-// 127 are always the core's (PS2N_GPR_HIGH).
+// `pc_` (QMFC2, QMTC2, LQC2, SQC2, and CFC2 and CTC2 but for the control
+// registers whose writing does more than store): `move_`, which compiled
+// code makes itself, unless the runtime has something to do about VU0
+// first, as PS2N_VU0 decides. Then the runtime carries it out whole, as
+// PS2N_COP2 does, with the changed registers put back first (`put_`) and the
+// general register it writes taken from the core again afterwards (`get_`).
+// The move is the runtime's (ps2n/ops_cop2.h): the locals of the general
+// registers hold their bits 0 to 63, and bits 64 to 127 are always the
+// core's (PS2N_GPR_HIGH).
 #define PS2N_GPR_HIGH(n_) cpuRegs.GPR.r[n_].UD[1]
 #define PS2N_COP2_MOVE(acc_, eighths_, pc_, put_, get_, move_) \
 	do \
 	{ \
 		const uint32_t ps2n_info = ::ps2n::ee::cop2Info(pc_, ps2n_start); \
-		if (ps2n_info & ::ps2n::ee::kStepCop2First) [[unlikely]] \
+		if (PS2N_COP2_ASKS()) [[unlikely]] \
 		{ \
 			put_; \
 			(acc_) = ::ps2n::ee::cop2Instruction(pc_, ps2n_start, (acc_) + (eighths_)); \
@@ -602,7 +650,7 @@ namespace ps2n::ee
 		} \
 		else \
 		{ \
-			(acc_) += (eighths_); \
+			PS2N_COP2_CYCLES(acc_, eighths_); \
 			move_; \
 		} \
 	} while (0)

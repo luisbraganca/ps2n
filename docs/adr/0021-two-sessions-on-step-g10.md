@@ -85,5 +85,8 @@ stock run over the whole level script: the same place and time at every one
 of 93,221,937 sync points, the same pictures and sound state, and as the
 only difference the FPU's at the 964 sync points listed since G4.
 
-Not measured: the two sessions' work together, and with profile-guided
-optimization; that is for when one history holds both.
+Measured together on 2026-11-13, once one history held both (the other
+session's work rebased onto `33d0e77`) and with profile-guided
+optimization trained for the combined code: the level run takes 1.04 times
+stock PCSX2's time, play alone 1.04, still the stock run (the game log,
+"G10", "Both sessions' work together").

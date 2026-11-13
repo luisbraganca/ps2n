@@ -38,14 +38,15 @@ itself where their block lets it: 1.19 times stock PCSX2's time. G8 (ADR
 ahead of time, from the dump the build is given: 51 of its instructions are
 still interpreted, at boot, and the level run takes 1.18 times stock
 PCSX2's time. G10 (ADR 0019), performance as the maintainer's research lays
-it out, is under way in the worktree `..\ps2n-vu0` (branch `perf`): with
-profile-guided optimization of the generated code and loops that have
-reached a fixed point skipped, the level run takes 1.07 times stock
-PCSX2's time (play alone 1.08), still the stock run. In the main tree
-beside it (ADR 0021), measured without profile-guided optimization: calls
-through a register made by compiled code itself, and the way a load or
-store seldom takes made short (the game's code 14% smaller), take play from
-1.18 to 1.14 times stock PCSX2's time. Phase 4 needs its own approval.
+it out, is under way, in the worktree `..\ps2n-vu0` (branch `perf`) and in
+the main tree beside it (ADR 0021): profile-guided optimization of the
+generated code, loops that have reached a fixed point skipped, the COP2
+instructions carried out by compiled code, calls through a register made
+by compiled code itself, and the way a load or store seldom takes made
+short (the game's code 14% smaller). All of it together, with
+profile-guided optimization, takes the level run to 1.04 times stock
+PCSX2's time (play alone 1.04), still the stock run. Phase 4 needs its own
+approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -171,7 +172,12 @@ Decisions:
   with stock PCSX2, goes to the maintainer first. Under way: profile-guided
   optimization (`build.ps1 -Pgo`), loops that have reached a fixed point
   (`PS2N_BLOCK_END_FIXED`), the COP2 transfers made by compiled code
-  (`PS2N_COP2_MOVE`).
+  (`PS2N_COP2_MOVE`, no gain that shows), the COP2 instructions that come
+  first in their block (`PS2N_COP2_ASKS`, `PS2N_COP2_CYCLES`), the rest of
+  them (`PS2N_VCALLMS`, `CFC2` and `CTC2` as moves; no gain that shows).
+  Link-time
+  optimization of PS2Native's own code (`build.ps1 -Lto thin`) was
+  evaluated: no gain, not used.
 - [ADR 0020](docs/adr/0020-no-claude-references-in-commit-messages.md):
   no commit message references Claude: no `Co-Authored-By` line naming
   Claude, no `Claude-Session` line. The history was rewritten on
@@ -250,7 +256,11 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   script), `llvm-profdata merge` (in the Visual Studio install's
   `VC\Tools\Llvm\x64\bin`), then `build.ps1 -Pgo use -PgoData <file>`; the
   counts stay in the build tree, and are made again after the generated
-  code changes ("G10", "Profile-guided optimization"). How much host code
+  code changes ("G10", "Profile-guided optimization"). `build.ps1 -Lto
+  thin` links PS2Native's own code (the generated code, the runtime) with
+  link-time optimization, PCSX2's code compiled as before; it gave nothing
+  over the level run, and `-Lto off` is how the build is used ("G10",
+  "Link-time optimization"). How much host code
   each kind of generated line became: `ps2n-host -code-size <file>` (from
   the host's own debugging information; no machine, about 20 s). To try a
   change to a header on one generated file, compile that file alone with

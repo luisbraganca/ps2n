@@ -22,7 +22,7 @@ The run files, pictures included, are under the git-ignored build tree.
 | G7 VU0's instructions | **Done** (2026-11-12, [ADR 0016](adr/0016-vu0-instructions-with-semantics-of-ps2natives-own.md)): the game's VU0 instructions have semantics of PS2Native's own, all but `VCALLMS` and `VCALLMSR`, which stay PCSX2's function as in its recompiler. The self-test finds them to be PCSX2's recompiler's in every case it tried: 1,968,000 cases, in each VU clamp mode and with the game fixes that change them, Killzone's configuration among them. The two known differences (`VRSQRT` of zero by zero, `VSQRT` of -0) are closed. The level run is still the stock run, VU0's registers the same at each of 93 million sync points, and the interpreted run; its time did not change that the measurement can show (1.21 times stock PCSX2's). Where it stands is in "G7" below. |
 | G8 The BIOS's EE code | **Done** (2026-11-12, [ADR 0017](adr/0017-bios-ee-code-compiled-as-step-g8.md)): the BIOS's code that runs on the EE under fast boot is compiled ahead of time from the dump the build is given, as four images, its code followed from where it is entered; of it, 51 instructions at boot are still interpreted, each with its cause. What the game copies into kernel memory is the game's code, and is compiled with it. Rebased onto G9: every test passes, and the game is still the stock run over the level script and the interpreted run over its first 4,200 frames. The level run takes 1.18 times stock PCSX2's time, 1.1 s less than with the BIOS interpreted; a test program boots in stock PCSX2's time. Where it stands is in "G8" below. |
 | G9 VU0's instructions in compiled code | **Done** (2026-11-12, [ADR 0018](adr/0018-vu0-instructions-carried-out-by-compiled-code.md), in a worktree of its own): compiled code carries out the game's VU0 instructions itself, inline, where its block has nothing done about VU0 first, and keeps its registers in locals past them. The level run takes 1.19 times stock PCSX2's time (89.5 s against 74.9 s, timed in turn), from 1.21, a gain at the edge of what the measurement shows; the profile has the runtime's share 1.3 s smaller. Still the stock run and the interpreted run. Where it stands is in "G9" below. |
-| G10 Performance | **Under way** (2026-11-12, [ADR 0019](adr/0019-performance-as-the-research-lays-it-out.md)): play measured apart from startup, with nothing drawn and with the hardware renderer (the same time: the CPU thread's), and profiled. Profile-guided optimization of the generated code, trained on another run of the level: play takes 1.13 times stock PCSX2's time, from 1.21, startup 1.07, from 1.11, the whole level run 1.11, from 1.18. Then loops that have reached a fixed point (a time round that leaves the machine as it found it): their times round up to the next event test are not run, their cycles counted at once, the event test made where it would have been. The game waits for each frame in one: play takes 1.08 times stock PCSX2's time, startup 1.05, the whole level run 1.07. Still the stock run and the interpreted run, and every test passes. In the main tree beside it ([ADR 0021](adr/0021-two-sessions-on-step-g10.md)), each change measured by itself without profile-guided optimization: calls through a register made by compiled code itself, play from 1.18 to 1.16 times stock PCSX2's time; the way a load or store seldom takes made short, the game's code 14% smaller, play 1.14; the FPU's settings read once per function, tried and taken out. `ps2n-host -code-size` says how much host code each kind of generated line becomes. Where it stands is in "G10" below. |
+| G10 Performance | **Under way** (2026-11-12, [ADR 0019](adr/0019-performance-as-the-research-lays-it-out.md)): play measured apart from startup, with nothing drawn and with the hardware renderer (the same time: the CPU thread's), and profiled. Profile-guided optimization of the generated code, trained on another run of the level: play takes 1.13 times stock PCSX2's time, from 1.21, startup 1.07, from 1.11, the whole level run 1.11, from 1.18. Then loops that have reached a fixed point (a time round that leaves the machine as it found it): their times round up to the next event test are not run, their cycles counted at once, the event test made where it would have been. The game waits for each frame in one: play takes 1.08 times stock PCSX2's time, startup 1.05, the whole level run 1.07. The COP2 transfers made by compiled code, and link-time optimization of PS2Native's code: no gain. Then the COP2 instructions that come first in their block, 78% of what compiled code still handed to the runtime for COP2, carried out by compiled code unless VU0 is running a micro program: play takes 1.06 times stock PCSX2's time, the whole level run 1.06. Then the rest of them (`VCALLMS` called the way PCSX2's recompiler calls it, `CFC2` and `CTC2` as moves): nothing the timing shows; the runtime now carries out only those at which VU0 is running. Still the stock run and the interpreted run, and every test passes. In the main tree beside it ([ADR 0021](adr/0021-two-sessions-on-step-g10.md)), each change measured by itself without profile-guided optimization: calls through a register made by compiled code itself, play from 1.18 to 1.16 times stock PCSX2's time; the way a load or store seldom takes made short, the game's code 14% smaller, play 1.14; the FPU's settings read once per function, tried and taken out. `ps2n-host -code-size` says how much host code each kind of generated line becomes. The two together, in one history and with profile-guided optimization: play takes 1.04 times stock PCSX2's time, the whole level run 1.04, still the stock run. Where it stands is in "G10" below. |
 
 ## The steps and their pass criteria
 
@@ -1767,6 +1767,18 @@ captures do. They hold for the code they were made from: when the
 generated code changes, the functions that changed lose theirs, so each
 change that follows is measured with counts made again for it.
 
+Code the training run does not reach is taken for code that never runs,
+and pays for it. The session that took on the website's charts found on
+2026-11-13 that `tests/programs/bench.s`, which no training run runs, is
+slower with profile-guided optimization than without: its `mmi` loop takes
+17.7 to 18.0 ms against 12.0 to 12.1 ms (stock PCSX2 8.2 to 8.5 ms). In
+the object file the compiler had not inlined the runtime's `ops::LQ` and
+`ops::SQ` into that function, as it does without the counts: it gives a
+call made where nothing was counted less inlining. The game's code that
+the training does not reach, another level for one, is in the same case.
+Not tried yet: making the semantics compiled code calls on its usual way
+always inline, or training on more of the game.
+
 ### Loops that have reached a fixed point
 
 After profile-guided optimization the function with the most samples in
@@ -1863,7 +1875,188 @@ Built with profile-guided optimization trained again for it, every test
 passes, the level run is the stock run at every one of 93,221,937 sync
 points (VU0's registers the same at every one, the FPU's different at the
 same 964), and the first 4,200 frames are the interpreted run at every one
-of 47,705,744 event tests. It has not been timed yet.
+of 47,705,744 event tests.
+
+Timed as before, stock PCSX2 and the compiled game in turn, three rounds,
+nothing drawn:
+
+| | Startup, three rounds | Play, three rounds |
+|---|---|---|
+| Stock PCSX2 | 16.7, 16.3, 16.2 s | 56.5, 55.6, 55.9 s |
+| Compiled | 17.5, 17.4, 17.3 s | 61.1, 60.6, 60.5 s |
+
+Play takes 1.08 times stock PCSX2's time (1.08 to 1.09, pair by pair), as
+before; startup 1.06; the whole run (79.3 to 80.0 s against 73.5 to
+74.7 s) 1.08. The change gave nothing that shows. The profile of play
+says why: the runtime's COP2 path has about 180 samples fewer than before
+it, and the lines of compiled code that make the transfers 181 more. Most
+of the path's time is still the runtime's, about 1,230 samples (1.8 s),
+`cop2Instruction` alone 690: what still goes there is the first COP2
+instruction of a block, before which PCSX2's recompiler adds the block's
+cycles so far and looks whether VU0 is running a micro program, and
+`CFC2`, `CTC2`, `VCALLMS` and `VCALLMSR`. Which of these takes the time,
+the profile does not say.
+
+### Link-time optimization
+
+The research asks for this to be evaluated too. PCSX2's own Windows builds
+link the whole program with it; this build never has
+(`scripts\windows\build.ps1` leaves it out), and stock PCSX2 here is built
+from the same tree as the compiled game, the same way. `build.ps1 -Lto thin` now applies it to
+PS2Native's own code only, the generated code and the runtime, and to
+nothing of PCSX2's: that code is compiled to LLVM's bitcode and the linker
+optimizes it as a whole (ThinLTO), so that a function of one of the game's
+64 parts can take in one of another part, or one of the runtime's. What the
+linker made of each part is kept in the build tree (`ps2n\lto-cache`), so a
+link after a change to a few parts redoes little. With the COP2 step's
+profile-guided optimization the build took 4.6 minutes, and the host came
+out 2.3 MB larger (189.7 MB).
+
+Timed as before, stock PCSX2 and the compiled game in turn, three rounds,
+nothing drawn:
+
+| | Startup, three rounds | Play, three rounds |
+|---|---|---|
+| Stock PCSX2 | 16.6, 16.4, 16.4 s | 56.1, 55.8, 55.9 s |
+| Compiled, with link-time optimization | 17.5, 17.3, 17.4 s | 61.6, 61.0, 60.8 s |
+
+Play takes 1.09 times stock PCSX2's time (1.09 to 1.10, pair by pair),
+against 1.08 without it; startup 1.06, as without; the whole run (79.7 to
+80.5 s against 73.7 to 74.2 s) 1.08. It gave nothing. The profile of play
+shows what it did: the runtime's functions went into the game's code
+(`dispatch` and `cop2Instruction` in part, `LQC2` and `SQC2` whole), the
+runtime's samples down to 1,727 from 2,420 and the game's code's up to
+15,239 from 14,318, and the two together took no less: 16,966 samples
+against 16,738. The calls between the game's functions, and from them into
+the runtime, are not where the time goes. The option stays, off, and what
+follows is built without it.
+
+Linking the whole host with it, as PCSX2's builds do, would change the
+stock PCSX2 the compiled game is measured against as well: that goes to the
+maintainer first (ADR 0019), and has not been tried.
+
+### The COP2 instructions that come first
+
+To know what the runtime's COP2 path still does, the runtime now counts
+what compiled code hands it, by instruction, and how often VU0 is running a
+micro program then; the host reports it. Over the level script it was
+417,787,562 times:
+
+| | Handed to the runtime | VU0 running then |
+|---|--:|--:|
+| `LQC2` | 164,309,686 | 0 |
+| `SQC2` | 94,875,156 | 0 |
+| `VCALLMS`, `VCALLMSR` | 51,520,831 | 0 |
+| `QMTC2` | 39,456,008 | 0 |
+| `QMFC2` | 31,453,924 | 13,221,123 |
+| `CFC2` | 17,063,293 | 4,214,519 |
+| `CTC2` | 11,235,378 | 0 |
+| VU0 instructions | 7,873,286 | 0 |
+
+The transfers and the VU0 instructions among them are the ones before
+which PCSX2's recompiler brings VU0 up to date: the first COP2 instruction
+of a block, and the first after a store or a `VCALLMS`, either of which may
+have started VU0 (`COP2MicroFinishPass` in its analysis). Before them it
+adds the block's cycles so far and looks whether VU0 is running a micro
+program; only when it is has it anything more to do (`Cop2Prologue` in the
+runtime does the same). VU0 was running at 13,221,123 of those `QMFC2` and
+at none of the rest: 324,746,937 of them, 78% of all, needed nothing from
+the runtime but the cycles.
+
+Compiled code now adds those cycles itself where the record says, and
+hands such an instruction to the runtime only where its record has VU0
+brought up to date first and VU0 is running (`PS2N_COP2_ASKS`); otherwise
+it carries it out, as it has done the others since the step before.
+
+Built with profile-guided optimization trained again for it, every test
+passes (459, and the unit tests). Over the level script the compiled game
+is the stock run at every one of 93,221,937 sync points, the registers the
+same but for the FPU's at the same 964, with the same picture at each of
+the 1,750 frames compared and the sound hardware in the same state at each
+of 1,750 moments; over the first 4,200 frames it is the interpreted run at
+every one of 47,705,744 event tests, the run's fingerprint the same
+(`F99B5EFD472E87EC`). Over the level script the runtime is now handed
+93,040,625 COP2 instructions, from 417,787,562: the 13,221,123 `QMFC2` at
+which VU0 was running, and the `CFC2`, `CTC2`, `VCALLMS` and `VCALLMSR`,
+as before.
+
+It was timed as before, stock PCSX2 and the compiled game in turn, three
+rounds, nothing drawn:
+
+| | Startup, three rounds | Play, three rounds |
+|---|---|---|
+| Stock PCSX2 | 16.7, 16.5, 16.4 s | 56.4, 56.3, 56.4 s |
+| Compiled | 17.5, 17.3, 17.5 s | 59.7, 59.5, 59.5 s |
+
+Play takes 1.06 times stock PCSX2's time (1.06 pair by pair), from 1.08:
+59.6 s on average against 60.7 s before it, 1.1 s less, where stock
+PCSX2's play took 56.3 s against 56.0 s. Startup takes 1.06 times, as
+before. The whole run takes 78.2 to 78.7 s against 74.1 to 74.6 s, 1.06,
+from 1.08. (The third stock run took 84.5 s in all: ten seconds more,
+spent outside its frames, which took as long as the other two runs'.)
+
+In the profile of play the runtime took 1,564 samples, from 2,420:
+`cop2Instruction` 255 from 690, `Cop2Operation` 73 from 252, and `LQC2`,
+`SQC2` and `Cop2Prologue` are no longer among the functions with the most
+samples. The lines of compiled code that carry out the transfers took 430,
+from 208. The game's code and the runtime together took 16,029 samples
+against 16,738: about 1.1 s less, as the timing says.
+
+### The rest of the COP2 instructions
+
+That left 93,040,625 COP2 instructions handed to the runtime over the
+level script. `VCALLMS` and `VCALLMSR`, 51,520,831 of them, need nothing
+from the runtime's record: before either, in every block, PCSX2's
+recompiler adds the cycles of the block so far and calls its
+interpreter's function (`INTERPRETATE_COP2_FUNC`), and the record says
+nothing else of them. Compiled code now does the same itself
+(`PS2N_VCALLMS`), and puts no register back for it, since the function
+touches none of the EE's. `CFC2` (17,063,293) and `CTC2` (11,235,378)
+move a VU0 integer or control register from or to a general one: compiled
+code now makes them as it makes the other transfers, unless the runtime
+has something to do about VU0 first, as the runtime's functions for them
+do (`ops_cop2.cpp`). A `CTC2` to the status flag register (which also
+rewrites the copies PCSX2's VU recompiler keeps), to `FBRST` (resets) or to
+`CMSAR1` (starts VU1) stays the runtime's.
+
+Built with profile-guided optimization trained again for it, every test
+passes (459, and the unit tests). Over the level script the compiled game
+is the stock run at every one of 93,221,937 sync points, the registers the
+same but for the FPU's at the same 964, with the same picture at each of
+the 1,750 frames compared and the sound hardware in the same state at each
+of 1,750 moments; over the first 4,200 frames it is the interpreted run at
+every one of 47,705,744 event tests, the run's fingerprint the same
+(`F99B5EFD472E87EC`). Over the level script the runtime now carries out
+17,435,656 COP2 instructions whole, where VU0 was running for all but 14
+(`QMFC2` 13,221,123 and `CFC2` 4,214,519; and 14 `CTC2` that do more than
+store), and the 51,520,831 `VCALLMS` and `VCALLMSR` reach PCSX2's function
+the new way.
+
+It was timed as before:
+
+| | Startup, three rounds | Play, three rounds |
+|---|---|---|
+| Stock PCSX2 | 16.5, 16.3, 16.3 s | 57.0, 56.1, 56.1 s |
+| Compiled | 17.9, 17.5, 17.4 s | 61.5, 59.1, 59.2 s |
+
+The first round was slower on both sides, stock PCSX2's play by 0.9 s and
+the compiled game's by 2.3 s; in the other two play takes 1.054 and 1.056
+times stock PCSX2's time, against 1.056 to 1.059 before. Timed again, with
+the other session running nothing:
+
+| | Startup, three rounds | Play, three rounds |
+|---|---|---|
+| Stock PCSX2 | 16.3, 16.2, 16.5 s | 55.9, 55.5, 56.2 s |
+| Compiled | 17.2, 17.5, 17.6 s | 58.7, 60.1, 58.7 s |
+
+Play takes 1.06 times stock PCSX2's time (1.04 to 1.08 pair by pair, the
+second round slower this time), as before the change; the whole run
+(77.3 to 79.0 s against 73.1 to 74.1 s) 1.06. Over the six rounds the
+change gave nothing the timing shows. In the profile of play the runtime
+took 1,324 samples, from 1,564: `cop2Instruction` 39 from 255, and
+`vcallms`, the new way to PCSX2's function, 31. The game's code and the
+runtime together took 15,831 samples against 16,029, about 0.3 s less:
+under what three rounds can show, which is what they show.
 
 ### In the main tree: calls through a register
 
@@ -2047,6 +2240,42 @@ processor lets a load of the configuration run ahead of the stores before
 it, and a branch on a setting that never changes is always predicted, so
 those loads cost little to begin with. Taken out: the code is as before.
 
+### Both sessions' work together
+
+Each session measured its own changes: the worktree's with profile-guided
+optimization, the main tree's without. Put into one history on 2026-11-13
+(the worktree's work rebased onto `33d0e77`, the generator stamped
+`ps2n-recomp 0.8.0`), the code was built with profile-guided optimization
+trained again for it. The host is 167.6 MB, from 187.8 MB: the shorter way
+loads and stores seldom take. Every test passes (459, and the unit tests).
+Over the level script the compiled game is the stock run at every one of
+93,221,937 sync points, the registers the same but for the FPU's at the
+same 964, with the same picture at each of the 1,750 frames compared and
+the sound hardware in the same state at each of 1,750 moments; over the
+first 4,200 frames it is the interpreted run at every one of 47,705,744
+event tests, the run's fingerprint the same (`F99B5EFD472E87EC`).
+
+Timed as before, stock PCSX2 and the compiled game in turn, three rounds,
+nothing drawn:
+
+| | Startup, three rounds | Play, three rounds |
+|---|---|---|
+| Stock PCSX2 | 16.5, 16.5, 16.7 s | 57.0, 56.9, 56.5 s |
+| Compiled | 17.5, 17.4, 17.4 s | 59.5, 58.7, 58.6 s |
+
+Play takes 1.04 times stock PCSX2's time (1.03 to 1.04 pair by pair),
+from 1.06; startup 1.05; the whole run (77.4 to 78.4 s against 74.7 to
+74.9 s) 1.04, from 1.06. Stock PCSX2's play took 56.8 s on average here,
+against 55.9 to 56.4 s in the timings of the day before; the compiled
+game's 58.9 s, against 59.2 to 59.9 s since the COP2 instructions that
+come first.
+
+In the profile of play the runtime took 731 samples, from 1,324:
+`dispatch` 111 from 700, now that calls through a register are looked up
+by compiled code itself, whose lines for calls, jumps and returns took 496,
+from 224. The game's code and the runtime together took 15,299 samples
+against 15,831, about 0.8 s less.
+
 ## Open
 
 - **What is left of VU0 in the game's EE code.** Since G7 its instructions
@@ -2055,8 +2284,10 @@ those loads cost little to begin with. Taken out: the code is as before.
   programs run on PCSX2's VU0 recompiler, a stand-in of
   [ADR 0003](adr/0003-no-jit-in-generated-games.md). Since G9 compiled
   code carries a VU0 instruction out itself unless its block has something
-  done about VU0 first; the transfers, `VCALLMS` and `VCALLMSR` still go
-  through the runtime ("G9", "The time").
+  done about VU0 first, and since G10 the transfers as well, and it calls
+  PCSX2's function for `VCALLMS` and `VCALLMSR` itself; the runtime carries
+  out only what comes where VU0 is running a micro program and has to be
+  brought up to date first ("G10", "The rest of the COP2 instructions").
 - **Speed.** 4,200 frames of logos, a prompt and a film take 25.7 s
   compiled against 22.9 s under stock PCSX2 with the software renderer, and
   15.1 s against 11.2 s with nothing drawn. Where the four seconds go has
@@ -2071,10 +2302,19 @@ those loads cost little to begin with. Taken out: the code is as before.
   (86.9 s against 73.9 s); with profile-guided optimization (G10), 1.11
   (81.3 to 81.7 s against 73.0 to 73.2 s), play alone 1.13; with loops
   that have reached a fixed point skipped (G10), 1.07 (78.8 to 80.3 s
-  against 74.0 to 74.3 s), play alone 1.08. In the main tree, without
+  against 74.0 to 74.3 s), play alone 1.08; with the COP2 transfers made
+  by compiled code (G10), the same within the noise, 1.08 (79.3 to 80.0 s
+  against 73.5 to 74.7 s), play alone 1.08; link-time optimization of
+  PS2Native's code (G10) gave nothing (play 1.09), and is not used; with
+  the COP2 instructions that come first in their block carried out by
+  compiled code (G10), 1.06 (78.2 to 78.7 s against 74.1 to 74.6 s), play
+  alone 1.06; with the rest of them (G10), the same, 1.06 (77.3 to 79.0 s
+  against 73.1 to 74.1 s), play alone 1.06. In the main tree, without
   profile-guided optimization, calls through a register made by compiled
   code and the seldom-taken way of loads and stores made short took play
-  from 1.18 to 1.14 times stock PCSX2's time (G10, "In the main tree"). More than a
+  from 1.18 to 1.14 times stock PCSX2's time (G10, "In the main tree");
+  both together, with profile-guided optimization (G10), 1.04 (77.4 to
+  78.4 s against 74.7 to 74.9 s), play alone 1.04. More than a
   third of the
   compiled code's time is now reaching memory through the core's address
   table, where PCSX2's recompiler uses one instruction and a fault ("G6",

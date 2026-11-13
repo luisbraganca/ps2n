@@ -1337,6 +1337,24 @@ namespace
 				static_cast<ull>(stats.fixed_loop_rounds), static_cast<ull>(stats.fixed_loop_cycles),
 				static_cast<ull>(stats.fixed_loop_skips));
 		}
+		{
+			// What compiled code still hands to the runtime of COP2: PS2N_COP2,
+			// PS2N_VCALLMS, and PS2N_VU0 and PS2N_COP2_MOVE where the runtime has
+			// something to do about VU0 first (PS2N_COP2_ASKS).
+			std::string line;
+			uint64_t total = 0;
+			for (size_t k = 0; k < ps2n::ee::kCop2Kinds; k++)
+			{
+				if (!stats.cop2_runtime[k])
+					continue;
+				total += stats.cop2_runtime[k];
+				line += fmt::format("{}{} {} ({} with VU0 running)", line.empty() ? "" : ", ", ps2n::ee::kCop2KindNames[k],
+					stats.cop2_runtime[k], stats.cop2_runtime_vu0_running[k]);
+			}
+			if (total)
+				std::fprintf(stderr, "ps2n-host: COP2 instructions compiled code handed to the runtime: %llu: %s\n",
+					static_cast<ull>(total), line.c_str());
+		}
 		if (stats.console_followed_abs_neg || stats.console_followed_max_min)
 		{
 			// Where a register may differ from a stock run's on purpose (ADR 0005).

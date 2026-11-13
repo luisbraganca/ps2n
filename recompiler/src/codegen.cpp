@@ -15,7 +15,7 @@ namespace ps2n::recomp {
 
 using namespace r5900;
 
-const char* const kGeneratorName = "ps2n-recomp 0.7.0";
+const char* const kGeneratorName = "ps2n-recomp 0.8.0";
 
 namespace {
 
@@ -225,6 +225,16 @@ bool isCop2(const Insn& in) {
     const uint32_t opcode = in.opcode();
     return (opcode == 022 && !in.isControlFlow()) || opcode == 066 || opcode == 076;
 }
+
+// VU0's control registers, as CFC2 and CTC2 number them (VUMicroRegs in
+// PCSX2's pcsx2/VU.h).
+constexpr uint32_t kVu0RegStatus = 16;
+constexpr uint32_t kVu0RegMac = 17;
+constexpr uint32_t kVu0RegR = 20;
+constexpr uint32_t kVu0RegTpc = 26;
+constexpr uint32_t kVu0RegFbrst = 28;
+constexpr uint32_t kVu0RegVpuStat = 29;
+constexpr uint32_t kVu0RegCmsar1 = 31;
 
 // What the generated code does not carry out in a delay slot, so that the
 // branch before it is left to the interpreter: a system instruction, an
@@ -933,13 +943,15 @@ private:
         }
     }
 
-    // QMFC2, QMTC2, LQC2 and SQC2, after `cost` eighths not yet in `acc`
-    // (theirs included): the move compiled code makes where the block does
-    // nothing about VU0 first, or the runtime otherwise (PS2N_COP2_MOVE).
-    // The changed registers are put back only on the runtime's way, and on
-    // the way of a load or store that is not of plain memory; a general
-    // register's local holds its bits 0 to 63, and the core bits 64 to 127.
-    // False, with nothing emitted, for the other COP2 instructions.
+    // QMFC2, QMTC2, LQC2, SQC2, CFC2 and CTC2, after `cost` eighths not yet
+    // in `acc` (theirs included): the move compiled code makes where the
+    // block does nothing about VU0 first, or the runtime otherwise
+    // (PS2N_COP2_MOVE). The changed registers are put back only on the
+    // runtime's way, and on the way of a load or store that is not of plain
+    // memory; a general register's local holds its bits 0 to 63, and the core
+    // bits 64 to 127. The moves are ops_cop2.cpp's. False, with nothing
+    // emitted, for the other COP2 instructions, and for a CTC2 whose writing
+    // does more than store (to the status flag register, FBRST, CMSAR1).
     bool emitCop2Move(const Insn& in, uint32_t cost, const char* note) {
         const uint32_t rt = in.rt();
         const std::string pc = hex(in.addr);
@@ -982,6 +994,51 @@ private:
                  strprintf("%s(%u, %s, %s, %s)", in.op == Op::LQC2 ? "PS2N_LQC2" : "PS2N_SQC2", rt, at.c_str(), pc.c_str(), puts.c_str()));
             return true;
         }
+        case Op::CFC2: {
+            // Into bits 0 to 63 of general register rt from VU0's integer or
+            // control register fs (the rd field); bits 64 to 127 stay. An
+            // integer register gives 16 bits, R 23, the other control
+            // registers 32, sign-extended.
+            const std::string puts = putArgument();
+            if (rt == 0) {
+                emit(puts, "(void)0", "(void)0");
+                return true;
+            }
+            const uint32_t fs = in.rd();
+            std::string value;
+            if (fs == 0)
+                value = "uint64_t{0}";
+            else if (fs == kVu0RegR)
+                value = strprintf("uint64_t{VU0.VI[%u].UL & 0x7FFFFFu}", fs);
+            else if (fs >= kVu0RegStatus)
+                value = strprintf("static_cast<uint64_t>(static_cast<int64_t>(VU0.VI[%u].SL))", fs);
+            else
+                value = strprintf("uint64_t{VU0.VI[%u].US[0]}", fs);
+            const std::string to = def(rt);
+            emit(puts, strprintf("PS2N_GET(%u)", rt), strprintf("%s = %s", to.c_str(), value.c_str()));
+            return true;
+        }
+        case Op::CTC2: {
+            // From general register rt into VU0's integer or control register
+            // fs (the rd field). VI0, the MAC flag register, TPC and VPU_STAT
+            // take nothing; an integer register takes 16 bits; R 23, with the
+            // exponent of 1.0 above them.
+            const uint32_t fs = in.rd();
+            if (fs == kVu0RegStatus || fs == kVu0RegFbrst || fs == kVu0RegCmsar1)
+                return false;
+            std::string move = "(void)0";
+            if (fs != 0 && fs != kVu0RegMac && fs != kVu0RegTpc && fs != kVu0RegVpuStat) {
+                const std::string from = use(rt);
+                if (fs == kVu0RegR)
+                    move = strprintf("VU0.VI[%u].UL = (static_cast<uint32_t>(%s) & 0x7FFFFFu) | 0x3F800000u", fs, from.c_str());
+                else if (fs < kVu0RegStatus)
+                    move = strprintf("VU0.VI[%u].US[0] = static_cast<uint16_t>(%s)", fs, from.c_str());
+                else
+                    move = strprintf("VU0.VI[%u].UL = static_cast<uint32_t>(%s)", fs, from.c_str());
+            }
+            emit(putArgument(), "(void)0", move);
+            return true;
+        }
         default: return false;
         }
     }
@@ -1020,6 +1077,16 @@ private:
             if (emitCop2Move(in, cost, note)) {
                 stats_.cop2++;
                 stats_.cop2Moves++;
+                return 0;
+            }
+
+            // VCALLMS and VCALLMSR: PCSX2's function, which its recompiler
+            // calls after adding the cycles of the block so far, in every block
+            // (INTERPRETATE_COP2_FUNC). It starts a micro program on VU0 and
+            // touches no register of the EE's, so the locals stay as they are.
+            if ((in.op == Op::VCALLMS || in.op == Op::VCALLMSR) && !delaySlot) {
+                line(strprintf("PS2N_VCALLMS(acc, %uu, %s, 0x%08Xu);", cost, hex(in.addr).c_str(), in.raw), &in, note);
+                stats_.cop2++;
                 return 0;
             }
 

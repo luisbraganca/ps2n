@@ -248,15 +248,24 @@ What the generated code does with them:
   instruction (`PS2N_VU0`) reads the same answer where the runtime keeps
   the last few thousand it gave (`cop2Sites`, `cop2Info()` in
   `ps2n/recomp.h`, good for as long as no block is formed or thrown away),
-  and where nothing is to happen first, carries itself out
-  ([ops_vu0.h](../runtime/include/ps2n/ops_vu0.h)); otherwise the runtime
-  carries it out as `PS2N_COP2` would. The transfers between VU0's
-  registers and the general registers or memory (`QMFC2`, `QMTC2`, `LQC2`,
-  `SQC2`) read the same answer and, where nothing is to happen first, make
-  the move themselves (`PS2N_COP2_MOVE`): a general register's local holds
-  its bits 0 to 63 and the core bits 64 to 127, and `LQC2` and `SQC2` go
-  through the address table as the other loads and stores do. `CFC2`,
-  `CTC2`, `VCALLMS` and `VCALLMSR` are the runtime's (`PS2N_COP2`).
+  adds the cycles so far where the answer says, and carries itself out
+  ([ops_vu0.h](../runtime/include/ps2n/ops_vu0.h)). Only where the block
+  has VU0 brought up to date first and VU0 is running a micro program
+  (`PS2N_COP2_ASKS`), which is when there is something to do about VU0
+  first, does the runtime carry it out, as `PS2N_COP2` would. The
+  transfers between VU0's registers and the general registers or memory
+  (`QMFC2`, `QMTC2`, `LQC2`, `SQC2`, `CFC2`, `CTC2`) read the same answer
+  and, unless the runtime has something to do first, make the move
+  themselves (`PS2N_COP2_MOVE`): a general register's local holds its bits
+  0 to 63 and the core bits 64 to 127, and `LQC2` and `SQC2` go through the
+  address table as the other loads and stores do. A `CTC2` to the status
+  flag register, `FBRST` or `CMSAR1`, whose writing does more than store,
+  is the runtime's (`PS2N_COP2`). `VCALLMS` and `VCALLMSR` are PCSX2's
+  function, which PCSX2's recompiler calls after adding the cycles so far,
+  in every block: compiled code does the same (`PS2N_VCALLMS`), with no
+  register put back, since the function touches none of the EE's. The host
+  reports how many COP2 instructions compiled code handed to the runtime, by
+  instruction, and at how many of them VU0 was running.
 - **`DI`** is compiled in one piece with the instruction after it, which
   runs first (rule 8), when that is a plain instruction at which no block
   can begin; in a delay slot it takes effect at once.

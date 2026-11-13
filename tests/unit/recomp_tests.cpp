@@ -412,10 +412,10 @@ _start: mfc0  $v0, $12             # 00100000
 TEST_CASE(cop2_instructions_ask_the_runtime_what_their_block_does_first) {
     // Whether VU0 is brought up to date before one, and whether the cycles so
     // far are added before that, PCSX2's recompiler decides from the whole
-    // block; only the runtime knows the block. CFC2 and CTC2 it carries out
-    // whole. QMFC2 and LQC2 compiled code moves itself where nothing comes
-    // first; otherwise the runtime does it all, with the changed registers
-    // put back first and the one QMFC2 writes taken again after.
+    // block; only the runtime knows the block. The transfers compiled code
+    // makes itself unless the runtime has something to do about VU0 first;
+    // then the runtime does it all, with the changed registers put back first
+    // and the one a transfer writes taken again after.
     const ElfFile elf = assemble(R"(
         .text
         .globl _start
@@ -428,18 +428,49 @@ _start: cfc2  $v0, $vi16           # 00100000
     GenerateStats stats;
     const std::string code = generateFor(elf, &stats);
     CHECK_EQ(stats.cop2, size_t{4});
-    CHECK_EQ(stats.cop2Moves, size_t{2});
+    CHECK_EQ(stats.cop2Moves, size_t{4});
     CHECK_EQ(stats.delegated, size_t{0});
     // Each is handed the eighths counted up to and including itself, and
-    // gives back what is left of them.
-    CHECK_CONTAINS(code, "PS2N_COP2(acc, 9u, 0x00100000u);");
-    CHECK_CONTAINS(code, "PS2N_COP2(acc, 9u, 0x00100004u);");
-    CHECK_CONTAINS(code,
-                   "PS2N_COP2_MOVE(acc, 9u, 0x00100008u, (void)0, PS2N_GET(3), g3 = VU0.VF[1].UD[0]; PS2N_GPR_HIGH(3) = VU0.VF[1].UD[1]);");
-    // The jump's 9 and the load's 14; $v1, changed, is put back only on the runtime's way and a device's.
-    CHECK_CONTAINS(code, "PS2N_COP2_MOVE(acc, 23u, 0x00100010u, PS2N_PUT(3), (void)0, PS2N_LQC2(1, static_cast<uint32_t>(g29) + "
-                         "static_cast<uint32_t>(16), 0x00100010u, PS2N_PUT(3)));");
+    // gives back what is left of them. A control register gives 32 bits,
+    // sign-extended; an integer register takes 16.
+    CHECK_CONTAINS(code, "PS2N_COP2_MOVE(acc, 9u, 0x00100000u, (void)0, PS2N_GET(2), "
+                         "g2 = static_cast<uint64_t>(static_cast<int64_t>(VU0.VI[16].SL)));");
+    CHECK_CONTAINS(code, "PS2N_COP2_MOVE(acc, 9u, 0x00100004u, PS2N_PUT(2), (void)0, VU0.VI[1].US[0] = static_cast<uint16_t>(g8));");
+    CHECK_CONTAINS(code, "PS2N_COP2_MOVE(acc, 9u, 0x00100008u, PS2N_PUT(2), PS2N_GET(3), "
+                         "g3 = VU0.VF[1].UD[0]; PS2N_GPR_HIGH(3) = VU0.VF[1].UD[1]);");
+    // The jump's 9 and the load's 14; $v0 and $v1, changed, are put back only on the runtime's way and a device's.
+    CHECK_CONTAINS(code, "PS2N_COP2_MOVE(acc, 23u, 0x00100010u, PS2N_PUT(2); PS2N_PUT(3), (void)0, PS2N_LQC2(1, static_cast<uint32_t>(g29) + "
+                         "static_cast<uint32_t>(16), 0x00100010u, PS2N_PUT(2); PS2N_PUT(3)));");
     CHECK_CONTAINS(code, "PS2N_BLOCK_END(acc, 0u, target);");
+    CHECK(code.find("PS2N_COP2(") == std::string::npos);
+}
+
+TEST_CASE(cfc2_and_ctc2_are_moves_but_for_the_control_registers_whose_writing_does_more) {
+    // As ops_cop2.cpp has them: R gives 23 bits and takes them under the
+    // exponent of 1.0; VPU_STAT is read-only. Writing the status flag
+    // register also rewrites the copies PCSX2's VU recompiler keeps, so that
+    // CTC2 is the runtime's, as are those to FBRST and CMSAR1.
+    const ElfFile elf = assemble(R"(
+        .text
+        .globl _start
+_start: cfc2  $a0, $vi1            # 00100000
+        cfc2  $a1, $vi20           # 00100004
+        ctc2  $a0, $vi20           # 00100008
+        ctc2  $a1, $vi16           # 0010000C
+        ctc2  $a1, $vi29           # 00100010
+        jr    $ra                  # 00100014
+        nop                        # 00100018
+)");
+    GenerateStats stats;
+    const std::string code = generateFor(elf, &stats);
+    CHECK_EQ(stats.cop2, size_t{5});
+    CHECK_EQ(stats.cop2Moves, size_t{4});
+    CHECK_CONTAINS(code, "PS2N_COP2_MOVE(acc, 9u, 0x00100000u, (void)0, PS2N_GET(4), g4 = uint64_t{VU0.VI[1].US[0]});");
+    CHECK_CONTAINS(code, "PS2N_COP2_MOVE(acc, 9u, 0x00100004u, PS2N_PUT(4), PS2N_GET(5), g5 = uint64_t{VU0.VI[20].UL & 0x7FFFFFu});");
+    CHECK_CONTAINS(code, "PS2N_COP2_MOVE(acc, 9u, 0x00100008u, PS2N_PUT(4); PS2N_PUT(5), (void)0, "
+                         "VU0.VI[20].UL = (static_cast<uint32_t>(g4) & 0x7FFFFFu) | 0x3F800000u);");
+    CHECK_CONTAINS(code, "PS2N_COP2(acc, 9u, 0x0010000Cu);");
+    CHECK_CONTAINS(code, "PS2N_COP2_MOVE(acc, 9u, 0x00100010u, (void)0, (void)0, (void)0);");
 }
 
 TEST_CASE(cop2_moves_to_vu0_read_the_locals) {
@@ -469,8 +500,8 @@ TEST_CASE(vu0_instructions_are_carried_out_by_compiled_code_where_the_runtime_le
     // A VU0 instruction asks the runtime what its block does about VU0 first;
     // where nothing is to be done, compiled code carries it out itself
     // (PS2N_VU0). It touches no register of the EE's, so the locals are not
-    // put back for it, as they are for VCALLMS, which the runtime carries
-    // out whole.
+    // put back for it, nor for VCALLMS, PCSX2's function, called after the
+    // cycles so far are added (PS2N_VCALLMS).
     const ElfFile elf = assemble(R"(
         .text
         .globl _start
@@ -490,11 +521,11 @@ _start: addiu $v0, $v0, 1            # 00100000
     CHECK_CONTAINS(code, "PS2N_VU0(acc, 18u, 0x00100004u, VMUL(PS2N_VU0_FLAGS, 14, 1, 2, 3));");   // the addition's 9 and its own 9
     CHECK_CONTAINS(code, "PS2N_VU0(acc, 9u, 0x00100008u, VADDbc(PS2N_VU0_FLAGS, 15, 3, 1, 2, 0));");
     CHECK_CONTAINS(code, "PS2N_VU0(acc, 9u, 0x0010000Cu, VDIV(PS2N_VU0_FLAGS, 1, 0, 2, 1));");
-    CHECK_CONTAINS(code, "PS2N_PUT(2);\n\tPS2N_COP2(acc, 9u, 0x00100010u);");
-    // $v0 stays in its local past the three VU0 instructions.
-    const size_t vdiv = code.find("VDIV(PS2N_VU0_FLAGS");
+    CHECK_CONTAINS(code, "PS2N_VCALLMS(acc, 9u, 0x00100010u, 0x4A000038u);");
+    // $v0 stays in its local past the three VU0 instructions and VCALLMS.
+    const size_t vcallms = code.find("PS2N_VCALLMS(");
     const size_t put = code.find("PS2N_PUT(2);");
-    CHECK(vdiv != std::string::npos && put != std::string::npos && put > vdiv);
+    CHECK(vcallms != std::string::npos && put != std::string::npos && put > vcallms);
 }
 
 TEST_CASE(loads_and_stores_tell_the_runtime_when_memory_is_not_plain) {

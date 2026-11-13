@@ -590,7 +590,7 @@
 					<li class="is-done"><b><span class="g">G7</span>VU0's instructions</b>Done: the game's VU0 instructions are PS2Native's own, the same as PCSX2's recompiler in every case the self-test tried, and the run into the first level is still the stock run</li>
 					<li class="is-done"><b><span class="g">G8</span>The BIOS's EE code</b>Done: the BIOS's code that runs on the main processor is compiled ahead of time from the user's own dump, but for 51 instructions at boot; the run into the first level takes 1.18 times stock PCSX2's time and is still the stock run</li>
 					<li class="is-done"><b><span class="g">G9</span>VU0's instructions in compiled code</b>Done: compiled code carries them out itself where their block lets it; the run into the first level takes 1.19 times stock PCSX2's time, from 1.21, and is still the stock run</li>
-						<li><b><span class="g">G10</span>Performance</b>Under way: profile-guided optimization, and loops that have reached a fixed point no longer run their identical times round; the run into the first level takes 1.07 times stock PCSX2's time, from 1.18, and is still the stock run</li>
+						<li><b><span class="g">G10</span>Performance</b>Under way: profile-guided optimization, loops that have reached a fixed point no longer run their identical times round, compiled code carries out the COP2 instructions and its calls through a register itself, and the way loads and stores seldom take is short; the run into the first level takes 1.04 times stock PCSX2's time, from 1.18, and is still the stock run</li>
 				</ul>
 			</li>
 			<li class="phase" data-reveal>
@@ -708,7 +708,7 @@
 		<p>PS2Native is free software under the GNU General Public License, version 3 or later. It builds on PCSX2 (GPL-3.0 or later, Copyright PCSX2 Dev Team), which is included unmodified as a submodule.</p>
 		<p>PS2Native is an independent project. It is not affiliated with the PCSX2 project or with Sony Interactive Entertainment. PlayStation and PS2 are trademarks of Sony Interactive Entertainment Inc. Other names belong to their owners and are used here only to say what the project works with.</p>
 		<div class="footer__end">
-			<span>The state of the project on 2026-11-12.</span>
+			<span>The state of the project on 2026-11-13.</span>
 			<button class="motion-switch" type="button" data-motion-switch aria-pressed="true"><i aria-hidden="true"></i>Motion</button>
 		</div>
 	</div>

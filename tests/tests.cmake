@@ -460,3 +460,24 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 		message(FATAL_ERROR "PS2N_PGO is generate, use or empty, not ${PS2N_PGO}")
 	endif()
 endif()
+
+# Link-time optimization of PS2Native's own code (docs/adr/0019). With
+# PS2N_LTO=thin the generated code and the runtime are compiled to LLVM
+# bitcode and optimized together when the host is linked (ThinLTO): a
+# compiled function can take in one of another part, or one of the
+# runtime's, which the 64 parts compiled one by one cannot. PCSX2's own code
+# is compiled as before. The linker keeps what it made of each part in the
+# build tree, so a link that changes few parts does little work again.
+set(PS2N_LTO "" CACHE STRING "Link-time optimization of PS2Native's code: thin, or empty for none")
+if(PS2N_LTO STREQUAL "thin")
+	# Set up so far for clang-cl linking with lld-link, as on Windows.
+	if(NOT (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND MSVC AND CMAKE_LINKER MATCHES "lld-link"))
+		message(FATAL_ERROR "PS2N_LTO=thin is set up for clang-cl with lld-link only so far (CMAKE_LINKER is ${CMAKE_LINKER})")
+	endif()
+	target_compile_options(ps2n-test-images PRIVATE -flto=thin)
+	target_compile_options(ps2n-runtime PRIVATE -flto=thin)
+	target_link_options(ps2n-host PRIVATE "/lldltocache:${CMAKE_BINARY_DIR}/ps2n/lto-cache"
+		"/lldltocachepolicy:cache_size_bytes=8g:prune_after=168h")
+elseif(NOT PS2N_LTO STREQUAL "")
+	message(FATAL_ERROR "PS2N_LTO is thin or empty, not ${PS2N_LTO}")
+endif()

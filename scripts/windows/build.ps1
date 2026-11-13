@@ -57,7 +57,10 @@ param(
     # (a run then writes the counts where LLVM_PROFILE_FILE says), "use" builds it with the merged counts given as
     # -PgoData (llvm-profdata merge), "off" without either. Remembered by the build tree, as -Game is.
     [ValidateSet('', 'generate', 'use', 'off')][string]$Pgo = '',
-    [string]$PgoData = ''
+    [string]$PgoData = '',
+    # Link-time optimization of PS2Native's own code, the generated code and the runtime (docs/adr/0019): "thin"
+    # (ThinLTO), or "off". PCSX2's code is compiled as before either way. Remembered by the build tree, as -Game is.
+    [ValidateSet('', 'thin', 'off')][string]$Lto = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -133,6 +136,9 @@ if ($Pgo) {
         if (-not $PgoData) { throw "-Pgo use needs -PgoData, the merged profile (llvm-profdata merge)." }
         $gameSettings += "-DPS2N_PGO_DATA=$(ForCMake (Resolve-Path -LiteralPath $PgoData).Path)"
     }
+}
+if ($Lto) {
+    $gameSettings += "-DPS2N_LTO=$(if ($Lto -eq 'off') { '' } else { $Lto })"
 }
 
 if ($Reconfigure -or $gameSettings -or -not (Test-Path (Join-Path $build 'build.ninja'))) {

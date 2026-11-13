@@ -1922,9 +1922,38 @@ uint32_t ps2n::ee::cop2InfoSlow(uint32_t pc, uint32_t start)
 	return StepAt(start, pc).info;
 }
 
+namespace
+{
+	ps2n::ee::Cop2Kind Cop2KindOf(const Insn& in)
+	{
+		using namespace ps2n::ee;
+		const u32 opcode = in.raw >> 26, rs = in.rs();
+		if (opcode == 066)
+			return kCop2Lqc2;
+		if (opcode == 076)
+			return kCop2Sqc2;
+		switch (rs)
+		{
+			case 001: return kCop2Qmfc2;
+			case 002: return kCop2Cfc2;
+			case 005: return kCop2Qmtc2;
+			case 006: return kCop2Ctc2;
+			default: break;
+		}
+		if (rs >= 020 && in.op != ps2n::r5900::Op::VCALLMS && in.op != ps2n::r5900::Op::VCALLMSR)
+			return kCop2Vu0;
+		return kCop2Other;
+	}
+} // namespace
+
 uint32_t ps2n::ee::cop2Instruction(uint32_t pc, uint32_t start, uint32_t eighths)
 {
 	Step& step = StepAt(start, pc);
+
+	const Cop2Kind kind = Cop2KindOf(step.insn);
+	s_stats.cop2_runtime[kind]++;
+	if (VU0.VI[REG_VPU_STAT].UL & 1)
+		s_stats.cop2_runtime_vu0_running[kind]++;
 
 	// As RunRecStep() does it; the instruction's own count is in `eighths`.
 	if (step.info & blocks::kFlush)
@@ -1941,6 +1970,23 @@ uint32_t ps2n::ee::cop2Instruction(uint32_t pc, uint32_t start, uint32_t eighths
 	}
 	Cop2Operation(step);
 	return eighths;
+}
+
+void ps2n::ee::vcallms(uint32_t pc, uint32_t code)
+{
+	// What cop2Instruction() comes to for these two: their record says only
+	// that the cycles are added first, which compiled code has done (the
+	// record of a block, rec_blocks.cpp, gives VCALLMS and VCALLMSR kFlush and
+	// nothing about VU0), and Cop2Operation() hands them to PCSX2's function.
+	s_stats.cop2_runtime[kCop2Other]++;
+	if (VU0.VI[REG_VPU_STAT].UL & 1)
+		s_stats.cop2_runtime_vu0_running[kCop2Other]++;
+	s_stats.delegated++;
+	s_stats.delegated_by_op[static_cast<size_t>((code & 63) == 071 ? ps2n::r5900::Op::VCALLMSR : ps2n::r5900::Op::VCALLMS)]++;
+
+	cpuRegs.code = code;
+	cpuRegs.pc = pc + 4;
+	Int_COP2SPECIAL1PrintTable[code & 63]();
 }
 
 uint64_t ps2n::ee::skipFixedLoop(uint64_t cycle, uint32_t cycles)

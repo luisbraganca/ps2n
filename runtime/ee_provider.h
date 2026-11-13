@@ -85,6 +85,23 @@ namespace ps2n::ee
 		kBiosPlaces,
 	};
 
+	/// The COP2 instructions compiled code hands to the runtime, by kind
+	/// (Stats::cop2_runtime).
+	enum Cop2Kind : uint8_t
+	{
+		kCop2Vu0, // a VU0 instruction PS2Native has semantics for
+		kCop2Qmfc2,
+		kCop2Qmtc2,
+		kCop2Lqc2,
+		kCop2Sqc2,
+		kCop2Cfc2,
+		kCop2Ctc2,
+		kCop2Other, // VCALLMS, VCALLMSR, and anything else PCSX2's function carries out
+		kCop2Kinds,
+	};
+	inline constexpr const char* kCop2KindNames[kCop2Kinds] = {
+		"VU0 instructions", "QMFC2", "QMTC2", "LQC2", "SQC2", "CFC2", "CTC2", "VCALLMS, VCALLMSR and others"};
+
 	/// How the instructions executed so far were carried out. Nothing is
 	/// interpreted or delegated without being counted here.
 	struct Stats
@@ -167,6 +184,12 @@ namespace ps2n::ee
 		uint64_t fixed_loop_rounds = 0;
 		uint64_t fixed_loop_cycles = 0;
 		uint64_t fixed_loop_skips = 0;
+		/// COP2 instructions, LQC2 and SQC2 that compiled code handed to the
+		/// runtime (cop2Instruction, and vcallms for VCALLMS and VCALLMSR), by
+		/// Cop2Kind; and of them, those at which VU0 was running a micro
+		/// program.
+		uint64_t cop2_runtime[kCop2Kinds] = {};
+		uint64_t cop2_runtime_vu0_running[kCop2Kinds] = {};
 		/// FlushCache calls that were not made, as PCSX2's recompiler does not
 		/// make them; and blocks carried out at another address than they were
 		/// formed at (a mirror of the same memory), which then run as if at the
