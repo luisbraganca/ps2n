@@ -634,7 +634,7 @@ _start: add.s $f0, $f1, $f2        # 00100000
     CHECK_CONTAINS(code, "PS2N_GET_F(1);");
     CHECK_CONTAINS(code, "PS2N_GET_ACC();");
     CHECK_CONTAINS(code, "PS2N_PUT(2); PS2N_PUT_F(0); PS2N_PUT_F(3);");
-    CHECK_CONTAINS(code, "uint32_t f0 = 0, f1 = 0, f2 = 0, f3 = 0, f4 = 0, f5 = 0, f6 = 0, f7 = 0, f8 = 0, facc = 0;");
+    CHECK_CONTAINS(code, "val::Fpr f0 = {}, f1 = {}, f2 = {}, f3 = {}, f4 = {}, f5 = {}, f6 = {}, f7 = {}, f8 = {}, facc = {};");
     // The square root is carried into the code after the label, unless the
     // block was cut short there; the block ends with the return and the
     // multiply-add in its delay slot.
@@ -642,6 +642,24 @@ _start: add.s $f0, $f1, $f2        # 00100000
     CHECK_CONTAINS(code, strprintf("PS2N_SPLIT_END(acc, %uu, 0x00100018u);", static_cast<unsigned>(r5900::cycles(r5900::Op::SQRT_S))));
     CHECK_CONTAINS(code, strprintf("PS2N_BLOCK_END(acc, %uu, target);",
                                    static_cast<unsigned>(r5900::cycles(r5900::Op::JR) + r5900::cycles(r5900::Op::MADD_S))));
+}
+
+TEST_CASE(fpu_registers_stay_in_their_locals_to_the_store) {
+    const ElfFile elf = assemble(R"(
+        .text
+        .globl _start
+_start: mtc1  $a0, $f1             # 00100000
+        mov.s $f2, $f1             # 00100004
+        swc1  $f2, 8($sp)          # 00100008
+        jr    $ra                  # 0010000C
+        nop                        # 00100010
+)");
+    const std::string code = generateFor(elf);
+    CHECK_CONTAINS(code, "f1 = val::MTC1(g4);");
+    CHECK_CONTAINS(code, "f2 = f1;");
+    // The store takes the register's 32 bits from its local (recomp.h).
+    CHECK_CONTAINS(code, "PS2N_STORE_F(static_cast<uint32_t>(g29) + static_cast<uint32_t>(8), f2, 0x00100008u, (void)0);");
+    CHECK_CONTAINS(code, "val::Fpr f1 = {}, f2 = {};");
 }
 
 TEST_CASE(captured_entries_become_block_leaders) {

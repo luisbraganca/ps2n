@@ -22,7 +22,7 @@ The run files, pictures included, are under the git-ignored build tree.
 | G7 VU0's instructions | **Done** (2026-11-12, [ADR 0016](adr/0016-vu0-instructions-with-semantics-of-ps2natives-own.md)): the game's VU0 instructions have semantics of PS2Native's own, all but `VCALLMS` and `VCALLMSR`, which stay PCSX2's function as in its recompiler. The self-test finds them to be PCSX2's recompiler's in every case it tried: 1,968,000 cases, in each VU clamp mode and with the game fixes that change them, Killzone's configuration among them. The two known differences (`VRSQRT` of zero by zero, `VSQRT` of -0) are closed. The level run is still the stock run, VU0's registers the same at each of 93 million sync points, and the interpreted run; its time did not change that the measurement can show (1.21 times stock PCSX2's). Where it stands is in "G7" below. |
 | G8 The BIOS's EE code | **Done** (2026-11-12, [ADR 0017](adr/0017-bios-ee-code-compiled-as-step-g8.md)): the BIOS's code that runs on the EE under fast boot is compiled ahead of time from the dump the build is given, as four images, its code followed from where it is entered; of it, 51 instructions at boot are still interpreted, each with its cause. What the game copies into kernel memory is the game's code, and is compiled with it. Rebased onto G9: every test passes, and the game is still the stock run over the level script and the interpreted run over its first 4,200 frames. The level run takes 1.18 times stock PCSX2's time, 1.1 s less than with the BIOS interpreted; a test program boots in stock PCSX2's time. Where it stands is in "G8" below. |
 | G9 VU0's instructions in compiled code | **Done** (2026-11-12, [ADR 0018](adr/0018-vu0-instructions-carried-out-by-compiled-code.md), in a worktree of its own): compiled code carries out the game's VU0 instructions itself, inline, where its block has nothing done about VU0 first, and keeps its registers in locals past them. The level run takes 1.19 times stock PCSX2's time (89.5 s against 74.9 s, timed in turn), from 1.21, a gain at the edge of what the measurement shows; the profile has the runtime's share 1.3 s smaller. Still the stock run and the interpreted run. Where it stands is in "G9" below. |
-| G10 Performance | **Under way** (2026-11-12, [ADR 0019](adr/0019-performance-as-the-research-lays-it-out.md)): play measured apart from startup, with nothing drawn and with the hardware renderer (the same time: the CPU thread's), and profiled. Profile-guided optimization of the generated code, trained on another run of the level: play takes 1.13 times stock PCSX2's time, from 1.21, startup 1.07, from 1.11, the whole level run 1.11, from 1.18. Then loops that have reached a fixed point (a time round that leaves the machine as it found it): their times round up to the next event test are not run, their cycles counted at once, the event test made where it would have been. The game waits for each frame in one: play takes 1.08 times stock PCSX2's time, startup 1.05, the whole level run 1.07. The COP2 transfers made by compiled code, and link-time optimization of PS2Native's code: no gain. Then the COP2 instructions that come first in their block, 78% of what compiled code still handed to the runtime for COP2, carried out by compiled code unless VU0 is running a micro program: play takes 1.06 times stock PCSX2's time, the whole level run 1.06. Then the rest of them (`VCALLMS` called the way PCSX2's recompiler calls it, `CFC2` and `CTC2` as moves): nothing the timing shows; the runtime now carries out only those at which VU0 is running. Still the stock run and the interpreted run, and every test passes. In the main tree beside it ([ADR 0021](adr/0021-two-sessions-on-step-g10.md)), each change measured by itself without profile-guided optimization: calls through a register made by compiled code itself, play from 1.18 to 1.16 times stock PCSX2's time; the way a load or store seldom takes made short, the game's code 14% smaller, play 1.14; the FPU's settings read once per function, tried and taken out. `ps2n-host -code-size` says how much host code each kind of generated line becomes. The two together, in one history and with profile-guided optimization: play takes 1.04 times stock PCSX2's time, the whole level run 1.04, still the stock run. On 2026-11-13 a third session measured the website's two charts again (the first 4,200 frames 1.09 times stock PCSX2's time with nothing drawn, from 1.35, and 1.03 with the software renderer, from 1.12; of the six loops, `jump` and `call` now about as fast as PCSX2's recompiler, `mmi` at 1.24 as at P4) and made `lq` and `sq` loads and stores on the locals and a block start's call of the runtime one of one argument (the host 12 MB smaller): play still 1.04 times stock PCSX2's time. Where it stands is in "G10" below. |
+| G10 Performance | **Under way** (2026-11-12, [ADR 0019](adr/0019-performance-as-the-research-lays-it-out.md)): play measured apart from startup, with nothing drawn and with the hardware renderer (the same time: the CPU thread's), and profiled. Profile-guided optimization of the generated code, trained on another run of the level: play takes 1.13 times stock PCSX2's time, from 1.21, startup 1.07, from 1.11, the whole level run 1.11, from 1.18. Then loops that have reached a fixed point (a time round that leaves the machine as it found it): their times round up to the next event test are not run, their cycles counted at once, the event test made where it would have been. The game waits for each frame in one: play takes 1.08 times stock PCSX2's time, startup 1.05, the whole level run 1.07. The COP2 transfers made by compiled code, and link-time optimization of PS2Native's code: no gain. Then the COP2 instructions that come first in their block, 78% of what compiled code still handed to the runtime for COP2, carried out by compiled code unless VU0 is running a micro program: play takes 1.06 times stock PCSX2's time, the whole level run 1.06. Then the rest of them (`VCALLMS` called the way PCSX2's recompiler calls it, `CFC2` and `CTC2` as moves): nothing the timing shows; the runtime now carries out only those at which VU0 is running. Still the stock run and the interpreted run, and every test passes. In the main tree beside it ([ADR 0021](adr/0021-two-sessions-on-step-g10.md)), each change measured by itself without profile-guided optimization: calls through a register made by compiled code itself, play from 1.18 to 1.16 times stock PCSX2's time; the way a load or store seldom takes made short, the game's code 14% smaller, play 1.14; the FPU's settings read once per function, tried and taken out. `ps2n-host -code-size` says how much host code each kind of generated line becomes. The two together, in one history and with profile-guided optimization: play takes 1.04 times stock PCSX2's time, the whole level run 1.04, still the stock run. On 2026-11-13 a third session measured the website's two charts again (the first 4,200 frames 1.09 times stock PCSX2's time with nothing drawn, from 1.35, and 1.03 with the software renderer, from 1.12; of the six loops, `jump` and `call` now about as fast as PCSX2's recompiler, `mmi` at 1.24 as at P4) and made `lq` and `sq` loads and stores on the locals and a block start's call of the runtime one of one argument (the host 12 MB smaller): play still 1.04 times stock PCSX2's time. Then, at the maintainer's word, the FPU's arithmetic: its registers held in SSE registers, as PCSX2's recompiler holds them, and the bits its additions keep past the guard bit looked up instead of branched to, the self-test holding all 511 cases of that to PCSX2's recompiler. Without profile-guided optimization play went from 1.10 to 1.046 times stock PCSX2's time; with it, play takes as long as stock PCSX2's (0.985 to 1.006 times, six rounds in pairs), the whole level run 1.01. Still the stock run and the interpreted run, and every test passes. Where it stands is in "G10" below. |
 
 ## The steps and their pass criteria
 
@@ -2504,6 +2504,169 @@ What the night found about where the rest of the time is:
   there would, until they are marked to be inlined everywhere or the
   training covers more of the game.
 
+### The FPU's arithmetic on SSE registers (main tree, 2026-11-13)
+
+On 2026-11-13 the maintainer answered the third session's recommendation
+(above: reworking the floating-point arithmetic, its gain an estimate)
+with "Let's rework floating point arithmetic". Read as: G10 goes on with
+the FPU, as recommended, each change measured as the main tree's are,
+without profile-guided optimization and against stock PCSX2 timed in turn,
+and then with it. Generator 0.10.0.
+
+**What was measured first.** The profile now also files the FPU's lines by
+instruction ("The FPU's lines of the game's compiled code, by instruction":
+its arithmetic and comparisons by the function of `ops_fpu.h` they call,
+and its loads and stores, which the kinds count with the general
+registers'). The code as it stood, built without profile-guided
+optimization, timed in turn with stock PCSX2, three rounds, nothing drawn:
+
+| | Startup, three rounds | Play, three rounds |
+|---|---|---|
+| Stock PCSX2 | 16.76, 16.57, 16.29 s | 58.05, 56.76, 55.53 s |
+| Compiled | 18.38, 17.82, 17.94 s | 63.65, 61.60, 61.68 s |
+
+Play took 1.10 times stock PCSX2's time (62.31 s against 56.78 s; 1.085 to
+1.111 pair by pair). (Stock PCSX2's first run took 86.5 s in all, eleven
+seconds more outside its frames, as seen before.) The FPU's lines had 4,340
+of play's samples: its arithmetic 3,140, comparisons 385, loads 513, stores
+302; and 452 more fell in the runtime, where the compiler had left
+`val::ADD_S`, `SUB_S`, `MUL_S` and `MADD_S` out of line in places.
+
+**The registers in SSE registers.** A local held an FPU register's 32 bits
+in a general register, and every operation moved its operands into SSE
+registers and its result back out. The locals are now `val::Fpr`, a
+register's 32 bits in the lowest lane of an SSE register, as PCSX2's
+recompiler holds them, and the functions of `ops_fpu.h` take and give such
+values: the same SSE instructions in the same order as before. A load
+(`PS2N_LOAD_F`), a store (`PS2N_STORE_F`, new) and a register put back to
+the core move the 32 bits between memory and the SSE register directly. A
+multiplication is now the multiplication, the clamp of its result (`minss`,
+`maxss`) and the tests of PCSX2's settings, which the processor predicts:
+five or six host instructions where it was about fourteen. Two things found
+on the way in the code the compiler made: written as an intrinsic, the move
+from an SSE register to a general one became `extractps`, two
+micro-operations where `movd` is one (it is now `movd`, as assembly); and a
+store whose seldom-taken way (a device's register) wants the value in a
+general register had the compiler move it there before every store (that
+way does it for itself now). The functions that are most of the FPU's time
+are always inlined (`PS2N_FPU_INLINE`), also in code that profile-guided
+optimization takes for cold.
+
+The other three lanes of an SSE register hold whatever the host left
+there. A new check of the self-test calls each of the FPU's 19 functions
+on values twice on the same operands, once with those lanes clear (as from
+the core's registers, through which the comparisons with PCSX2 go) and once
+with them random, in each clamp mode and with the FPU's game fix: 304,000
+cases, none different. A planted function that read them (`movmskps` of a
+whole comparison) was reported in every mode.
+
+Timed as above:
+
+| | Startup, three rounds | Play, three rounds |
+|---|---|---|
+| Stock PCSX2 | 16.68, 16.62, 17.18 s | 57.08, 56.61, 58.61 s |
+| Compiled | 18.10, 17.77, 18.17 s | 61.86, 60.67, 62.71 s |
+
+Play took 1.075 times stock PCSX2's time (61.75 s against 57.43 s; 1.070
+to 1.084 pair by pair), from 1.10. In the profile of play the FPU's
+arithmetic, its lines and the functions out of line together, went from
+3,592 samples to 3,076: multiplications 37% fewer, additions 9%,
+subtractions 12%, the multiply-adds 8% to 24%; its comparisons from 385
+to 343.
+
+**The guard bit without a branch.** The EE's adder keeps one guard bit:
+of the operand with the smaller exponent, the bits past it are cleared
+before the host adds (`FPU_ADD_SUB` in PCSX2's recompiler, `addSub` in
+`ops_fpu.h`), and all but its sign when the exponents are 25 or more apart.
+PCSX2's code and PS2Native's chose the mask by branching on the difference
+of the exponents, which goes one way or the other as the operands'
+magnitudes come, and the additions, subtractions and the multiply-adds'
+additions were now most of the FPU's time. The masks now come from a table
+of the 511 differences (`kGuardMasks`, 4 KB, built when the code is
+compiled), loaded into an SSE register: two `movd` for the exponents, a
+subtraction, one load, two ANDs and the addition, and no branch on the
+data. The masks are the same, so every result is. To hold every entry to
+PCSX2's recompiler, the self-test now gives each of the 511 differences,
+four times, to each instruction that adds (`add.s`, `sub.s`, `adda.s`,
+`suba.s` and the four multiply-adds), in each clamp mode: 16,352 cases a
+mode, none different. A wrong result planted at one difference (200) went
+unseen by the random cases of `add.s` against the recompiler, 400 in each
+clamp mode, and was reported by this check in every mode, at the four cases
+of that difference.
+
+Timed twice, the second time because in the first the third compiled round
+took four seconds longer in play while its startup was as usual:
+
+| | Startup, three rounds | Play, three rounds |
+|---|---|---|
+| Stock PCSX2 | 16.63, 16.52, 16.63 s | 55.95, 58.41, 56.62 s |
+| Compiled | 17.79, 18.59, 18.05 s | 58.76, 60.57, 64.70 s |
+| Stock PCSX2, again | 16.79, 16.54, 16.50 s | 56.94, 56.89, 55.80 s |
+| Compiled, again | 18.01, 17.98, 17.76 s | 59.42, 59.69, 58.33 s |
+
+Play takes 1.046 times stock PCSX2's time in the second timing (59.15 s
+against 56.54 s; 1.044 to 1.049 pair by pair), and 1.050 and 1.037 in the
+first two rounds of the first: from 1.075 with the first change alone, and
+from 1.10 before either, about 2.9 s of play. Startup takes 1.08 times,
+from 1.09. In the profile of play the FPU's arithmetic had 2,197 samples
+where it had 3,076: additions 36% fewer, subtractions 29%, multiplications
+15%, the multiply-adds 29% to 33%.
+
+Every test passes (459, and the unit tests) after each of the two changes.
+
+**With profile-guided optimization**, trained again for the new code (the
+host 157.3 MB), every test passes, and timed in turn with stock PCSX2,
+three rounds, nothing drawn, and once more half an hour later:
+
+| | Startup, three rounds | Play, three rounds |
+|---|---|---|
+| Stock PCSX2 | 16.42, 16.35, 16.41 s | 55.80, 55.11, 55.40 s |
+| Compiled | 17.32, 17.32, 17.21 s | 55.21, 55.42, 55.63 s |
+| Stock PCSX2, again | 16.56, 16.44, 16.29 s | 55.87, 55.89, 55.39 s |
+| Compiled, again | 17.21, 17.13, 17.14 s | 56.09, 55.07, 55.47 s |
+
+Play takes as long as stock PCSX2's: 55.42 s against 55.44 s, and 55.54 s
+against 55.72 s; 0.985 to 1.006 pair by pair, where it took 1.04 times
+("Where it stands", above). Startup takes 1.04 to 1.05 times, as before;
+the whole run (73.7 to 74.7 s against 72.9 to 73.9 s) 1.01, from 1.04. In
+the profile of play the FPU's
+arithmetic has 2,160 samples, where the last profile with profile-guided
+optimization had 3,294 (`cba2be7`'s build, whose FPU code was the code
+before these changes).
+
+This build was checked as the others were. Over the level script the
+compiled game is the stock run at every one of 93,221,937 sync points, the
+same place at the same cycle count, the registers the same but for the
+FPU's at the same 964 sync points, the first 57,130,066 (the sign of a
+zero, followed on purpose since G4), with the same picture at each of the
+1,750 frames compared and the sound hardware in the same state at each of
+1,750 moments; 51 instructions interpreted, those of the BIOS at boot. Over
+the first 4,200 frames it is the interpreted run at every one of
+47,705,744 event tests, the run's fingerprint the same
+(`F99B5EFD472E87EC`). The game's compiled code is 68.0 MB, its FPU
+arithmetic 4.5 MB of it, about twice what it was, now that its functions
+are always inlined.
+
+The website's two charts on this build. The first 4,200 frames, logos, a
+prompt and a film with little of the FPU's arithmetic in them, take what
+they took this morning, within the noise: with nothing drawn 12.2, 12.1,
+12.2 s against 11.3, 11.2, 11.2 s under stock PCSX2 (1.08; from the first
+frame on 10.93, 10.82, 10.90 s against 9.96, 9.90, 9.90 s, 1.10), and with
+the software renderer 23.5, 23.5, 23.4 s against 22.5, 22.6, 22.6 s
+(1.04); both runs end at EE cycle 24,766,740,046. `bench.s`'s six loops,
+as at P4 without profile-guided optimization, the best of three runs,
+stock PCSX2 in turn: `sum` 0.93 (64.0 ms against 69.1 ms), `mem` 1.07
+(19.9 against 18.6), `call` 1.00 (29.6 against 29.5), `fpu` 1.00 (50.0
+against 50.1), `mmi` 1.24 (10.3 against 8.3), `jump` 1.06 (52.2 against
+49.4): the others as this morning, and `fpu` at 1.00 where it was 1.01.
+That loop is one chain of additions (`add.s $f2, $f2, $f3`), each waiting
+for the one before, whose exponents stand in the same order every time. A
+likely reason it gains little, not measured: there PCSX2's branches are
+always predicted and cost nothing, and the table's load lies on the chain.
+The website keeps the two charts as measured this morning ("Where it
+stands", above), which these figures repeat within the noise; what it now
+says of the level run is from this section.
+
 ## Open
 
 - **What is left of VU0 in the game's EE code.** Since G7 its instructions
@@ -2545,7 +2708,10 @@ What the night found about where the rest of the time is:
   78.4 s against 74.7 to 74.9 s), play alone 1.04; with `lq` and `sq` on
   the locals and a block start asking in one argument (G10, the main tree,
   2026-11-13), the same, 1.04 (76.9 to 77.5 s against 74.0 to 74.9 s),
-  play alone 1.04. More than a
+  play alone 1.04; with the FPU's registers in SSE registers and the bits
+  its additions keep looked up (G10, the main tree, 2026-11-13), 1.01
+  (73.7 to 74.7 s against 72.9 to 73.9 s), play alone as long as stock
+  PCSX2's (0.985 to 1.006 times). More than a
   third of the
   compiled code's time is now reaching memory through the core's address
   table, where PCSX2's recompiler uses one instruction and a fault ("G6",

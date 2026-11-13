@@ -770,7 +770,9 @@ namespace ps2n::ee
 // which the C++ compiler can keep in host registers: nothing else can reach
 // them, so a store into the console's memory does not make it read them
 // again. The general registers are `g1` to `g31`, bits 0-63 of each; the
-// FPU's are `f0` to `f31` and, for its accumulator, `facc`, 32 bits each. The
+// FPU's are `f0` to `f31` and, for its accumulator, `facc`, each a
+// register's 32 bits in the lowest lane of a host SSE register (val::Fpr in
+// ops_fpu.h), where the FPU's instructions take them from and leave them. The
 // generator knows at every point which locals hold a register's value and
 // which of those differ from the core's copy. It puts the changed ones back
 // (PS2N_PUT, PS2N_PUT_F, PS2N_PUT_ACC) before anything outside the function
@@ -785,10 +787,10 @@ namespace ps2n::ee
 #define PS2N_GPR(n_) cpuRegs.GPR.r[n_].UD[0]
 #define PS2N_GET(n_) g##n_ = PS2N_GPR(n_)
 #define PS2N_PUT(n_) PS2N_GPR(n_) = g##n_
-#define PS2N_GET_F(n_) f##n_ = fpuRegs.fpr[n_].UL
-#define PS2N_PUT_F(n_) fpuRegs.fpr[n_].UL = f##n_
-#define PS2N_GET_ACC() facc = fpuRegs.ACC.UL
-#define PS2N_PUT_ACC() fpuRegs.ACC.UL = facc
+#define PS2N_GET_F(n_) f##n_ = ::ps2n::ee::ops::fpu::fromBits(fpuRegs.fpr[n_].UL)
+#define PS2N_PUT_F(n_) ::ps2n::ee::ops::fpu::store(&fpuRegs.fpr[n_].UL, f##n_)
+#define PS2N_GET_ACC() facc = ::ps2n::ee::ops::fpu::fromBits(fpuRegs.ACC.UL)
+#define PS2N_PUT_ACC() ::ps2n::ee::ops::fpu::store(&fpuRegs.ACC.UL, facc)
 
 namespace ps2n::ee
 {
@@ -847,7 +849,7 @@ namespace ps2n::ee
 //
 // PS2N_LOAD_ENDS is for a load after which the block may end: `ends_` is set
 // when it does. PS2N_LOAD_F is a load of 32 bits into the local of an FPU
-// register.
+// register, which takes them into its SSE register directly.
 #define PS2N_LOAD(dst_, as_, T_, addr_, pc_, slow_) \
 	do \
 	{ \
@@ -888,17 +890,18 @@ namespace ps2n::ee
 		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
 		{ \
 			slow_; \
-			(dst_) = ::ps2n::ee::slowRead<mem32_t>(ps2n_a, pc_, ps2n_start); \
+			(dst_) = ::ps2n::ee::ops::fpu::fromBits(::ps2n::ee::slowRead<mem32_t>(ps2n_a, pc_, ps2n_start)); \
 			PS2N_TIME(); \
 		} \
 		else \
 		{ \
-			(dst_) = ::ps2n::ee::plainRead<mem32_t>(ps2n_e, ps2n_a); \
+			(dst_) = ::ps2n::ee::ops::fpu::fromBits(::ps2n::ee::plainRead<mem32_t>(ps2n_e, ps2n_a)); \
 		} \
 	} while (0)
 
 // A store at `pc_` of the low bits of `value_` as a `T_` at `addr_`, in the
-// same way (slowWrite).
+// same way (slowWrite). PS2N_STORE_F stores the 32 bits of an FPU register's
+// local, from its SSE register directly.
 #define PS2N_STORE(T_, addr_, value_, pc_, slow_) \
 	do \
 	{ \
@@ -913,6 +916,22 @@ namespace ps2n::ee
 		else \
 		{ \
 			::ps2n::ee::plainWrite<T_>(ps2n_e, ps2n_a, static_cast<T_>(value_)); \
+		} \
+	} while (0)
+#define PS2N_STORE_F(addr_, value_, pc_, slow_) \
+	do \
+	{ \
+		const uint32_t ps2n_a = (addr_); \
+		const vtlb_private::VTLBVirtual ps2n_e = ps2n_vmap[ps2n_a >> vtlb_private::VTLB_PAGE_BITS]; \
+		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
+		{ \
+			slow_; \
+			::ps2n::ee::slowWrite<mem32_t>(ps2n_a, ::ps2n::ee::ops::fpu::toBits(value_), pc_, ps2n_start); \
+			PS2N_TIME(); \
+		} \
+		else \
+		{ \
+			::ps2n::ee::ops::fpu::store(reinterpret_cast<uint32_t*>(ps2n_e.assumePtr(ps2n_a)), (value_)); \
 		} \
 	} while (0)
 

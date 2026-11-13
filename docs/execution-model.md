@@ -290,7 +290,8 @@ it works on in local variables, which nothing else can reach and the
 compiler keeps in host registers
 ([ADR 0015](adr/0015-a-speed-step-before-phase-3-ends.md)): the general
 registers in `g1` to `g31`, bits 0 to 63 of each, and the FPU's in `f0` to
-`f31` and `facc` (its accumulator), 32 bits each.
+`f31` and `facc` (its accumulator), each a register's 32 bits in the lowest
+lane of a host SSE register (`val::Fpr`), as PCSX2's recompiler holds them.
 
 The generator knows, at every point of the code it writes, which locals
 hold their register's value and which of those hold a value the core does
@@ -307,14 +308,20 @@ not have yet. From that:
   is still defined once.
 - **The FPU's instructions** work on its registers' locals in the same way:
   `f0 = val::ADD_S(f1, f2)`, `facc = val::MADDA_S(facc, f1, f2)`
-  ([ops_fpu.h](../runtime/include/ps2n/ops_fpu.h)). A comparison writes its
-  condition to FCR31 in the core, where the branch that follows reads it,
-  and so do the flags of a division or a square root: those stay in the
-  core. `MFC1` and `MTC1` move between a general register's local and an
-  FPU register's.
+  ([ops_fpu.h](../runtime/include/ps2n/ops_fpu.h)), taking and leaving SSE
+  registers, so that a chain of them never passes through a general
+  register: an addition takes its operands' exponents into general
+  registers to look up the bits it keeps past its guard bit, and `MFC1` and
+  `MTC1` move between a general register's local and an FPU register's.
+  Nothing a function of ops_fpu.h gives depends on the other three lanes,
+  which hold whatever the host left there; the self-test checks that. A
+  comparison writes its condition to FCR31 in the core, where the branch
+  that follows reads it, and so do the flags of a division or a square
+  root: those stay in the core.
 - **The loads and stores of a general register or an FPU register** take
   the address from a local and look at the core's address table once
-  (`PS2N_LOAD`, `PS2N_LOAD_F`, `PS2N_STORE`; `PS2N_LQ`, `PS2N_SQ` and
+  (`PS2N_LOAD`, `PS2N_LOAD_F`, `PS2N_STORE`, `PS2N_STORE_F`, the last two
+  between memory and the SSE register directly; `PS2N_LQ`, `PS2N_SQ` and
   `PS2N_SQ_CORE` for the 128 bits of `lq` and `sq`: the local holds bits 0
   to 63 and the core bits 64 to 127, and `lq` writes all sixteen bytes to
   the core at once, its local a copy, so that an instruction reading the
@@ -604,8 +611,10 @@ PCSX2's recompiler, which games are tested against; the console where a
 recording shows the recompiler wrong and PCSX2's interpreter right, or where
 the recompiler has no single behavior; never a behavior that neither has.
 `ps2n-host -selftest` compares every function with both PCSX2
-implementations on random and boundary operands, and lists what it
-deliberately does not compare, with the reason in `host/selftest.cpp`. The
+implementations on random and boundary operands (and the FPU's additions
+with the recompiler on every difference of their operands' exponents, which
+random operands seldom reach), and lists what it deliberately does not
+compare, with the reason in `host/selftest.cpp`. The
 `ps2autotests/never-further/*` tests hold the outputs of whole programs to
 the same rule, line by line against stock PCSX2 and the console.
 

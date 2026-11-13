@@ -236,6 +236,38 @@ namespace ps2n::host::profile
 			return "(another kind of line)";
 		}
 
+		// The FPU's instruction a line of generated code carries out on the
+		// locals, or nothing: its arithmetic, comparisons and moves by the
+		// function of ops_fpu.h it calls, its loads and stores by their macros
+		// (a store as code before generator 0.10.0 wrote it, PS2N_STORE of an
+		// FPU register's local, as well). MULA.S, ADDA.S and SUBA.S are filed
+		// under MUL_S, ADD_S and SUB_S, MSUBA.S under MSUB_S.
+		std::string FpuInstructionOfLine(const std::string* text)
+		{
+			if (!text)
+				return {};
+			const size_t at = text->find_first_not_of(" \t");
+			if (at == std::string::npos)
+				return {};
+			const std::string_view line(text->data() + at, text->size() - at);
+			const auto begins = [&line](const char* with) { return line.rfind(with, 0) == 0; };
+			if (begins("PS2N_LOAD_F("))
+				return "LWC1";
+			if (begins("PS2N_STORE_F(") || (begins("PS2N_STORE(mem32_t") && line.find(", f") != std::string_view::npos))
+				return "SWC1";
+			if (begins("fpu::setCondition(false)"))
+				return "C_F_S";
+			const bool fpu = (line.size() > 1 && line[0] == 'f' && line[1] >= '0' && line[1] <= '9') || begins("facc") ||
+				begins("fpu::setCondition") || line.find("= val::MFC1(") != std::string_view::npos;
+			if (!fpu)
+				return {};
+			const size_t name = line.find("val::");
+			if (name == std::string_view::npos)
+				return "MOV_S";
+			const size_t bracket = line.find('(', name);
+			return bracket == std::string_view::npos ? std::string() : std::string(line.substr(name + 5, bracket - name - 5));
+		}
+
 		Place Identify(HANDLE process, u64 address)
 		{
 			for (const Area& area : s_areas)
@@ -493,6 +525,7 @@ namespace ps2n::host::profile
 		u64 by_kind[kKindCount] = {};
 		std::unordered_map<std::string, std::pair<Kind, u64>> by_name;
 		std::unordered_map<std::string, u64> by_line_kind; // within the game's compiled code
+		std::unordered_map<std::string, u64> by_fpu_instruction; // the same, its FPU's lines
 		// The game's compiled code, instruction by instruction: where in which
 		// function, how often, and the generated line it came from.
 		struct Hot
@@ -515,6 +548,9 @@ namespace ps2n::host::profile
 				const std::string* text = place.file.empty() ? nullptr : SourceLine(place.file, place.line);
 				const std::string kind = place.file.empty() ? std::string("(no line known)") : KindOfLine(text);
 				by_line_kind[kind] += count;
+				const std::string fpu = FpuInstructionOfLine(text);
+				if (!fpu.empty())
+					by_fpu_instruction[fpu] += count;
 
 				char where[256];
 				std::snprintf(where, sizeof(where), "%s+0x%llx", place.name.c_str(), static_cast<unsigned long long>(place.offset));
@@ -560,6 +596,21 @@ namespace ps2n::host::profile
 			{
 				std::fprintf(fp, "  %6.2f%%  %6.2f%%  %9llu  %s\n", 100.0 * static_cast<double>(lines[i].second) / static_cast<double>(by_kind[kGame]),
 					100.0 * static_cast<double>(lines[i].second) / total, static_cast<unsigned long long>(lines[i].second), lines[i].first.c_str());
+			}
+
+			// The FPU's lines among them, by instruction: its arithmetic and
+			// comparisons, and its loads, stores and moves, which the kinds above
+			// count with the general registers'.
+			std::vector<std::pair<std::string, u64>> fpu(by_fpu_instruction.begin(), by_fpu_instruction.end());
+			std::sort(fpu.begin(), fpu.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+			if (!fpu.empty())
+			{
+				std::fputs("\nThe FPU's lines of the game's compiled code, by instruction (share of that code, of the run, samples):\n", fp);
+				for (const auto& [name, count] : fpu)
+				{
+					std::fprintf(fp, "  %6.2f%%  %6.2f%%  %9llu  %s\n", 100.0 * static_cast<double>(count) / static_cast<double>(by_kind[kGame]),
+						100.0 * static_cast<double>(count) / total, static_cast<unsigned long long>(count), name.c_str());
+				}
 			}
 		}
 

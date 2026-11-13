@@ -606,8 +606,13 @@ namespace
 		u32 oracle_raised = 0; // the interpreter raised an exception PS2Native does not model
 	};
 
+	// Operands made for a case of an instruction, in place of random ones: for
+	// a check that has to reach every case of something. Called with the
+	// instruction's word and the random state, which it changes.
+	using Shape = void (*)(u32 word, State* start, Rng& rng);
+
 	// One instruction against one oracle. Returns the number of failures.
-	Tally CheckOp(Op op, Oracle oracle, u32 trials, Rng& rng)
+	Tally CheckOp(Op op, Oracle oracle, u32 trials, Rng& rng, Shape shape = nullptr)
 	{
 		Tally tally;
 		const r5900::OpInfo& oi = r5900::info(op);
@@ -719,6 +724,8 @@ namespace
 			}
 			for (u8& b : start.scratch)
 				b = static_cast<u8>(rng.Next32());
+			if (shape)
+				shape(word, &start, rng);
 
 			// COP0 as it stands, except for an instruction that reads or writes it.
 			// Then every register holds something else, but nothing that would let
@@ -927,6 +934,69 @@ namespace
 		return static_cast<int>(failed_ops);
 	}
 
+	// The FPU's additions keep one guard bit: of the operand with the smaller
+	// exponent, they clear the bits past it, by masks chosen by the difference
+	// of the two exponents, from -255 to 255 (kGuardMasks in ops_fpu.h).
+	// Random operands seldom reach the far differences. Here every one of the
+	// 511 is given to each instruction that adds, four times, against PCSX2's
+	// recompiler: the next difference at each case, the two exponents placed
+	// anywhere they fit, the mantissas and signs random. For the
+	// multiply-adds fs is 1 or -1, so that the product is ft's value, give or
+	// take its sign.
+	int s_exponent_difference = -255;
+
+	u32 FloatWithExponent(u32 exponent, Rng& rng)
+	{
+		return (rng.Below(2) << 31) | (exponent << 23) | (rng.Next32() & 0x7FFFFFu);
+	}
+
+	void ShapeExponentDifference(u32 word, State* start, Rng& rng)
+	{
+		const int diff = s_exponent_difference;
+		s_exponent_difference = diff == 255 ? -255 : diff + 1;
+		const u32 first = static_cast<u32>(diff > 0 ? diff : 0) + rng.Below(256 - static_cast<u32>(diff < 0 ? -diff : diff));
+		const u32 second = static_cast<u32>(static_cast<int>(first) - diff);
+		const u32 fs = (word >> 11) & 31, ft = (word >> 16) & 31;
+		switch (r5900::decodeOp(word))
+		{
+			case Op::MADD_S: // the product, then the accumulator
+				start->fpr[fs] = (rng.Below(2) << 31) | 0x3F800000u;
+				start->fpr[ft] = FloatWithExponent(first, rng);
+				start->acc = FloatWithExponent(second, rng);
+				break;
+			case Op::MSUB_S: case Op::MADDA_S: case Op::MSUBA_S: // the accumulator, then the product
+				start->fpr[fs] = (rng.Below(2) << 31) | 0x3F800000u;
+				start->fpr[ft] = FloatWithExponent(second, rng);
+				start->acc = FloatWithExponent(first, rng);
+				break;
+			default: // fs, then ft
+				start->fpr[fs] = FloatWithExponent(first, rng);
+				start->fpr[ft] = FloatWithExponent(second, rng);
+				break;
+		}
+	}
+
+	int CheckExponentDifferences(Rng& rng, const char* what)
+	{
+		static const Op kAdders[] = {Op::ADD_S, Op::SUB_S, Op::ADDA_S, Op::SUBA_S, Op::MADD_S, Op::MSUB_S, Op::MADDA_S, Op::MSUBA_S};
+		u32 cases = 0, failed_ops = 0;
+		for (const Op op : kAdders)
+		{
+			s_exponent_difference = -255;
+			const Tally tally = CheckOp(op, Oracle::Recompiler, 511 * 4, rng, ShapeExponentDifference);
+			cases += tally.run;
+			if (tally.failed || tally.run == 0)
+			{
+				failed_ops++;
+				std::fprintf(stderr, "  %s: %u of %u cases differ from PCSX2's recompiler\n", r5900::mnemonic(op), tally.failed, tally.run);
+			}
+		}
+		std::fprintf(stderr,
+			"selftest: %s, every difference of exponents, against PCSX2's recompiler: %zu instructions, %u cases, %u instructions differ\n",
+			what, std::size(kAdders), cases, failed_ops);
+		return static_cast<int>(failed_ops);
+	}
+
 	int CheckSemantics(const ps2n::selftest::Options& options, Rng& rng)
 	{
 		std::vector<Op> all, fpu;
@@ -940,6 +1010,7 @@ namespace
 		int failures = 0;
 		failures += CheckOps(all, Oracle::Interpreter, options.interp_trials, "semantics", rng);
 		failures += CheckOps(all, Oracle::Recompiler, options.jit_trials, "semantics", rng);
+		failures += CheckExponentDifferences(rng, "the FPU's additions");
 
 		// The FPU again in PCSX2's other clamp modes, which change what both
 		// the recompiler and PS2Native's functions do. (The fourth mode, Full,
@@ -959,6 +1030,7 @@ namespace
 			EmuConfig.Cpu.Recompiler.SetEEClampMode(mode.mode);
 			recCpu.Reset();
 			failures += CheckOps(fpu, Oracle::Recompiler, options.jit_trials, mode.what, rng);
+			failures += CheckExponentDifferences(rng, mode.what);
 		}
 		EmuConfig.Cpu.Recompiler.SetEEClampMode(standing);
 		recCpu.Reset();
@@ -1009,6 +1081,129 @@ namespace
 		set_vu(overflow, extra, sign, false);
 
 		return failures;
+	}
+
+	// Compiled code holds the FPU's registers in the lowest lanes of host SSE
+	// registers, and the other three lanes hold whatever the host left there
+	// (ops_fpu.h). The functions it calls must not carry that into a result.
+	// Each is called here twice on the same operands: once with the other
+	// lanes clear, as from the core's registers (which the comparisons with
+	// PCSX2 above go through), once with them random. The two calls must
+	// leave the same result, the same FCR31 and the same counts, in each
+	// clamp mode and with the FPU's game fix.
+	int CheckFpuLanes(u32 trials, Rng& rng)
+	{
+		namespace val = ps2n::ee::val;
+		namespace fpu = ps2n::ee::ops::fpu;
+		using val::Fpr;
+
+		static const struct
+		{
+			const char* name;
+			u64 (*call)(Fpr acc, Fpr s, Fpr t);
+		} kFns[] = {
+			{"ADD.S", [](Fpr, Fpr s, Fpr t) -> u64 { return fpu::toBits(val::ADD_S(s, t)); }},
+			{"SUB.S", [](Fpr, Fpr s, Fpr t) -> u64 { return fpu::toBits(val::SUB_S(s, t)); }},
+			{"MUL.S", [](Fpr, Fpr s, Fpr t) -> u64 { return fpu::toBits(val::MUL_S(s, t)); }},
+			{"MADD.S", [](Fpr a, Fpr s, Fpr t) -> u64 { return fpu::toBits(val::MADD_S(a, s, t)); }},
+			{"MSUB.S", [](Fpr a, Fpr s, Fpr t) -> u64 { return fpu::toBits(val::MSUB_S(a, s, t)); }},
+			{"MADDA.S", [](Fpr a, Fpr s, Fpr t) -> u64 { return fpu::toBits(val::MADDA_S(a, s, t)); }},
+			{"DIV.S", [](Fpr, Fpr s, Fpr t) -> u64 { return fpu::toBits(val::DIV_S(s, t)); }},
+			{"SQRT.S", [](Fpr, Fpr, Fpr t) -> u64 { return fpu::toBits(val::SQRT_S(t)); }},
+			{"RSQRT.S", [](Fpr, Fpr s, Fpr t) -> u64 { return fpu::toBits(val::RSQRT_S(s, t)); }},
+			{"ABS.S", [](Fpr, Fpr s, Fpr) -> u64 { return fpu::toBits(val::ABS_S(s)); }},
+			{"NEG.S", [](Fpr, Fpr s, Fpr) -> u64 { return fpu::toBits(val::NEG_S(s)); }},
+			{"MAX.S", [](Fpr, Fpr s, Fpr t) -> u64 { return fpu::toBits(val::MAX_S(s, t)); }},
+			{"MIN.S", [](Fpr, Fpr s, Fpr t) -> u64 { return fpu::toBits(val::MIN_S(s, t)); }},
+			{"CVT.S.W", [](Fpr, Fpr s, Fpr) -> u64 { return fpu::toBits(val::CVT_S_W(s)); }},
+			{"CVT.W.S", [](Fpr, Fpr s, Fpr) -> u64 { return fpu::toBits(val::CVT_W_S(s)); }},
+			{"C.EQ.S", [](Fpr, Fpr s, Fpr t) -> u64 { return val::C_EQ_S(s, t); }},
+			{"C.LT.S", [](Fpr, Fpr s, Fpr t) -> u64 { return val::C_LT_S(s, t); }},
+			{"C.LE.S", [](Fpr, Fpr s, Fpr t) -> u64 { return val::C_LE_S(s, t); }},
+			{"MFC1", [](Fpr, Fpr s, Fpr) -> u64 { return val::MFC1(s); }},
+		};
+
+		auto& rec = EmuConfig.Cpu.Recompiler;
+		auto& fixes = EmuConfig.Gamefixes;
+		const u32 standing = rec.GetEEClampMode();
+		const bool mul_hack = fixes.FpuMulHack;
+		static const struct
+		{
+			u32 mode;
+			bool mul_hack;
+		} kModes[] = {{1, false}, {2, false}, {0, false}, {1, true}};
+
+		const u32 saved_fcr31 = fpuRegs.fprc[31];
+		const u64 saved_followed[2] = {ps2n::ee::ops::fpu::console_followed[0], ps2n::ee::ops::fpu::console_followed[1]};
+		u32 cases = 0, failed = 0;
+		for (const auto& mode : kModes)
+		{
+			rec.SetEEClampMode(mode.mode);
+			fixes.FpuMulHack = mode.mul_hack;
+			for (const auto& fn : kFns)
+			{
+				u32 differ = 0;
+				for (u32 i = 0; i < trials; i++)
+				{
+					u32 bits[3];
+					for (u32& b : bits)
+						b = rng.Float();
+					// The operands of PCSX2's game fix for the multiplication.
+					if (mode.mul_hack && rng.Below(4) == 0)
+					{
+						bits[1] = 0x3E800000u;
+						bits[2] = 0x40490FDBu;
+					}
+					const u32 fcr31 = rng.Next32();
+					Fpr clean[3], dirty[3];
+					for (int k = 0; k < 3; k++)
+					{
+						clean[k] = fpu::fromBits(bits[k]);
+						dirty[k] = _mm_castsi128_ps(_mm_setr_epi32(static_cast<int>(bits[k]), static_cast<int>(rng.Float()),
+							static_cast<int>(rng.Next32()), static_cast<int>(rng.Float())));
+					}
+
+					const u64 before[2] = {ps2n::ee::ops::fpu::console_followed[0], ps2n::ee::ops::fpu::console_followed[1]};
+					fpuRegs.fprc[31] = fcr31;
+					const u64 want = fn.call(clean[0], clean[1], clean[2]);
+					const u32 want_fcr31 = fpuRegs.fprc[31];
+					const u64 want_followed[2] = {ps2n::ee::ops::fpu::console_followed[0] - before[0],
+						ps2n::ee::ops::fpu::console_followed[1] - before[1]};
+
+					const u64 middle[2] = {ps2n::ee::ops::fpu::console_followed[0], ps2n::ee::ops::fpu::console_followed[1]};
+					fpuRegs.fprc[31] = fcr31;
+					const u64 got = fn.call(dirty[0], dirty[1], dirty[2]);
+					const u32 got_fcr31 = fpuRegs.fprc[31];
+					const u64 got_followed[2] = {ps2n::ee::ops::fpu::console_followed[0] - middle[0],
+						ps2n::ee::ops::fpu::console_followed[1] - middle[1]};
+
+					cases++;
+					if (got != want || got_fcr31 != want_fcr31 || got_followed[0] != want_followed[0] || got_followed[1] != want_followed[1])
+					{
+						if (differ++ < 3)
+							std::fprintf(stderr,
+								"  LANES %s, clamp mode %u%s: operands %08x %08x %08x: %llx, FCR31 %08x with the other lanes clear;"
+								" %llx, FCR31 %08x with them set\n",
+								fn.name, mode.mode, mode.mul_hack ? " and the game fix" : "", bits[0], bits[1], bits[2],
+								static_cast<unsigned long long>(want), want_fcr31, static_cast<unsigned long long>(got), got_fcr31);
+					}
+				}
+				if (differ)
+					failed++;
+			}
+		}
+		rec.SetEEClampMode(standing);
+		fixes.FpuMulHack = mul_hack;
+		recCpu.Reset();
+		fpuRegs.fprc[31] = saved_fcr31;
+		ps2n::ee::ops::fpu::console_followed[0] = saved_followed[0];
+		ps2n::ee::ops::fpu::console_followed[1] = saved_followed[1];
+
+		std::fprintf(stderr,
+			"selftest: the FPU's functions on values, with the SSE lanes above a register's clear and set: %zu functions, %zu modes,"
+			" %u cases, %u differ\n",
+			std::size(kFns), std::size(kModes), cases, failed);
+		return static_cast<int>(failed);
 	}
 
 	// What PCSX2's opcode table calls the instruction PS2Native's decoder calls
@@ -1118,6 +1313,7 @@ int ps2n::selftest::Run(const Options& options)
 	int failures = 0;
 	failures += CheckTables(options, rng);
 	failures += CheckSemantics(options, rng);
+	failures += CheckFpuLanes(options.interp_trials, rng);
 
 	std::fprintf(stderr, "selftest: %s\n", failures ? "FAILED" : "passed");
 	return failures;

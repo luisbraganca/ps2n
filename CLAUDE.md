@@ -50,7 +50,12 @@ session, in the main tree, measured the website's two speed charts again
 (the first 4,200 frames 1.09 times stock PCSX2's time with nothing drawn,
 from 1.35) and made `lq` and `sq` loads and stores on the locals and a block
 start's call of the runtime one of one argument: the level run the same,
-1.04, the host 12 MB smaller. Phase 4 needs its own approval.
+1.04, the host 12 MB smaller. The same day, at the maintainer's word, the
+FPU's arithmetic: its registers held in SSE registers, and the bits its
+additions keep past the guard bit looked up instead of branched to. With
+profile-guided optimization the level run takes 1.01 times stock PCSX2's
+time, its play as long as stock PCSX2's, still the stock run. Phase 4 needs
+its own approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -187,7 +192,11 @@ Decisions:
   (`PS2N_LQ`, `PS2N_SQ`) and a block start asking the runtime in one
   argument (`askAbout`, the game's code 6% smaller), both kept and both
   within the noise over the level run; registers kept changed across the
-  end of a block, tried and taken out.
+  end of a block, tried and taken out. Then, at the maintainer's word, the
+  FPU's registers in SSE registers (`val::Fpr`) and the masks of its
+  additions' guard bit from a table (`kGuardMasks`), the self-test holding
+  all 511 exponent differences to PCSX2's recompiler: play as long as
+  stock PCSX2's, with profile-guided optimization.
 - [ADR 0020](docs/adr/0020-no-claude-references-in-commit-messages.md):
   no commit message references Claude: no `Co-Authored-By` line naming
   Claude, no `Claude-Session` line. The history was rewritten on
@@ -251,7 +260,8 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   same run takes up to twice as long the next time. `game.ps1 -TimeProfile`
   (`ps2n-host -profile`) writes where the CPU thread's time went, by kind
   of code and by function, into `profile.txt` among the run's files; for
-  the compiled code also by kind of generated line, and its hottest
+  the compiled code also by kind of generated line, its FPU's lines by
+  instruction, and its hottest
   instructions by function and offset, to read beside the function's
   disassembly (`llvm-objdump --disassemble-symbols`, in the Visual Studio
   install's `VC\Tools\Llvm\x64\bin`). Over the level run, two builds of

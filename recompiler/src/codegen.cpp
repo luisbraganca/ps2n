@@ -15,7 +15,7 @@ namespace ps2n::recomp {
 
 using namespace r5900;
 
-const char* const kGeneratorName = "ps2n-recomp 0.9.0";
+const char* const kGeneratorName = "ps2n-recomp 0.10.0";
 
 namespace {
 
@@ -378,11 +378,12 @@ public:
                 if (declared_ & (1u << r)) locals += strprintf("%s g%u = 0", locals.empty() ? "" : ",", r);
             out += "\tuint64_t" + locals + ";\n";
         }
+        // The FPU's, each in the lowest lane of a host SSE register (val::Fpr).
         if (fdeclared_) {
             std::string locals;
             for (uint32_t r = 0; r <= kAcc; ++r)
-                if (fdeclared_ & (uint64_t{1} << r)) locals += (locals.empty() ? " " : ", ") + fname(r) + " = 0";
-            out += "\tuint32_t" + locals + ";\n";
+                if (fdeclared_ & (uint64_t{1} << r)) locals += (locals.empty() ? " " : ", ") + fname(r) + " = {}";
+            out += "\tval::Fpr" + locals + ";\n";
         }
         if (usesTable_) out += "\tconst vtlb_private::VTLBVirtual* const ps2n_vmap = addressTable();\n";
         if (usesUnused_) out += "\t[[maybe_unused]] uint64_t ps2n_unused = 0;\n";
@@ -961,7 +962,7 @@ private:
             const std::string at = address();
             const std::string value = fuse(ft);
             usesTable_ = true;
-            line(strprintf("PS2N_STORE(mem32_t, %s, %s, %s, (void)0);", at.c_str(), value.c_str(), hex(in.addr).c_str()), &in, note);
+            line(strprintf("PS2N_STORE_F(%s, %s, %s, (void)0);", at.c_str(), value.c_str(), hex(in.addr).c_str()), &in, note);
             return true;
         }
         default: return false;
