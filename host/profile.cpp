@@ -193,9 +193,9 @@ namespace ps2n::host::profile
 			if (begins("PS2N_BLOCK_END") || begins("PS2N_SPLIT_END") || begins("if ((ps2n_end") || begins("acc +=") || begins("bool ends") ||
 				begins("if (ends)"))
 				return "the end of a block: its cycles, the test for events";
-			if (begins("PS2N_LOAD"))
+			if (begins("PS2N_LOAD") || begins("PS2N_LQ("))
 				return "loads into general registers, on locals";
-			if (begins("PS2N_STORE"))
+			if (begins("PS2N_STORE") || begins("PS2N_SQ(") || begins("PS2N_SQ_CORE("))
 				return "stores of general registers, on locals";
 			if (begins("PS2N_ACCESS"))
 				return "loads and stores through register numbers";

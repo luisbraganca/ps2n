@@ -409,7 +409,7 @@
 
 		<div class="charts">
 			<section class="chart" data-reveal aria-labelledby="chart-game">
-				<h3 id="chart-game">Speed so far: slower</h3>
+				<h3 id="chart-game">Speed so far: a little slower</h3>
 				<p class="chart__sub">The first 4,200 frames of Killzone, in seconds. Shorter is faster.</p>
 				<ul class="legend" aria-hidden="true">
 					<li><i class="k-stock"></i>Stock PCSX2, its recompilers</li>
@@ -420,14 +420,14 @@
 					<thead><tr><th scope="col"><span class="sr-only">Run</span></th><th scope="col"><span class="sr-only">Seconds</span></th></tr></thead>
 					<tbody>
 						<tr class="grp"><th colspan="2" scope="rowgroup">With PCSX2's software renderer</th></tr>
-						<tr><th scope="row">Stock</th><td><div class="bar" tabindex="0" style="--v:.8179;--i:0"><span class="bar__fill"></span><span class="bar__val">22.9 s</span><span class="bar__tip" role="tooltip"><b>22.9 s</b> stock PCSX2, software renderer. Two runs: 22.8 s and 22.9 s</span></div></td></tr>
-						<tr><th scope="row">PS2Native</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.9179;--i:1"><span class="bar__fill"></span><span class="bar__val">25.7 s</span><span class="bar__tip" role="tooltip"><b>25.7 s</b> PS2Native, software renderer. Two runs: 25.8 s and 25.7 s</span></div></td></tr>
+						<tr><th scope="row">Stock</th><td><div class="bar" tabindex="0" style="--v:.8107;--i:0"><span class="bar__fill"></span><span class="bar__val">22.7 s</span><span class="bar__tip" role="tooltip"><b>22.7 s</b> stock PCSX2, software renderer. Three runs: 22.7 s, 22.6 s and 22.8 s</span></div></td></tr>
+						<tr><th scope="row">PS2Native</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.8357;--i:1"><span class="bar__fill"></span><span class="bar__val">23.4 s</span><span class="bar__tip" role="tooltip"><b>23.4 s</b> PS2Native, software renderer. Three runs: 23.4 s, 23.4 s and 23.3 s. On 2026-11-11, 25.7 s</span></div></td></tr>
 						<tr class="grp"><th colspan="2" scope="rowgroup">With nothing drawn</th></tr>
-						<tr><th scope="row">Stock</th><td><div class="bar" tabindex="0" style="--v:.4;--i:2"><span class="bar__fill"></span><span class="bar__val">11.2 s</span><span class="bar__tip" role="tooltip"><b>11.2 s</b> stock PCSX2, nothing drawn. Two runs: 11.2 s and 11.1 s</span></div></td></tr>
-						<tr><th scope="row">PS2Native</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.5393;--i:3"><span class="bar__fill"></span><span class="bar__val">15.1 s</span><span class="bar__tip" role="tooltip"><b>15.1 s</b> PS2Native, nothing drawn. Two runs: 15.1 s and 15.2 s</span></div></td></tr>
+						<tr><th scope="row">Stock</th><td><div class="bar" tabindex="0" style="--v:.4036;--i:2"><span class="bar__fill"></span><span class="bar__val">11.3 s</span><span class="bar__tip" role="tooltip"><b>11.3 s</b> stock PCSX2, nothing drawn. Three runs: 11.3 s, 11.3 s and 11.2 s</span></div></td></tr>
+						<tr><th scope="row">PS2Native</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.4393;--i:3"><span class="bar__fill"></span><span class="bar__val">12.3 s</span><span class="bar__tip" role="tooltip"><b>12.3 s</b> PS2Native, nothing drawn. Three runs: 12.3 s, 12.2 s and 12.3 s. On 2026-11-11, 15.1 s</span></div></td></tr>
 					</tbody>
 				</table>
-				<p class="chart__note">These frames are logos, a prompt and a film, measured on 2026-11-11. A run into the first level took 100 s compiled where stock PCSX2 takes 74 s, the whole difference in the game's own code. A first speed step, seven changes to how the code is generated, each measured, brought it to 91 s: the game's own code takes 41 s compiled against 26 s under PCSX2's recompiler, and more than a third of the compiled code's time is now reaching memory. <span class="when">2026-11-12</span></p>
+				<p class="chart__note">These frames are logos, a prompt and a film, measured again on 2026-11-13: 1.03 and 1.09 times stock PCSX2's time, where on 2026-11-11 they took 1.12 and 1.35. The run into the first level took 1.35 times stock PCSX2's time then, and takes 1.04 times now: seven changes to how the code is generated, the VU0 instructions and the BIOS's code compiled, profile-guided optimization, loops that have reached a fixed point skipped, and the COP2 instructions and calls through a register made by compiled code itself, each measured. <span class="when">2026-11-13</span></p>
 			</section>
 
 			<section class="chart" data-reveal style="--d:120" aria-labelledby="chart-loops">
@@ -437,16 +437,16 @@
 					<caption class="sr-only">Time of six CPU-bound workloads, compiled ahead of time, relative to PCSX2's recompiler</caption>
 					<thead><tr><th scope="col"><span class="sr-only">Workload</span></th><th scope="col"><span class="sr-only">Time relative to PCSX2's recompiler</span></th></tr></thead>
 					<tbody>
-						<tr><th scope="row">sum</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.5438;--i:0"><span class="bar__fill"></span><span class="bar__val">0.87</span><span class="bar__tip" role="tooltip"><b>0.87</b> register arithmetic: 60.4 ms against 69.7 ms</span></div></td></tr>
-						<tr><th scope="row">mem</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.6375;--i:1"><span class="bar__fill"></span><span class="bar__val">1.02</span><span class="bar__tip" role="tooltip"><b>1.02</b> word loads and stores: 19.2 ms against 18.8 ms</span></div></td></tr>
-						<tr><th scope="row">fpu</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.65;--i:2"><span class="bar__fill"></span><span class="bar__val">1.04</span><span class="bar__tip" role="tooltip"><b>1.04</b> floating point: 51.7 ms against 49.6 ms</span></div></td></tr>
-						<tr><th scope="row">call</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.7188;--i:3"><span class="bar__fill"></span><span class="bar__val">1.15</span><span class="bar__tip" role="tooltip"><b>1.15</b> seven million calls: 34.4 ms against 29.8 ms</span></div></td></tr>
-						<tr><th scope="row">mmi</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.7688;--i:4"><span class="bar__fill"></span><span class="bar__val">1.23</span><span class="bar__tip" role="tooltip"><b>1.23</b> 128-bit arithmetic: 10.2 ms against 8.3 ms</span></div></td></tr>
-						<tr><th scope="row">jump</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.9188;--i:5"><span class="bar__fill"></span><span class="bar__val">1.47</span><span class="bar__tip" role="tooltip"><b>1.47</b> a jump through a table: 71.9 ms against 48.8 ms</span></div></td></tr>
+						<tr><th scope="row">sum</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.5869;--i:0"><span class="bar__fill"></span><span class="bar__val">0.94</span><span class="bar__tip" role="tooltip"><b>0.94</b> register arithmetic: 64.7 ms against 68.9 ms</span></div></td></tr>
+						<tr><th scope="row">call</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.6313;--i:1"><span class="bar__fill"></span><span class="bar__val">1.01</span><span class="bar__tip" role="tooltip"><b>1.01</b> seven million calls: 29.4 ms against 29.1 ms. In the proof of concept, 1.15</span></div></td></tr>
+						<tr><th scope="row">fpu</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.6338;--i:2"><span class="bar__fill"></span><span class="bar__val">1.01</span><span class="bar__tip" role="tooltip"><b>1.01</b> floating point: 50.5 ms against 49.8 ms. From 0.90 to 1.03 over the builds of the night</span></div></td></tr>
+						<tr><th scope="row">mem</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.6619;--i:3"><span class="bar__fill"></span><span class="bar__val">1.06</span><span class="bar__tip" role="tooltip"><b>1.06</b> word loads and stores: 19.7 ms against 18.6 ms</span></div></td></tr>
+						<tr><th scope="row">jump</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.6663;--i:4"><span class="bar__fill"></span><span class="bar__val">1.07</span><span class="bar__tip" role="tooltip"><b>1.07</b> a jump through a table: 52.0 ms against 48.8 ms. In the proof of concept, 1.47</span></div></td></tr>
+						<tr><th scope="row">mmi</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.7775;--i:5"><span class="bar__fill"></span><span class="bar__val">1.24</span><span class="bar__tip" role="tooltip"><b>1.24</b> 128-bit arithmetic: 10.2 ms against 8.2 ms. 1.43 earlier the same night</span></div></td></tr>
 						<tr class="axis" aria-hidden="true"><th></th><td><div class="bar"><span>1.00, PCSX2's recompiler</span></div></td></tr>
 					</tbody>
 				</table>
-				<p class="chart__note">Faster on one, within 4% on two, 15% to 47% slower on three, and none of it tuned yet. Against PCSX2's interpreter the same code is 8 to 23 times as fast. <span class="when">Proof of concept, 2026-11-10</span></p>
+				<p class="chart__note">Measured again, as in the proof of concept: without profile-guided optimization, whose training is the game's. The jump through a table and the calls, 1.47 and 1.15 then, are now about as fast as PCSX2's recompiler. The 128-bit arithmetic, at 1.43 when measured again, is at 1.24 since its loads and stores are made on the locals; its parallel instructions still work on the registers in memory, where PCSX2's recompiler keeps them in host registers. A loop moves by a few percent from one build to the next with nothing in it changed. <span class="when">2026-11-13</span></p>
 			</section>
 		</div>
 	</div>

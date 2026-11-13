@@ -445,6 +445,38 @@ _start: cfc2  $v0, $vi16           # 00100000
     CHECK(code.find("PS2N_COP2(") == std::string::npos);
 }
 
+TEST_CASE(lq_and_sq_are_made_on_the_locals) {
+    // As the COP2 transfers: a general register's local holds its bits 0 to
+    // 63 and the core bits 64 to 127, and the address comes from a local.
+    // LQ writes the whole register to the core as well, so its local holds
+    // nothing changed and nothing is put back for it; SQ takes the low bits
+    // from the local only where it holds them changed, and otherwise the
+    // sixteen bytes the core has. A load into $zero still reads.
+    const ElfFile elf = assemble(R"(
+        .text
+        .globl _start
+_start: lq    $t0, 16($a0)         # 00100000
+        sq    $t0, 32($a0)         # 00100004
+        lq    $zero, 0($a1)        # 00100008
+        daddu $t1, $t0, $t0        # 0010000C
+        sq    $t1, 64($a0)         # 00100010
+        jr    $ra                  # 00100014
+        sq    $zero, 48($a0)       # 00100018
+)");
+    GenerateStats stats;
+    const std::string code = generateFor(elf, &stats);
+    CHECK_EQ(stats.delegated, size_t{0});
+    CHECK_CONTAINS(code, "PS2N_LQ(g8, 8, static_cast<uint32_t>(g4) + static_cast<uint32_t>(16), 0x00100000u, (void)0);");
+    CHECK_CONTAINS(code, "PS2N_SQ_CORE(8, static_cast<uint32_t>(g4) + static_cast<uint32_t>(32), 0x00100004u, (void)0);");
+    CHECK_CONTAINS(code, "PS2N_LQ(ps2n_unused, 0, static_cast<uint32_t>(g5) + static_cast<uint32_t>(0), 0x00100008u, (void)0);");
+    CHECK_CONTAINS(code, "g9 = val::DADDU(g8, g8);");
+    CHECK_CONTAINS(code, "PS2N_SQ(g9, 9, static_cast<uint32_t>(g4) + static_cast<uint32_t>(64), 0x00100010u, (void)0);");
+    CHECK_CONTAINS(code, "PS2N_SQ_CORE(0, static_cast<uint32_t>(g4) + static_cast<uint32_t>(48), 0x00100018u, (void)0);");
+    CHECK(code.find("PS2N_ACCESS") == std::string::npos);
+    CHECK(code.find("PS2N_PUT(8)") == std::string::npos);
+    CHECK(code.find("PS2N_PUT(9)") != std::string::npos); // before the block ends
+}
+
 TEST_CASE(cfc2_and_ctc2_are_moves_but_for_the_control_registers_whose_writing_does_more) {
     // As ops_cop2.cpp has them: R gives 23 bits and takes them under the
     // exponent of 1.0; VPU_STAT is read-only. Writing the status flag

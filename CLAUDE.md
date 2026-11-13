@@ -45,8 +45,12 @@ instructions carried out by compiled code, calls through a register made
 by compiled code itself, and the way a load or store seldom takes made
 short (the game's code 14% smaller). All of it together, with
 profile-guided optimization, takes the level run to 1.04 times stock
-PCSX2's time (play alone 1.04), still the stock run. Phase 4 needs its own
-approval.
+PCSX2's time (play alone 1.04), still the stock run. On 2026-11-13 a third
+session, in the main tree, measured the website's two speed charts again
+(the first 4,200 frames 1.09 times stock PCSX2's time with nothing drawn,
+from 1.35) and made `lq` and `sq` loads and stores on the locals and a block
+start's call of the runtime one of one argument: the level run the same,
+1.04, the host 12 MB smaller. Phase 4 needs its own approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -177,7 +181,13 @@ Decisions:
   them (`PS2N_VCALLMS`, `CFC2` and `CTC2` as moves; no gain that shows).
   Link-time
   optimization of PS2Native's own code (`build.ps1 -Lto thin`) was
-  evaluated: no gain, not used.
+  evaluated: no gain, not used. On 2026-11-13 a third session, given the
+  website's two charts ("We need to improve these numbers"), measured them
+  again and took on their slowest parts: `lq` and `sq` on the locals
+  (`PS2N_LQ`, `PS2N_SQ`) and a block start asking the runtime in one
+  argument (`askAbout`, the game's code 6% smaller), both kept and both
+  within the noise over the level run; registers kept changed across the
+  end of a block, tried and taken out.
 - [ADR 0020](docs/adr/0020-no-claude-references-in-commit-messages.md):
   no commit message references Claude: no `Co-Authored-By` line naming
   Claude, no `Claude-Session` line. The history was rewritten on

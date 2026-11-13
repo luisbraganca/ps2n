@@ -169,6 +169,19 @@ namespace ps2n::ee
 	// pass): the caller returns the value returned, a PC or kUnwind.
 	uint32_t blockStart(const ImageInfo& image, uint32_t index, uint32_t body, uint32_t* block);
 
+	// The same for the function's own code, with the answer returned: what
+	// PS2N_BLOCK_START needs, or zero, and then blockExit holds the value to
+	// return. askAbout() is it for one image in one argument, so that each of
+	// the many places compiled code asks from, a way it seldom takes, hands
+	// over only the leader's index (game log, "G10").
+	uint32_t blockAsk(const ImageInfo& image, uint32_t index);
+	extern uint32_t blockExit;
+	template <const ImageInfo& Image>
+	[[gnu::noinline, gnu::cold]] uint32_t askAbout(uint32_t index)
+	{
+		return blockAsk(Image, index);
+	}
+
 	// Lets the core handle its events: interrupts, timers, DMA, the IOP, the
 	// VUs. `next` is the instruction execution continues at. Returns the PC to
 	// continue at: `next`, unless an exception was taken; or kUnwind.
@@ -271,6 +284,10 @@ namespace ps2n::ee
 	T slowReadEnds(uint32_t address, uint32_t pc, uint32_t start, bool* ends);
 	template <typename T>
 	void slowWrite(uint32_t address, T value, uint32_t pc, uint32_t start);
+	// The same for LQ and SQ (PS2N_LQ, PS2N_SQ): sixteen bytes at `address`,
+	// whose low four bits are clear.
+	RETURNS_R128 slowRead128(uint32_t address, uint32_t pc, uint32_t start);
+	void TAKES_R128 slowWrite128(uint32_t address, r128 value, uint32_t pc, uint32_t start);
 
 	// An instruction PS2Native has no semantics of its own for yet, carried out
 	// by the core's interpreter function for it. The second form is for an
@@ -371,11 +388,9 @@ namespace ps2n::ee
 		ps2n_end = blocks[index_]; \
 		if (ps2n_end == 0) [[unlikely]] \
 		{ \
-			uint32_t ps2n_block = 0; \
-			const uint32_t ps2n_pc = ::ps2n::ee::blockStart(image, index_, 0, &ps2n_block); \
-			if (ps2n_block == 0) \
-				return ps2n_pc; \
-			ps2n_end = ps2n_block; \
+			ps2n_end = ::ps2n::ee::askAbout<image>(index_); \
+			if (ps2n_end == 0) \
+				return ::ps2n::ee::blockExit; \
 			PS2N_TIME(); \
 		} \
 	} while (0)
@@ -714,9 +729,10 @@ namespace ps2n::ee
 
 // The load or store `op_` at `pc_`, carried out through register numbers, of
 // the address in general register `base_` plus `offset_`. (The loads and
-// stores of whole general registers are not written this way: PS2N_LOAD and
-// PS2N_STORE, below.) The runtime is told first when it is about to touch
-// memory that is not plain. `op_` is written out on both sides so that on the
+// stores of whole general registers, `lq` and `sq` among them, are not
+// written this way: PS2N_LOAD, PS2N_STORE, PS2N_LQ and PS2N_SQ, below.) The
+// runtime is told first when it is about to touch memory that is not
+// plain. `op_` is written out on both sides so that on the
 // plain side the compiler already has the answer to what kind of memory it
 // is, and asks only once. The second form is for a load after which the
 // block may end: `ends_` is set when it does.
@@ -920,5 +936,79 @@ namespace ps2n::ee
 			const T_ ps2n_v = static_cast<T_>(value_); \
 			ps2n_same &= ::ps2n::ee::plainRead<T_>(ps2n_e, ps2n_a) == ps2n_v; \
 			::ps2n::ee::plainWrite<T_>(ps2n_e, ps2n_a, ps2n_v); \
+		} \
+	} while (0)
+
+// LQ and SQ at `pc_`: the sixteen bytes at `addr_` with its low four bits
+// cleared, and general register `n_`, in the same way (slowRead128,
+// slowWrite128). A general register's local holds its bits 0 to 63, and the
+// core bits 64 to 127 (PS2N_GPR_HIGH), as for the COP2 transfers.
+//
+// PS2N_LQ writes all sixteen bytes to the core at once, and `low_`, the
+// register's local, takes bits 0 to 63 unchanged from what the core has: an
+// instruction that reads the register whole from the core next, as the
+// parallel instructions do, finds it in one store. (Written half to the core
+// and half to the local, the two halves met in the core only when the local
+// was put back, and a read of sixteen bytes over two stores of eight waits
+// until both have left the processor.) A load into register 0 still reads,
+// into `ps2n_unused`: a device's register can have effects.
+//
+// PS2N_SQ stores the register's local with bits 64 to 127 from the core, for
+// a local that holds bits 0 to 63 changed; PS2N_SQ_CORE the sixteen bytes the
+// core has, for one that holds nothing changed.
+#define PS2N_LQ(low_, n_, addr_, pc_, slow_) \
+	do \
+	{ \
+		const uint32_t ps2n_a = (addr_) & ~15u; \
+		const vtlb_private::VTLBVirtual ps2n_e = ps2n_vmap[ps2n_a >> vtlb_private::VTLB_PAGE_BITS]; \
+		r128 ps2n_q; \
+		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
+		{ \
+			slow_; \
+			ps2n_q = ::ps2n::ee::slowRead128(ps2n_a, pc_, ps2n_start); \
+			PS2N_TIME(); \
+		} \
+		else \
+		{ \
+			ps2n_q = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ps2n_e.assumePtr(ps2n_a))); \
+		} \
+		if ((n_) != 0) \
+			r128_store_unaligned(&cpuRegs.GPR.r[n_], ps2n_q); \
+		(low_) = r128_to_u64(ps2n_q); \
+	} while (0)
+#define PS2N_SQ(low_, n_, addr_, pc_, slow_) \
+	do \
+	{ \
+		const uint32_t ps2n_a = (addr_) & ~15u; \
+		const vtlb_private::VTLBVirtual ps2n_e = ps2n_vmap[ps2n_a >> vtlb_private::VTLB_PAGE_BITS]; \
+		const uint64_t ps2n_low = (low_); \
+		const uint64_t ps2n_high = (n_) != 0 ? PS2N_GPR_HIGH(n_) : uint64_t{0}; \
+		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
+		{ \
+			slow_; \
+			::ps2n::ee::slowWrite128(ps2n_a, _mm_set_epi64x(static_cast<int64_t>(ps2n_high), static_cast<int64_t>(ps2n_low)), pc_, ps2n_start); \
+			PS2N_TIME(); \
+		} \
+		else \
+		{ \
+			::ps2n::ee::plainWrite<mem64_t>(ps2n_e, ps2n_a, ps2n_low); \
+			::ps2n::ee::plainWrite<mem64_t>(ps2n_e, ps2n_a + 8, ps2n_high); \
+		} \
+	} while (0)
+#define PS2N_SQ_CORE(n_, addr_, pc_, slow_) \
+	do \
+	{ \
+		const uint32_t ps2n_a = (addr_) & ~15u; \
+		const vtlb_private::VTLBVirtual ps2n_e = ps2n_vmap[ps2n_a >> vtlb_private::VTLB_PAGE_BITS]; \
+		const r128 ps2n_q = _mm_loadu_si128(reinterpret_cast<const __m128i*>(&cpuRegs.GPR.r[n_])); \
+		if (ps2n_e.isHandler(ps2n_a)) [[unlikely]] \
+		{ \
+			slow_; \
+			::ps2n::ee::slowWrite128(ps2n_a, ps2n_q, pc_, ps2n_start); \
+			PS2N_TIME(); \
+		} \
+		else \
+		{ \
+			_mm_storeu_si128(reinterpret_cast<__m128i*>(ps2n_e.assumePtr(ps2n_a)), ps2n_q); \
 		} \
 	} while (0)

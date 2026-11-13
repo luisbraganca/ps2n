@@ -15,7 +15,7 @@ namespace ps2n::recomp {
 
 using namespace r5900;
 
-const char* const kGeneratorName = "ps2n-recomp 0.8.0";
+const char* const kGeneratorName = "ps2n-recomp 0.9.0";
 
 namespace {
 
@@ -783,6 +783,29 @@ private:
             line(strprintf("PS2N_STORE%s(%s, %s, %s, %s, (void)0);", fixed ? "_SAME" : "", type, at.c_str(), value.c_str(), hex(in.addr).c_str()),
                  &in, note);
         };
+        // LQ and SQ: the local holds bits 0 to 63 of the register, and the
+        // core bits 64 to 127 (recomp.h, PS2N_LQ). LQ writes all of it to
+        // the core as well, so its local holds nothing changed; SQ takes
+        // bits 0 to 63 from the local only where it holds them changed.
+        // Neither is in a loop that may reach a fixed point (fixedLoopEffect).
+        const auto load128 = [&]() {
+            const std::string at = address();
+            usesTable_ = true;
+            if (rt == 0) usesUnused_ = true;
+            const std::string dest = rt ? def(rt) : std::string("ps2n_unused");
+            line(strprintf("PS2N_LQ(%s, %u, %s, %s, (void)0);", dest.c_str(), rt, at.c_str(), hex(in.addr).c_str()), &in, note);
+            dirty_ &= ~(1u << rt);
+        };
+        const auto store128 = [&]() {
+            const std::string at = address();
+            usesTable_ = true;
+            if (rt != 0 && (dirty_ & (1u << rt))) {
+                const std::string value = use(rt);
+                line(strprintf("PS2N_SQ(%s, %u, %s, %s, (void)0);", value.c_str(), rt, at.c_str(), hex(in.addr).c_str()), &in, note);
+            } else {
+                line(strprintf("PS2N_SQ_CORE(%u, %s, %s, (void)0);", rt, at.c_str(), hex(in.addr).c_str()), &in, note);
+            }
+        };
 
         const std::string simm = std::to_string(in.simm());
         const std::string uimm = strprintf("0x%Xu", in.uimm());
@@ -853,6 +876,8 @@ private:
         case Op::SH: store("mem16_t"); return true;
         case Op::SW: store("mem32_t"); return true;
         case Op::SD: store("mem64_t"); return true;
+        case Op::LQ: load128(); return true;
+        case Op::SQ: store128(); return true;
         default: break;
         }
 

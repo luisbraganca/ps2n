@@ -208,7 +208,10 @@ What the generated code does with them:
   it reads the image's table `blocks[index]`. Zero means nothing is known:
   the runtime (`blockStart()`) finds or forms the block, compares its code
   with what was compiled (below), and answers. From then on the table has
-  the answer, until the block is thrown away.
+  the answer, until the block is thrown away. That way is taken seldom and
+  written at every label, so it is one call with the leader's index alone
+  (`askAbout<image>()`, `blockAsk()`), whose answer comes back in a
+  register (game log, "G10").
 - **Reaching a label from the instruction before it**, the function compares
   the label's address with `ps2n_end`. If they differ, the block goes on
   through the label. If they are equal the block was cut short there
@@ -311,9 +314,14 @@ not have yet. From that:
   FPU register's.
 - **The loads and stores of a general register or an FPU register** take
   the address from a local and look at the core's address table once
-  (`PS2N_LOAD`, `PS2N_LOAD_F`, `PS2N_STORE`). Only when the address is not
-  plain memory is the runtime called, once (`slowRead`, `slowWrite`): it is
-  told, and the core's own function makes the access. The locals keep the
+  (`PS2N_LOAD`, `PS2N_LOAD_F`, `PS2N_STORE`; `PS2N_LQ`, `PS2N_SQ` and
+  `PS2N_SQ_CORE` for the 128 bits of `lq` and `sq`: the local holds bits 0
+  to 63 and the core bits 64 to 127, and `lq` writes all sixteen bytes to
+  the core at once, its local a copy, so that an instruction reading the
+  register whole from the core finds it in one store). Only when the
+  address is not plain memory is the runtime called, once (`slowRead`,
+  `slowWrite`, `slowRead128`, `slowWrite128`): it is told, and the core's
+  own function makes the access. The locals keep the
   registers they hold on that way, changed or not, because nothing on it
   reads the EE's registers: the runtime looks at its record of blocks, the
   core's function at the device, and no exception is raised there. PCSX2's

@@ -1739,6 +1739,17 @@ bool ps2n::ee::ExecuteOwn(uint32_t code, uint32_t pc)
 
 // ---- for compiled code -----------------------------------------------------------
 
+uint32_t ps2n::ee::blockExit = 0;
+
+uint32_t ps2n::ee::blockAsk(const ImageInfo& image, uint32_t index)
+{
+	uint32_t block = 0;
+	const uint32_t pc = blockStart(image, index, 0, &block);
+	if (block == 0)
+		blockExit = pc;
+	return block;
+}
+
 uint32_t ps2n::ee::blockStart(const ImageInfo& image, uint32_t index, uint32_t body, uint32_t* out)
 {
 	*out = 0;
@@ -2035,6 +2046,18 @@ void ps2n::ee::slowWrite(uint32_t address, T value, uint32_t pc, uint32_t start)
 {
 	memoryFault(pc, start);
 	vtlb_memWrite<T>(address, value);
+}
+
+RETURNS_R128 ps2n::ee::slowRead128(uint32_t address, uint32_t pc, uint32_t start)
+{
+	memoryFault(pc, start);
+	return vtlb_memRead128(address);
+}
+
+void TAKES_R128 ps2n::ee::slowWrite128(uint32_t address, r128 value, uint32_t pc, uint32_t start)
+{
+	memoryFault(pc, start);
+	vtlb_memWrite128(address, value);
 }
 
 // The sizes in which compiled code loads and stores general and FPU registers
