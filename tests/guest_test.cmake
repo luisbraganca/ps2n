@@ -27,6 +27,11 @@
 #              recompiler (ten times as many against its interpreter)
 #   SELFTEST_VU  with SELFTEST: only the random micro programs, the first so
 #              many for each VU and setting (ps2n-host -selftest-vu)
+#   SELFTEST_IOP  with SELFTEST: only the random IOP programs, so many of them
+#              (ps2n-host -selftest-iop)
+#   IOP_REQUIRE_COMPILED  with SELFTEST_IOP: the run fails if a block of those
+#              programs had to be interpreted, and is skipped by a host built
+#              without them (ps2n-host -iop-require-compiled)
 #   VU_REQUIRE_COMPILED  with SELFTEST_VU: the run fails if a block of those
 #              programs had to be interpreted, and is skipped by a host built
 #              without them (ps2n-host -vu-require-compiled)
@@ -41,7 +46,14 @@
 #   WORK_DIR   scratch directory for this test; emptied first
 #   EXPECTED   file the output must equal (a console recording)
 #   EE         jit, interp or ps2n (default jit)
-#   IOP        jit or interp (default jit)
+#   IOP        jit, interp or ps2n (default jit). ps2n: the IOP's code on
+#              PS2Native's IOP provider in the runs PS2Native makes, with
+#              PCSX2's IOP recompiler under the stock run they are compared
+#              with (ps2n-host -iop-ps2n)
+#   IOP_STATIC with IOP=ps2n: off to have every block of IOP code interpreted
+#              (ps2n-host -iop-static off)
+#   IOP_CAPTURE with IOP=ps2n: a file to write the blocks of IOP code that
+#              were interpreted to, for the recompiler (ps2n-host -iop-capture)
 #   VU         jit, interp or ps2n (default jit). ps2n: both VUs' micro programs
 #              on PS2Native's VU provider, as VU_PS2N=both, in the runs PS2Native
 #              makes; a stock run they are compared with has PCSX2's recompiler
@@ -92,6 +104,10 @@
 #              written into the VUs' micro memory and what they ran, with
 #              vu-report-frames.csv and vu-report-uploads.bin beside it
 #              (ps2n-host -vu-report)
+#   IOP_REPORT also write iop-report.txt in the scratch directory: what the
+#              IOP ran, which modules were loaded where, how often its memory
+#              was written, with iop-report-frames.csv beside it (ps2n-host
+#              -iop-report)
 #   VU_PS2N    0, 1 or both: run those VUs' micro programs on PS2Native's VU
 #              provider in the runs PS2Native makes, never in a stock run
 #              they are compared with (ps2n-host -vu-ps2n), and write the
@@ -309,6 +325,18 @@ if(SELFTEST)
 	if(DEFINED VU_CAPTURE AND NOT "${VU_CAPTURE}" STREQUAL "")
 		list(APPEND trials -vu-capture "${VU_CAPTURE}")
 	endif()
+	if(DEFINED SELFTEST_IOP AND NOT "${SELFTEST_IOP}" STREQUAL "")
+		list(APPEND trials -selftest-iop ${SELFTEST_IOP})
+	endif()
+	if(DEFINED IOP_REQUIRE_COMPILED AND IOP_REQUIRE_COMPILED)
+		list(APPEND trials -iop-require-compiled)
+	endif()
+	if(DEFINED IOP_STATIC AND IOP_STATIC STREQUAL "off")
+		list(APPEND trials -iop-static off)
+	endif()
+	if(DEFINED IOP_CAPTURE AND NOT "${IOP_CAPTURE}" STREQUAL "")
+		list(APPEND trials -iop-capture "${IOP_CAPTURE}")
+	endif()
 	ps2n_run("" -selftest ${trials} -seconds ${SECONDS})
 	if(NOT exit_code STREQUAL "0")
 		message(FATAL_ERROR "The self-test failed (exit code ${exit_code}; 3 is the time limit, SECONDS). PCSX2's log: ${WORK_DIR}/core.log")
@@ -350,6 +378,9 @@ endif()
 if(DEFINED VU_REPORT AND VU_REPORT)
 	list(APPEND limits -vu-report "${WORK_DIR}/vu-report.txt")
 endif()
+if(DEFINED IOP_REPORT AND IOP_REPORT)
+	list(APPEND limits -iop-report "${WORK_DIR}/iop-report.txt")
+endif()
 if(DEFINED MARKS)
 	foreach(mark IN LISTS MARKS)
 		list(APPEND limits -mark "${mark}")
@@ -384,6 +415,23 @@ if(DEFINED VU_PS2N AND NOT "${VU_PS2N}" STREQUAL "" AND NOT "${VU_PS2N}" STREQUA
 	endif()
 endif()
 
+# PS2Native's IOP provider, likewise: in the runs PS2Native makes, with the
+# core's recompiler underneath for the stock run it is compared with.
+set(iop_ps2n "")
+set(iop_interpreted "")
+if(IOP STREQUAL "ps2n")
+	set(IOP jit)
+	set(iop_ps2n -iop-ps2n)
+	if(DEFINED IOP_CAPTURE AND NOT "${IOP_CAPTURE}" STREQUAL "")
+		list(APPEND iop_ps2n -iop-capture "${IOP_CAPTURE}")
+	endif()
+	set(iop_interpreted -iop-static off)
+	if((DEFINED IOP_STATIC AND IOP_STATIC STREQUAL "off") OR STATIC STREQUAL "off")
+		list(APPEND iop_ps2n ${iop_interpreted})
+		set(iop_interpreted "")
+	endif()
+endif()
+
 if(DEFINED SYNC AND SYNC)
 	list(APPEND limits -sync "${WORK_DIR}/sync.txt")
 endif()
@@ -398,7 +446,7 @@ if(LOCKSTEP)
 	message("--- interpreted ---")
 	ps2n_run("-interpreted"
 		-out "${WORK_DIR}/guest-interpreted.txt"
-		-ee ps2n -iop ${IOP} -vu ${VU} -static off ${image} ${vu_ps2n} ${vu_interpreted}
+		-ee ps2n -iop ${IOP} -vu ${VU} -static off ${image} ${vu_ps2n} ${vu_interpreted} ${iop_ps2n} ${iop_interpreted}
 		-trace "${WORK_DIR}/interpreted.trace"
 		${limits} "${ELF}")
 	if(NOT exit_code STREQUAL "${EXPECT_EXIT}")
@@ -413,7 +461,7 @@ if(LOCKSTEP)
 	message("--- compiled ---")
 	ps2n_run(""
 		-out "${WORK_DIR}/guest.txt"
-		-ee ps2n -iop ${IOP} -vu ${VU} -static on ${image} ${stack} ${vu_ps2n}
+		-ee ps2n -iop ${IOP} -vu ${VU} -static on ${image} ${stack} ${vu_ps2n} ${iop_ps2n}
 		-trace "${WORK_DIR}/compiled.trace"
 		-trace-against "${WORK_DIR}/interpreted.trace"
 		-capture "${WORK_DIR}/capture.toml"
@@ -451,7 +499,7 @@ if(SAME_AS_STOCK)
 	message("--- PS2Native, compiled ---")
 	ps2n_run(""
 		-out "${WORK_DIR}/guest.txt"
-		-ee ps2n -iop ${IOP} -vu ${VU} -static on ${image} ${vu_ps2n}
+		-ee ps2n -iop ${IOP} -vu ${VU} -static on ${image} ${vu_ps2n} ${iop_ps2n}
 		-sync-against "${WORK_DIR}/stock.sync"
 		${limits} "${ELF}")
 	if(NOT exit_code STREQUAL "${EXPECT_EXIT}")
@@ -522,7 +570,7 @@ endif()
 
 ps2n_run(""
 	-out "${WORK_DIR}/guest.txt"
-	-ee ${EE} -iop ${IOP} -vu ${VU} ${static} ${vu_ps2n}
+	-ee ${EE} -iop ${IOP} -vu ${VU} ${static} ${vu_ps2n} ${iop_ps2n}
 	${limits} "${ELF}")
 
 if(NOT exit_code STREQUAL "${EXPECT_EXIT}")

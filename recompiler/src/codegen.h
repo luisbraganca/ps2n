@@ -84,7 +84,8 @@ std::vector<std::string> generatedSuffixes(unsigned parts);
 // `ps2n_images` and its length `ps2n_image_count`, and for the images of
 // compiled micro code (vu_codegen.h) `ps2n_vu_images` and
 // `ps2n_vu_image_count`.
-std::string generateRegistry(const std::vector<std::string>& ids, const std::vector<std::string>& vuIds = {});
+std::string generateRegistry(const std::vector<std::string>& ids, const std::vector<std::string>& vuIds = {},
+                             const std::vector<std::string>& iopIds = {});
 
 // The CRC by which PCSX2 identifies an executable: the exclusive-or of its
 // 32-bit words.

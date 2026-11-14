@@ -17,8 +17,8 @@ ahead-of-time static recompilation. This repository is a reboot of
   fallback interpreter and the PCSX2 core run a program together. Read it
   before touching `runtime/` or `recompiler/`: how time is counted (exactly
   as PCSX2's EE recompiler counts it, by the blocks it would have formed) is
-  a contract between the two. Its last section is the same for the vector
-  units' micro programs.
+  a contract between the two. Its last two sections are the same for the
+  vector units' micro programs and for the I/O processor's code.
 
 ## Status
 
@@ -83,9 +83,37 @@ recompiler. 20,000 random micro programs give microVU's results, 1,500 of
 them on compiled blocks alone; every test passes (468), PS2Native's
 configurations on its own VU provider; the level run is the stock run at
 every sync point, VU0's and VU1's registers included, and takes 0.97 times
-stock PCSX2's time, its play 0.95. G11's pass criterion is met. What comes
-next is the maintainer's to choose: the IOP's recompiler is the one
-stand-in left (ADR 0003). Phase 4 needs its own approval.
+stock PCSX2's time, its play 0.95. G11's pass criterion is met. Then, at
+the maintainer's word on 2026-11-14 ("Let's work on the I/O processor"),
+step G12 (ADR 0023): the IOP's code, the BIOS's modules and the game's,
+compiled ahead of time, begun with a measurement (`ps2n-host -iop-report`).
+Over the level run the IOP runs about 10,600 small blocks of code, nearly
+all of them formed in the first 250 frames; 85% of its cycles pass in
+stretches that end where its kernel's idle loop is, and the host spends
+16% of the run in its provider, most of it around the IOP's code and not
+in it. The IOP's place and registers are held to the stock run at every
+sync point, as the EE's and the VUs' are. PS2Native's IOP provider
+(`runtime/iop_provider.h`) keeps the record of blocks PCSX2's IOP
+recompiler keeps, and carries a block out by its interpreter or by the
+function a build compiled for it (`ps2n-recomp iop`), which it finds by a
+fingerprint of the block's instructions wherever the IOP's kernel loaded
+them. After one run and one rebuild every one of the level run's 911
+million block runs of IOP code is compiled code's (8,023 blocks): nothing
+of the IOP's code is interpreted, and nothing of it runs on PCSX2's IOP
+recompiler. 4,000 random IOP programs give that recompiler's results,
+1,500 of them on compiled blocks alone; every test passes (469),
+PS2Native's configurations on its own IOP provider; the level run is the
+stock run at every sync point, the IOP's place and registers included,
+once both runs start with the console's clock at the same time
+(`ps2n-host -clock`), and takes what it took with PCSX2's IOP recompiler
+under it: 0.97 times stock PCSX2's time, its play 0.95. G12's pass
+criterion is met: in the run into the first level no recompiler of
+PCSX2's for PS2 code carries anything out, and none of ADR 0003's
+stand-ins is in use. The next step, at the maintainer's word the same day
+(ADR 0024), is G13: further into the game before Phase 3 ends, the
+maintainer playing on in the window and what each session had to
+interpret compiled into the next build. It has not begun: it waits for
+the maintainer's first session. Phase 4 needs its own approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -267,6 +295,44 @@ Decisions:
   captured (`ps2n-host -vu-capture`, `build.ps1 -VuCapture`), PS2Native's
   configurations on PS2Native's VU provider. What the session decided
   within the step is listed there, for the maintainer to decide otherwise.
+- [ADR 0023](docs/adr/0023-the-iops-code-compiled-as-step-g12.md):
+  step G12, inside Phase 3, at the maintainer's word on 2026-11-14 ("Let's
+  work on the I/O processor"): the IOP's code, the BIOS's modules and the
+  game's, compiled ahead of time by PS2Native's own translator, in the
+  place of PCSX2's IOP recompiler, the last stand-in of ADR 0003,
+  following it as ADR 0005 has it. Begun with a measurement
+  (`ps2n-host -iop-report`). What the session decided within the step is
+  listed there, for the maintainer to decide otherwise: the IOP's place and
+  registers held to the stock run at every sync point (on the strength of
+  the answer for VU1's in ADR 0022); PS2Native's own IOP provider
+  (`runtime/iop_provider.h`), which keeps the record of blocks PCSX2's IOP
+  recompiler keeps and interprets them; IOP code compiled block by block,
+  each as that recompiler formed it, found by a fingerprint of its
+  instructions wherever it is loaded (`ps2n-recomp iop`,
+  `ps2n/iop_recomp.h`); blocks no build has compiled interpreted and
+  captured (`ps2n-host -iop-capture`, `build.ps1 -IopCapture`); what it
+  does not carry out refused by name; PS2Native's configurations on
+  PS2Native's IOP provider; and every run that is not played in a window
+  started with the console's clock at one fixed time (`ps2n-host -clock`),
+  since the first comparison with the IOP in it showed two runs reading
+  different times of day. The self-test found a defect of PCSX2's IOP
+  recompiler on the way (a jump through a register that goes to address
+  0): the provider stops at that form. On 2026-11-14 the maintainer chose
+  to tell PCSX2 themselves, in an issue of their own, and asked for a
+  draft to go by; the session wrote none, as ADR 0010 has it, and gave
+  where the defect is and how it is seen (the ADR's section on it).
+- [ADR 0024](docs/adr/0024-further-into-the-game-before-phase-3-ends.md):
+  the next step, G13, inside Phase 3, at the maintainer's word on
+  2026-11-14 ("Ok", to the session's recommendation): further into the
+  game before the phase ends. The maintainer plays on in the window,
+  beyond what the scripts reach; each session writes down what it had to
+  interpret (the game's EE code, the micro code, the IOP's code); a
+  session puts that into the captures, makes the build again, checks it
+  again and reports what new code each part of the game brought, and what
+  went wrong. The step's criterion is the session's proposal, and how far
+  is far enough is the maintainer's to say. Not begun: its first move is
+  a session of the maintainer's (`game.ps1 -Play` with `-Capture`,
+  `-VuCapture` and `-IopCapture`; the game log's "How to run it").
 
 ## Layout, build and test
 
@@ -278,17 +344,24 @@ CMakeLists.txt, core/     build-time tools, a project of their own with no PCSX2
                           instruction decoder, disassembler, assembler, ELF/IRX/SNR2 readers, the reader of a
                           BIOS image's directory (romdir); for the vector units, the first pass of PCSX2's VU
                           recompiler (ps2n/vu_mvu.h) and a block of micro code as a list of steps, its plan
-                          (ps2n/vu_plan.h, vu_steps.inc), both used by the runtime too
+                          (ps2n/vu_plan.h, vu_steps.inc); for the IOP, its instructions as PCSX2's IOP
+                          recompiler treats them and what a block of them is (ps2n/r3000a.h); all used by the
+                          runtime too
 recompiler/               ps2n-recomp, in that same project: analysis and C++ generation for EE executables
                           and for the BIOS's EE code (bios.cpp), and C++ generation for the blocks of micro
-                          code that runs captured (vu_codegen.cpp)
+                          code (vu_codegen.cpp) and of IOP code (iop_codegen.cpp) that runs captured
 runtime/                  what PS2Native adds to the core at run time: the EE provider (dispatcher,
                           fallback interpreter), the record of the blocks PCSX2's recompiler would have formed
                           (rec_blocks), instruction semantics, the contract for generated code; the VU
                           provider (vu_interp), which follows PCSX2's VU recompiler: its record of programs
                           and blocks, the planner, the interpreter of plans; the steps' semantics
-                          (ps2n/vu_ops.h) and the contract for compiled micro code (ps2n/vu_recomp.h)
-host/                     ps2n-host: console frontend for the PCSX2 core, the test bench; with -window, where a game
+                          (ps2n/vu_ops.h) and the contract for compiled micro code (ps2n/vu_recomp.h); the
+                          IOP provider (iop_provider), which follows PCSX2's IOP recompiler: its record of
+                          blocks, the interpreter; the IOP's instructions carried out (ps2n/iop_ops.h) and the
+                          contract for compiled IOP code (ps2n/iop_recomp.h)
+host/                     ps2n-host: console frontend for the PCSX2 core, the test bench (the self-test of the
+                          instruction semantics, of the VU provider and of the IOP provider; the watches on the
+                          core's providers: sync_trace, vu_report, iop_report); with -window, where a game
                           is played (window.cpp: Windows only so far)
 tests/unit/               unit tests of the build-time tools
 tests/                    CTest registration for programs booted on the core, the driver script, the recorded
@@ -347,7 +420,12 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   run's files (what was written into each VU's micro memory, where, with
   how many contents, where programs were started, how long each ran), with
   the counts frame by frame and the contents written beside it, which are
-  the game's and stay in the build tree ("G11"). How much host code
+  the game's and stay in the build tree ("G11"). What the IOP runs:
+  `game.ps1 -IopReport` (`ps2n-host -iop-report`) writes `iop-report.txt`
+  (how much IOP time passed and how long the host took for it, how often
+  the IOP's memory was written, which modules its kernel listed where and
+  when, and, under PCSX2's IOP recompiler, how many blocks it formed in
+  each), with the counts frame by frame beside it ("G12"). How much host code
   each kind of generated line became: `ps2n-host -code-size <file>` (from
   the host's own debugging information; no machine, about 20 s). To try a
   change to a header on one generated file, compile that file alone with
@@ -402,6 +480,32 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   capture go stale: run the game with `-VuCapture` again and rebuild. The
   captures are derived from the game and stay in the build tree. The
   execution model's "The vector units' micro programs" says how it works.
+- The IOP's code (step G12): in PS2Native's configurations the IOP runs on
+  PS2Native's IOP provider (`ps2n-host -iop-ps2n`; `game.ps1 -IopPs2n off`
+  puts PCSX2's IOP recompiler back under them; the stock run of a
+  comparison never has PS2Native's). It carries a block of IOP code out by
+  the function a build compiled for it, found by a fingerprint of the
+  block's instructions wherever they are loaded, and by its interpreter
+  otherwise. `game.ps1 -IopCapture build\game\<name>\iop-capture.toml`
+  adds the blocks a run had to interpret to that file (`ps2n-host
+  -iop-capture`, `ps2n-recomp iop-capture`), and
+  `scripts\windows\build.ps1 -IopCapture <file>` compiles them into the
+  host, into `build\windows-clang\ps2n\generated\iop` (the build tree
+  remembers the file; `-IopCapture none` forgets it). After a run the host
+  says how many different blocks the IOP ran, how many of them compiled
+  and how many interpreted, and how often, and how many blocks PCSX2's IOP
+  recompiler holds: for the level run "interpreted" and that must be
+  zero. `game.ps1 -IopStatic off` (`ps2n-host -iop-static off`) has every
+  block interpreted, the reference for the compiled ones.
+  `scripts\windows\iop-selftest.ps1 -Bios <BIOS image>` captures the
+  blocks of the self-test's random IOP programs and builds them in
+  (`build.ps1 -IopSelftestCapture`), for the test `selftest/iop-compiled`:
+  run it again whenever that test says blocks had to be interpreted, which
+  is what a change to the programs the self-test makes does. The captures
+  are derived from the BIOS and the game and stay in the build tree. What
+  the provider does not carry out it stops at, with an error that names it
+  (`r3000a::shape`, `Refuse` in `runtime/iop_provider.cpp`). The execution
+  model's "The I/O processor's code" says how it works.
 - Playing the game: `scripts\windows\game.ps1 -Image <disc image> -Play
   -Name <name>` opens it in a window, at the console's speed, with sound,
   the keyboard and the first controller (`ps2n-host -help` has the keys),
@@ -409,9 +513,12 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   same window. What a game keeps between sessions (memory card, the
   console's settings) is in `build\game\<name>\play`, and so is what the
   last session had to interpret of the game (`capture.toml`; `-Capture
-  <file>` adds it to the file `build.ps1 -GameCapture` takes) and of its
-  micro code (`vu-capture.toml`; `-VuCapture <file>` likewise). Windows
-  only so far.
+  <file>` adds it to the file `build.ps1 -GameCapture` takes), of its
+  micro code (`vu-capture.toml`; `-VuCapture <file>` likewise) and of the
+  IOP's code (`iop-capture.toml`; `-IopCapture <file>`). In a window the
+  console's clock is the host's time of day; every other run starts it at
+  one fixed time (`ps2n-host -clock fixed`), so that two runs are the same
+  machine. Windows only so far.
   A session that checks the window does it with the sound off, because the
   sound comes out of the maintainer's speakers:
   `scripts\windows\window-check.ps1 -Image <disc image> -Name <name> -Steps
@@ -422,18 +529,22 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   (console recordings), `programs` (our own, `tests/programs/*.s`, built with
   `ps2n-recomp assemble`) and `sdk` (C programs built with ps2sdk, binaries in
   `tests/sdk/bin`). Configurations: `stock-jit`, `stock-interp`
-  (PCSX2 as it ships), `ps2n-ee` (our providers, the EE's and the VUs',
-  interpreting), `ps2n-static` (our providers, the program compiled ahead of
-  time; a test program's micro code is interpreted, no build having
-  captured it), `lockstep` (the compiled run compared with the interpreted
-  one at every event test), `same-as-stock` (ADR 0011: the compiled run
-  compared with a stock run at every sync point: place, cycle count,
-  registers, VU0's and VU1's among them), `never-further` (ADR 0005: the
-  compiled run's output against the stock run's, line by line; CTest runs
-  the two it compares first), and for the console-recorded VU programs
-  `ps2n-static-microvu` (compiled EE code with PCSX2's VU recompiler under
-  it, as before G11: tells a fault of the VU provider from one of the
-  EE's). Also `selftest/tables-and-semantics`: our instruction semantics
+  (PCSX2 as it ships), `ps2n-ee` (our providers, the EE's, the IOP's and
+  the VUs', interpreting), `ps2n-static` (our providers, the program
+  compiled ahead of time; a test program's micro code is interpreted, no
+  build having captured it, and its IOP code runs compiled where the host
+  has the block, as it has the BIOS's modules' with a game's capture built
+  in), `lockstep` (the compiled run compared with the interpreted one at
+  every event test, the IOP's state in the fingerprint), `same-as-stock`
+  (ADR 0011: the compiled run compared with a stock run at every sync
+  point: place, cycle count, the IOP's PC and cycle count, and the
+  registers, VU0's, VU1's and the IOP's among them), `never-further`
+  (ADR 0005: the compiled run's output against the stock run's, line by
+  line; CTest runs the two it compares first), and for the console-recorded
+  VU programs `ps2n-static-microvu` (compiled EE code with PCSX2's VU and
+  IOP recompilers under it, as before G11: tells a fault of the VU provider
+  or of the IOP provider from one of the EE's). Also
+  `selftest/tables-and-semantics`: our instruction semantics
   against PCSX2's interpreter and recompiler, and PS2Native's VU provider
   against PCSX2's VU recompiler on random micro programs
   (`host/selftest_vu.cpp`: 2,000 per VU in each of five settings, the fifth
@@ -442,7 +553,13 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   registers it uses); and `selftest/vu-compiled`, the first 150 of those
   programs per VU and setting with every block compiled ahead of time
   (skipped without the self-test's capture in the build, failed when a
-  block had to be interpreted).
+  block had to be interpreted). The same self-test holds PS2Native's IOP
+  provider to PCSX2's IOP recompiler on 4,000 random IOP programs
+  (`host/selftest_iop.cpp`: registers, memory and cycle counts after every
+  stretch of time, and the addresses at which each holds a block; a
+  program that differs is made as small as it still differs in and
+  printed), and `selftest/iop-compiled` runs the first 1,500 of them with
+  every block compiled ahead of time (skipped and failed likewise).
 - A failing test's files are in `build\windows-clang\ps2n\tests\<test name>`:
   `core.log` (PCSX2's log), `guest.txt`, `actual.txt`.
 - A `lockstep` failure names the event test where the runs part, a
@@ -469,7 +586,11 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   many instructions of encodings PCSX2's VU recompiler knows nothing of
   the blocks held (carried out as it carries them out: not at all), and
   another names what the VU provider does not carry out, where the run
-  stopped at it.
+  stopped at it. "PS2Native's IOP provider" and "the IOP's blocks" say the
+  same for the IOP: its stretches of time, the blocks begun, formed and
+  thrown away, how many different blocks ran compiled and interpreted, how
+  many blocks PCSX2's IOP recompiler holds (none, when it carried out
+  nothing), and what the provider stopped at, if anything.
 - The Linux scripts have never been run. Only the maintainer can run them.
 - Never run stock `pcsx2-gsrunner` here: it writes into the maintainer's own
   `Documents\PCSX2`.

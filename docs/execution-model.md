@@ -47,6 +47,10 @@ code is right and this file needs fixing.
   micro code a build has seen, an interpreter for the rest, and a record
   that follows PCSX2's VU recompiler as the record of blocks follows its EE
   recompiler ("The vector units' micro programs" at the end).
+- **The I/O processor's code** has a provider of its own as well: code
+  compiled ahead of time for the blocks of IOP code a build has seen, an
+  interpreter for the rest, and a record that follows PCSX2's IOP
+  recompiler ("The I/O processor's code" at the end).
 
 There is no guest state outside the core, but for the length of a stretch
 of straight-line compiled code. Registers are `cpuRegs` and `fpuRegs`,
@@ -646,13 +650,23 @@ runs no compiled code, and delegates the FPU.
 
 ## Comparing two runs
 
+**The same machine.** Two runs can only be the same run if they start from
+the same machine. The core sets the console's clock from the host's time of
+day when the machine starts, and the IOP's modules read it. So the host
+starts every run that is not played in a window at one fixed time
+(`ps2n-host -clock fixed`, the default: 2020-03-04, midnight, the time PCSX2
+gives its input recordings); someone playing gets the day it is (`-clock
+host`, the default with `-window`).
+
 **With stock PCSX2: sync points.** The core lets the IOP catch up with the
 EE from its event test, and that moment exists whatever runs the EE.
 `ps2n-host -sync <file>` writes one line for each (a *sync point*): the EE's
-PC and cycle count, how far the IOP is let run, and hashes of the EE's
-general, FPU, COP0 and VU0 registers, and of VU1's (since G11, ADR 0022;
-VU1 runs on the CPU thread between the EE's blocks, so it is never in the
-middle of an instruction there). (Registers of the machine only: not
+PC and cycle count, how far the IOP is let run, the IOP's cycle count and
+its PC, and hashes of the EE's general, FPU, COP0 and VU0 registers, of
+VU1's (since G11, ADR 0022; VU1 runs on the CPU thread between the EE's
+blocks, so it is never in the middle of an instruction there) and of the
+IOP's general registers and its COP0's (since G12, ADR 0023; the IOP is
+between two of its blocks there, whatever runs it). (Registers of the machine only: not
 the variables PCSX2's interpreter functions keep beside them, such as the
 VU interpreter's pending result of a division, which a run that goes
 through those functions has and a run on PCSX2's recompilers has not.) It
@@ -675,14 +689,15 @@ followed on purpose, and from there a register differs for good. So for a
 game (`game.ps1 -Config same-as-stock`) place and time must be the same at
 every sync point, and so must the pictures and the state of the sound
 hardware at the frames looked at; the registers are reported kind
-by kind (general, FPU, COP0, VU0, VU1): at how many sync points each differed and
+by kind (general, FPU, COP0, VU0, VU1, the IOP's): at how many sync points each differed and
 where first, so that one kind that differs for a known reason does not hide
 the others.
 
 **Compiled against interpreted: event tests.** Both carry out the same
 blocks, so event tests happen at the same instructions and cycle counts.
 The provider folds the registers at every event test into a fingerprint of
-the run:
+the run (the EE's, the FPU's, COP0's and VU0's, and since G12 the IOP's
+PC, cycle count, general registers and COP0 registers):
 
 - `ps2n-host -trace <file>` writes one line per event test: number, PC,
   cycle count, fingerprint so far. `-trace-detail <n>` adds the registers
@@ -961,3 +976,197 @@ in the build tree). The test programs and the game are held to the stock
 run with the VUs on the provider (`same-as-stock`, VU0's and VU1's
 registers at every sync point), and to the run with everything
 interpreted, the micro code too (`lockstep`).
+
+## The I/O processor's code
+
+The IOP's code, the BIOS's modules and a game's, is run by a provider of
+the core's (`psxCpu`): PCSX2's IOP recompiler as it ships, or PS2Native's
+IOP provider (`runtime/iop_provider.h`), which the host puts in its place
+in PS2Native's configurations (`ps2n-host -iop-ps2n`; step G12, ADR 0023).
+PS2Native's provider carries a block of IOP code out by code compiled
+ahead of time where the host has it, and by its interpreter elsewhere;
+what it had to interpret it reports and writes down for the next build.
+The definitions are in code:
+[core/include/ps2n/r3000a.h](../core/include/ps2n/r3000a.h) (the IOP's
+instructions as PCSX2's IOP recompiler treats them, and what a block is by
+its instructions), [runtime/include/ps2n/iop_ops.h](../runtime/include/ps2n/iop_ops.h)
+(the instructions carried out, and how a block ends),
+[runtime/include/ps2n/iop_recomp.h](../runtime/include/ps2n/iop_recomp.h)
+(the contract compiled IOP code is written against),
+[runtime/iop_provider.cpp](../runtime/iop_provider.cpp) (the record of
+blocks, the interpreter, the dispatcher) and
+[recompiler/src/iop_codegen.cpp](../recompiler/src/iop_codegen.cpp) (what is
+generated).
+
+**It follows PCSX2's IOP recompiler, not the console** (ADR 0005), in its
+results and in its time (ADR 0011). The core gives the IOP its time in
+stretches, from the EE's event test, and takes back what the IOP did not
+use; the IOP's interrupts, its answers to the EE and its sound all come at
+the IOP's cycle counts. That recompiler counts time by the blocks it
+compiles, as PCSX2's EE recompiler does, and what a block is was fixed
+when it first compiled it. So the provider keeps the record that
+recompiler keeps, without the code: `Form()` is its `iopRecRecompile()`
+carried out on paper, `Clear()` its `recClearIOP()`, `Reset()` its
+`recResetIOP()`.
+
+### What a block of the IOP's is
+
+The rules, each transcribed from PCSX2 v2.9.170 (`pcsx2/x86/iR3000A.cpp`,
+`iR3000Atables.cpp`, `BaseblockEx.h`):
+
+1. **Where it ends.** From the block's first instruction the recompiler
+   looks ahead and stops after a branch or jump and its delay slot; at an
+   address where a block exists already; and, if a conditional branch goes
+   back to a place inside the block, at that place. Nothing else ends one:
+   not `SYSCALL`, not a page boundary, not its length.
+2. **What it costs.** A cycle for each instruction, seven more for a
+   multiplication and forty more for a division. The EE's clock is charged
+   eight for each of the IOP's.
+3. **A block that ends at a branch or jump** adds its cycles and charges
+   the EE's clock. If that leaves the stretch nothing, the IOP stops there
+   until it is given time again. Otherwise an event test follows if the
+   cycle count has reached the next event, and an interrupt taken there
+   sends the IOP elsewhere.
+4. **A block that was cut short** (at another block, or at its own
+   branch's target) adds its cycles, charges them and runs on into the
+   next block: nothing is tested, though the stretch be used up.
+5. **Wait loops.** A block whose branch goes back to its own first
+   instruction and which holds nothing else but NOPs lets time pass when
+   that branch is taken: to the next event, or as far as the EE's clock
+   lets it; and unless that ends the stretch an event test follows whatever
+   the time. The kernel's idle thread is such a loop. PCSX2's `WaitLoop`
+   setting switches this off; it is read when the block is formed.
+6. **`SYSCALL` and `BREAK`** raise their exception and leave the block with
+   the cycles of its instructions so far, their own included; nothing is
+   tested. (Over the level run the IOP carries out five million of them.)
+7. **Time stands still inside a block.** The cycle count, the EE's clock
+   and the PC the core has are those of the block's start until the block
+   ends: a device a block reads or writes is told the time it began.
+8. **A block is what memory held when it was formed.** Its instructions are
+   kept, as the recompiler's host code keeps them. A store into the middle
+   of a block changes memory and not the block. A write to the address a
+   block begins at throws that block away, and with it every block that
+   overlaps what is thrown away; a transfer into memory does the same word
+   by word. Only below the highest address a block has ended at is anything
+   looked at.
+9. **Blocks are filed under physical addresses**, RAM and the ROMs being
+   mapped at three places each. A block is entered through any of them,
+   and what in it depends on its address (where a branch goes, what a call
+   returns to) keeps the address it was formed at.
+10. **A module's imports.** `addiu $zero, $zero, n` is the instruction by
+    which an import stub names its function. When a block with one is
+    formed, the table of imports the stub belongs to is looked for before
+    it in memory, and if the core has a function of its own for that
+    library's import (the kernel's `Kprintf`; file access on `host:`; the
+    registering of a library, which the core's debugger listens to), that
+    function is called when the instruction runs. Where it did the import's
+    work itself the IOP goes on where it says, and nothing of the block's
+    time is counted.
+11. **The order of a jump and its delay slot.** The recompiler carries the
+    delay slot's instruction out before the jump where it finds the two
+    cannot get in each other's way (`psxTrySwapDelaySlot`), and it
+    overlooks two cases, which show: after `JALR`, an instruction of the
+    arithmetic kind in the delay slot that writes the link register loses
+    to the return address, and a move to a coprocessor there reads the link
+    register as it was before (`r3000a::swapsDelaySlot`).
+12. **The rest of what it does not do as the console**: no exception on
+    overflow, none on an address that is not aligned, no delay of a load's
+    result; a division by zero gives the dividend as the remainder and 1 or
+    -1; a load reads RAM wherever bit 28 of its address is clear; an
+    encoding it has no instruction for does nothing and costs a cycle.
+13. **Three addresses** at which forming a block does something more: the
+    kernel's start (the core's debugger forgets its modules), the place
+    where a module the user asked for is put in the kernel's list, and the
+    boot code, which is told there how much RAM there is.
+14. **The whole record is thrown away** when the core resets its providers
+    (a game is started, a setting changes).
+
+### Blocks compiled ahead of time
+
+A run writes down the blocks its interpreter had to carry out, each as it
+was formed: its instructions, and for the reader where it was first met
+(`ps2n-host -iop-capture`, `game.ps1 -IopCapture`; `ps2n-recomp
+iop-capture` puts several runs' files together). `ps2n-recomp iop` writes
+one C++ function for each (`build.ps1 -IopCapture`), and the host's
+registry lists the images of them it was linked with (`ps2n_iop_images`).
+
+- **A compiled block is found by its instructions**, by a 128-bit
+  fingerprint of them (`r3000a::key`), not by its address: when the
+  provider forms a block and a build has a function for those
+  instructions, the block runs by it. Nothing in the function says where
+  the block is: a branch's target and the address a call returns to are
+  reckoned from the address the record has for the block (`Block::pc`). So
+  the same instructions are carried out by the same function wherever the
+  IOP's kernel loaded them, in whichever of its three starts. Instructions
+  that hold an address (a call's target, a pointer to a module's data) are
+  other instructions at another address; a block with them that a build
+  compiled for one place is interpreted at another, and captured.
+- **There is no question whether memory still holds the code that was
+  compiled**: the record forms a block from what memory holds, and only
+  then is a function looked for.
+- **The registers are locals.** A block's function takes the general
+  registers, HI and LO it reads from the core the first time it reads
+  each, works on locals, and puts back what it wrote before anything else
+  can look: where the block ends, before `SYSCALL` or `BREAK` (the
+  exception's handler reads them), before an import's function of the
+  core's and before an instruction of the GTE's (the core's functions read
+  and write them; the locals are taken again after). What the core does
+  for a load or a store that is not RAM reads none of them, so the locals
+  stay across it.
+- **Loads and stores of RAM are in the block's code**: a load as the
+  recompiler compiles it, a store as the core's function for it makes it,
+  with the test whether a block begins at the word written (rule 8) in the
+  place of the call that would announce it.
+- **Blocks go on to each other**, as the recompiler's blocks jump to each
+  other. Each of a block's two ways out remembers the block it led to; it
+  is good for as long as no block has been thrown away since
+  (`g_generation`). A block calls the next in the place of returning (a
+  jump: `[[clang::musttail]]`, under a calling convention with which a
+  block saves no registers for its caller), and returns to the provider
+  when the stretch is over or the record has no block yet where it goes.
+  An interpreted block is entered and left the same way.
+
+**Code no build has compiled** is interpreted, counted and reported: after
+a run the host says how many different blocks the IOP ran, how many of
+them were compiled and how often those ran, how many were interpreted and
+how often. `ps2n-host -iop-static off` has every block interpreted, the
+compiled ones too: the reference for them.
+
+**What is not carried out.** The IOP's PlayStation mode (a PlayStation
+game on the console); a branch or jump, a `SYSCALL` or a `BREAK` in a delay
+slot; an import the core has a function for, in a block longer than its
+stub (the recompiler writes the registers back before that call, but not
+one whose value the rest of the block never reads, which only its
+allocation of host registers says); a jump through a register whose delay
+slot is an unaligned load or store (`LWL`, `LWR`, `SWL`, `SWR`) or an
+instruction of the GTE's that the recompiler does not carry out before the
+jump (rule 11): PCSX2's recompiler loses the jump's target there (it keeps
+it in a host register, gives every host register up for the call the delay
+slot's instruction is, writes the target to the EE's registers and reads
+it back from the IOP's), and the IOP goes on at address 0, which is
+neither followed nor guessed at; a block of more than 16,384 instructions;
+a jump to an address that is not a multiple of four or where the IOP has
+no memory, at which PCSX2 stops the machine too; code run through a mirror
+of RAM above its size and then written. A run that reaches one stops with
+an error that names it. The game and the test programs reach none.
+
+**What is not reproduced.** PCSX2's IOP recompiler throws its record away
+when its 32 MB of host code are full, which the provider cannot know (the
+level run fills 1.85 MB). Its breakpoints and its trace of the kernel's
+calls, which a run here never switches on.
+
+**How it is held to PCSX2's IOP recompiler.** The self-test
+(`host/selftest_iop.cpp`) runs random IOP programs on that recompiler and
+on the provider, in the same stretches of time, and compares after every
+stretch where the IOP is, its cycle count, what is left of the EE's clock
+and every register, and at the end the memory the program could reach,
+its own code included, and the addresses at which each holds a block: on
+4,000 programs nothing differs. `selftest/iop-compiled` runs the first
+1,500 of them with every block compiled ahead of time,
+and fails if one had to be interpreted; without that capture in the build
+it is skipped, not passed (`scripts\windows\iop-selftest.ps1` captures and
+builds them). The test programs and the game are held to the stock run
+with the IOP on the provider (`same-as-stock`: the IOP's PC and cycle
+count with the place and time, and its registers, at every sync point),
+and to the run with everything interpreted, the IOP's code too
+(`lockstep`).

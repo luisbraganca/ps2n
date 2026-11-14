@@ -96,13 +96,15 @@ endmacro()
 set(PS2N_TEST_CONFIGS
 	"stock-jit|jit|jit|jit|on"          # PCSX2 as it ships: the reference
 	"stock-interp|interp|interp|interp|on"
-	"ps2n-ee|ps2n|jit|ps2n|off"         # PS2Native's EE and VU providers, interpreting everything
-	"ps2n-static|ps2n|jit|ps2n|on"      # the same with the code compiled ahead of time where a build has it
+	"ps2n-ee|ps2n|ps2n|ps2n|off"        # PS2Native's EE, IOP and VU providers, interpreting everything
+	"ps2n-static|ps2n|ps2n|ps2n|on"     # the same with the code compiled ahead of time where a build has it
 )
 # In both ps2n configurations the VUs' micro programs run on PS2Native's VU
 # provider too (step G11, ADR 0022): on the blocks a build has compiled
 # (ps2n-recomp vu), which for a test program are few or none, and on its
-# interpreter. The IOP is on PCSX2's recompiler, the stand-in of ADR 0003.
+# interpreter. So does the IOP's code, on PS2Native's IOP provider (step G12,
+# ADR 0023): on the blocks a build has compiled (ps2n-recomp iop) and on its
+# interpreter.
 
 # ps2n_add_guest_test(<test name> <timeout> <labels> <arguments for guest_test.cmake>...)
 function(ps2n_add_guest_test test timeout labels)
@@ -176,7 +178,7 @@ function(ps2n_add_program_tests suite name elf expected image)
 	# Lockstep: the program run interpreted and then compiled, the second run
 	# compared with the first at every event test.
 	ps2n_add_guest_test("${suite}/lockstep/${name}" 240 "${suite};lockstep"
-		"-DELF=${elf}" -DIOP=jit -DVU=ps2n "-DIMAGE=${image}" -DLOCKSTEP=1 ${ARGN})
+		"-DELF=${elf}" -DIOP=ps2n -DVU=ps2n "-DIMAGE=${image}" -DLOCKSTEP=1 ${ARGN})
 
 	# Same as stock: the program run under stock PCSX2 with its recompilers and
 	# then compiled, the second run compared with the first at every sync point
@@ -184,7 +186,7 @@ function(ps2n_add_program_tests suite name elf expected image)
 	# stock run as well.
 	set(test "${suite}/same-as-stock/${name}")
 	ps2n_add_guest_test("${test}" 240 "${suite};same-as-stock"
-		"-DELF=${elf}" -DIOP=jit -DVU=ps2n "-DIMAGE=${image}" -DSAME_AS_STOCK=1 ${ARGN})
+		"-DELF=${elf}" -DIOP=ps2n -DVU=ps2n "-DIMAGE=${image}" -DSAME_AS_STOCK=1 ${ARGN})
 	if(name IN_LIST ${suite_upper}_DIFFERS_same-as-stock)
 		if(name IN_LIST ${suite_upper}_NO_STOCK_RUN)
 			ps2n_expect_failure("${test}" "The stock run ended with")
@@ -207,6 +209,14 @@ ps2n_add_guest_test("selftest/tables-and-semantics" 600 "selftest" -DSELFTEST=1)
 set(PS2N_VU_SELFTEST_PROGRAMS 150)
 ps2n_add_guest_test("selftest/vu-compiled" 600 "selftest;ps2n-vu" -DSELFTEST=1
 	-DSELFTEST_VU=${PS2N_VU_SELFTEST_PROGRAMS} -DVU_REQUIRE_COMPILED=1)
+
+# The same for the random IOP programs (step G12): the first so many, whose
+# blocks a build has compiled when it was given their capture
+# (scripts/windows/iop-selftest.ps1 makes it and builds it in). Skipped by a
+# host built without; failed when a block of them had to be interpreted.
+set(PS2N_IOP_SELFTEST_PROGRAMS 1500)
+ps2n_add_guest_test("selftest/iop-compiled" 600 "selftest;ps2n-iop" -DSELFTEST=1
+	-DSELFTEST_IOP=${PS2N_IOP_SELFTEST_PROGRAMS} -DIOP_REQUIRE_COMPILED=1)
 
 # ---- ps2autotests: programs whose output was recorded on a console -----------------
 include("${PS2N_ROOT}/tests/ps2autotests-known-differences.cmake")
@@ -249,12 +259,12 @@ foreach(elf IN LISTS ps2autotests_elfs)
 	)
 endforeach()
 
-# PS2Native's configurations without its VU provider (step G11,
-# docs/adr/0022-vu-micro-programs-compiled-as-step-g11.md): the console-
-# recorded VU tests with PS2Native's EE provider and PCSX2's VU recompiler
-# under it, as every test ran before G11. They tell a fault of the VU
-# provider from one of the EE's when a VU test fails: held to the recording
-# as ps2n-static is, with the same known differences.
+# PS2Native's configurations without its VU provider and its IOP provider
+# (steps G11 and G12, docs/adr/0022, 0023): the console-recorded VU tests
+# with PS2Native's EE provider and PCSX2's VU and IOP recompilers under it,
+# as every test ran before G11. They tell a fault of the VU provider or of
+# the IOP provider from one of the EE's when a VU test fails: held to the
+# recording as ps2n-static is, with the same known differences.
 foreach(elf IN LISTS ps2autotests_elfs)
 	if(NOT elf MATCHES "^vu/")
 		continue()
@@ -278,7 +288,7 @@ foreach(name IN ITEMS cpu/ee/alu cpu/ee_fpu/arithmetic kernel/ee/thread/terminat
 	if("${name}.elf" IN_LIST ps2autotests_elfs)
 		string(MAKE_C_IDENTIFIER "${name}" id)
 		ps2n_add_guest_test("ps2autotests/lockstep-no-stack/${name}" 240 "ps2autotests;lockstep"
-			"-DELF=${PS2AUTOTESTS_ROOT}/${name}.elf" -DIOP=jit -DVU=ps2n "-DIMAGE=${id}" -DLOCKSTEP=1 -DSTACK_BUDGET=0)
+			"-DELF=${PS2AUTOTESTS_ROOT}/${name}.elf" -DIOP=ps2n -DVU=ps2n "-DIMAGE=${id}" -DLOCKSTEP=1 -DSTACK_BUDGET=0)
 	endif()
 endforeach()
 
@@ -379,32 +389,34 @@ endforeach()
 #   ctest -LE gpu
 set(vu_elf "${PS2N_SDK_ROOT}/bin/vu.elf")
 if(EXISTS "${vu_elf}")
-	set(frame_run "-DELF=${vu_elf}" -DIOP=jit -DIMAGE=sdk_vu -DUNTIL=done -DWHOLE=1 -DSETTLE=4 -DFRAMES=900)
+	set(frame_run "-DELF=${vu_elf}" -DIMAGE=sdk_vu -DUNTIL=done -DWHOLE=1 -DSETTLE=4 -DFRAMES=900)
 
 	foreach(config_entry IN LISTS PS2N_TEST_CONFIGS)
 		string(REPLACE "|" ";" config_fields "${config_entry}")
 		list(GET config_fields 0 config)
 		list(GET config_fields 1 config_ee)
+		list(GET config_fields 2 config_iop)
 		list(GET config_fields 3 config_vu)
 		list(GET config_fields 4 config_static)
 		if(config STREQUAL "stock-interp")
 			continue()   # PCSX2's VU interpreters; the program runs under them in sdk/stock-interp/vu
 		endif()
 		ps2n_add_guest_test("frames/software/${config}/vu" 120 "frames;gpu;${config}"
-			${frame_run} "-DEE=${config_ee}" "-DVU=${config_vu}" "-DSTATIC=${config_static}"
+			${frame_run} "-DEE=${config_ee}" "-DIOP=${config_iop}" "-DVU=${config_vu}" "-DSTATIC=${config_static}"
 			-DRENDERER=sw "-DFRAME_EXPECTED=${PS2N_SDK_ROOT}/vu.software.frame")
 	endforeach()
 
-	# The same picture with PCSX2's VU recompiler under PS2Native's EE provider,
-	# as before G11: to tell a fault of the VU provider from another.
+	# The same picture with PCSX2's VU and IOP recompilers under PS2Native's EE
+	# provider, as before G11: to tell a fault of the VU provider or of the IOP
+	# provider from another.
 	ps2n_add_guest_test("frames/software/ps2n-static-microvu/vu" 120 "frames;gpu;ps2n-static-microvu"
-		${frame_run} -DEE=ps2n -DVU=jit -DSTATIC=on
+		${frame_run} -DEE=ps2n -DIOP=jit -DVU=jit -DSTATIC=on
 		-DRENDERER=sw "-DFRAME_EXPECTED=${PS2N_SDK_ROOT}/vu.software.frame")
 
 	ps2n_add_guest_test("frames/vulkan-1x/ps2n-static/vu" 120 "frames;gpu;ps2n-static"
-		${frame_run} -DEE=ps2n -DVU=ps2n -DSTATIC=on -DRENDERER=vulkan -DUPSCALE=1 -DFRAME_SIZE=320x448)
+		${frame_run} -DEE=ps2n -DIOP=ps2n -DVU=ps2n -DSTATIC=on -DRENDERER=vulkan -DUPSCALE=1 -DFRAME_SIZE=320x448)
 	ps2n_add_guest_test("frames/vulkan-3x/ps2n-static/vu" 120 "frames;gpu;ps2n-static"
-		${frame_run} -DEE=ps2n -DVU=ps2n -DSTATIC=on -DRENDERER=vulkan -DUPSCALE=3 -DFRAME_SIZE=960x1344)
+		${frame_run} -DEE=ps2n -DIOP=ps2n -DVU=ps2n -DSTATIC=on -DRENDERER=vulkan -DUPSCALE=3 -DFRAME_SIZE=960x1344)
 endif()
 
 # ---- a game (Phase 3) --------------------------------------------------------------
@@ -516,12 +528,63 @@ if(PS2N_VU_SELFTEST_CAPTURE)
 	message(STATUS "PS2Native: the host will hold the compiled micro code of the self-test, ${PS2N_VU_SELFTEST_CAPTURE}")
 endif()
 
+# ---- the I/O processor's code (step G12) -------------------------------------------------
+# Compiled from the blocks runs had to interpret (ps2n-host -iop-capture,
+# ps2n-recomp iop; docs/adr/0023), each as PCSX2's IOP recompiler formed it.
+# A block is found by the key of its instructions, whatever program its code
+# was in, so every image of them is used by every run. What is generated is
+# derived from the programs whose code it was (the BIOS's modules, a game's):
+# it goes into the build tree with the rest. The build scripts set these
+# (-IopCapture, -IopSelftestCapture).
+set(PS2N_IOP_CAPTURE "" CACHE FILEPATH "What runs of a game reported of the IOP's code (ps2n-host -iop-capture), to compile into ps2n-host")
+set(PS2N_IOP_SELFTEST_CAPTURE "" CACHE FILEPATH "The same from the host's self-test, whose random IOP programs then run compiled as well")
+set(PS2N_IOP_PARTS "16" CACHE STRING "How many files a capture's compiled IOP code is spread over")
+set(ps2n_iop_arguments "")
+
+# ps2n_add_iop_image(<id> <capture file> <comment>)
+macro(ps2n_add_iop_image id capture comment)
+	if(NOT EXISTS "${capture}")
+		message(FATAL_ERROR "No such capture of IOP code: ${capture}")
+	endif()
+	set(iop_outputs "${PS2N_GENERATED}/iop/iop_${id}.cpp" "${PS2N_GENERATED}/iop/iop_${id}.h")
+	foreach(iop_part RANGE 1 ${PS2N_IOP_PARTS})
+		if(iop_part LESS 10)
+			set(iop_part "00${iop_part}")
+		elseif(iop_part LESS 100)
+			set(iop_part "0${iop_part}")
+		endif()
+		list(APPEND iop_outputs "${PS2N_GENERATED}/iop/iop_${id}_part${iop_part}.cpp")
+	endforeach()
+	add_custom_command(
+		OUTPUT ${iop_outputs}
+		COMMAND "${PS2N_RECOMP}" iop "${capture}" --id "${id}" --out "${PS2N_GENERATED}/iop/iop_${id}.cpp" --parts ${PS2N_IOP_PARTS}
+		DEPENDS "${capture}" "${PS2N_RECOMP}"
+		COMMENT "Recompiling ${comment}"
+		VERBATIM
+	)
+	list(APPEND ps2n_image_sources ${iop_outputs})
+	list(APPEND ps2n_iop_arguments --iop "${id}")
+endmacro()
+
+if(PS2N_IOP_PARTS LESS 2)
+	message(FATAL_ERROR "PS2N_IOP_PARTS is 2 or more, not ${PS2N_IOP_PARTS}")
+endif()
+if(PS2N_IOP_CAPTURE)
+	ps2n_add_iop_image(game "${PS2N_IOP_CAPTURE}" "the IOP code runs of a game captured, ${PS2N_IOP_CAPTURE}")
+	message(STATUS "PS2Native: the host will hold the compiled IOP code of ${PS2N_IOP_CAPTURE}")
+endif()
+if(PS2N_IOP_SELFTEST_CAPTURE)
+	ps2n_add_iop_image(selftest "${PS2N_IOP_SELFTEST_CAPTURE}" "the self-test's IOP programs, ${PS2N_IOP_SELFTEST_CAPTURE}")
+	message(STATUS "PS2Native: the host will hold the compiled IOP code of the self-test, ${PS2N_IOP_SELFTEST_CAPTURE}")
+endif()
+
 # ---- the images, linked into the host ----------------------------------------------
 # The list of the images, which the host hands to PS2Native's EE provider,
-# and of the images of compiled micro code, which it hands to the VU provider.
+# and of the images of compiled micro code and of compiled IOP code, which it
+# hands to the VU provider and to the IOP provider.
 add_custom_command(
 	OUTPUT "${PS2N_GENERATED}/registry.cpp"
-	COMMAND "${PS2N_RECOMP}" registry --out "${PS2N_GENERATED}/registry.cpp" ${ps2n_vu_arguments} ${ps2n_image_ids}
+	COMMAND "${PS2N_RECOMP}" registry --out "${PS2N_GENERATED}/registry.cpp" ${ps2n_vu_arguments} ${ps2n_iop_arguments} ${ps2n_image_ids}
 	DEPENDS "${PS2N_RECOMP}"
 	COMMENT "Listing the recompiled test programs"
 	VERBATIM

@@ -10,7 +10,8 @@
 // (`psxCpu`) from inside the EE's event test, whenever the EE has got ahead
 // of the IOP. That pointer is wrapped here, PCSX2 untouched: each such call
 // is a *sync point*, at which the EE's registers are whole (PCSX2's
-// recompiler has written them all back before an event test).
+// recompiler has written them all back before an event test), and the IOP is
+// between two blocks, its registers whole as well.
 //
 // Not every event test is a sync point: one that follows another within a
 // few cycles finds the IOP still ahead and does not run it. A sync point
@@ -21,6 +22,9 @@
 
 namespace ps2n::host
 {
+	/// How many kinds of registers a sync point holds.
+	constexpr int kSyncRegisterKinds = 6;
+
 	/// Starts recording sync points to `write_path` and comparing them with
 	/// the record of an earlier run in `against_path`; either may be null.
 	/// From sync point `detail_from` on, a written record is followed by the
@@ -34,6 +38,11 @@ namespace ps2n::host
 	/// False when the core has put a provider of its own back.
 	bool SyncTraceInstalled();
 
+	/// What the wrapper stands in front of, when `provider` is the wrapper;
+	/// otherwise `provider` itself. To find what runs the IOP behind it (a
+	/// watch put there first, iop_report.h, or PS2Native's IOP provider).
+	const void* SyncTraceUnder(const void* provider);
+
 	/// Closes the files. A reference run that went on after this one stopped
 	/// counts as a difference.
 	void StopSyncTrace();
@@ -44,7 +53,8 @@ namespace ps2n::host
 	const char* GetSyncTimeMismatch(); // where the EE was, or when
 	const char* GetSyncStateMismatch(); // what its registers held
 
-	/// The registers kind by kind (0 general, 1 the FPU's, 2 COP0's, 3 VU0's, 4 VU1's):
+	/// The registers kind by kind (0 general, 1 the FPU's, 2 COP0's, 3 VU0's,
+	/// 4 VU1's, 5 the IOP's general registers and its COP0's):
 	/// at how many sync points this run's differed from the reference run's,
 	/// what the kind is called, and where the first of them was. One kind that
 	/// differs for a known reason does not hide the others this way. Only

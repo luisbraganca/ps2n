@@ -33,6 +33,16 @@ the self-test's random micro programs (scripts\windows\vu-selftest.ps1
 makes the capture and calls this). Both are remembered like -Game; "none"
 takes them out.
 
+With -IopCapture, the I/O processor's code that runs of a game wrote down is
+compiled into the host the same way (docs\adr\0023): the blocks they had to
+interpret (ps2n-host -iop-capture, which scripts\windows\game.ps1
+-IopCapture puts together into one file), each as one function, found at
+run time by its instructions. It is the BIOS's modules' code and the game's,
+and what is generated stays in the build tree. -IopSelftestCapture does the
+same for the self-test's random IOP programs (scripts\windows\iop-selftest.ps1
+makes the capture and calls this). Both are remembered like -Game; "none"
+takes them out.
+
 With -Pcsx2Source, another PCSX2 source tree is built in the place of the pinned
 submodule: to try PS2Native on a newer PCSX2 before the submodule is moved,
 or to check a change someone made to PCSX2 against the tests here. Give it a
@@ -68,6 +78,11 @@ param(
     [string]$VuCapture = '',
     # The same from the host's self-test (scripts\windows\vu-selftest.ps1 makes it), or "none".
     [string]$VuSelftestCapture = '',
+    # What runs of a game reported of the IOP's code (ps2n-host -iop-capture), to compile into the host, or "none".
+    # Remembered by the build tree, as -Game is.
+    [string]$IopCapture = '',
+    # The same from the host's self-test (scripts\windows\iop-selftest.ps1 makes it), or "none".
+    [string]$IopSelftestCapture = '',
     # Profile-guided optimization of the generated code (docs/adr/0019): "generate" builds it to count where it goes
     # (a run then writes the counts where LLVM_PROFILE_FILE says), "use" builds it with the merged counts given as
     # -PgoData (llvm-profdata merge), "off" without either. Remembered by the build tree, as -Game is.
@@ -152,6 +167,14 @@ if ($VuCapture) {
 if ($VuSelftestCapture) {
     $vuSelftestPath = if ($VuSelftestCapture -eq 'none') { '' } else { ForCMake (Resolve-Path -LiteralPath $VuSelftestCapture).Path }
     $gameSettings += "-DPS2N_VU_SELFTEST_CAPTURE=$vuSelftestPath"
+}
+if ($IopCapture) {
+    $iopCapturePath = if ($IopCapture -eq 'none') { '' } else { ForCMake (Resolve-Path -LiteralPath $IopCapture).Path }
+    $gameSettings += "-DPS2N_IOP_CAPTURE=$iopCapturePath"
+}
+if ($IopSelftestCapture) {
+    $iopSelftestPath = if ($IopSelftestCapture -eq 'none') { '' } else { ForCMake (Resolve-Path -LiteralPath $IopSelftestCapture).Path }
+    $gameSettings += "-DPS2N_IOP_SELFTEST_CAPTURE=$iopSelftestPath"
 }
 if ($Pgo) {
     $gameSettings += "-DPS2N_PGO=$(if ($Pgo -eq 'off') { '' } else { $Pgo })"

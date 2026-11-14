@@ -13,10 +13,11 @@ The configurations:
 
   stock-jit     PCSX2's recompilers: the reference
   stock-interp  PCSX2's interpreters
-  ps2n-ee       PS2Native's EE and VU providers, interpreting everything
-  ps2n-static   PS2Native's EE and VU providers with the game's code compiled
-                ahead of time (build it in first: scripts\windows\build.ps1
-                -Game <elf>, and for the vector units' micro code -VuCapture)
+  ps2n-ee       PS2Native's EE, IOP and VU providers, interpreting everything
+  ps2n-static   PS2Native's EE, IOP and VU providers with the game's code
+                compiled ahead of time (build it in first:
+                scripts\windows\build.ps1 -Game <elf>, for the vector units'
+                micro code -VuCapture, and for the IOP's code -IopCapture)
   lockstep      ps2n-ee and then ps2n-static, the second compared with the
                 first at every event test
   same-as-stock stock-jit and then ps2n-static, the second compared with the
@@ -36,9 +37,14 @@ With -VuCapture, the blocks of the vector units' micro code that the run had
 to interpret are added to that file (ps2n-recomp vu-capture), which
 scripts\windows\build.ps1 -VuCapture takes.
 
+With -IopCapture, the blocks of the IOP's code that the run had to interpret
+are added to that file (ps2n-recomp iop-capture), which
+scripts\windows\build.ps1 -IopCapture takes.
+
 In PS2Native's configurations the vector units' micro programs run on
 PS2Native's VU provider (-VuPs2n none puts PCSX2's VU recompiler back under
-them, as before step G11).
+them, as before step G11), and the IOP's code on PS2Native's IOP provider
+(-IopPs2n off puts PCSX2's IOP recompiler back, as before step G12).
 
 With -Play the game is played instead: in a window, at the console's speed,
 with sound, on the keyboard and on the first controller, until the window is
@@ -81,6 +87,9 @@ param(
     # Also write vu-report.txt among the run's files: what was written into the VUs' micro memory and what
     # they ran, with the counts frame by frame and the contents written beside it (ps2n-host -vu-report).
     [switch]$VuReport,
+    # Also write iop-report.txt among the run's files: what the IOP ran, which modules were loaded where, how
+    # often its memory was written, with the counts frame by frame beside it (ps2n-host -iop-report).
+    [switch]$IopReport,
     # Which VUs' micro programs run on PS2Native's VU provider (ps2n-host -vu-ps2n): none, 0, 1 or both. Left out:
     # both in PS2Native's configurations, none under stock PCSX2. Never in the stock run a same-as-stock run is
     # compared with.
@@ -91,6 +100,15 @@ param(
     # Add the blocks of micro code the run had to interpret to this file (ps2n-recomp vu-capture), which
     # scripts\windows\build.ps1 -VuCapture takes.
     [string]$VuCapture = '',
+    # Whether the IOP's code runs on PS2Native's IOP provider (ps2n-host -iop-ps2n): on or off. Left out: on in
+    # PS2Native's configurations, off under stock PCSX2. Never in the stock run a same-as-stock run is compared with.
+    [ValidateSet('', 'on', 'off')][string]$IopPs2n = '',
+    # off has PS2Native's IOP provider interpret every block of IOP code, the ones the host has compiled too
+    # (ps2n-host -iop-static off), to time the two or to have a reference.
+    [ValidateSet('on', 'off')][string]$IopStatic = 'on',
+    # Add the blocks of IOP code the run had to interpret to this file (ps2n-recomp iop-capture), which
+    # scripts\windows\build.ps1 -IopCapture takes.
+    [string]$IopCapture = '',
     # Frames at which the wall-clock time is noted, reported after the run with the first and the last frame's
     # (ps2n-host -mark): to time a game's startup and its play apart. Separated by commas, "6600,12000": through
     # powershell -File an array of numbers would arrive as one number.
@@ -137,6 +155,10 @@ $p = $providers[$Config]
 # provider runs, unless -VuPs2n says otherwise.
 $vuOurs = if ($VuPs2n) { $VuPs2n } elseif ($p[0] -eq 'ps2n') { 'both' } else { 'none' }
 if ($vuOurs -ne 'none' -and $p[0] -ne 'ps2n') { throw "-VuPs2n is for PS2Native's configurations, not $Config." }
+
+# The IOP on PS2Native's IOP provider, likewise.
+$iopOurs = if ($IopPs2n) { $IopPs2n -eq 'on' } else { $p[0] -eq 'ps2n' }
+if ($iopOurs -and $p[0] -ne 'ps2n') { throw "-IopPs2n is for PS2Native's configurations, not $Config." }
 
 if ($Play) {
     if ($Config -eq 'lockstep' -or $Config -eq 'same-as-stock') {
@@ -190,6 +212,13 @@ if ($Play) {
         $hostArgs += @('-vu-ps2n', $vuOurs, '-vu-capture', $vuReported)
         if ($VuStatic -eq 'off') { $hostArgs += @('-vu-static', 'off') }
     }
+    # And for the blocks of the IOP's code.
+    $iopReported = Join-Path $session 'iop-capture.toml'
+    if ($iopOurs) {
+        Remove-Item -LiteralPath $iopReported -ErrorAction SilentlyContinue
+        $hostArgs += @('-iop-ps2n', '-iop-capture', $iopReported)
+        if ($IopStatic -eq 'off') { $hostArgs += @('-iop-static', 'off') }
+    }
     $hostArgs += $imagePath
 
     $env:PATH = (Join-Path $root 'deps\windows-x64\deps\bin') + ';' + $env:PATH
@@ -215,6 +244,11 @@ if ($Play) {
         $target = if ([IO.Path]::IsPathRooted($VuCapture)) { $VuCapture } else { Join-Path $root $VuCapture }
         & $recomp vu-capture --out $target $target $vuReported
     }
+    if ($IopCapture -and $iopOurs -and (Test-Path -LiteralPath $iopReported)) {
+        $recomp = Join-Path $root 'build\tools-windows\bin\ps2n-recomp.exe'
+        $target = if ([IO.Path]::IsPathRooted($IopCapture)) { $IopCapture } else { Join-Path $root $IopCapture }
+        & $recomp iop-capture --out $target $target $iopReported
+    }
     exit $code
 }
 
@@ -237,18 +271,25 @@ $work = Join-Path $build "ps2n\tests\game\$Name\$Config"
 $arguments = @(
     "-DHOST=$(ForCMake $hostExe)", "-DWORK_DIR=$(ForCMake $work)",
     "-DDLL_DIR=$(ForCMake (Join-Path $root 'deps\windows-x64\deps\bin'))", "-DELF=$(ForCMake $imagePath)",
-    "-DEE=$($p[0])", "-DIOP=$($p[1])", "-DVU=$($p[2])", "-DSTATIC=$($p[3])", "-DBIOS_STATIC=$BiosStatic", "-DCALL_SITES=$CallSites", '-DIMAGE=game',
+    "-DEE=$($p[0])", "-DIOP=$(if ($iopOurs) { 'ps2n' } else { $p[1] })", "-DVU=$($p[2])", "-DSTATIC=$($p[3])", "-DBIOS_STATIC=$BiosStatic",
+    "-DCALL_SITES=$CallSites", '-DIMAGE=game',
     "-DFRAMES=$Frames", "-DSECONDS=$Seconds", '-DUNTIL=@@ no such line @@', '-DEXPECT_EXIT=2', '-DWHOLE=1', '-DTIMES=1')
 if ($Renderer -ne 'null') { $arguments += @("-DRENDERER=$Renderer", "-DUPSCALE=$Upscale", "-DFRAME_EVERY=$FrameEvery") }
 if ($Pad) { $arguments += "-DPAD=$(ForCMake (Resolve-Path -LiteralPath $Pad).Path)" }
 if ($TimeProfile) { $arguments += '-DPROFILE=1' }
 if ($TimeProfile -and $ProfileFrom -gt 0) { $arguments += "-DPROFILE_FROM=$ProfileFrom" }
 if ($VuReport) { $arguments += '-DVU_REPORT=1' }
+if ($IopReport) { $arguments += '-DIOP_REPORT=1' }
 if ($vuOurs -ne 'none') {
     $arguments += "-DVU_PS2N=$vuOurs"
     if ($VuStatic -eq 'off') { $arguments += '-DVU_STATIC=off' }
     # What the run had to interpret of the micro code is always written down among its files.
     $arguments += "-DVU_CAPTURE=$(ForCMake (Join-Path $work 'vu-capture.toml'))"
+}
+if ($iopOurs) {
+    if ($IopStatic -eq 'off') { $arguments += '-DIOP_STATIC=off' }
+    # What the run had to interpret of the IOP's code is always written down among its files.
+    $arguments += "-DIOP_CAPTURE=$(ForCMake (Join-Path $work 'iop-capture.toml'))"
 }
 $markList = @($Marks -split '[,;\s]+' | Where-Object { $_ -ne '' } | ForEach-Object { [int]$_ })
 if ($markList.Count -gt 0) { $arguments += "-DMARKS=$($markList -join ';')" }
@@ -303,6 +344,14 @@ if ($VuCapture -and $vuOurs -ne 'none') {
         $recomp = Join-Path $root 'build\tools-windows\bin\ps2n-recomp.exe'
         $target = if ([IO.Path]::IsPathRooted($VuCapture)) { $VuCapture } else { Join-Path $root $VuCapture }
         & $recomp vu-capture --out $target $target $reported
+    }
+}
+if ($IopCapture -and $iopOurs) {
+    $reported = Join-Path $work 'iop-capture.toml'
+    if (Test-Path $reported) {
+        $recomp = Join-Path $root 'build\tools-windows\bin\ps2n-recomp.exe'
+        $target = if ([IO.Path]::IsPathRooted($IopCapture)) { $IopCapture } else { Join-Path $root $IopCapture }
+        & $recomp iop-capture --out $target $target $reported
     }
 }
 exit 0

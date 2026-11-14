@@ -8,6 +8,7 @@
 #include "analysis.h"
 #include "bios.h"
 #include "codegen.h"
+#include "iop_codegen.h"
 #include "vu_codegen.h"
 
 #include "ps2n/assembler.h"
@@ -1108,6 +1109,14 @@ TEST_CASE(registry_lists_the_images) {
     CHECK_CONTAINS(both, "&ps2n_vu_image_selftest::image,");
     CHECK_CONTAINS(both, "const size_t ps2n_vu_image_count = 2;");
     CHECK_THROWS(generateRegistry({"a"}, {"not an identifier"}));
+
+    // And the images of compiled IOP code.
+    CHECK_CONTAINS(code, "const size_t ps2n_iop_image_count = 0;");
+    const std::string three = generateRegistry({"a"}, {"game"}, {"game", "selftest"});
+    CHECK_CONTAINS(three, "&ps2n_iop_image_game::image,");
+    CHECK_CONTAINS(three, "&ps2n_iop_image_selftest::image,");
+    CHECK_CONTAINS(three, "const size_t ps2n_iop_image_count = 2;");
+    CHECK_THROWS(generateRegistry({"a"}, {}, {"not an identifier"}));
 }
 
 // ---- the vector units' micro code (docs/game-log.md, "G11") ---------------------
@@ -1486,6 +1495,180 @@ TEST_CASE(code_run_outside_the_executable_makes_an_image_of_its_own) {
     starts.clear();
     codeOutside(elf, capture, notes, starts);
     CHECK_EQ(notes.size(), size_t{1});
+}
+
+// ---- the I/O processor's code (docs/game-log.md, "G12") --------------------------
+// The blocks below are written here: an entry sequence, a load, a system
+// call, an import stub, a loop that waits.
+TEST_CASE(a_block_of_iop_code_becomes_a_function_on_locals) {
+    IopCapture capture = parseIopCapture(R"(
+# addiu $sp, $sp, -24; sw $ra, 16($sp); jal 0x10040; addiu $a0, $zero, 1
+[[block]]
+pc = 0x00010000
+words = [0x27BDFFE8, 0xAFBF0010,
+	0x0C004010, 0x24040001]
+
+# lw $v0, 0($a0); nop: no branch, so a block that was cut short
+[[block]]
+pc = 0x00012000
+words = [0x8C820000, 0x00000000]
+)", "iop-capture.toml");
+    CHECK_EQ(capture.blocks.size(), size_t{2});
+    capture.normalize();
+    const auto find = [&](uint32_t pc) -> const IopCapture::Block& {
+        for (const IopCapture::Block& b : capture.blocks)
+            if (b.pc == pc) return b;
+        return capture.blocks[0];
+    };
+    const IopCapture::Block& entry = find(0x00010000);
+    const IopCapture::Block& load = find(0x00012000);
+    CHECK_EQ(entry.words.size(), size_t{4});
+    CHECK(entry.key == r3000a::key(entry.words.data(), 4));
+
+    IopGenerateOptions options;
+    options.id = "test";
+    IopGenerateStats stats;
+    const std::vector<GeneratedFile> files = generateIopFiles(capture, options, &stats);
+    CHECK_EQ(files.size(), size_t{1});
+    CHECK_EQ(stats.blocks, size_t{2});
+    CHECK_EQ(stats.instructions, size_t{6});
+    const std::string& code = files[0].text;
+    const auto name = [](const IopCapture::Block& b) {
+        return strprintf("iopb_%016llX%016llX", static_cast<unsigned long long>(b.key.a), static_cast<unsigned long long>(b.key.b));
+    };
+
+    // A register is taken from the core the first time the block reads it,
+    // and what the block wrote is put back where it ends. Where the block is
+    // (`pc`) is the record's to say: the address a call returns to and the
+    // region a jump stays in are reckoned from it. The block ends as PCSX2's
+    // recompiler ends it: its four cycles added and tested.
+    CHECK_CONTAINS(code, "namespace ps2n_iop_image_test");
+    CHECK_CONTAINS(code, "static bool PS2N_IOP_CC " + name(entry) + "(Block* b)\n{\n\tPS2N_IOP_ENTER();\n"
+                         "\tuint32_t g29 = r[29];\n\tg29 = val::ADDIU(g29, -24);\n"
+                         "\tuint32_t g31 = r[31];\n\tStore32(g29 + 0x10u, g31);\n"
+                         "\tg31 = pc + 0x10u;\n"
+                         "\tuint32_t g4 = val::ADDIU(0u, 1);\n"
+                         "\tr[4] = g4;\n\tr[29] = g29;\n\tr[31] = g31;\n"
+                         "\tPS2N_IOP_LEAVE(1u, ((pc + 0xCu) & 0xF0000000u) | 0x10040u, 4u);\n}");
+    // A block that was cut short runs on into the next: no test. The NOP is
+    // nothing.
+    CHECK_CONTAINS(code, "static bool PS2N_IOP_CC " + name(load) + "(Block* b)\n{\n\tPS2N_IOP_ENTER();\n"
+                         "\tuint32_t g4 = r[4];\n\tuint32_t g2 = Load32(g4);\n\tr[2] = g2;\n"
+                         "\tPS2N_IOP_RUN_ON(pc + 0x8u, 2u);\n}");
+    // The table the runtime finds them by: the key of the instructions.
+    CHECK_CONTAINS(code, strprintf("\t{0x%016llXull, 0x%016llXull, &%s},\n", static_cast<unsigned long long>(entry.key.a),
+                                   static_cast<unsigned long long>(entry.key.b), name(entry).c_str()));
+    CHECK_CONTAINS(code, "const ImageInfo image = {\n\t\"test\",\n\tblocks,\n\t2,");
+    CHECK_CONTAINS(code, "// first met at 00010000: 4 instructions, 4 cycles\n//   27BDFFE8 AFBF0010 0C004010 24040001\n");
+    CHECK_CONTAINS(code, "// first met at 00012000: 2 instructions, 2 cycles; cut short, it runs on into the next block\n");
+
+    // Spread over several files: the functions declared in a header, the
+    // tables in the main file.
+    options.parts = 2;
+    options.headerName = "iop_test.h";
+    const std::vector<GeneratedFile> parts = generateIopFiles(capture, options);
+    CHECK_EQ(parts.size(), size_t{4});
+    if (parts.size() == 4) {
+        CHECK_CONTAINS(parts[0].text, "#include \"iop_test.h\"");
+        CHECK_CONTAINS(parts[0].text, "static const BlockInfo blocks[] = {");
+        CHECK_CONTAINS(parts[1].text, "\nbool PS2N_IOP_CC " + name(entry) + "(Block* b);\n");
+        CHECK(contains(parts[2].text + parts[3].text, "\nbool PS2N_IOP_CC " + name(load) + "(Block* b)\n{"));
+    }
+
+    // The same instructions at another address are the same block: one
+    // function for both, the one first met kept for the reader. Other
+    // instructions are another.
+    IopCapture twice = capture;
+    twice.blocks.push_back(entry);
+    twice.blocks.back().pc = 0x00020000;
+    twice.blocks.push_back(entry);
+    twice.blocks.back().words[3] = 0x24040002;
+    twice.blocks.back().key = r3000a::key(twice.blocks.back().words.data(), 4);
+    twice.normalize();
+    CHECK_EQ(twice.blocks.size(), size_t{3});
+
+    // What the host writes is what is read.
+    const IopCapture again = parseIopCapture(writeIopCapture(capture, "a comment"), "again.toml");
+    CHECK_EQ(again.blocks.size(), size_t{2});
+    if (again.blocks.size() == 2) {
+        CHECK(again.blocks[0].key == capture.blocks[0].key);
+        CHECK_EQ(again.blocks[1].pc, capture.blocks[1].pc);
+    }
+    CHECK_THROWS(parseIopCapture("[[block]]\npc = 0x100\n", "x"));
+    CHECK_THROWS(parseIopCapture("pc = 0x100\n", "x"));
+    CHECK_THROWS(parseIopCapture("[[block]]\nwords = [1, 2\n", "x"));
+}
+
+TEST_CASE(what_leaves_an_iop_block_puts_its_registers_back_first) {
+    IopCapture capture = parseIopCapture(R"(
+# addiu $v0, $zero, 1; syscall; jr $ra; nop
+[[block]]
+pc = 0x00010000
+words = [0x24020001, 0x0000000C, 0x03E00008, 0x00000000]
+
+# an import stub: jr $ra; addiu $zero, $zero, 14
+[[block]]
+pc = 0x00010100
+words = [0x03E00008, 0x2400000E]
+
+# a loop that waits: beq $zero, $zero, itself; nop
+[[block]]
+pc = 0x00010200
+words = [0x1000FFFF, 0x00000000]
+
+# a branch in a delay slot: PS2Native's IOP provider refuses it, so nothing is compiled for it
+[[block]]
+pc = 0x00010300
+words = [0x10000001, 0x10000001]
+)", "iop-capture.toml");
+    capture.normalize();
+
+    IopGenerateOptions options;
+    options.id = "test";
+    options.comments = false;
+    IopGenerateStats stats;
+    const std::string code = generateIopFiles(capture, options, &stats)[0].text;
+    CHECK_EQ(stats.blocks, size_t{3});
+    CHECK_EQ(stats.skipped, size_t{1});
+
+    // SYSCALL: what the block wrote goes back before the exception is raised,
+    // and the block is left with the cycles of its two instructions so far.
+    // The jump through a register comes after its delay slot, a NOP, and
+    // looks its block up.
+    CHECK_CONTAINS(code, "\tuint32_t g2 = val::ADDIU(0u, 1);\n\tr[2] = g2;\n"
+                         "\tif (Exception(0xCu, pc + 0x4u, 0x20u, 2u)) [[unlikely]]\n\t\treturn true;\n"
+                         "\tuint32_t g31 = r[31];\n\tconst uint32_t target = g31;\n"
+                         "\tPS2N_IOP_LEAVE_ANYWHERE(target, 4u);\n}");
+    // An import: whether the core has a function for it, the record says
+    // when the block runs.
+    CHECK_CONTAINS(code, "\tif (b->imports[0]) [[unlikely]]\n\t{\n\t\tif (Import(b, 0u, 0x2400000Eu, pc + 0x4u))\n\t\t\treturn true;\n\t}\n"
+                         "\tuint32_t g31 = r[31];\n\tconst uint32_t target = g31;\n\tPS2N_IOP_LEAVE_ANYWHERE(target, 2u);\n}");
+    // A block that may be a wait loop: where its branch is taken, the record
+    // says whether time passes.
+    CHECK_CONTAINS(code, "\tconst bool taken = true;\n\tif (taken)\n\t\tPS2N_IOP_LEAVE_LOOP(1u, pc, 2u);\n\tPS2N_IOP_LEAVE(0u, pc + 0x8u, 2u);\n}");
+}
+
+TEST_CASE(a_jump_and_its_delay_slot_keep_the_order_of_pcsx2s_recompiler) {
+    IopCapture capture = parseIopCapture(R"(
+# jalr $ra, $t2; addu $ra, $a0, $a1: the delay slot first, and the return address wins
+[[block]]
+pc = 0x00010000
+words = [0x0140F809, 0x0085F821]
+
+# jalr $ra, $t2; addiu $ra, $ra, 4: the link first, and the delay slot adds to it
+[[block]]
+pc = 0x00010100
+words = [0x0140F809, 0x27FF0004]
+)", "iop-capture.toml");
+    capture.normalize();
+    IopGenerateOptions options;
+    options.id = "test";
+    options.comments = false;
+    const std::string code = generateIopFiles(capture, options)[0].text;
+    CHECK_CONTAINS(code, "\tuint32_t g4 = r[4];\n\tuint32_t g5 = r[5];\n\tuint32_t g31 = val::ADDU(g4, g5);\n\tg31 = pc + 0x8u;\n"
+                         "\tuint32_t g10 = r[10];\n\tconst uint32_t target = g10;\n\tr[31] = g31;\n\tPS2N_IOP_LEAVE_ANYWHERE(target, 2u);\n}");
+    CHECK_CONTAINS(code, "\tuint32_t g10 = r[10];\n\tconst uint32_t target = g10;\n\tuint32_t g31 = pc + 0x8u;\n\tg31 = val::ADDIU(g31, 4);\n"
+                         "\tr[31] = g31;\n\tPS2N_IOP_LEAVE_ANYWHERE(target, 2u);\n}");
 }
 
 int main(int argc, char** argv) { return ::testing::runAll(argc, argv); }

@@ -10,6 +10,8 @@ add_library(ps2n_recomp STATIC
     src/bios.h
     src/codegen.cpp
     src/codegen.h
+    src/iop_codegen.cpp
+    src/iop_codegen.h
     src/vu_codegen.cpp
     src/vu_codegen.h
 )

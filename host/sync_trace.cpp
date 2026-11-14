@@ -42,9 +42,9 @@ namespace
 		u64 differing = 0;
 		std::string first;
 	};
-	constexpr int kKinds = 5;
-	Kind s_kinds[kKinds] = {
-		{"the general registers"}, {"the FPU's registers"}, {"COP0's registers"}, {"VU0's registers"}, {"VU1's registers"}};
+	constexpr int kKinds = ps2n::host::kSyncRegisterKinds;
+	Kind s_kinds[kKinds] = {{"the general registers"}, {"the FPU's registers"}, {"COP0's registers"}, {"VU0's registers"},
+		{"VU1's registers"}, {"the IOP's registers"}};
 
 	// The IOP provider the core chose, and what the core calls instead.
 	R3000Acpu* s_real = nullptr;
@@ -132,6 +132,15 @@ namespace
 		}
 		std::fprintf(s_file, "  vu1 acc=%08X.%08X.%08X.%08X; the VU interpreter's working q=%08X p=%08X\n", VU1.ACC.UL[0], VU1.ACC.UL[1],
 			VU1.ACC.UL[2], VU1.ACC.UL[3], VU1.q.UL, VU1.p.UL);
+
+		// The IOP's: its general registers with HI and LO, and its COP0's.
+		std::fputs("  iop gpr", s_file);
+		for (u32 r = 0; r < 34; r++)
+			std::fprintf(s_file, " %08X", psxRegs.GPR.r[r]);
+		std::fputs("\n  iop cp0", s_file);
+		for (u32 r = 0; r < 32; r++)
+			std::fprintf(s_file, " %08X", psxRegs.CP0.r[r]);
+		std::fputs("\n", s_file);
 	}
 
 	// One sync point: the core is about to let the IOP run for `ee_cycles`
@@ -174,13 +183,22 @@ namespace
 		vu1.add(&VU1.VI, sizeof(VU1.VI));
 		vu1.add(&VU1.ACC, sizeof(VU1.ACC));
 
-		// number, PC, EE cycle, cycles the IOP is given, IOP cycle; then the
-		// registers, folded: general, FPU, COP0, VU0, VU1.
-		char time[96];
-		std::snprintf(time, sizeof(time), "%llu %08X %llu %d %llu", static_cast<ull>(s_count), cpuRegs.pc, static_cast<ull>(cpuRegs.cycle),
-			ee_cycles, static_cast<ull>(psxRegs.cycle));
-		char state[64];
-		std::snprintf(state, sizeof(state), "%08X %08X %08X %08X %08X", gpr.value(), fpu.value(), cp0.value(), vu.value(), vu1.value());
+		// The IOP's registers (docs/adr/0023-the-iops-code-compiled-as-step-g12.md):
+		// the general ones with HI and LO, and its COP0's. The IOP is between
+		// two blocks here, whatever runs it, and where it is belongs to the
+		// place: its PC goes with the EE's.
+		Fold iop;
+		iop.add(&psxRegs.GPR, sizeof(psxRegs.GPR));
+		iop.add(&psxRegs.CP0, sizeof(psxRegs.CP0));
+
+		// number, PC, EE cycle, cycles the IOP is given, IOP cycle, the IOP's
+		// PC; then the registers, folded: general, FPU, COP0, VU0, VU1, IOP.
+		char time[112];
+		std::snprintf(time, sizeof(time), "%llu %08X %llu %d %llu %08X", static_cast<ull>(s_count), cpuRegs.pc,
+			static_cast<ull>(cpuRegs.cycle), ee_cycles, static_cast<ull>(psxRegs.cycle), psxRegs.pc);
+		char state[80];
+		std::snprintf(state, sizeof(state), "%08X %08X %08X %08X %08X %08X", gpr.value(), fpu.value(), cp0.value(), vu.value(), vu1.value(),
+			iop.value());
 
 		if (s_file)
 		{
@@ -230,10 +248,10 @@ namespace
 					}
 
 					// Which registers.
-					const u32 ours[kKinds] = {gpr.value(), fpu.value(), cp0.value(), vu.value(), vu1.value()};
+					const u32 ours[kKinds] = {gpr.value(), fpu.value(), cp0.value(), vu.value(), vu1.value(), iop.value()};
 					unsigned theirs[kKinds] = {};
-					if (std::sscanf(reference + time_length, "%x %x %x %x %x", &theirs[0], &theirs[1], &theirs[2], &theirs[3], &theirs[4]) ==
-						kKinds)
+					if (std::sscanf(reference + time_length, "%x %x %x %x %x %x", &theirs[0], &theirs[1], &theirs[2], &theirs[3], &theirs[4],
+							&theirs[5]) == kKinds)
 					{
 						for (int k = 0; k < kKinds; k++)
 						{
@@ -268,7 +286,8 @@ bool ps2n::host::StartSyncTrace(const char* write_path, const char* against_path
 		if (!s_file)
 			return false;
 		std::setvbuf(s_file, nullptr, _IOFBF, 1 << 20);
-		std::fputs("# sync point, PC, EE cycle, EE cycles the IOP is given, IOP cycle; registers folded: general, FPU, COP0, VU0, VU1\n",
+		std::fputs("# sync point, PC, EE cycle, EE cycles the IOP is given, IOP cycle, the IOP's PC; registers folded: general, FPU, "
+				   "COP0, VU0, VU1, the IOP's\n",
 			s_file);
 	}
 	if (against_path)
@@ -302,6 +321,11 @@ void ps2n::host::InstallSyncTrace()
 bool ps2n::host::SyncTraceInstalled()
 {
 	return !s_active || psxCpu == &s_wrapper;
+}
+
+const void* ps2n::host::SyncTraceUnder(const void* provider)
+{
+	return provider == &s_wrapper ? s_real : provider;
 }
 
 void ps2n::host::StopSyncTrace()

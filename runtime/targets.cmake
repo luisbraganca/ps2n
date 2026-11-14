@@ -11,8 +11,12 @@
 add_library(ps2n-runtime STATIC
 	"${CMAKE_CURRENT_LIST_DIR}/ee_provider.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/ee_provider.h"
+	"${CMAKE_CURRENT_LIST_DIR}/iop_provider.cpp"
+	"${CMAKE_CURRENT_LIST_DIR}/iop_provider.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ee_memory.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ee_state.h"
+	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/iop_ops.h"
+	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/iop_recomp.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ops_cop0.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ops_cop2.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ops_fpu.h"

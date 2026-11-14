@@ -15,12 +15,15 @@
 #include "profile.h"
 #include "selftest.h"
 #include "sync_trace.h"
+#include "iop_report.h"
 #include "vu_report.h"
 #include "window.h"
 
 #include "runtime/ee_provider.h"
+#include "runtime/iop_provider.h"
 #include "runtime/vu_interp.h"
 
+#include "ps2n/iop_recomp.h"
 #include "ps2n/vu_recomp.h"
 #include "runtime/rec_blocks.h"
 
@@ -60,6 +63,7 @@
 #include "pcsx2/ImGui/ImGuiManager.h"
 #include "pcsx2/Input/InputManager.h"
 #include "pcsx2/MTGS.h"
+#include "pcsx2/R3000A.h"
 #include "pcsx2/R5900.h"
 #include "pcsx2/SIO/Pad/Pad.h"
 #include "pcsx2/SIO/Pad/PadDualshock2.h"
@@ -76,6 +80,10 @@ extern const size_t ps2n_image_count;
 // with, listed the same way.
 extern const ps2n::vu::ImageInfo* const ps2n_vu_images[];
 extern const size_t ps2n_vu_image_count;
+
+// The blocks of IOP code compiled ahead of time, likewise.
+extern const ps2n::iop::ImageInfo* const ps2n_iop_images[];
+extern const size_t ps2n_iop_image_count;
 
 namespace
 {
@@ -111,6 +119,10 @@ namespace
 		}
 	}
 
+	// What PS2Native's IOP provider did, and what it had to interpret, written
+	// for the recompiler where the run asked for that.
+	void ReportIop();
+
 	// How the blocks of micro code were carried out on PS2Native's VU provider:
 	// compiled ahead of time, or interpreted (`which`: bit 0 VU0, bit 1 VU1).
 	void ReportVuPlans(u32 which)
@@ -142,13 +154,19 @@ namespace
 		std::string log_path; // where the core's whole log goes
 		std::string marker = "-- TEST END";
 		EEProvider ee = EEProvider::Jit;
+		bool clock_fixed = true; // the console's clock starts at a fixed time, not at the host's time of day
+		bool clock_given = false;
 		bool iop_jit = true;
+		bool iop_ps2n = false; // PS2Native's IOP provider in the place of the core's
+		bool iop_static = true; // whether it runs the blocks compiled ahead of time that the host has
+		std::string iop_capture_path; // where the blocks it had to interpret are written, for the recompiler
 		bool vu_jit = true;
 		u32 vu_ps2n = 0; // bit 0 VU0, bit 1 VU1: PS2Native's VU provider in the place of the core's
 		std::string vu_programs_path; // where that provider writes a line for each program it records
 		bool vu_static = true; // whether it runs the blocks compiled ahead of time that the host has
 		std::string vu_capture_path; // where the plans of the blocks it had to interpret are written, for the recompiler
 		bool vu_require_compiled = false; // the self-test fails if a block of micro code had to be interpreted
+		bool iop_require_compiled = false; // and if a block of IOP code had to be
 		GSRendererType renderer = GSRendererType::Null;
 		u32 max_frames = 3600;
 		u32 max_seconds = 60;
@@ -177,6 +195,7 @@ namespace
 		std::string code_size_path; // where the report of how much host code the compiled images became is written
 		u32 profile_from = 1; // the frame from which the profile looks (startup left out when later than 1)
 		std::string vu_report_path; // where the report of what the vector units ran is written (vu_report.h)
+		std::string iop_report_path; // where the report of what the IOP ran is written (iop_report.h)
 		std::vector<u32> marks; // frames at which the wall-clock time is noted, for the report
 		bool fast_cores = false; // keep the run on the processor's fastest cores, so that its time repeats
 		bool window = false; // play in a window: the console's speed, sound, the keyboard, a controller, a memory card
@@ -224,6 +243,7 @@ namespace
 	bool s_stop_requested = false;
 	bool s_provider_replaced = false;
 	bool s_vu_unsupported = false; // PS2Native's VU interpreter met what it does not carry out yet
+	bool s_iop_unsupported = false; // PS2Native's IOP provider met what it does not carry out
 
 	std::mutex s_queue_mutex;
 	std::deque<std::function<void()>> s_queue;
@@ -287,6 +307,21 @@ namespace
 			"  -ee jit|interp|ps2n  PCSX2's EE recompiler, its interpreter, or PS2Native's\n"
 			"                     own EE provider (default jit).\n"
 			"  -iop jit|interp    PCSX2's IOP recompiler or interpreter (default jit).\n"
+			"  -clock fixed|host  What the console's clock is set to when the machine\n"
+			"                     starts: one fixed time (2020-03-04, midnight), so that\n"
+			"                     two runs are the same machine, or the host's time of\n"
+			"                     day. Default fixed; host with -window.\n"
+			"  -iop-ps2n          Run the IOP's code on PS2Native's IOP provider, which\n"
+			"                     follows PCSX2's IOP recompiler (runtime/iop_provider.h):\n"
+			"                     by the blocks compiled ahead of time that this host has,\n"
+			"                     and by its interpreter elsewhere. The run stops with an\n"
+			"                     error at what it does not carry out.\n"
+			"  -iop-static on|off With -iop-ps2n: run the blocks of IOP code compiled ahead\n"
+			"                     of time that this host has (default on). Off, PS2Native's\n"
+			"                     IOP interpreter carries every block out.\n"
+			"  -iop-capture <file>  With -iop-ps2n: write what the recompiler needs to\n"
+			"                     compile the blocks of IOP code that had to be interpreted\n"
+			"                     (ps2n-recomp iop).\n"
 			"  -vu jit|interp     PCSX2's VU recompilers or interpreters (default jit).\n"
 			"  -vu-ps2n 0|1|both  Run VU0's, VU1's or both VUs' micro programs on\n"
 			"                     PS2Native's VU provider, which follows PCSX2's VU\n"
@@ -394,6 +429,11 @@ namespace
 			"                     were started, and how long each ran. Beside it go the same\n"
 			"                     counts frame by frame (-frames.csv) and each distinct\n"
 			"                     content written (-uploads.bin), which are the program's.\n"
+			"  -iop-report <file> Watch the core's IOP provider and write to this file how\n"
+			"                     much IOP time passed, how often the IOP's memory was\n"
+			"                     written, which modules its kernel listed where and when,\n"
+			"                     and how many blocks PCSX2's IOP recompiler formed in each.\n"
+			"                     Beside it go the counts frame by frame (-frames.csv).\n"
 			"  -mark <n>          Note the wall-clock time at frame n, and report it after\n"
 			"                     the run with the time of the first and the last frame,\n"
 			"                     each since the host started. May be given more than once:\n"
@@ -418,6 +458,14 @@ namespace
 			"  -vu-require-compiled  With -selftest-vu: fail if a block of those programs\n"
 			"                     had to be interpreted; skipped (PS2N_SKIP) by a host\n"
 			"                     that was not built with them.\n"
+			"  -selftest-iop <n>  Instead of booting a file, run the self-test's random\n"
+			"                     IOP programs alone, n of them, on PCSX2's IOP recompiler\n"
+			"                     and on PS2Native's IOP provider. With -iop-capture: for\n"
+			"                     the build that compiles their blocks\n"
+			"                     (scripts/windows/iop-selftest.ps1).\n"
+			"  -iop-require-compiled  With -selftest-iop: fail if a block of those\n"
+			"                     programs had to be interpreted; skipped (PS2N_SKIP) by a\n"
+			"                     host that was not built with them.\n"
 			"  -selftest-trials <n>  Random cases per instruction against PCSX2's\n"
 			"                     recompiler (default 400); ten times as many against\n"
 			"                     its interpreter.\n"
@@ -482,6 +530,8 @@ namespace
 				o.code_size_path = argv[++i];
 			else if (is("-vu-report") && has_value)
 				o.vu_report_path = argv[++i];
+			else if (is("-iop-report") && has_value)
+				o.iop_report_path = argv[++i];
 			else if ((is("-profile-from") || is("-mark")) && has_value)
 			{
 				const bool mark = is("-mark");
@@ -599,6 +649,20 @@ namespace
 			}
 			else if (is("-vu-require-compiled"))
 				o.vu_require_compiled = true;
+			else if (is("-selftest-iop") && has_value)
+			{
+				const std::optional<u32> n = StringUtil::FromChars<u32>(argv[++i]);
+				if (!n || *n == 0)
+				{
+					std::fputs("ps2n-host: -selftest-iop takes a positive number\n", stderr);
+					return false;
+				}
+				o.selftest = true;
+				o.selftest_options.iop_only = true;
+				o.selftest_options.iop_trials = *n;
+			}
+			else if (is("-iop-require-compiled"))
+				o.iop_require_compiled = true;
 			else if (is("-bios") && has_value)
 				o.bios_path = argv[++i];
 			else if (is("-data") && has_value)
@@ -646,6 +710,37 @@ namespace
 				else
 				{
 					std::fprintf(stderr, "ps2n-host: -vu-ps2n takes 0, 1 or both, not %s\n", which);
+					return false;
+				}
+			}
+			else if (is("-clock") && has_value)
+			{
+				const char* value = argv[++i];
+				if (!std::strcmp(value, "fixed"))
+					o.clock_fixed = true;
+				else if (!std::strcmp(value, "host"))
+					o.clock_fixed = false;
+				else
+				{
+					std::fprintf(stderr, "ps2n-host: -clock takes fixed or host, not '%s'\n", value);
+					return false;
+				}
+				o.clock_given = true;
+			}
+			else if (is("-iop-ps2n"))
+				o.iop_ps2n = true;
+			else if (is("-iop-capture") && has_value)
+				o.iop_capture_path = argv[++i];
+			else if (is("-iop-static") && has_value)
+			{
+				const char* value = argv[++i];
+				if (!std::strcmp(value, "on"))
+					o.iop_static = true;
+				else if (!std::strcmp(value, "off"))
+					o.iop_static = false;
+				else
+				{
+					std::fprintf(stderr, "ps2n-host: -iop-static takes on or off, not '%s'\n", value);
 					return false;
 				}
 			}
@@ -801,6 +896,9 @@ namespace
 				o.max_seconds = 0;
 			if (!renderer_given)
 				o.renderer = GSRendererType::Auto;
+			// And the console has the day it is.
+			if (!o.clock_given)
+				o.clock_fixed = false;
 		}
 		else if (o.mute || o.osd)
 		{
@@ -812,9 +910,9 @@ namespace
 			std::fputs("ps2n-host: -profile is for a run of a program, and is not available on this platform yet\n", stderr);
 			return false;
 		}
-		if (!o.vu_report_path.empty() && o.selftest)
+		if ((!o.vu_report_path.empty() || !o.iop_report_path.empty()) && o.selftest)
 		{
-			std::fputs("ps2n-host: -vu-report is for a run of a program\n", stderr);
+			std::fputs("ps2n-host: -vu-report and -iop-report are for a run of a program\n", stderr);
 			return false;
 		}
 
@@ -824,7 +922,7 @@ namespace
 		// forward slashes, so every path is put in the platform's form here.
 		for (std::string* path : {&o.boot_path, &o.bios_path, &o.data_dir, &o.out_path, &o.times_path, &o.log_path, &o.capture_path,
 				 &o.bios_capture_path, &o.trace_path, &o.trace_against_path, &o.sync_path, &o.sync_against_path, &o.frame_path, &o.pad_path,
-				 &o.profile_path, &o.vu_report_path, &o.vu_programs_path, &o.vu_capture_path})
+				 &o.profile_path, &o.vu_report_path, &o.iop_report_path, &o.vu_programs_path, &o.vu_capture_path, &o.iop_capture_path})
 			Path::ToNativePath(path);
 		return true;
 	}
@@ -1084,6 +1182,27 @@ namespace
 
 		si.SetBoolValue("EmuCore", "HostFs", o.host_fs);
 
+		// The console's clock. The core sets it from the host's time of day
+		// when the machine starts, and the IOP's modules read it: two runs
+		// started a minute apart are then not the same machine. So a run that
+		// is not played in a window starts at one fixed time (the one PCSX2
+		// gives its input recordings: 2020-03-04, midnight), unless -clock host.
+		// Someone playing gets the day it is.
+		if (o.clock_fixed)
+		{
+			si.SetBoolValue("EmuCore", "ManuallySetRealTimeClock", true);
+			si.SetIntValue("EmuCore", "RtcYear", 20);
+			si.SetIntValue("EmuCore", "RtcMonth", 3);
+			si.SetIntValue("EmuCore", "RtcDay", 4);
+			si.SetIntValue("EmuCore", "RtcHour", 0);
+			si.SetIntValue("EmuCore", "RtcMinute", 0);
+			si.SetIntValue("EmuCore", "RtcSecond", 0);
+		}
+		else
+		{
+			si.SetBoolValue("EmuCore", "ManuallySetRealTimeClock", false);
+		}
+
 		si.SetIntValue("EmuCore/GS", "Renderer", static_cast<int>(o.renderer));
 		si.SetFloatValue("EmuCore/GS", "upscale_multiplier", static_cast<float>(o.upscale));
 
@@ -1320,6 +1439,48 @@ namespace
 			s_sound_lines.push_back(fmt::format("ps2n-host: sound at frame {}: fingerprint {:016X}", s_frames, hash));
 		else
 			s_sound_line = fmt::format("ps2n-host: sound at the last frame: fingerprint {:016X}", hash);
+	}
+
+	void ReportIop()
+	{
+		using ull = unsigned long long;
+		const ps2n::iop::Stats st = ps2n::iop::GetStats();
+		std::fprintf(stderr,
+			"ps2n-host: PS2Native's IOP provider: %llu stretches of IOP time, %llu blocks begun, %llu instructions in them; %llu blocks "
+			"formed, %llu thrown away because their memory was written, the whole record %llu times; %llu SYSCALL and BREAK "
+			"instructions; %llu times a wait loop let time pass; %llu imports of modules for which the core has a function, which did "
+			"%llu of them itself\n",
+			ull(st.stretches), ull(st.runs), ull(st.instructions), ull(st.formed), ull(st.thrown), ull(st.resets), ull(st.exceptions),
+			ull(st.waits), ull(st.imports), ull(st.importsDone));
+		std::fprintf(stderr,
+			"ps2n-host: the IOP's blocks: %llu different ones by their instructions (%llu instructions); %llu of them compiled ahead of "
+			"time (this host has %zu), which ran %llu times; %llu interpreted, which ran %llu times\n",
+			ull(st.shapes), ull(st.shapeWords), ull(st.shapesCompiled), ps2n::iop::CompiledBlockCount(),
+			ull(st.runs - st.runsInterpreted), ull(st.shapesInterpreted), ull(st.runsInterpreted));
+		if (st.unknown)
+		{
+			std::fprintf(stderr,
+				"ps2n-host: PS2Native's IOP provider: the blocks formed held %llu instructions of encodings PCSX2's IOP recompiler has "
+				"nothing for; they are carried out as it carries them out, which is not at all\n",
+				ull(st.unknown));
+		}
+		if (const char* what = ps2n::iop::Unsupported())
+			std::fprintf(stderr, "ps2n-host: PS2Native's IOP provider does not carry out: %s\n", what);
+		// That PCSX2's IOP recompiler carried out nothing, by its own table
+		// (which it has only where the core was set up with it).
+		if (s_options.iop_jit)
+		{
+			std::fprintf(stderr, "ps2n-host: PCSX2's IOP recompiler holds %u blocks after this run\n",
+				ps2n::host::iopreport::RecompilerBlocks());
+		}
+		if (!s_options.iop_capture_path.empty())
+		{
+			if (ps2n::iop::WriteCapture(s_options.iop_capture_path.c_str()))
+				std::fprintf(stderr, "ps2n-host: the blocks of IOP code that were interpreted, for the recompiler: %s\n",
+					s_options.iop_capture_path.c_str());
+			else
+				std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.iop_capture_path.c_str());
+		}
 	}
 
 	// What PS2Native's EE provider did, so that nothing is interpreted or
@@ -1647,11 +1808,17 @@ namespace
 				VMManager::SetState(VMState::Running);
 				ps2n::vu::SetCompiledBlocksEnabled(s_options.vu_static);
 				ps2n::vu::SetImages(ps2n_vu_images, ps2n_vu_image_count);
+				ps2n::iop::SetCompiledBlocksEnabled(s_options.iop_static);
+				ps2n::iop::SetImages(ps2n_iop_images, ps2n_iop_image_count);
 				// The self-test's own micro programs compiled, as a build with their
-				// capture has them (the image "selftest").
+				// capture has them (the image "selftest"); and its IOP programs'
+				// blocks, likewise.
 				bool compiled_selftest = false;
 				for (size_t i = 0; i < ps2n_vu_image_count; i++)
 					compiled_selftest = compiled_selftest || !std::strcmp(ps2n_vu_images[i]->id, "selftest");
+				bool compiled_iop_selftest = false;
+				for (size_t i = 0; i < ps2n_iop_image_count; i++)
+					compiled_iop_selftest = compiled_iop_selftest || !std::strcmp(ps2n_iop_images[i]->id, "selftest");
 				int failures = 0;
 				if (s_options.vu_require_compiled && !compiled_selftest)
 				{
@@ -1659,9 +1826,39 @@ namespace
 							   "(scripts/windows/vu-selftest.ps1 builds them in)\n",
 						stderr);
 				}
+				else if (s_options.iop_require_compiled && !compiled_iop_selftest)
+				{
+					std::fputs("PS2N_SKIP: this host was not built with the blocks of the self-test's IOP programs compiled "
+							   "(scripts/windows/iop-selftest.ps1 builds them in)\n",
+						stderr);
+				}
 				else
 				{
 					failures = ps2n::selftest::Run(s_options.selftest_options);
+					if (!s_options.selftest_options.vu_only)
+					{
+						const ps2n::iop::Stats st = ps2n::iop::GetStats();
+						std::fprintf(stderr,
+							"ps2n-host: the IOP's blocks: %llu different ones by their instructions (%llu instructions); %llu of them "
+							"compiled ahead of time (this host has %zu), which ran %llu times; %llu interpreted, which ran %llu times\n",
+							static_cast<unsigned long long>(st.shapes), static_cast<unsigned long long>(st.shapeWords),
+							static_cast<unsigned long long>(st.shapesCompiled), ps2n::iop::CompiledBlockCount(),
+							static_cast<unsigned long long>(st.runs - st.runsInterpreted),
+							static_cast<unsigned long long>(st.shapesInterpreted), static_cast<unsigned long long>(st.runsInterpreted));
+						if (s_options.iop_require_compiled && st.shapesInterpreted)
+						{
+							std::fprintf(stderr,
+								"ps2n-host: %llu blocks of the self-test's IOP programs had to be interpreted: the compiled ones this host "
+								"has are of other programs. Make them again (scripts/windows/iop-selftest.ps1).\n",
+								static_cast<unsigned long long>(st.shapesInterpreted));
+							failures++;
+						}
+						if (!s_options.iop_capture_path.empty() && !ps2n::iop::WriteCapture(s_options.iop_capture_path.c_str()))
+						{
+							std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.iop_capture_path.c_str());
+							failures++;
+						}
+					}
 					ReportVuPlans(3);
 					const u64 interpreted = ps2n::vu::Plans(0).interpreted + ps2n::vu::Plans(1).interpreted;
 					if (s_options.vu_require_compiled && interpreted)
@@ -1739,6 +1936,32 @@ namespace
 					Cpu->Reset();
 				}
 
+				// PS2Native's IOP provider in the place of the core's (-iop-ps2n).
+				// Nothing of the IOP's has run yet.
+				if (s_options.iop_ps2n)
+				{
+					ps2n::iop::SetCompiledBlocksEnabled(s_options.iop_static);
+					ps2n::iop::SetImages(ps2n_iop_images, ps2n_iop_image_count);
+					psxCpu = ps2n::iop::Provider();
+					psxCpu->Reset();
+				}
+
+				// What the IOP runs, in any configuration: its provider watched,
+				// not changed (iop_report.h). Before the record of sync points,
+				// which then stands in front of the watch.
+				if (!s_options.iop_report_path.empty())
+				{
+					if (ps2n::host::iopreport::Start(s_options.iop_report_path.c_str()))
+					{
+						ps2n::host::iopreport::Install();
+					}
+					else
+					{
+						std::fprintf(stderr, "ps2n-host: cannot open the files of %s\n", s_options.iop_report_path.c_str());
+						trace_ok = false;
+					}
+				}
+
 				// The record of sync points, in any configuration.
 				if (!s_options.sync_path.empty() || !s_options.sync_against_path.empty())
 				{
@@ -1804,6 +2027,13 @@ namespace
 				if (s_options.ee == EEProvider::Ps2n)
 					ps2n::ee::StopTrace();
 				ps2n::host::StopSyncTrace();
+				if (!s_options.iop_report_path.empty())
+				{
+					if (ps2n::host::iopreport::Stop(s_frames))
+						std::fprintf(stderr, "ps2n-host: what the IOP ran: %s\n", s_options.iop_report_path.c_str());
+					else
+						std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.iop_report_path.c_str());
+				}
 				if (!s_options.vu_report_path.empty())
 				{
 					if (ps2n::host::vureport::Stop(s_frames))
@@ -1823,6 +2053,11 @@ namespace
 				{
 					code = EXIT_ERROR;
 					reason = "an error: the core put a provider of its own back where the host had put one";
+				}
+				else if (s_iop_unsupported)
+				{
+					code = EXIT_ERROR;
+					reason = "an error: PS2Native's IOP provider met what it does not carry out";
 				}
 				else if (s_vu_unsupported)
 				{
@@ -1852,7 +2087,7 @@ namespace
 				}
 				std::fprintf(stderr, "ps2n-host: stopped at %s after %u frames, EE cycle %llu, EE %s, IOP %s, VU %s\n", reason,
 					s_frames, static_cast<unsigned long long>(cpuRegs.cycle), EEProviderName(s_options.ee),
-					s_options.iop_jit ? "jit" : "interp",
+					s_options.iop_ps2n ? "ps2n" : s_options.iop_jit ? "jit" : "interp",
 					s_options.vu_ps2n == 3 ? "ps2n" :
 					s_options.vu_ps2n == 1 ? "ps2n for VU0" :
 					s_options.vu_ps2n == 2 ? "ps2n for VU1" :
@@ -1887,6 +2122,8 @@ namespace
 						std::fprintf(stderr, "ps2n-host: PS2Native's VU%d interpreter does not carry out yet: %s\n", vu, what);
 					ps2n::vu::LogPrograms(vu, nullptr);
 				}
+				if (s_options.iop_ps2n)
+					ReportIop();
 				ReportVuPlans(s_options.vu_ps2n);
 				if (s_options.vu_ps2n && !s_options.vu_capture_path.empty())
 				{
@@ -1935,7 +2172,7 @@ namespace
 							std::fputs("ps2n-host: sync: place and time are the same as the reference run's at every sync point\n", stderr);
 						if (state)
 							std::fprintf(stderr, "ps2n-host: sync: registers first differ %s\n", state);
-						for (int kind = 0; kind < 5; kind++)
+						for (int kind = 0; kind < ps2n::host::kSyncRegisterKinds; kind++)
 						{
 							const char* name = nullptr;
 							const char* first = nullptr;
@@ -2243,15 +2480,18 @@ void ps2n::host::OnGuestFrame()
 		Pad::SetControllerState(0, event.input, event.value);
 	}
 
-	// What the vector units did during the frame (-vu-report).
+	// What the vector units did during the frame (-vu-report), and the IOP
+	// (-iop-report).
 	ps2n::host::vureport::Frame(s_frames);
+	ps2n::host::iopreport::Frame(s_frames);
 
 	// Never run on with a provider other than the one that was asked for. The
 	// VU report's watch stands in front of the VU interpreter when both are
 	// asked for, and checks itself.
 	const bool vuWatched = !s_options.vu_report_path.empty();
 	if ((s_options.ee == EEProvider::Ps2n && Cpu != ps2n::ee::Provider()) || !ps2n::host::SyncTraceInstalled() ||
-		!ps2n::host::vureport::Installed() ||
+		!ps2n::host::vureport::Installed() || !ps2n::host::iopreport::Installed() ||
+		(s_options.iop_ps2n && ps2n::host::iopreport::Under(ps2n::host::SyncTraceUnder(psxCpu)) != ps2n::iop::Provider()) ||
 		(!vuWatched && (s_options.vu_ps2n & 1) && CpuVU0 != ps2n::vu::Interpreter(0)) ||
 		(!vuWatched && (s_options.vu_ps2n & 2) && CpuVU1 != ps2n::vu::Interpreter(1)))
 		s_provider_replaced = true;
@@ -2260,6 +2500,10 @@ void ps2n::host::OnGuestFrame()
 	// carry out yet; the run stops with it.
 	if (((s_options.vu_ps2n & 1) && ps2n::vu::Unsupported(0)) || ((s_options.vu_ps2n & 2) && ps2n::vu::Unsupported(1)))
 		s_vu_unsupported = true;
+
+	// So does PS2Native's IOP provider.
+	if (s_options.iop_ps2n && ps2n::iop::Unsupported())
+		s_iop_unsupported = true;
 
 	// A run that has parted from the one it is compared with has nothing more to
 	// show.
@@ -2277,7 +2521,8 @@ void ps2n::host::OnGuestFrame()
 	// 0 frames: no limit (someone is playing in a window).
 	const bool frames_done = s_options.max_frames != 0 && s_frames >= s_options.max_frames;
 
-	if (s_provider_replaced || s_vu_unsupported || parted || marker || s_time_limit_passed.load() || frames_done || s_close_requested.load())
+	if (s_provider_replaced || s_vu_unsupported || s_iop_unsupported || parted || marker || s_time_limit_passed.load() || frames_done ||
+		s_close_requested.load())
 	{
 		if (profiling)
 			ps2n::host::profile::Enable(false);

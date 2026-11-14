@@ -597,6 +597,12 @@ namespace
 		fold(&fpuRegs, sizeof(fpuRegs));
 		fold(&VU0.VF, sizeof(VU0.VF));
 		fold(&VU0.VI, sizeof(VU0.VI));
+		// The IOP's place, its time and its registers (step G12): it is between
+		// two of its blocks here, whatever carries them out.
+		fold(&psxRegs.pc, sizeof(psxRegs.pc));
+		fold(&psxRegs.cycle, sizeof(psxRegs.cycle));
+		fold(&psxRegs.GPR, sizeof(psxRegs.GPR));
+		fold(&psxRegs.CP0, sizeof(psxRegs.CP0));
 		s_stats.trace_hash = h;
 
 		using ull = unsigned long long;

@@ -1311,13 +1311,16 @@ int ps2n::selftest::Run(const Options& options)
 		EmuConfig.Cpu.FPUDivFPCR.bitmask);
 
 	int failures = 0;
-	if (!options.vu_only)
+	if (!options.vu_only && !options.iop_only)
 	{
 		failures += CheckTables(options, rng);
 		failures += CheckSemantics(options, rng);
 		failures += CheckFpuLanes(options.interp_trials, rng);
 	}
-	failures += CheckVuPrograms(options.vu_trials, options.vu_run, options.seed);
+	if (!options.iop_only)
+		failures += CheckVuPrograms(options.vu_trials, options.vu_run, options.seed);
+	if (!options.vu_only)
+		failures += CheckIopPrograms(options.iop_trials, options.seed);
 
 	std::fprintf(stderr, "selftest: %s\n", failures ? "FAILED" : "passed");
 	return failures;

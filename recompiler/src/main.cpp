@@ -5,6 +5,7 @@
 #include "analysis.h"
 #include "bios.h"
 #include "codegen.h"
+#include "iop_codegen.h"
 #include "vu_codegen.h"
 
 #include "ps2n/assembler.h"
@@ -84,9 +85,23 @@ void usage() {
         "      files) into one file, each plan once. The output may be one of the\n"
         "      inputs.\n"
         "\n"
-        "  ps2n-recomp registry --out <file.cpp> [--vu <id>]... <id>...\n"
+        "  ps2n-recomp iop <capture>... --out <file.cpp> [--id <name>] [--parts <n>] [--no-comments]\n"
+        "      Translates blocks of the I/O processor's code into C++ against\n"
+        "      ps2n/iop_recomp.h: the blocks runs had to interpret (the host's\n"
+        "      -iop-capture files), each as PCSX2's IOP recompiler formed it, one\n"
+        "      function for each, found at run time by the key of its instructions.\n"
+        "      Names the generated namespace ps2n_iop_image_<name> (default: iop).\n"
+        "      What this writes is derived from the programs whose code it was (a\n"
+        "      BIOS's modules, a game's): it belongs in the build tree.\n"
+        "\n"
+        "  ps2n-recomp iop-capture --out <file> <capture>...\n"
+        "      Puts what several runs reported of IOP code (the host's -iop-capture\n"
+        "      files) into one file, each block once. The output may be one of the\n"
+        "      inputs.\n"
+        "\n"
+        "  ps2n-recomp registry --out <file.cpp> [--vu <id>]... [--iop <id>]... <id>...\n"
         "      Writes the list of images a host is linked with; --vu names an image\n"
-        "      of compiled micro code.\n"
+        "      of compiled micro code, --iop one of compiled IOP code.\n"
         "\n"
         "  ps2n-recomp assemble <file.s> --out <file.elf>\n"
         "      Assembles a test program written for PS2Native's own small R5900\n"
@@ -108,6 +123,7 @@ struct Args {
     std::string id;
     std::vector<std::filesystem::path> captures;
     std::vector<std::string> vuIds;
+    std::vector<std::string> iopIds;
     bool symbols = true;
     bool comments = true;
     unsigned parts = 1;
@@ -131,6 +147,7 @@ Args parse(int argc, char** argv) {
         else if (arg == "--id") a.id = value();
         else if (arg == "--capture") a.captures.emplace_back(value());
         else if (arg == "--vu") a.vuIds.push_back(value());
+        else if (arg == "--iop") a.iopIds.push_back(value());
         else if (arg == "--no-symbols") a.symbols = false;
         else if (arg == "--no-comments") a.comments = false;
         else if (arg == "--parts") {
@@ -420,7 +437,53 @@ int capture(const Args& a) {
 int registry(const Args& a) {
     if (a.out.empty()) throw Error("registry needs --out <file.cpp>");
     if (a.out.has_parent_path()) std::filesystem::create_directories(a.out.parent_path());
-    writeFileIfChanged(a.out, generateRegistry(a.positional, a.vuIds));
+    writeFileIfChanged(a.out, generateRegistry(a.positional, a.vuIds, a.iopIds));
+    return 0;
+}
+
+// What runs reported of IOP code, put together: each block once.
+IopCapture loadIopCaptures(const std::vector<std::string>& files, const std::filesystem::path& out) {
+    IopCapture all;
+    for (const std::string& file : files) {
+        // The output may be named among the inputs before it exists.
+        if (!std::filesystem::exists(file) && std::filesystem::path(file) == out) continue;
+        all.add(loadIopCaptureFile(file));
+    }
+    all.normalize();
+    return all;
+}
+
+int iopCompile(const Args& a) {
+    if (a.out.empty()) throw Error("iop needs --out <file.cpp>");
+    const IopCapture capture = loadIopCaptures(a.positional, {});
+
+    IopGenerateOptions go;
+    go.id = a.id.empty() ? "iop" : a.id;
+    go.comments = a.comments;
+    go.parts = a.parts;
+    if (go.parts > 1) go.headerName = a.out.stem().string() + ".h";
+    IopGenerateStats stats;
+    const std::vector<GeneratedFile> files = generateIopFiles(capture, go, &stats);
+    if (a.out.has_parent_path()) std::filesystem::create_directories(a.out.parent_path());
+    for (const GeneratedFile& file : files) {
+        const std::filesystem::path path = file.suffix == ".cpp" ? a.out : a.out.parent_path() / (a.out.stem().string() + file.suffix);
+        writeFileIfChanged(path, file.text);
+    }
+    std::printf("%s: %zu blocks of IOP code, %zu instructions", go.id.c_str(), stats.blocks, stats.instructions);
+    if (stats.skipped) std::printf("; %zu blocks left out, which PS2Native's IOP provider does not carry out", stats.skipped);
+    std::printf("\n");
+    return 0;
+}
+
+int iopCapture(const Args& a) {
+    if (a.out.empty()) throw Error("iop-capture needs --out <file>");
+    if (a.positional.empty()) throw Error("iop-capture takes one or more capture files");
+    const IopCapture all = loadIopCaptures(a.positional, a.out);
+    if (a.out.has_parent_path()) std::filesystem::create_directories(a.out.parent_path());
+    writeFileIfChanged(a.out, writeIopCapture(all, "What runs reported of the I/O processor's code, put together by ps2n-recomp iop-capture."));
+    size_t words = 0;
+    for (const IopCapture::Block& b : all.blocks) words += b.words.size();
+    std::printf("%s: %zu blocks of IOP code, %zu instructions\n", a.out.string().c_str(), all.blocks.size(), words);
     return 0;
 }
 
@@ -530,6 +593,8 @@ int main(int argc, char** argv) {
         if (a.command == "registry") return registry(a);
         if (a.command == "vu") return vuCompile(a);
         if (a.command == "vu-capture") return vuCapture(a);
+        if (a.command == "iop") return iopCompile(a);
+        if (a.command == "iop-capture") return iopCapture(a);
         if (a.command == "assemble") return assemble(a);
         if (a.command == "disasm") return disasm(a);
         throw Error("unknown command '" + a.command + "'");

@@ -28,11 +28,20 @@ namespace ps2n::selftest
 		uint32_t vu_run = ~0u;
 		/// Only the micro programs, none of the other checks.
 		bool vu_only = false;
+		/// Random IOP programs, run on PCSX2's IOP recompiler and on
+		/// PS2Native's IOP provider (selftest_iop.cpp).
+		uint32_t iop_trials = 4000;
+		/// Only the IOP programs, none of the other checks.
+		bool iop_only = false;
 		uint64_t seed = 0x9E3779B97F4A7C15ull;
 	};
 
 	/// Returns the number of failed checks, having written a report to stderr.
 	int Run(const Options& options);
+
+	/// PS2Native's IOP provider against PCSX2's IOP recompiler on random
+	/// programs (selftest_iop.cpp). Returns the number that differ.
+	int CheckIopPrograms(uint32_t trials, uint64_t seed);
 
 	/// PS2Native's VU interpreter against PCSX2's VU recompiler on random
 	/// micro programs, for each VU. Returns the number that differ.

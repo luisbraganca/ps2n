@@ -143,7 +143,7 @@
 					</svg>
 				</div>
 				<h3>On the core of PCSX2</h3>
-				<p>Graphics, sound, storage, timing and the console's second processor are <a href="https://pcsx2.net" rel="noopener">PCSX2</a>'s, pinned to one version and unmodified. The translated code takes the place of PCSX2's recompilers for the console's main processor and its two vector units.</p>
+				<p>Graphics, sound, storage and timing are <a href="https://pcsx2.net" rel="noopener">PCSX2</a>'s, pinned to one version and unmodified. The translated code takes the place of PCSX2's recompilers for the console's two processors and its two vector units.</p>
 			</article>
 			<article class="card" data-reveal style="--d:220">
 				<span class="card__px" aria-hidden="true"></span>
@@ -218,15 +218,15 @@
 				<p>PCSX2 <span class="nowrap">v2.9.170</span>, a pinned and unmodified submodule. PS2Native owns no model of the hardware.</p>
 			</div>
 			<div class="socket">
-				<span class="socket__label">Main processor, vector units</span>
-				<div class="chipcard chipcard--static"><b>The game's code, compiled</b>Runs in the place of PCSX2's recompilers for the main processor and both vector units.</div>
+				<span class="socket__label">Both processors, vector units</span>
+				<div class="chipcard chipcard--static"><b>The game's code, compiled</b>Runs in the place of PCSX2's recompilers for the main processor, the second processor and both vector units.</div>
 				<div class="chipcard chipcard--interp"><b>The interpreters</b>For code no one saw at build time, and a few of the BIOS's instructions at boot.</div>
 			</div>
 			<ul class="devs">
 				<li class="dev"><b>Graphics</b>The GS and its renderers</li>
 				<li class="dev"><b>Sound</b>SPU2</li>
 				<li class="dev"><b>Memory and time</b>The scheduler, DMA, timers</li>
-				<li class="dev"><b>The second processor</b>The IOP, on PCSX2's recompiler for now</li>
+				<li class="dev"><b>The second processor's hardware</b>Its timers, its DMA, its link to the main processor</li>
 				<li class="dev"><b>Storage</b>The disc, memory cards</li>
 				<li class="dev"><b>Input, and the rest</b>Pads, the game database, patches</li>
 			</ul>
@@ -355,7 +355,7 @@
 			</figure>
 		</div>
 
-		<p class="aside" data-reveal>Those 4,200 frames are the copyright screen, the developer's logo, a memory card prompt and the intro film. A longer run goes through the menus into the first level and plays there for three and a half minutes: the two are at the same place at the same cycle count at every one of its 93,221,937 moments, and they show the same picture at each of the 1,750 frames compared, one in every ten. Where PS2Native follows the console on purpose, because a recording shows PCSX2's recompiler wrong, a run does differ from the stock run, and each such place is listed with its cause.</p>
+		<p class="aside" data-reveal>Those 4,200 frames are the copyright screen, the developer's logo, a memory card prompt and the intro film. A longer run goes through the menus into the first level and plays there for three and a half minutes: the two are at the same place at the same cycle count at every one of its 93,221,937 moments, the second processor's place and registers compared too since 2026-11-14, and they show the same picture at each of the 1,750 frames compared, one in every ten. Where PS2Native follows the console on purpose, because a recording shows PCSX2's recompiler wrong, a run does differ from the stock run, and each such place is listed with its cause.</p>
 	</div>
 </section>
 
@@ -427,7 +427,7 @@
 						<tr><th scope="row">PS2Native</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.4393;--i:3"><span class="bar__fill"></span><span class="bar__val">12.3 s</span><span class="bar__tip" role="tooltip"><b>12.3 s</b> PS2Native, nothing drawn. Three runs: 12.3 s, 12.2 s and 12.3 s. On 2026-11-11, 15.1 s</span></div></td></tr>
 					</tbody>
 				</table>
-				<p class="chart__note">These frames are logos, a prompt and a film, measured again on 2026-11-13: 1.03 and 1.09 times stock PCSX2's time, where on 2026-11-11 they took 1.12 and 1.35. The run into the first level took 1.35 times stock PCSX2's time then, and takes 0.97 times now, its three and a half minutes of play 0.95 times: seven changes to how the code is generated, the VU0 instructions and the BIOS's code compiled, profile-guided optimization, loops that have reached a fixed point skipped, the COP2 instructions and calls through a register made by compiled code itself, the FPU's arithmetic done in SSE registers, and the vector units' programs compiled ahead of time, each measured. <span class="when">2026-11-14</span></p>
+				<p class="chart__note">These frames are logos, a prompt and a film, measured again on 2026-11-13: 1.03 and 1.09 times stock PCSX2's time, where on 2026-11-11 they took 1.12 and 1.35. The run into the first level took 1.35 times stock PCSX2's time then, and takes 0.97 times now, its three and a half minutes of play 0.95 times: seven changes to how the code is generated, the VU0 instructions and the BIOS's code compiled, profile-guided optimization, loops that have reached a fixed point skipped, the COP2 instructions and calls through a register made by compiled code itself, the FPU's arithmetic done in SSE registers, and the vector units' programs and the second processor's code compiled ahead of time, each measured. <span class="when">2026-11-14</span></p>
 			</section>
 
 			<section class="chart" data-reveal style="--d:120" aria-labelledby="chart-loops">
@@ -458,7 +458,7 @@
 		<div class="section__head" data-reveal>
 			<p class="eyebrow"><span data-scramble>06 &middot; What is static</span></p>
 			<h2>What is translated today, and what is not yet</h2>
-			<p class="section__lead">The rule is that no recompiler for PS2 code ships in a finished game. Today that holds for the game's own code, the BIOS's, and the programs the game runs on the vector units. What is left is labeled for what it is, in this order of work.</p>
+			<p class="section__lead">The rule is that no recompiler for PS2 code ships in a finished game. Today that holds for everything Killzone runs as far as its first level: the game's own code, the BIOS's, the programs on the vector units and the second processor's modules. Code no build has seen is interpreted, and listed.</p>
 		</div>
 
 		<div class="board">
@@ -483,12 +483,12 @@
 				<span class="state"><i aria-hidden="true"></i>Static</span>
 				<p>Translated ahead of time, each block by what it does, wherever the game writes it. In the run into Killzone's first level not one block of them is interpreted, and none runs on PCSX2's recompiler.</p>
 			</article>
-			<article class="chip chip--standin" data-reveal style="--d:330">
+			<article class="chip chip--static" data-reveal style="--d:330">
 				<span class="chip__n">4 &middot; SECOND PROCESSOR</span>
 				<h3>The IOP's modules</h3>
 				<p class="chip__sub">IOP</p>
-				<span class="state"><i aria-hidden="true"></i>Stand-in</span>
-				<p>PCSX2's recompiler runs them for now. It is a temporary stand-in: a static translator is to take its place, once it has been validated against it. PCSX2's recompiler for the main processor is never a stand-in.</p>
+				<span class="state"><i aria-hidden="true"></i>Static</span>
+				<p>Translated ahead of time, block by block, each found by its instructions wherever the IOP's kernel loads it. In the run into Killzone's first level not one block of them is interpreted, and none runs on PCSX2's recompiler.</p>
 			</article>
 		</div>
 
@@ -499,7 +499,7 @@
 			</div>
 			<div class="plain" data-reveal style="--d:110">
 				<h3>No finished game on a stand-in</h3>
-				<p>Packaging does not exist yet. When it does, it is to refuse a release while a stand-in is in use, or mark the result a development build.</p>
+				<p>Until PS2Native had translators of its own for them, PCSX2's recompilers for the vector units and the second processor stood in, labeled as that; its recompiler for the main processor never did. None is in use now. Packaging does not exist yet: when it does, it is to refuse a release that uses one.</p>
 			</div>
 		</div>
 	</div>
@@ -592,6 +592,8 @@
 					<li class="is-done"><b><span class="g">G9</span>VU0's instructions in compiled code</b>Done: compiled code carries them out itself where their block lets it; the run into the first level takes 1.19 times stock PCSX2's time, from 1.21, and is still the stock run</li>
 					<li class="is-done"><b><span class="g">G10</span>Performance</b>Done: profile-guided optimization, loops that have reached a fixed point no longer run their identical times round, compiled code carries out the COP2 instructions and its calls through a register itself, the way loads and stores seldom take is short, and the FPU's arithmetic is done in SSE registers; the run into the first level takes 1.01 times stock PCSX2's time, from 1.18, its play as long as stock PCSX2's, and is still the stock run</li>
 					<li class="is-done"><b><span class="g">G11</span>The vector units' programs</b>Done: the programs the game runs on its two vector units are compiled ahead of time, each block by what it does, wherever the game writes it: 589 different blocks, where PCSX2's recompiler makes 6,088 programs. What a build has not seen is interpreted, which in the run into the first level is nothing. 20,000 random programs give PCSX2's results; the run takes 0.97 times stock PCSX2's time, from 1.01, its play 0.95 times, and is still the stock run</li>
+					<li class="is-done"><b><span class="g">G12</span>The second processor's code</b>Done: the second processor's modules, the BIOS's and the game's, are compiled ahead of time, each block found by its instructions wherever they are loaded: 8,023 blocks. In the run into the first level none is interpreted, and none runs on PCSX2's recompiler, the last that stood in. 4,000 random programs give PCSX2's results; the run is still the stock run, the second processor's registers now compared too, in the time it took before: 0.97 times stock PCSX2's, its play 0.95 times</li>
+					<li class="is-open"><b><span class="g">G13</span>Playing on</b>Next: the maintainer plays further into the game than the scripts reach, and what each session had to interpret is compiled into the next build</li>
 				</ul>
 			</li>
 			<li class="phase" data-reveal>

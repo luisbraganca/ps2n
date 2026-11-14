@@ -5,6 +5,7 @@
 #include "ps2n/assembler.h"
 #include "ps2n/elf.h"
 #include "ps2n/irx.h"
+#include "ps2n/r3000a.h"
 #include "ps2n/r5900.h"
 #include "ps2n/romdir.h"
 #include "ps2n/snr2.h"
@@ -517,6 +518,103 @@ TEST_CASE(rom_directory_absent_or_cut_short_is_none) {
     const std::vector<uint8_t> rom = makeRom();
     CHECK(bios::readRomDirectory(rom.data(), 0xA0).empty());
     CHECK(bios::readRomDirectory(nullptr, 0).empty());
+}
+
+// ---- the IOP's instructions as PCSX2's IOP recompiler treats them ----------------
+TEST_CASE(iop_instructions_are_what_pcsx2s_recompiler_makes_of_them) {
+    using r3000a::Op;
+    CHECK(r3000a::decode(0x00000000) == Op::SLL);       // NOP
+    CHECK(r3000a::decode(0x27BDFFE8) == Op::ADDIU);
+    CHECK(r3000a::decode(0x23BDFFE8) == Op::ADDIU);     // ADDI: no overflow exception, so the same
+    CHECK(r3000a::decode(0x00851020) == Op::ADDU);      // ADD
+    CHECK(r3000a::decode(0x00851022) == Op::SUBU);      // SUB
+    CHECK(r3000a::decode(0x2400000E) == Op::IMPORT);    // addiu $zero, $zero, 14
+    CHECK(r3000a::decode(0x2401000E) == Op::ADDIU);     // addiu $at, $zero, 14
+    CHECK(r3000a::decode(0x0000000C) == Op::SYSCALL);
+    CHECK(r3000a::decode(0x42000010) == Op::RFE);
+    CHECK(r3000a::decode(0x40026000) == Op::MFC0);
+    CHECK(r3000a::decode(0x40C26000) == Op::MTC0);      // CTC0
+    CHECK(r3000a::decode(0x04110001) == Op::BGEZAL);
+    CHECK(r3000a::decode(0x04020001) == Op::Unknown);   // BLTZL: not an instruction of the IOP's
+    CHECK(r3000a::decode(0x0000000F) == Op::Unknown);   // SYNC
+    CHECK(r3000a::decode(0x70000000) == Op::Unknown);
+    CHECK(r3000a::decode(0x4A000001) == Op::GTE);       // RTPS
+    CHECK(r3000a::decode(0xC8820000) == Op::GTE);       // LWC2
+    CHECK(r3000a::decode(0x4A000002) == Op::Unknown);
+
+    // What ends a block, and what one costs.
+    CHECK(r3000a::isBranch(Op::JR) && r3000a::isBranch(Op::BEQ) && !r3000a::isBranch(Op::SYSCALL));
+    CHECK(r3000a::isConditional(Op::BLTZAL) && !r3000a::isConditional(Op::JAL));
+    CHECK_EQ(r3000a::cycles(Op::ADDU), 1u);
+    CHECK_EQ(r3000a::cycles(Op::MULTU), 8u);
+    CHECK_EQ(r3000a::cycles(Op::DIV), 41u);
+    CHECK_EQ(r3000a::branchTarget(0x1000, 0x1000FFFF), 0x1000u);
+    CHECK_EQ(r3000a::jumpTarget(0x80001000, 0x0C004010), 0x80010040u);
+}
+
+TEST_CASE(an_iop_block_is_known_by_its_words) {
+    // mult, then a branch and its delay slot: 8 + 1 + 1 cycles.
+    const uint32_t block[] = {0x00850018, 0x1485FFFE, 0x00000000};
+    const r3000a::Shape whole = r3000a::shape(block, 3);
+    CHECK(whole.valid && whole.branch && !whole.refused);
+    CHECK_EQ(whole.cycles, 10u);
+    // Cut short before its branch: valid, and no branch.
+    const r3000a::Shape cut = r3000a::shape(block, 1);
+    CHECK(cut.valid && !cut.branch);
+    CHECK_EQ(cut.cycles, 8u);
+    // Words after a branch's delay slot are not the block's.
+    const uint32_t more[] = {0x1485FFFE, 0x00000000, 0x00000000};
+    CHECK(!r3000a::shape(more, 3).valid);
+    CHECK(!r3000a::shape(block, 0).valid);
+    // What PS2Native's provider does not carry out.
+    const uint32_t twice[] = {0x1485FFFE, 0x1485FFFE};
+    CHECK(r3000a::shape(twice, 2).refused != nullptr);
+    const uint32_t call[] = {0x03E00008, 0x0000000C};
+    CHECK(r3000a::shape(call, 2).refused != nullptr);
+    // jalr $t6, $t6 with swr in its delay slot: PCSX2's recompiler loses the
+    // jump's target there. With jr $ra the store goes first, and nothing is
+    // lost.
+    const uint32_t lost[] = {0x01C07009, 0xB921FFE8};
+    CHECK(r3000a::shape(lost, 2).refused != nullptr);
+    const uint32_t kept[] = {0x03E00008, 0xB921FFE8};
+    CHECK(r3000a::shape(kept, 2).valid && r3000a::shape(kept, 2).refused == nullptr);
+
+    // A wait loop: nothing but NOPs and a branch back to its first instruction.
+    const uint32_t wait[] = {0x00000000, 0x1000FFFE, 0x00000000};
+    CHECK(r3000a::waitLoop(0x2000, wait, 3));
+    const uint32_t busy[] = {0x24420001, 0x1000FFFE, 0x00000000};
+    CHECK(!r3000a::waitLoop(0x2000, busy, 3));
+    const uint32_t jump[] = {0x08000800, 0x00000000};   // j 0x2000
+    CHECK(r3000a::waitLoop(0x2000, jump, 2));
+    CHECK(!r3000a::waitLoop(0x3000, jump, 2));
+
+    // The key is of the words and how many: not of where they are.
+    const r3000a::Key key = r3000a::key(block, 3);
+    CHECK(key == r3000a::key(block, 3));
+    CHECK(!(key == r3000a::key(block, 2)));
+    CHECK(!(key == r3000a::key(more, 3)));
+}
+
+TEST_CASE(a_delay_slot_goes_before_its_jump_where_pcsx2s_recompiler_puts_it_there) {
+    // jr $t2 with a NOP, with an addition that does not touch $t2, with one that writes it.
+    CHECK(r3000a::swapsDelaySlot(10, 0, 0, 0x00000000));
+    CHECK(r3000a::swapsDelaySlot(10, 0, 0, 0x00851021));
+    CHECK(!r3000a::swapsDelaySlot(10, 0, 0, 0x00855021));
+    CHECK(!r3000a::swapsDelaySlot(10, 0, 0, 0x254A0004));   // addiu $t2, $t2, 4
+    // jalr $ra, $t2: an addition that writes $ra goes first all the same; one
+    // that reads it does not; a move of $ra to a coprocessor does.
+    CHECK(r3000a::swapsDelaySlot(10, 0, 31, 0x0085F821));
+    CHECK(!r3000a::swapsDelaySlot(10, 0, 31, 0x03E51021));
+    CHECK(r3000a::swapsDelaySlot(10, 0, 31, 0x409F1800));    // mtc0 $ra, $3
+    CHECK(!r3000a::swapsDelaySlot(10, 0, 31, 0x27FF0004));   // addiu $ra, $ra, 4
+    // Never a branch, a system call, or a move from HI.
+    CHECK(!r3000a::swapsDelaySlot(10, 0, 0, 0x1000FFFF));
+    CHECK(!r3000a::swapsDelaySlot(10, 0, 0, 0x0000000C));
+    CHECK(!r3000a::swapsDelaySlot(10, 0, 0, 0x00001010));
+    // A multiplication, a store that reads neither register, the GTE.
+    CHECK(r3000a::swapsDelaySlot(10, 0, 0, 0x00850018));
+    CHECK(r3000a::swapsDelaySlot(10, 0, 0, 0xAC850000));
+    CHECK(r3000a::swapsDelaySlot(10, 0, 0, 0x4A000001));
 }
 
 int main(int argc, char** argv) { return ::testing::runAll(argc, argv); }

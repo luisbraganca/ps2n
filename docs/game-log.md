@@ -24,6 +24,8 @@ The run files, pictures included, are under the git-ignored build tree.
 | G9 VU0's instructions in compiled code | **Done** (2026-11-12, [ADR 0018](adr/0018-vu0-instructions-carried-out-by-compiled-code.md), in a worktree of its own): compiled code carries out the game's VU0 instructions itself, inline, where its block has nothing done about VU0 first, and keeps its registers in locals past them. The level run takes 1.19 times stock PCSX2's time (89.5 s against 74.9 s, timed in turn), from 1.21, a gain at the edge of what the measurement shows; the profile has the runtime's share 1.3 s smaller. Still the stock run and the interpreted run. Where it stands is in "G9" below. |
 | G10 Performance | **Done** (2026-11-13, ended there by the maintainer; [ADR 0019](adr/0019-performance-as-the-research-lays-it-out.md), begun 2026-11-12): play measured apart from startup, with nothing drawn and with the hardware renderer (the same time: the CPU thread's), and profiled. Profile-guided optimization of the generated code, trained on another run of the level: play takes 1.13 times stock PCSX2's time, from 1.21, startup 1.07, from 1.11, the whole level run 1.11, from 1.18. Then loops that have reached a fixed point (a time round that leaves the machine as it found it): their times round up to the next event test are not run, their cycles counted at once, the event test made where it would have been. The game waits for each frame in one: play takes 1.08 times stock PCSX2's time, startup 1.05, the whole level run 1.07. The COP2 transfers made by compiled code, and link-time optimization of PS2Native's code: no gain. Then the COP2 instructions that come first in their block, 78% of what compiled code still handed to the runtime for COP2, carried out by compiled code unless VU0 is running a micro program: play takes 1.06 times stock PCSX2's time, the whole level run 1.06. Then the rest of them (`VCALLMS` called the way PCSX2's recompiler calls it, `CFC2` and `CTC2` as moves): nothing the timing shows; the runtime now carries out only those at which VU0 is running. Still the stock run and the interpreted run, and every test passes. In the main tree beside it ([ADR 0021](adr/0021-two-sessions-on-step-g10.md)), each change measured by itself without profile-guided optimization: calls through a register made by compiled code itself, play from 1.18 to 1.16 times stock PCSX2's time; the way a load or store seldom takes made short, the game's code 14% smaller, play 1.14; the FPU's settings read once per function, tried and taken out. `ps2n-host -code-size` says how much host code each kind of generated line becomes. The two together, in one history and with profile-guided optimization: play takes 1.04 times stock PCSX2's time, the whole level run 1.04, still the stock run. On 2026-11-13 a third session measured the website's two charts again (the first 4,200 frames 1.09 times stock PCSX2's time with nothing drawn, from 1.35, and 1.03 with the software renderer, from 1.12; of the six loops, `jump` and `call` now about as fast as PCSX2's recompiler, `mmi` at 1.24 as at P4) and made `lq` and `sq` loads and stores on the locals and a block start's call of the runtime one of one argument (the host 12 MB smaller): play still 1.04 times stock PCSX2's time. Then, at the maintainer's word, the FPU's arithmetic: its registers held in SSE registers, as PCSX2's recompiler holds them, and the bits its additions keep past the guard bit looked up instead of branched to, the self-test holding all 511 cases of that to PCSX2's recompiler. Without profile-guided optimization play went from 1.10 to 1.046 times stock PCSX2's time; with it, play takes as long as stock PCSX2's (0.985 to 1.006 times, six rounds in pairs), the whole level run 1.01. Still the stock run and the interpreted run, and every test passes. Where it stands is in "G10" below. |
 | G11 The vector units' micro programs | **Done** (2026-11-14, [ADR 0022](adr/0022-vu-micro-programs-compiled-as-step-g11.md), begun 2026-11-13): measured first, the host watching the core's two VU providers (`ps2n-host -vu-report`). In play VU1's micro memory is rewritten about 40 times a frame, yet all it is given over the level run is 208 distinct pieces of code, 1,750 distinct instruction pairs, written at 5,405 places; PCSX2's VU recompiler makes 6,088 programs of them, and spends about a tenth of play's CPU-thread time starting programs, finding which one memory holds and making new ones. VU0 runs one set of code, written once at boot, started 51.5 million times. The vector units took about a third of play's CPU-thread time. The maintainer's choices with the measurement: VU1's registers held to the stock run at every sync point too, and PS2Native's own VU interpreter before the translator. The interpreter (2026-11-13) follows microVU's analysis of a block, its record of programs and blocks, its instructions and, where results show it, its allocation of host registers. The translator (2026-11-14): what microVU's second pass decides for a block is made once, as a list of steps (the block's plan), the same for the same code wherever the game writes it, and each plan is compiled ahead of time as one C++ function, found at run time by a fingerprint of the plan. Over the level run VU1's 42,173 blocks in 6,088 programs have 589 plans. Blocks go on to each other as microVU's do, and the program at a start or a jump is not looked for where it cannot have changed. After one run and one rebuild every one of the level run's 1.19 billion block runs is compiled code's: none is interpreted, and none runs on PCSX2's VU recompiler. The self-test finds the semantics to be microVU's on every case tried: 20,000 random micro programs, in five settings, give its results, cycle counts and TPC, 1,500 of them with every block compiled. Every test passes (468), PS2Native's configurations now on PS2Native's VU provider. The level run is the stock run at every one of its 93,221,937 sync points, VU0's and VU1's registers included, with the same picture at each of the 1,750 frames compared, and over the first 4,200 frames it is the interpreted run at every one of 47,705,744 event tests, the micro code interpreted there too. Play takes 0.95 times stock PCSX2's time (53.4 s against 56.2 s, three rounds in turn), the whole level run 0.97, from 1.00 and 1.01. Where it stands is in "G11" below. |
+| G12 The IOP's code | **Done** (2026-11-14, [ADR 0023](adr/0023-the-iops-code-compiled-as-step-g12.md)): measured first, the host watching the core's IOP provider (`ps2n-host -iop-report`). Over the level run the IOP runs about 10,600 different blocks of code, 58,000 instructions, nearly all of them formed in the first 250 frames and 17 after the level has loaded; 85% of its cycles pass in stretches that end where its kernel's idle loop is; the host spends 16% of the run inside its provider, most of that not in the IOP's code but around it. The same address holds different code at different times: the IOP is started three times, the last with the game's own modules. The IOP's place and registers are now held to the stock run at every sync point. PS2Native's IOP provider keeps the record of blocks PCSX2's IOP recompiler keeps, and carries a block out by its interpreter or by a function compiled ahead of time: one C++ function for each block as that recompiler formed it, found by a fingerprint of its instructions wherever the IOP's kernel loaded them. After one run and one rebuild every one of the level run's 911 million block runs of IOP code is compiled code's (8,023 blocks): none is interpreted, and none runs on PCSX2's IOP recompiler, whose own table holds no block after the run. The self-test finds the provider to be PCSX2's IOP recompiler on 4,000 random programs, in registers, memory, time and the blocks each holds, 1,500 of them with every block compiled; it found a form on which that recompiler loses a jump's target, which the provider stops at. Every test passes (469). The level run is the stock run at every one of its 93,221,937 sync points, the IOP's place and registers included, once both runs start with the console's clock at the same time (the first comparison found the two reading different times of day), and over the first 4,200 frames it is the interpreted run at every one of 47,705,744 event tests, the IOP's code interpreted there too. Play takes 0.95 times stock PCSX2's time (53.7 s against 56.6 s, three rounds in turn), the whole level run 0.97: what they took with PCSX2's IOP recompiler under the compiled game. No recompiler of PCSX2's for PS2 code now carries out anything in the run into the first level. Where it stands is in "G12" below. |
+| G13 Playing on | **Not begun** (2026-11-14, [ADR 0024](adr/0024-further-into-the-game-before-phase-3-ends.md)): the next step, chosen by the maintainer when G12 was done. The maintainer plays on in the window, beyond what the scripts reach; what each session had to interpret, of the game's code, of the micro code and of the IOP's, goes into the captures and is compiled into the next build, which is checked again and reported on. It waits for the first session. |
 
 ## The steps and their pass criteria
 
@@ -41,6 +43,8 @@ The run files, pictures included, are under the git-ignored build tree.
 | G9 VU0's instructions in compiled code ([ADR 0018](adr/0018-vu0-instructions-carried-out-by-compiled-code.md)) | Compiled code carries out a VU0 instruction itself, with G7's semantics inline, where the runtime's record of its block says nothing is to be done about VU0 first and no cycles are to be added first; elsewhere the runtime, as before. Measured on the level run and with the profile. | The compiled game is still the stock run and the interpreted run, and every test passes. What it gave back is reported as measured. |
 | G10 Performance ([ADR 0019](adr/0019-performance-as-the-research-lays-it-out.md)) | As the maintainer's research lays it out: gameplay measured first, startup apart from play, with nothing drawn and with the hardware renderer, and profiled; then the expensive paths the profile names, one change at a time, each measured, profile-guided optimization among them. What would change how time is counted, or what is compared with stock PCSX2, goes to the maintainer first. | Every change keeps the compiled game the stock run and the interpreted run, and every test passing. What each gives back is reported as measured, against stock PCSX2 timed in turn. |
 | G11 The vector units' micro programs ([ADR 0022](adr/0022-vu-micro-programs-compiled-as-step-g11.md)) | The micro programs the game runs on VU0 and VU1 compiled ahead of time by PS2Native's own translator, in the place of PCSX2's VU recompiler (microVU), following it as every family follows PCSX2's recompiler ([ADR 0005](adr/0005-never-further-from-the-console-than-pcsx2.md)). Measured first: what is written into micro memory, what is started where, how long it runs. VU1's registers then held to the stock run at every sync point, as the EE's and VU0's are. Then PS2Native's own VU interpreter, on semantics of its own, VU0's code first: the reference, and what runs code a build has not compiled. Then the translator, checked against it. | The game's micro programs are carried out by code compiled ahead of time, or by PS2Native's VU interpreter where a build has not compiled them, each such place listed; none by PCSX2's VU recompiler. The self-test finds the semantics to be microVU's on every case tried. Every test passes, and the game is still the stock run, VU1's registers included, and the interpreted run. The level run's time measured against stock PCSX2. |
+| G12 The IOP's code ([ADR 0023](adr/0023-the-iops-code-compiled-as-step-g12.md)) | The I/O processor's code, the BIOS's modules and the game's, compiled ahead of time by PS2Native's own translator, in the place of PCSX2's IOP recompiler, the last stand-in of [ADR 0003](adr/0003-no-jit-in-generated-games.md), following it as every family follows PCSX2's recompiler. Measured first: what the IOP runs, from where, how often its code changes, how long it takes. The IOP's place and registers then held to the stock run at every sync point. Then PS2Native's own IOP provider: the record of blocks PCSX2's IOP recompiler keeps, and an interpreter of them, the reference and what runs code a build has not compiled. Then the translator, checked against it. | The IOP's code is carried out by code compiled ahead of time, or by PS2Native's IOP interpreter where a build has not compiled it, each such place listed; none by PCSX2's IOP recompiler. The self-test finds the provider to be PCSX2's IOP recompiler on every case tried. Every test passes, and the game is still the stock run, the IOP's place and registers included, and the interpreted run. The level run's time measured against stock PCSX2. |
+| G13 Playing on ([ADR 0024](adr/0024-further-into-the-game-before-phase-3-ends.md)) | Further into the game than the scripts reach, before Phase 3 ends. The maintainer plays on in the window; each session writes down what it had to interpret (the game's EE code, the micro code, the IOP's code). That goes into the captures, and the build is made again and checked again. For each part of the game played: how much code no build had seen, on which processor, and what went wrong, if anything, with its cause. | What the sessions had to interpret is compiled into the next build and reported, part by part. After each rebuild every test passes and the scripted runs are still the stock run and the interpreted run. What goes wrong in play is listed with its cause, and put right by a change that is not for this game alone or left with its reason. How far is far enough is the maintainer's to say. (The criterion is the session's proposal: ADR 0024.) |
 
 The brief's rules for this phase: reusable solutions, no game-specific
 hardcoding unless unavoidable, and no wizard or packaging yet.
@@ -67,6 +71,10 @@ scripts\windows\build.ps1 -GameCapture build\game\killzone\capture.toml
 scripts\windows\game.ps1 -Image $iso -Config ps2n-static -Frames 17500 -Renderer null -Pad tests\games\killzone\level1.pad -Name level1 -VuCapture build\game\killzone\vu-capture.toml
 scripts\windows\build.ps1 -VuCapture build\game\killzone\vu-capture.toml
 
+# The same for the I/O processor's code (step G12): the blocks a run had to interpret.
+scripts\windows\game.ps1 -Image $iso -Config ps2n-static -Frames 17500 -Renderer null -Pad tests\games\killzone\level1.pad -Name level1 -IopCapture build\game\killzone\iop-capture.toml
+scripts\windows\build.ps1 -IopCapture build\game\killzone\iop-capture.toml
+
 # The compiled run against the stock run: at every sync point, and the picture at every frame
 # (17 minutes for both runs, and 3 GB in the build tree while it lasts):
 scripts\windows\game.ps1 -Image $iso -Config same-as-stock -Frames 4200 -FrameEvery 1 -Pad tests\games\killzone\start.pad -Name killzone
@@ -92,6 +100,10 @@ scripts\windows\game.ps1 -Image $iso -Config stock-jit -Frames 17500 -Renderer n
 scripts\windows\game.ps1 -Image $iso -Play -Name killzone
 # The same under stock PCSX2, to compare by eye and ear (the memory card is shared):
 scripts\windows\game.ps1 -Image $iso -Play -Name killzone -Config stock-jit
+# Playing on (step G13): what the session had to interpret, of the game's code, of the micro
+# code and of the IOP's, is added to the three capture files, and the next build compiles it.
+scripts\windows\game.ps1 -Image $iso -Play -Name killzone -Capture build\game\killzone\capture.toml -VuCapture build\game\killzone\vu-capture.toml -IopCapture build\game\killzone\iop-capture.toml
+scripts\windows\build.ps1
 
 # The window checked by machine, with the sound off: photographed, a key pressed in it, closed.
 scripts\windows\window-check.ps1 -Image $iso -Name killzone -Steps '41 shot film.png', '42 key K', '45 shot title.png', '47 close'
@@ -3271,6 +3283,357 @@ point"). In play the same function is the second of the game's, with 1.4%
 of the samples. What the loop costs under PCSX2's recompiler the profile
 cannot say: its code is not told apart there. Not looked into further.
 
+## G12: the IOP's code (Windows, 2026-11-14)
+
+Step G12 ([ADR 0023](adr/0023-the-iops-code-compiled-as-step-g12.md)): the
+I/O processor's code, the BIOS's modules and the game's, carried out by
+code of PS2Native's own compiled ahead of time, in the place of PCSX2's IOP
+recompiler, the last stand-in of
+[ADR 0003](adr/0003-no-jit-in-generated-games.md). It began, as G8 and G11
+did, with a measurement.
+
+### What the IOP runs, measured
+
+`ps2n-host -iop-report <file>` (`game.ps1 -IopReport`) watches the core's
+IOP provider and changes nothing in how the machine runs: every stretch of
+IOP time goes through the provider's `ExecuteBlock`, and every write into
+the IOP's memory that is not a store into a device is announced to it
+(`Clear`). PCSX2's IOP recompiler keeps a table of where each block's host
+code is, and its core finds the IOP kernel's list of modules for its
+debugger; the report reads both at the end of every frame. The level
+script under stock PCSX2, 17,500 frames, nothing drawn.
+
+**Time.** The IOP's clock moves 737,280 cycles a frame, 12,901,666,504
+over the run, in 93,221,937 stretches (one at each sync point), 138 cycles
+each on average. The host spent 13.9 s inside the IOP's provider, 16% of
+this run's 86 s (the watching slows it; unwatched it takes 74 s): about
+2.1 s for every 2,500 frames of play. That is the IOP's code and what the
+core does for it, when that code reads and writes devices and when event
+tests come due inside it; the host code PCSX2's IOP recompiler generated
+has 4.7% of play's samples itself ("Where G11 stands").
+
+**Mostly it waits.** 85% of the IOP's cycles pass in stretches that end in
+the kernel's thread manager, where the idle thread's loop is: a loop PCSX2
+does not run but lets time pass over. Then the interrupt manager (5.7%),
+the game's sound driver (4.5%), its file driver (1.2%), the pad driver
+(0.7%), the sound library (0.7%), the disc drive's driver (0.5%). (Where a
+stretch ended is a hint at where its time went, not a count; the counts
+are further down, from PS2Native's own provider.)
+
+**What it runs is small, and stops changing.** At the end of each frame
+the recompiler's table showed 12,004 blocks that had not been there the
+frame before, at 10,450 places; by their contents (the code from the place
+to the first branch and its delay slot) 10,646 different blocks, 58,182
+instructions in all, 130 of the blocks in the ROM and the rest in RAM. Of
+the 12,004, 10,526 were formed in the first 250 frames, 1,461 more up to
+frame 7,500, where the level has loaded, and 17 after that; in play (from
+frame 6,600) no write into the IOP's memory hit the start of a block. The
+recompiler's host code took 1.85 MB of the 32 MB it has room for.
+
+**The same address, different code.** The IOP is started three times: with
+the BIOS's own modules from its ROM (16 of them listed at frame 2, 24 by
+frame 7); again at frame 57, with a set that has the memory card's
+modules; and at frame 73, with a set that has the kernel's modules in
+newer versions (the thread manager 2.3 for 1.1, the disc drive's driver
+2.37 for 1.4) at other addresses and in other sizes: the game's own, which
+its disc has in an image file beside its 26 modules.
+Then the game loads its own: a file driver at frame 94, the controller and
+memory card modules at 163 to 165, a USB driver and a keyboard driver at
+169, the sound library and two sound drivers at 213 to 217. From frame 217
+the list stands at 34 modules. 195 places held more than one content over
+the run, so a block cannot be known by its address alone.
+
+**Its memory is written all the time, its code almost never.** The
+provider was told of 495,812,583 stores of the IOP's own and of 155,482
+transfers (from the EE, the disc, the sound hardware; 28,479,812 words).
+2,804 of the words written were where a block began, all but 11 of them in
+the first 250 frames: modules being loaded over older ones.
+
+What that says about the step: the code is a few thousand small blocks,
+formed once while the machine starts and then left alone, so compiling it
+ahead of time loses little to code no build has seen. The time is mostly
+not in the code but around it (93 million entries and exits, half a
+billion stores, the devices), so a compiled IOP will not show much in the
+level run's time either way: what it buys is that no recompiler runs.
+
+### The IOP's place and registers held to the stock run
+
+Before any IOP code of PS2Native's ran, the record of sync points took the
+IOP in ([ADR 0023](adr/0023-the-iops-code-compiled-as-step-g12.md)): its PC
+goes with the place and time of a sync point (its cycle count was there
+already), and its general registers, HI, LO and COP0 registers are a kind
+of their own, counted apart as VU1's are. The IOP is between two of its
+blocks at a sync point, whatever runs it.
+
+### What following PCSX2's IOP recompiler takes
+
+Far less than following its VU recompiler did. PCSX2's IOP recompiler
+(`pcsx2/x86/iR3000A.cpp`, `iR3000Atables.cpp`) counts time by the blocks
+it compiles, one cycle an instruction, and what it decides that shows is
+short enough to list; the execution model has it rule by rule ("What a
+block of the IOP's is"). What had to be read out of it:
+
+- **A block ends** after a branch and its delay slot, at an address where
+  a block exists already, or where its own branch goes back into it, and
+  nowhere else. A block that was cut short adds its cycles and runs on
+  without any test, though the IOP's stretch of time be used up.
+- **It throws a block away only when the word it begins at is written.** A
+  store into the middle of a block changes memory and leaves the block as
+  it was compiled. (PCSX2's EE recompiler marks every word of a block; its
+  IOP recompiler marks the first.) So a block is what memory held when it
+  was formed, and the record keeps its instructions.
+- **Its idle loop is not run**, and `SYSCALL` leaves a block in the middle
+  with the cycles so far.
+- **Some imports of the IOP's modules never reach the module**: the core
+  has functions of its own for the kernel's `Kprintf`, for file access on
+  `host:`, and listens to libraries being registered, and the recompiler
+  decides when it compiles an import's stub whether one of them is called.
+- **The order of a jump through a register and its delay slot** is the
+  console's but for two cases it overlooks, in which the delay slot's
+  instruction is carried out first.
+- **Its register allocation does not show**, as microVU's did: it keeps
+  registers in host registers within a block and writes them all back
+  where the block ends and before it calls out. A value it never writes
+  back is one the block overwrites before reading it, and before `SYSCALL`
+  and `BREAK` it takes every register for read. So between blocks the core
+  has the registers an interpreter leaves there.
+
+### PS2Native's IOP provider
+
+`runtime/iop_provider.cpp`, `ps2n-host -iop-ps2n`: the record of blocks as
+PCSX2's IOP recompiler keeps it (formed, thrown away and thrown away whole
+as that recompiler does), an interpreter of the blocks on semantics of
+PS2Native's own (`runtime/include/ps2n/iop_ops.h`), and the dispatcher that
+gives the IOP its stretches of time. What the recompiler hands to the core
+stays the core's: the imports' functions, the GTE, exceptions, devices.
+
+- **The first program run on it** (a controller test built with ps2sdk,
+  which boots the BIOS's modules and loads the controller's) was the stock
+  run at every one of its 694,545 sync points, the IOP's PC and registers
+  among them.
+- **The suite**: every test passes with the IOP on the provider in
+  PS2Native's configurations (468), the comparisons with the stock run now
+  holding the IOP's place and registers too.
+- **The level run**, the game compiled and the IOP interpreted, takes
+  94.2 s (play 67.6 s, where it takes 53.4 s with PCSX2's IOP recompiler:
+  the interpreter costs 14 s).
+
+What the IOP ran over the level run, counted this time and not guessed
+at: 93,221,937 stretches of time; 910,923,627 blocks begun, of
+4,787,756,837 instructions; 12,854 blocks formed, 2,900 thrown away because
+the word they began at was written, the whole record three times;
+5,242,829 `SYSCALL` and `BREAK` instructions; 76,069,352 times the idle
+loop let time pass; 380 imports the core has a function for, of which it
+did 149 itself. By their instructions alone the blocks are 8,023 different
+ones, of 46,155 instructions (PCSX2's table had shown 10,646 different
+contents at their places: the same instructions at another address are one
+block here).
+
+### The IOP's code compiled ahead of time
+
+`ps2n-recomp iop` writes one C++ function for each block of a capture
+(`recompiler/src/iop_codegen.cpp`, against
+`runtime/include/ps2n/iop_recomp.h`): the block as PCSX2's IOP recompiler
+formed it, its instructions in order on the IOP's registers held in locals,
+its end and its cycles in the code. The provider finds a function by a
+fingerprint of the block's instructions, not by its address, and tells it
+where the block is; so one function serves the same instructions wherever
+the IOP's kernel loaded them. Blocks go on to each other without coming
+back to the provider. (The execution model, "Blocks compiled ahead of
+time".)
+
+The level script's capture: 8,023 blocks, 46,155 instructions; 5.3 MB of
+C++ in 16 files. With them built
+in, every one of the level run's 910,923,627 block runs is compiled
+code's: none is interpreted, and none runs on PCSX2's IOP recompiler,
+which a run on PS2Native's provider does not start. The run takes 73.7 s
+(play 54.8 s) before the generated code has any counts for profile-guided
+optimization: about what it takes with PCSX2's IOP recompiler.
+
+### The self-test
+
+`host/selftest_iop.cpp`, part of `selftest/tables-and-semantics`: random
+IOP programs run on PCSX2's IOP recompiler and on the provider, in the same
+stretches of time. After every stretch the two must agree on the IOP's PC
+and cycle count, on what is left of the EE's clock, and on every register
+(general, HI, LO, COP0, the GTE's); at the end on the memory the program
+stores to, on its own code in memory, and on the addresses at which each
+holds a block. The programs have every instruction the recompiler has and
+encodings it has none for, branches forward and back, jumps through
+registers into each of the three places RAM is mapped at, stores into
+their own code, `SYSCALL` and `BREAK` with a handler that returns, loads
+and stores at every alignment and through a mirror of RAM, the awkward
+multiplications and divisions, a wait loop, an import the core carries out
+itself, an event test and an interrupt in the middle, and stretches of no
+time at all.
+
+On 4,000 programs (133,486 instructions; 23,175 blocks formed, 1,026
+thrown away for stores into them, 7,889 `SYSCALL` and `BREAK`, 1,894
+imports, 17,275 passes of a wait loop) nothing differs. `selftest/iop-compiled`
+runs the first 1,500 with every block compiled ahead of time (6,406
+blocks, `scripts\windows\iop-selftest.ps1` captures and builds them):
+nothing differs, and none is interpreted.
+
+**What it found in PCSX2.** The first run had five programs differ, all
+of one form: `JALR` linking into the register it jumps through, with an
+unaligned store or load in its delay slot. There PCSX2's IOP recompiler
+went on at address 0. It keeps the jump's target in a host register across
+the delay slot; for `LWL`, `LWR`, `SWL`, `SWR` and the GTE's instructions
+it calls the core and gives every host register up first; the target is
+then written back as the EE's recompiler would write it, into the EE's
+registers (`X86TYPE_PCWRITEBACK`, `cpuRegs.pcWriteback`), and read from
+the IOP's (`psxRegs.pcWriteback`), which nothing writes. It needs a delay
+slot the recompiler does not carry out before the jump: one that loads or
+stores the jump's own register, or uses the register the jump links into,
+or a jump that links into its own register. No real program has one; the
+provider stops at it with an error that names it
+([ADR 0023](adr/0023-the-iops-code-compiled-as-step-g12.md)), and the
+self-test's programs leave it out.
+
+PCSX2's `master` of 2026-11-14 (`0ab00c49`) has the same lines, which came
+in with its pull request 7295 (merged on 2022-11-19), and no issue or pull
+request of PCSX2's mentions the defect (looked up by reading only). The
+maintainer tells PCSX2, in an issue of their own; where the defect is, line
+by line, is in ADR 0023, "A defect of PCSX2's IOP recompiler, found on the
+way".
+
+### The console's clock
+
+The first comparison of the compiled level run with the stock run that had
+the IOP's registers in it found place and time the same at every one of
+the 93,221,937 sync points, the pictures and the sound hardware the same,
+and the IOP's registers different at 72 of them, the first at sync point
+1,886,066. With the registers written out there (`-sync-detail`): one
+register, `$v1`, 45 in the stock run and 52 in the compiled one, in a loop
+of the disc drive's driver that copies an answer of the drive from the
+stack. The answer is the console's clock, and the byte its seconds. PCSX2
+sets that clock from the host's time of day when the machine starts, and
+the two runs of a comparison start minutes apart (seven seconds, the two
+runs that were made to look).
+
+It had always been so; nothing compared had held a byte of it before. The
+host now starts every run that is not played in a window at one fixed time
+(`ps2n-host -clock fixed`: 2020-03-04, midnight, the time PCSX2 gives its
+input recordings), so that two runs that are compared start from the same
+machine; in a window the console has the day it is.
+
+### Where G12 stands (2026-11-14)
+
+**Profile-guided optimization, made again.** The counts the build had were
+made before any IOP code was compiled. The training script
+(`level1-train.pad`) runs no block of IOP code that the level script's
+capture does not have (8,018 of its 8,023), so nothing was added to the
+capture; the instrumented build, the training run, the merge (58.5 MB of
+counts) and the build with the counts were made again.
+
+**The time.** Stock PCSX2 and the compiled game in turn, three rounds,
+nothing drawn:
+
+| | Startup, three rounds | Play, three rounds |
+|---|---|---|
+| Stock PCSX2 | 16.67, 16.82, 16.72 s | 56.53, 56.68, 56.51 s |
+| Compiled | 17.66, 17.75, 17.79 s | 53.71, 53.83, 53.66 s |
+
+Play takes 0.95 times stock PCSX2's time: 53.73 s against 56.57 s, 0.950
+in each of the three pairs, as it did with PCSX2's IOP recompiler under
+the compiled game (53.39 s against 56.17 s, "Where G11 stands"). Startup
+takes 1.06 times (17.7 s against 16.7 s), where it took 1.05; the run from
+its first frame on 0.975 (71.4 to 71.6 s against 73.2 to 73.5 s), where it
+took 0.974: 0.97, as before. With the IOP's code compiled ahead of time
+the game takes the time it took with PCSX2's IOP recompiler under it,
+which is what the measurement had said to expect. Before the counts were
+made again, play had taken 54.8 s in one run ("The IOP's code compiled
+ahead of time"): as far as one run says, making them again was worth a
+second of play.
+
+**Still the stock run.** This build, with the IOP's code compiled and the
+counts made again, was compared with the stock run over the level script,
+both runs starting with the console's clock at the same time. It is the
+stock run at every one of 93,221,937 sync points: the EE and the IOP at
+the same places at the same cycle counts, and the registers the same, the
+IOP's among them, but for the FPU's at the same 964 sync points as before,
+the first 57,130,066 (the sign of a zero, followed on purpose since G4);
+with the same picture at each of the 1,750 frames compared and the sound
+hardware in the same state at each of 1,750 moments. The 72 sync points
+at which the IOP's registers differed in the first comparison are gone
+with the clock's time of day ("The console's clock"). The compiled run of
+the comparison interprets 51 instructions, those of the BIOS at boot, no
+block of micro code and no block of the IOP's.
+
+**And the interpreted run.** Over the first 4,200 frames the compiled game
+is the interpreted run at every one of 47,705,744 event tests. The run's
+fingerprint now has the IOP's PC, cycle count and registers in it at every
+event test (`DBCD0205447FBA7C`; without them it was `F99B5EFD472E87EC` at
+every step before). The interpreted run interprets the IOP's code as well
+as the EE's and the micro code: 236,805,180 block runs of 7,378 different
+blocks. The compiled run carries every one of them out by compiled code.
+
+**The tests.** Every test passes (469, and the unit tests), PS2Native's
+configurations with the IOP on PS2Native's provider. The self-test: 4,000
+random IOP programs give what PCSX2's IOP recompiler gives; 1,500 of them
+run with every block compiled ahead of time (`selftest/iop-compiled`).
+
+**What carries the IOP's code out.** Over the level run the IOP is given
+93,221,937 stretches of time and begins 910,923,627 blocks, of
+4,787,756,837 instructions: every one of them code compiled ahead of time,
+none interpreted. PCSX2's IOP recompiler carries out nothing: after the
+run its own table holds no block. With the EE's code compiled since G2,
+the BIOS's since G8 and the micro programs since G11, no recompiler of
+PCSX2's for PS2 code carries out anything in the run into the first
+level, and what is interpreted there is 51 instructions of the BIOS at
+boot ("G8"). What PCSX2 still generates at run time is for the VIF's
+unpacking and, when it draws, for its software renderer, which are not PS2
+code ([ADR 0006](adr/0006-no-jit-rule-covers-ps2-code-only.md)).
+
+**Where play's time goes now.** The profile of play on this build (54.4 s
+profiled, 36,212 samples of the CPU thread), beside the one of the build
+G11 ended with, PCSX2's IOP recompiler under the compiled game (54.3 s,
+36,223 samples):
+
+| | With PCSX2's IOP recompiler | Now |
+|---|--:|--:|
+| The game's EE code, compiled ahead of time | 36.0%, 19.5 s | 35.4%, 19.2 s |
+| The vector units' micro code, compiled ahead of time | 19.3%, 10.5 s | 19.1%, 10.4 s |
+| The IOP's code: generated at run time then, compiled ahead of time now | 4.7%, 2.5 s | 7.6%, 4.1 s |
+| PS2Native's runtime | 10.0%, 5.4 s | 10.6%, 5.8 s |
+| PCSX2's core | 24.6%, 13.3 s | 21.8%, 11.9 s |
+| Windows and other libraries, and what was not identified | 5.5%, 3.0 s | 5.5%, 3.0 s |
+
+No sample is in host code that one of PCSX2's recompilers for PS2 code
+generated: there is none. The compiled blocks have more of the samples
+than the generated code had because they do themselves what that code
+called the core for: a store into RAM and the test whether a block begins
+at the word written were `iopMemWrite32` and `recClearIOP` then (1.2% and
+0.8% of the samples) and are in the blocks now. Counted with those, and
+with the provider's own dispatcher now (`ExecuteBlock`, 0.75%), the IOP's
+code has 8.4% of play's samples where it had 6.7%, and the other kinds
+together that much less. Each profile is one run; the three rounds of
+timing find play's time against stock PCSX2's unchanged. The block with
+most of the samples, 0.40%, is the kernel's idle loop, which only lets
+time pass. Where the rest goes inside the blocks has not been looked into.
+
+**The window.** Checked by machine with the sound off, a session of its
+own (`window-check.ps1 -Name g12-window`): the film and the title screen
+at 49.93 frames a second where the console shows 50, the IOP on
+PS2Native's provider, nothing in PCSX2's IOP recompiler, both VUs on
+compiled code. A session in the window has a memory card in its first
+slot, which the scripted runs do not have. Of the 7,783 different blocks
+of IOP code the session ran, 349 were not in the level script's capture
+and were interpreted, 2,356 block runs of 125,981,468: 193 first met in
+the module `secrman_for_cex`, 140 in the memory card manager (`mcman`), 9
+in its server (`mcserv`) and 7 in the disc drive's driver. The session
+wrote them down (`build\game\g12-window\play\iop-capture.toml`) for the
+next build to compile; they are not in the build measured here.
+
+**The website's first chart on this build.** The first 4,200 frames take
+what they took: with nothing drawn 12.5, 12.6, 12.5 s against 11.3, 11.5,
+11.4 s under stock PCSX2 (1.10); every run ends at EE cycle
+24,766,740,046. These frames are where most of the IOP's blocks are formed
+(10,526 of the level run's 12,004 in the first 250), which PCSX2's IOP
+recompiler compiles there and PS2Native's provider looks up by their
+instructions: the one in the other's place makes no difference that the
+timing shows. The chart keeps its numbers of 2026-11-13.
+
 ## Open
 
 - **What is left of VU0 in the game's EE code.** Since G7 its instructions
@@ -3285,11 +3648,45 @@ cannot say: its code is not told apart there. Not looked into further.
   brought up to date first ("G10", "The rest of the COP2 instructions").
   The micro programs themselves, VU0's and VU1's, are compiled ahead of
   time since G11, and run on PS2Native's VU provider.
-- **The IOP.** Its code, the BIOS's modules and the game's, still runs on
-  PCSX2's IOP recompiler: the one stand-in of
-  [ADR 0003](adr/0003-no-jit-in-generated-games.md) that is left, and the
-  next in its order of work. Not begun; in play it has about 5% of the CPU
-  thread's samples.
+- **No stand-in is left** of those
+  [ADR 0003](adr/0003-no-jit-in-generated-games.md) allowed for a time:
+  since G12 the IOP's code runs on PS2Native's IOP provider, compiled ahead
+  of time, as the game's EE code does since G2, the BIOS's since G8 and the
+  micro programs since G11. In the run into the first level no recompiler
+  of PCSX2's for PS2 code carries anything out. What a build has not seen
+  is interpreted, and listed.
+- **What the IOP provider does not carry out.** The IOP's PlayStation mode;
+  a branch, a `SYSCALL` or a `BREAK` in a delay slot; an import the core
+  has a function for, in a block longer than its stub; a jump through a
+  register whose delay slot is an unaligned load or store that PCSX2's
+  recompiler does not carry out before the jump, where that recompiler
+  loses the jump's target (a defect of its: "G12", "The self-test"; the
+  maintainer tells PCSX2,
+  [ADR 0023](adr/0023-the-iops-code-compiled-as-step-g12.md)); a jump to an
+  address that is not a multiple of four or where the IOP has no memory. A
+  run that reaches one stops with an error that names it. Neither Killzone
+  as far as the first level nor a test program has one.
+- **IOP code no build has seen** is interpreted until the next build. A
+  compiled block is found by its instructions, wherever they are; but a
+  module's instructions that hold addresses are other instructions at
+  another load address, so a module loaded elsewhere than in the captured
+  runs has part of its blocks interpreted until they are captured there
+  too. The training script's run met no block that the level script's
+  capture did not have. A session in the window does: it has a memory
+  card, which the scripted runs do not, and the memory card's modules run
+  code there that no script reaches (342 of the 349 blocks the window
+  check interpreted, "G12", "Where G12 stands"). It writes what it
+  interpreted down (`build\game\<name>\play\iop-capture.toml`), for the
+  next build.
+- **The test programs' IOP code** runs compiled where the host has the
+  block (the BIOS's modules are in a game's capture, since the game starts
+  the IOP with them twice) and is interpreted otherwise.
+- **PCSX2's IOP recompiler's cache.** When its 32 MB of host code are full
+  it throws its record of blocks away, which PS2Native's provider cannot
+  know. The level run fills 1.85 MB of it.
+- **The console's clock** starts at one fixed time in every run that is
+  not played in a window ("G12", "The console's clock"), so that two runs
+  are the same machine. A program that shows the date shows that one.
 - **What the VU provider does not carry out.** The T and M bits on a
   branch, the T bit with an XGKICK still to come at its block's end,
   PCSX2's XGKICK game fix, and the forms whose result under microVU
@@ -3316,7 +3713,8 @@ cannot say: its code is not told apart there. Not looked into further.
   15.1 s against 11.2 s with nothing drawn, at G3; on 2026-11-13 they take
   23.4 s against 22.7 s, and 12.3 s against 11.3 s ("G10", "Where it
   stands (main tree, 2026-11-13)"), and the same on 2026-11-14 with the
-  micro programs compiled. The second that is left with nothing drawn is
+  micro programs compiled and then with the IOP's code compiled as well
+  (12.5 s against 11.4 s). The second that is left with nothing drawn is
   in the game's own EE code, a fifth of the compiled run in one loop that
   waits on the count register ("G11", "Where G11 stands"); what could be
   done about it has not been looked into.
@@ -3348,12 +3746,15 @@ cannot say: its code is not told apart there. Not looked into further.
   (73.7 to 74.7 s against 72.9 to 73.9 s), play alone as long as stock
   PCSX2's (0.985 to 1.006 times); with the vector units' micro programs
   compiled ahead of time (G11, 2026-11-14), 0.97 (72.1 to 73.0 s against
-  74.1 to 74.6 s), play alone 0.95 (0.943 to 0.962). More than a
-  third of the
+  74.1 to 74.6 s), play alone 0.95 (0.943 to 0.962); with the IOP's code
+  compiled ahead of time (G12, 2026-11-14), the same, 0.97 (72.9 to
+  73.1 s against 74.7 to 74.9 s), play alone 0.95 (0.950 in each of three
+  pairs). More than a third of the
   compiled code's time is now reaching memory through the core's address
   table, where PCSX2's recompiler uses one instruction and a fault ("G6",
-  "Where the time is now"). The 4,200-frame times above are from G3 and
-  have not been taken again since.
+  "Where the time is now"). The IOP's compiled blocks and their provider
+  have 8.4% of play's samples, 4.6 s; where that goes inside the blocks
+  has not been looked into ("G12", "Where G12 stands").
 - **What a longer run could meet.** PCSX2's recompiler throws all its
   blocks away when its code cache is full, and PS2Native cannot know when
   that is (execution model, "What is not reproduced"). It did not happen in
@@ -3375,7 +3776,8 @@ cannot say: its code is not told apart there. Not looked into further.
   first level. Longer sessions go where no script has been: each writes
   down what it had to interpret, for a rebuild. Stock PCSX2 opens in the
   same window (`-Config stock-jit`) for whoever wants the two side by
-  side.
+  side. This is the next step, G13
+  ([ADR 0024](adr/0024-further-into-the-game-before-phase-3-ends.md)).
 - **The window on Linux.** Not written: `ps2n-host -window` says so there.
   `pcsx2-gsrunner` has the X11 window to go by.
 - **The pictures the runs saved have only been looked at by the AI

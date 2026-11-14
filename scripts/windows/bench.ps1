@@ -13,8 +13,9 @@ The configurations:
 
   stock-jit     PCSX2's recompilers
   stock-interp  PCSX2's interpreters
-  ps2n-ee       PS2Native's EE provider, interpreting everything
-  ps2n-static   PS2Native's EE provider with the program compiled ahead of time
+  ps2n-ee       PS2Native's providers (the EE's, the IOP's, the VUs'), interpreting
+                everything
+  ps2n-static   PS2Native's providers with the program compiled ahead of time
 
 .EXAMPLE
 scripts\windows\bench.ps1 -Bios "$HOME\Documents\PCSX2\bios\SCPH-70004_BIOS_V12_PAL_200.BIN"
@@ -53,8 +54,8 @@ function ForCMake([string]$path) { $path -replace '\\', '/' }
 $providers = @{
     'stock-jit'    = @('jit', 'jit', 'jit', 'on')
     'stock-interp' = @('interp', 'interp', 'interp', 'on')
-    'ps2n-ee'      = @('ps2n', 'jit', 'jit', 'off')
-    'ps2n-static'  = @('ps2n', 'jit', 'jit', 'on')
+    'ps2n-ee'      = @('ps2n', 'ps2n', 'ps2n', 'off')
+    'ps2n-static'  = @('ps2n', 'ps2n', 'ps2n', 'on')
 }
 
 $results = [ordered]@{}   # workload -> configuration -> list of milliseconds
