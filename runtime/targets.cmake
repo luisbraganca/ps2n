@@ -24,6 +24,8 @@ add_library(ps2n-runtime STATIC
 	"${CMAKE_CURRENT_LIST_DIR}/ops_vu0.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/rec_blocks.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/rec_blocks.h"
+	"${CMAKE_CURRENT_LIST_DIR}/vu_interp.cpp"
+	"${CMAKE_CURRENT_LIST_DIR}/vu_interp.h"
 
 	# The instruction decoder and the reader of a BIOS image's directory,
 	# shared with the build-time tools (core/). Only the parts that use no C++
@@ -33,6 +35,7 @@ add_library(ps2n-runtime STATIC
 	"${PS2N_ROOT}/core/src/disasm.cpp"
 	"${PS2N_ROOT}/core/src/romdir.cpp"
 	"${PS2N_ROOT}/core/src/strings.cpp"
+	"${PS2N_ROOT}/core/src/vu_mvu.cpp"
 )
 
 # Users include "runtime/<header>", "ps2n/<header>" for the semantics

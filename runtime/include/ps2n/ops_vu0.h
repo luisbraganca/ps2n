@@ -283,15 +283,21 @@ namespace ps2n::ee::vu0
 
 		// clampOp (microVU_Misc.inl): `to` op `from`, the result in `to`'s
 		// register.
-		PS2N_VU0_INLINE __m128 Compute(Arith op, __m128 to, bool to_clampable, __m128 from, bool from_clampable, const Clamp& c)
+		// swapSources: the addition or multiplication with its two sources the
+		// other way round, as PCSX2's emitter writes ADDPS and MULPS with AVX when
+		// that shortens them; the result differs only where both are NaN (x86
+		// gives the first source's). The register written, and so the result's
+		// clamp, stay `to`'s.
+		PS2N_VU0_INLINE __m128 Compute(Arith op, __m128 to, bool to_clampable, __m128 from, bool from_clampable, const Clamp& c,
+			bool swapSources = false)
 		{
 			to = Clamp3(to, c, to_clampable);
 			from = Clamp3(from, c, from_clampable);
 			switch (op)
 			{
-				case Arith::Add: to = ADDPS(to, from); break;
+				case Arith::Add: to = swapSources ? ADDPS(from, to) : ADDPS(to, from); break;
 				case Arith::Sub: to = SUBPS(to, from); break;
-				case Arith::Mul: to = MULPS(to, from); break;
+				case Arith::Mul: to = swapSources ? MULPS(from, to) : MULPS(to, from); break;
 				case Arith::Div: to = DIVSS(to, from); break;
 			}
 			return Clamp4(to, c, to_clampable);

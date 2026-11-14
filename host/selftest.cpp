@@ -1314,6 +1314,7 @@ int ps2n::selftest::Run(const Options& options)
 	failures += CheckTables(options, rng);
 	failures += CheckSemantics(options, rng);
 	failures += CheckFpuLanes(options.interp_trials, rng);
+	failures += CheckVuPrograms(options.vu_trials, options.seed);
 
 	std::fprintf(stderr, "selftest: %s\n", failures ? "FAILED" : "passed");
 	return failures;

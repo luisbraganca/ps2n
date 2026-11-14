@@ -15,9 +15,11 @@
 #include "profile.h"
 #include "selftest.h"
 #include "sync_trace.h"
+#include "vu_report.h"
 #include "window.h"
 
 #include "runtime/ee_provider.h"
+#include "runtime/vu_interp.h"
 #include "runtime/rec_blocks.h"
 
 #include <algorithm>
@@ -61,6 +63,7 @@
 #include "pcsx2/SIO/Pad/PadDualshock2.h"
 #include "pcsx2/SPU2/defs.h"
 #include "pcsx2/VMManager.h"
+#include "pcsx2/VUmicro.h"
 
 // The executables compiled ahead of time that this host is linked with: a list
 // the recompiler writes (tests/tests.cmake). The array ends with a null entry.
@@ -113,6 +116,8 @@ namespace
 		EEProvider ee = EEProvider::Jit;
 		bool iop_jit = true;
 		bool vu_jit = true;
+		u32 vu_ps2n = 0; // bit 0 VU0, bit 1 VU1: PS2Native's VU interpreter in the place of the core's provider
+		std::string vu_programs_path; // where that interpreter writes a line for each program it records
 		GSRendererType renderer = GSRendererType::Null;
 		u32 max_frames = 3600;
 		u32 max_seconds = 60;
@@ -140,6 +145,7 @@ namespace
 		std::string profile_path; // where the report of where the CPU thread's time went is written
 		std::string code_size_path; // where the report of how much host code the compiled images became is written
 		u32 profile_from = 1; // the frame from which the profile looks (startup left out when later than 1)
+		std::string vu_report_path; // where the report of what the vector units ran is written (vu_report.h)
 		std::vector<u32> marks; // frames at which the wall-clock time is noted, for the report
 		bool fast_cores = false; // keep the run on the processor's fastest cores, so that its time repeats
 		bool window = false; // play in a window: the console's speed, sound, the keyboard, a controller, a memory card
@@ -186,6 +192,7 @@ namespace
 	u32 s_frames = 0;
 	bool s_stop_requested = false;
 	bool s_provider_replaced = false;
+	bool s_vu_unsupported = false; // PS2Native's VU interpreter met what it does not carry out yet
 
 	std::mutex s_queue_mutex;
 	std::deque<std::function<void()>> s_queue;
@@ -250,6 +257,12 @@ namespace
 			"                     own EE provider (default jit).\n"
 			"  -iop jit|interp    PCSX2's IOP recompiler or interpreter (default jit).\n"
 			"  -vu jit|interp     PCSX2's VU recompilers or interpreters (default jit).\n"
+			"  -vu-ps2n 0|1|both  Run VU0's, VU1's or both VUs' micro programs on\n"
+			"                     PS2Native's VU interpreter, which follows PCSX2's VU\n"
+			"                     recompiler (runtime/vu_interp.h). The run stops with an\n"
+			"                     error at what it does not carry out yet.\n"
+			"  -vu-programs <file>  With -vu-ps2n: write a line for each micro program it\n"
+			"                     records, as PCSX2's recompiler writes them to its log.\n"
 			"  -static on|off     With -ee ps2n: run code compiled ahead of time where there\n"
 			"                     is some for the executable (default on). Off, PS2Native's\n"
 			"                     interpreter runs everything.\n"
@@ -336,6 +349,12 @@ namespace
 			"                     with the functions that had most of it. Windows only.\n"
 			"  -profile-from <n>  With -profile: look from frame n on, not from the first,\n"
 			"                     to leave out what comes before (a game's startup).\n"
+			"  -vu-report <file>  Watch the core's two VU providers and write to this file\n"
+			"                     what was written into each VU's micro memory, where, with\n"
+			"                     how many different contents, at which addresses programs\n"
+			"                     were started, and how long each ran. Beside it go the same\n"
+			"                     counts frame by frame (-frames.csv) and each distinct\n"
+			"                     content written (-uploads.bin), which are the program's.\n"
 			"  -mark <n>          Note the wall-clock time at frame n, and report it after\n"
 			"                     the run with the time of the first and the last frame,\n"
 			"                     each since the host started. May be given more than once:\n"
@@ -414,6 +433,8 @@ namespace
 				o.profile_path = argv[++i];
 			else if (is("-code-size") && has_value)
 				o.code_size_path = argv[++i];
+			else if (is("-vu-report") && has_value)
+				o.vu_report_path = argv[++i];
 			else if ((is("-profile-from") || is("-mark")) && has_value)
 			{
 				const bool mark = is("-mark");
@@ -552,6 +573,23 @@ namespace
 				if (!ParseProvider("-vu", argv[++i], &o.vu_jit))
 					return false;
 			}
+			else if (is("-vu-ps2n") && has_value)
+			{
+				const char* which = argv[++i];
+				if (!std::strcmp(which, "0"))
+					o.vu_ps2n = 1;
+				else if (!std::strcmp(which, "1"))
+					o.vu_ps2n = 2;
+				else if (!std::strcmp(which, "both"))
+					o.vu_ps2n = 3;
+				else
+				{
+					std::fprintf(stderr, "ps2n-host: -vu-ps2n takes 0, 1 or both, not %s\n", which);
+					return false;
+				}
+			}
+			else if (is("-vu-programs") && has_value)
+				o.vu_programs_path = argv[++i];
 			else if (is("-renderer") && has_value)
 			{
 				const char* value = argv[++i];
@@ -698,6 +736,11 @@ namespace
 			std::fputs("ps2n-host: -profile is for a run of a program, and is not available on this platform yet\n", stderr);
 			return false;
 		}
+		if (!o.vu_report_path.empty() && o.selftest)
+		{
+			std::fputs("ps2n-host: -vu-report is for a run of a program\n", stderr);
+			return false;
+		}
 
 		// On Windows the core's file functions turn an absolute path into an
 		// extended-length one (\\?\C:\...), which does not take forward slashes
@@ -705,7 +748,7 @@ namespace
 		// forward slashes, so every path is put in the platform's form here.
 		for (std::string* path : {&o.boot_path, &o.bios_path, &o.data_dir, &o.out_path, &o.times_path, &o.log_path, &o.capture_path,
 				 &o.bios_capture_path, &o.trace_path, &o.trace_against_path, &o.sync_path, &o.sync_against_path, &o.frame_path, &o.pad_path,
-				 &o.profile_path})
+				 &o.profile_path, &o.vu_report_path, &o.vu_programs_path})
 			Path::ToNativePath(path);
 		return true;
 	}
@@ -1604,6 +1647,42 @@ namespace
 					}
 				}
 
+				// PS2Native's VU interpreter in the place of the core's VU providers
+				// (-vu-ps2n). The core chose its providers with the machine, and
+				// chooses again only when a recompiler is switched on or off.
+				for (int vu = 0; vu < 2; vu++)
+				{
+					if (!(s_options.vu_ps2n & (1u << vu)))
+						continue;
+					BaseVUmicroCPU* ours = ps2n::vu::Interpreter(vu);
+					ours->Reset();
+					(vu ? CpuVU1 : CpuVU0) = ours;
+					if (!s_options.vu_programs_path.empty())
+					{
+						const std::string path = vu ? s_options.vu_programs_path + "1" : s_options.vu_programs_path + "0";
+						if (!ps2n::vu::LogPrograms(vu, path.c_str()))
+						{
+							std::fprintf(stderr, "ps2n-host: cannot write %s\n", path.c_str());
+							trace_ok = false;
+						}
+					}
+				}
+
+				// What the vector units run, in any configuration: their providers
+				// watched, not changed (vu_report.h).
+				if (!s_options.vu_report_path.empty())
+				{
+					if (ps2n::host::vureport::Start(s_options.vu_report_path.c_str()))
+					{
+						ps2n::host::vureport::Install();
+					}
+					else
+					{
+						std::fprintf(stderr, "ps2n-host: cannot open the files of %s\n", s_options.vu_report_path.c_str());
+						trace_ok = false;
+					}
+				}
+
 				// As fast as the host goes: the core otherwise holds the machine to
 				// the console's speed, however little work a frame is. With a
 				// window someone is playing, and the console's speed is the point.
@@ -1615,6 +1694,13 @@ namespace
 				if (s_options.ee == EEProvider::Ps2n)
 					ps2n::ee::StopTrace();
 				ps2n::host::StopSyncTrace();
+				if (!s_options.vu_report_path.empty())
+				{
+					if (ps2n::host::vureport::Stop(s_frames))
+						std::fprintf(stderr, "ps2n-host: what the vector units ran: %s\n", s_options.vu_report_path.c_str());
+					else
+						std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.vu_report_path.c_str());
+				}
 
 				int code = EXIT_FRAME_LIMIT;
 				const char* reason = "frame limit";
@@ -1626,7 +1712,12 @@ namespace
 				else if (s_provider_replaced)
 				{
 					code = EXIT_ERROR;
-					reason = "an error: the core replaced PS2Native's EE provider with its own";
+					reason = "an error: the core put a provider of its own back where the host had put one";
+				}
+				else if (s_vu_unsupported)
+				{
+					code = EXIT_ERROR;
+					reason = "an error: PS2Native's VU interpreter met what it does not carry out yet";
 				}
 				else if (s_options.ee == EEProvider::Ps2n && ps2n::ee::GetTraceMismatch())
 				{
@@ -1655,6 +1746,22 @@ namespace
 				std::fprintf(stderr, "ps2n-host: EE COP0 Config %08x (double issue %s), Status %08x, EE cycle rate setting %d\n",
 					cpuRegs.CP0.n.Config, (cpuRegs.CP0.n.Config >> 18) & 1 ? "on" : "off", cpuRegs.CP0.n.Status.val,
 					static_cast<int>(EmuConfig.Speedhacks.EECycleRate));
+				for (int vu = 0; vu < 2; vu++)
+				{
+					if (!(s_options.vu_ps2n & (1u << vu)))
+						continue;
+					const ps2n::vu::InterpreterStats& st = ps2n::vu::Stats(vu);
+					std::fprintf(stderr,
+						"ps2n-host: PS2Native's VU%d interpreter: %llu runs, %llu blocks, %llu instruction pairs; %llu blocks analysed, "
+						"%llu programs recorded, %llu indirect jumps, %llu runs stopped for their cycles\n",
+						vu, static_cast<unsigned long long>(st.runs), static_cast<unsigned long long>(st.blocks),
+						static_cast<unsigned long long>(st.pairs), static_cast<unsigned long long>(st.compiles),
+						static_cast<unsigned long long>(st.programs), static_cast<unsigned long long>(st.jumps),
+						static_cast<unsigned long long>(st.pauses));
+					if (const char* what = ps2n::vu::Unsupported(vu))
+						std::fprintf(stderr, "ps2n-host: PS2Native's VU%d interpreter does not carry out yet: %s\n", vu, what);
+					ps2n::vu::LogPrograms(vu, nullptr);
+				}
 				if (s_options.window && s_frames > 1)
 				{
 					// The pace the session kept, against the console's. A machine that
@@ -1694,7 +1801,7 @@ namespace
 							std::fputs("ps2n-host: sync: place and time are the same as the reference run's at every sync point\n", stderr);
 						if (state)
 							std::fprintf(stderr, "ps2n-host: sync: registers first differ %s\n", state);
-						for (int kind = 0; kind < 4; kind++)
+						for (int kind = 0; kind < 5; kind++)
 						{
 							const char* name = nullptr;
 							const char* first = nullptr;
@@ -2002,9 +2109,23 @@ void ps2n::host::OnGuestFrame()
 		Pad::SetControllerState(0, event.input, event.value);
 	}
 
-	// Never run on with a provider other than the one that was asked for.
-	if ((s_options.ee == EEProvider::Ps2n && Cpu != ps2n::ee::Provider()) || !ps2n::host::SyncTraceInstalled())
+	// What the vector units did during the frame (-vu-report).
+	ps2n::host::vureport::Frame(s_frames);
+
+	// Never run on with a provider other than the one that was asked for. The
+	// VU report's watch stands in front of the VU interpreter when both are
+	// asked for, and checks itself.
+	const bool vuWatched = !s_options.vu_report_path.empty();
+	if ((s_options.ee == EEProvider::Ps2n && Cpu != ps2n::ee::Provider()) || !ps2n::host::SyncTraceInstalled() ||
+		!ps2n::host::vureport::Installed() ||
+		(!vuWatched && (s_options.vu_ps2n & 1) && CpuVU0 != ps2n::vu::Interpreter(0)) ||
+		(!vuWatched && (s_options.vu_ps2n & 2) && CpuVU1 != ps2n::vu::Interpreter(1)))
 		s_provider_replaced = true;
+
+	// PS2Native's VU interpreter stops a VU where it meets what it does not
+	// carry out yet; the run stops with it.
+	if (((s_options.vu_ps2n & 1) && ps2n::vu::Unsupported(0)) || ((s_options.vu_ps2n & 2) && ps2n::vu::Unsupported(1)))
+		s_vu_unsupported = true;
 
 	// A run that has parted from the one it is compared with has nothing more to
 	// show.
@@ -2022,7 +2143,7 @@ void ps2n::host::OnGuestFrame()
 	// 0 frames: no limit (someone is playing in a window).
 	const bool frames_done = s_options.max_frames != 0 && s_frames >= s_options.max_frames;
 
-	if (s_provider_replaced || parted || marker || s_time_limit_passed.load() || frames_done || s_close_requested.load())
+	if (s_provider_replaced || s_vu_unsupported || parted || marker || s_time_limit_passed.load() || frames_done || s_close_requested.load())
 	{
 		if (profiling)
 			ps2n::host::profile::Enable(false);

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Accepted; in progress |
+| Status | Accepted; done (ended by the maintainer, 2026-11-13, [ADR 0022](0022-vu-micro-programs-compiled-as-step-g11.md)) |
 | Date | 2026-11-12 |
 | Decided by | Maintainer |
 
@@ -76,3 +76,12 @@ How it was read:
   whose time, stay the same; replacing a routine with a native
   implementation that does not keep the stock run at every sync point is
   such a change.
+
+## End
+
+On 2026-11-13, with play in the first level as long as under stock PCSX2
+and the whole level run at 1.01 times its time, still the stock run, the
+session recommended ending the step there ("its aim, the game's code no
+slower than PCSX2's, is met in play"). The maintainer's word: "Yep." The
+step ended where it stood; the next is G11
+([ADR 0022](0022-vu-micro-programs-compiled-as-step-g11.md)).

@@ -42,7 +42,9 @@ namespace
 		u64 differing = 0;
 		std::string first;
 	};
-	Kind s_kinds[4] = {{"the general registers"}, {"the FPU's registers"}, {"COP0's registers"}, {"VU0's registers"}};
+	constexpr int kKinds = 5;
+	Kind s_kinds[kKinds] = {
+		{"the general registers"}, {"the FPU's registers"}, {"COP0's registers"}, {"VU0's registers"}, {"VU1's registers"}};
 
 	// The IOP provider the core chose, and what the core calls instead.
 	R3000Acpu* s_real = nullptr;
@@ -117,6 +119,19 @@ namespace
 		// because they explain a difference in Q when there is one.
 		std::fprintf(s_file, "  vacc=%08X.%08X.%08X.%08X; the VU interpreter's working q=%08X p=%08X\n", VU0.ACC.UL[0], VU0.ACC.UL[1],
 			VU0.ACC.UL[2], VU0.ACC.UL[3], VU0.q.UL, VU0.p.UL);
+
+		// VU1's, the same way.
+		std::fputs("  vu1 vi", s_file);
+		for (u32 r = 0; r < 32; r++)
+			std::fprintf(s_file, " %08X", VU1.VI[r].UL);
+		std::fputs("\n", s_file);
+		for (u32 r = 0; r < 32; r++)
+		{
+			std::fprintf(s_file, "%svu1 vf%02u=%08X.%08X.%08X.%08X%s", (r % 4) ? " " : "  ", r, VU1.VF[r].UL[0], VU1.VF[r].UL[1],
+				VU1.VF[r].UL[2], VU1.VF[r].UL[3], (r % 4 == 3) ? "\n" : "");
+		}
+		std::fprintf(s_file, "  vu1 acc=%08X.%08X.%08X.%08X; the VU interpreter's working q=%08X p=%08X\n", VU1.ACC.UL[0], VU1.ACC.UL[1],
+			VU1.ACC.UL[2], VU1.ACC.UL[3], VU1.q.UL, VU1.p.UL);
 	}
 
 	// One sync point: the core is about to let the IOP run for `ee_cycles`
@@ -150,13 +165,22 @@ namespace
 		vu.add(&VU0.VI, sizeof(VU0.VI));
 		vu.add(&VU0.ACC, sizeof(VU0.ACC));
 
+		// VU1's the same way, VU1 running in its micro programs where VU0 is
+		// mostly COP2 (docs/adr/0022-vu-micro-programs-compiled-as-step-g11.md).
+		// The core runs VU1 on the CPU thread, between the EE's blocks, so it
+		// is never in the middle of an instruction here.
+		Fold vu1;
+		vu1.add(&VU1.VF, sizeof(VU1.VF));
+		vu1.add(&VU1.VI, sizeof(VU1.VI));
+		vu1.add(&VU1.ACC, sizeof(VU1.ACC));
+
 		// number, PC, EE cycle, cycles the IOP is given, IOP cycle; then the
-		// registers, folded: general, FPU, COP0, VU0.
+		// registers, folded: general, FPU, COP0, VU0, VU1.
 		char time[96];
 		std::snprintf(time, sizeof(time), "%llu %08X %llu %d %llu", static_cast<ull>(s_count), cpuRegs.pc, static_cast<ull>(cpuRegs.cycle),
 			ee_cycles, static_cast<ull>(psxRegs.cycle));
-		char state[48];
-		std::snprintf(state, sizeof(state), "%08X %08X %08X %08X", gpr.value(), fpu.value(), cp0.value(), vu.value());
+		char state[64];
+		std::snprintf(state, sizeof(state), "%08X %08X %08X %08X %08X", gpr.value(), fpu.value(), cp0.value(), vu.value(), vu1.value());
 
 		if (s_file)
 		{
@@ -206,11 +230,12 @@ namespace
 					}
 
 					// Which registers.
-					const u32 ours[4] = {gpr.value(), fpu.value(), cp0.value(), vu.value()};
-					unsigned theirs[4] = {};
-					if (std::sscanf(reference + time_length, "%x %x %x %x", &theirs[0], &theirs[1], &theirs[2], &theirs[3]) == 4)
+					const u32 ours[kKinds] = {gpr.value(), fpu.value(), cp0.value(), vu.value(), vu1.value()};
+					unsigned theirs[kKinds] = {};
+					if (std::sscanf(reference + time_length, "%x %x %x %x %x", &theirs[0], &theirs[1], &theirs[2], &theirs[3], &theirs[4]) ==
+						kKinds)
 					{
-						for (int k = 0; k < 4; k++)
+						for (int k = 0; k < kKinds; k++)
 						{
 							if (theirs[k] == ours[k])
 								continue;
@@ -243,7 +268,8 @@ bool ps2n::host::StartSyncTrace(const char* write_path, const char* against_path
 		if (!s_file)
 			return false;
 		std::setvbuf(s_file, nullptr, _IOFBF, 1 << 20);
-		std::fputs("# sync point, PC, EE cycle, EE cycles the IOP is given, IOP cycle; registers folded: general, FPU, COP0, VU0\n", s_file);
+		std::fputs("# sync point, PC, EE cycle, EE cycles the IOP is given, IOP cycle; registers folded: general, FPU, COP0, VU0, VU1\n",
+			s_file);
 	}
 	if (against_path)
 	{

@@ -14,8 +14,11 @@ add_executable(ps2n-host
 	"${CMAKE_CURRENT_LIST_DIR}/profile.h"
 	"${CMAKE_CURRENT_LIST_DIR}/selftest.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/selftest.h"
+	"${CMAKE_CURRENT_LIST_DIR}/selftest_vu.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/sync_trace.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/sync_trace.h"
+	"${CMAKE_CURRENT_LIST_DIR}/vu_report.cpp"
+	"${CMAKE_CURRENT_LIST_DIR}/vu_report.h"
 	"${CMAKE_CURRENT_LIST_DIR}/window.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/window.h"
 )

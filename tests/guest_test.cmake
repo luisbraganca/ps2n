@@ -79,6 +79,14 @@
 #              thread's time went (ps2n-host -profile; Windows only)
 #   PROFILE_FROM  with PROFILE: the frame from which to look (ps2n-host
 #              -profile-from), to leave a game's startup out
+#   VU_REPORT  also write vu-report.txt in the scratch directory: what was
+#              written into the VUs' micro memory and what they ran, with
+#              vu-report-frames.csv and vu-report-uploads.bin beside it
+#              (ps2n-host -vu-report)
+#   VU_PS2N    0, 1 or both: run those VUs' micro programs on PS2Native's VU
+#              interpreter in the runs PS2Native makes, never in a stock run
+#              they are compared with (ps2n-host -vu-ps2n), and write the
+#              programs it records to vu-programs-0 and -1
 #   MARKS      frames at which the wall-clock time is noted and reported
 #              (ps2n-host -mark, once each), a list: to time parts of a run
 #   FAST_CORES keep the run on the processor's fastest cores, so that its time
@@ -312,6 +320,9 @@ if(DEFINED PROFILE AND PROFILE)
 		list(APPEND limits -profile-from "${PROFILE_FROM}")
 	endif()
 endif()
+if(DEFINED VU_REPORT AND VU_REPORT)
+	list(APPEND limits -vu-report "${WORK_DIR}/vu-report.txt")
+endif()
 if(DEFINED MARKS)
 	foreach(mark IN LISTS MARKS)
 		list(APPEND limits -mark "${mark}")
@@ -319,6 +330,13 @@ if(DEFINED MARKS)
 endif()
 if(DEFINED FAST_CORES AND FAST_CORES)
 	list(APPEND limits -fast-cores)
+endif()
+
+# PS2Native's VU interpreter, in the runs PS2Native makes (never the stock
+# run another is compared with).
+set(vu_ps2n "")
+if(DEFINED VU_PS2N AND NOT "${VU_PS2N}" STREQUAL "")
+	set(vu_ps2n -vu-ps2n ${VU_PS2N} -vu-programs "${WORK_DIR}/vu-programs-")
 endif()
 
 if(DEFINED SYNC AND SYNC)
@@ -335,7 +353,7 @@ if(LOCKSTEP)
 	message("--- interpreted ---")
 	ps2n_run("-interpreted"
 		-out "${WORK_DIR}/guest-interpreted.txt"
-		-ee ps2n -iop ${IOP} -vu ${VU} -static off ${image}
+		-ee ps2n -iop ${IOP} -vu ${VU} -static off ${image} ${vu_ps2n}
 		-trace "${WORK_DIR}/interpreted.trace"
 		${limits} "${ELF}")
 	if(NOT exit_code STREQUAL "${EXPECT_EXIT}")
@@ -350,7 +368,7 @@ if(LOCKSTEP)
 	message("--- compiled ---")
 	ps2n_run(""
 		-out "${WORK_DIR}/guest.txt"
-		-ee ps2n -iop ${IOP} -vu ${VU} -static on ${image} ${stack}
+		-ee ps2n -iop ${IOP} -vu ${VU} -static on ${image} ${stack} ${vu_ps2n}
 		-trace "${WORK_DIR}/compiled.trace"
 		-trace-against "${WORK_DIR}/interpreted.trace"
 		-capture "${WORK_DIR}/capture.toml"
@@ -388,7 +406,7 @@ if(SAME_AS_STOCK)
 	message("--- PS2Native, compiled ---")
 	ps2n_run(""
 		-out "${WORK_DIR}/guest.txt"
-		-ee ps2n -iop ${IOP} -vu ${VU} -static on ${image}
+		-ee ps2n -iop ${IOP} -vu ${VU} -static on ${image} ${vu_ps2n}
 		-sync-against "${WORK_DIR}/stock.sync"
 		${limits} "${ELF}")
 	if(NOT exit_code STREQUAL "${EXPECT_EXIT}")
@@ -459,7 +477,7 @@ endif()
 
 ps2n_run(""
 	-out "${WORK_DIR}/guest.txt"
-	-ee ${EE} -iop ${IOP} -vu ${VU} ${static}
+	-ee ${EE} -iop ${IOP} -vu ${VU} ${static} ${vu_ps2n}
 	${limits} "${ELF}")
 
 if(NOT exit_code STREQUAL "${EXPECT_EXIT}")

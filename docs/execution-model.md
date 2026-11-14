@@ -645,7 +645,9 @@ runs no compiled code, and delegates the FPU.
 EE from its event test, and that moment exists whatever runs the EE.
 `ps2n-host -sync <file>` writes one line for each (a *sync point*): the EE's
 PC and cycle count, how far the IOP is let run, and hashes of the EE's
-general, FPU, COP0 and VU0 registers. (Registers of the machine only: not
+general, FPU, COP0 and VU0 registers, and of VU1's (since G11, ADR 0022;
+VU1 runs on the CPU thread between the EE's blocks, so it is never in the
+middle of an instruction there). (Registers of the machine only: not
 the variables PCSX2's interpreter functions keep beside them, such as the
 VU interpreter's pending result of a division, which a run that goes
 through those functions has and a run on PCSX2's recompilers has not.) It
@@ -668,7 +670,7 @@ followed on purpose, and from there a register differs for good. So for a
 game (`game.ps1 -Config same-as-stock`) place and time must be the same at
 every sync point, and so must the pictures and the state of the sound
 hardware at the frames looked at; the registers are reported kind
-by kind (general, FPU, COP0, VU0): at how many sync points each differed and
+by kind (general, FPU, COP0, VU0, VU1): at how many sync points each differed and
 where first, so that one kind that differs for a known reason does not hide
 the others.
 
@@ -762,3 +764,76 @@ calls through is.
 `ps2n-recomp disasm <file> --at <address> [--count n] [--base address]`
 disassembles any part of an executable or of a raw image such as a BIOS,
 with each instruction's count.
+
+## The vector units' micro programs
+
+The micro programs VU0 and VU1 run are run by a provider of the core's
+(`CpuVU0`, `CpuVU1`): PCSX2's VU recompiler (microVU) as it ships, or
+PS2Native's VU interpreter (`runtime/vu_interp.h`, `ps2n-host -vu-ps2n`),
+which the host puts in its place (step G11, ADR 0022). The interpreter is to
+be what the compiled code of the micro programs is checked against, and
+what runs the micro code a build has not compiled.
+
+**It follows microVU, not the console** (ADR 0005), in its results and in
+its time (ADR 0011): VU1's progress and its writes into its memory reach
+the EE through the GIF, the VIF and the VU's registers, so a different
+count of cycles would part the run from the stock run. microVU decides
+everything but the values in a first pass over each block, from the state
+of the pipeline the block is entered with (`core/include/ps2n/vu_mvu.h`,
+its port, without PCSX2); the interpreter carries the block out with that
+and with microVU's host instructions in the same order on the same
+operands, under the VU's floating-point control register.
+
+**What microVU compiled before matters.** A block microVU has compiled is
+used again for an entry state that matches eight bytes of the 96 of its
+own, without the stalls still pending on VF and VI registers, unless the
+state asks for an exact match: the stalls a block runs with are those of
+the state it was first compiled for. microVU knows a program by where it
+starts and by what micro memory held where it compiled from, compares
+those ranges again after each write into micro memory, and compiles a new
+program when none matches. The interpreter keeps the same record, in the
+same order (both sides of a conditional branch when the branch is
+compiled, an indirect jump's target when it is taken, through a cache of
+jumps like microVU's), so that it runs each block with the stalls microVU
+runs it with. Over the game's first 4,200 frames it records the same
+programs as microVU, line for line with what microVU writes to the core's
+log.
+
+**What its register allocation does.** Some of microVU's results depend on
+which host registers its allocator gave an operand. The interpreter keeps
+microVU's allocation of both kinds of register, in the order microVU's
+second pass makes it (one count of allocations for both), and follows
+this:
+
+- *VI registers* live in 32-bit host registers within a block (eight of
+  them, the least recently used given up first, some loaded at the block's
+  start, the ones a call may change emptied before an XGKICK), and only
+  their low half is written back. FMEQ compares the whole register, ISW and
+  ISWR store the whole of one that MFIR sign-extended in place, MTIR leaves
+  a whole float in one, and the integer instructions carry the high half
+  on. The interpreter keeps what each host register holds, allocated as
+  microVU allocates them.
+- *XMM registers*: a register microVU does not hold is loaded as an
+  instruction's field asks (one component alone, VF00 without w as zeros),
+  one it holds is copied whole. OPMULA and the EFU's sums (ESADD, ERSADD,
+  ELENG, ERLENG, ESUM) load their operand so and read its other lanes too,
+  so with one component in their field (which assemblers do not write)
+  their result depends on what microVU held: the interpreter refuses them.
+  And with AVX, PCSX2's emitter swaps the two sources of a commutative
+  instruction (ADDPS, MULPS) when that makes its encoding shorter (the
+  first in xmm0 to xmm7, the second in xmm8 to xmm15): where both are NaN,
+  x86 gives the first source's, so which NaN a packed addition or
+  multiplication gives depends on the registers. The interpreter swaps
+  them where the emitter does, on a processor with AVX, as PCSX2 decides
+  from the processor.
+
+**What is not reproduced.** microVU throws its record away when its 64 MB
+of host code are full (`mVUreset`), which the interpreter cannot know; a
+run long enough to fill it could part from the stock run there (the level
+run fills 43.5 MB). The same swap of two NaNs in VU0's macro mode (COP2
+instructions in EE code): there the registers are the EE recompiler's,
+which compiled EE code does not have, so an addition or multiplication of
+two NaNs there can give the other NaN than stock PCSX2's; no run has shown
+it. The self-test (`host/selftest_vu.cpp`) runs random micro programs on
+microVU and on the interpreter and compares everything the VU holds
+afterwards, its cycle count included: on 16,000 of them, nothing differs.

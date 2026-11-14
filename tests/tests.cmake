@@ -215,6 +215,32 @@ foreach(elf IN LISTS ps2autotests_elfs)
 	)
 endforeach()
 
+# PS2Native's VU interpreter (step G11, docs/adr/0022-vu-micro-programs-compiled-as-step-g11.md):
+# the console-recorded VU tests with both VUs on it (VU_PS2N=both), their
+# output held to the recording as ps2n-static's is, with the same known
+# differences, and their run held to the stock run at every sync point, the
+# VUs' registers included.
+foreach(elf IN LISTS ps2autotests_elfs)
+	if(NOT elf MATCHES "^vu/")
+		continue()
+	endif()
+	string(REGEX REPLACE "\\.elf$" "" name "${elf}")
+	string(MAKE_C_IDENTIFIER "${name}" id)
+	set(test "ps2autotests/ps2n-vu/${name}")
+	ps2n_add_guest_test("${test}" 120 "ps2autotests;ps2n-vu"
+		"-DELF=${PS2AUTOTESTS_ROOT}/${elf}" "-DEXPECTED=${PS2AUTOTESTS_ROOT}/${name}.expected"
+		-DEE=ps2n -DIOP=jit -DVU=jit -DSTATIC=on "-DIMAGE=${id}" -DVU_PS2N=both)
+	if(name IN_LIST PS2AUTOTESTS_DIFFERS_ps2n-static)
+		set_tests_properties("${test}" PROPERTIES WILL_FAIL TRUE)
+	endif()
+	set(test "ps2autotests/same-as-stock-vu/${name}")
+	ps2n_add_guest_test("${test}" 240 "ps2autotests;same-as-stock;ps2n-vu"
+		"-DELF=${PS2AUTOTESTS_ROOT}/${elf}" -DIOP=jit -DVU=jit "-DIMAGE=${id}" -DSAME_AS_STOCK=1 -DVU_PS2N=both)
+	if(name IN_LIST PS2AUTOTESTS_DIFFERS_same-as-stock)
+		set_tests_properties("${test}" PROPERTIES WILL_FAIL TRUE)
+	endif()
+endforeach()
+
 # The lockstep comparison again with no host stack to spare: every event test
 # reached from compiled code then abandons the compiled frames, and execution
 # goes on from the dispatcher through the resume points. A run must not change
@@ -338,6 +364,14 @@ if(EXISTS "${vu_elf}")
 			${frame_run} "-DEE=${config_ee}" "-DSTATIC=${config_static}"
 			-DRENDERER=sw "-DFRAME_EXPECTED=${PS2N_SDK_ROOT}/vu.software.frame")
 	endforeach()
+
+	# The same picture with both VUs on PS2Native's VU interpreter (G11), and
+	# the run held to the stock run at every sync point.
+	ps2n_add_guest_test("frames/software/ps2n-vu/vu" 120 "frames;gpu;ps2n-vu"
+		${frame_run} -DEE=ps2n -DSTATIC=on -DVU_PS2N=both
+		-DRENDERER=sw "-DFRAME_EXPECTED=${PS2N_SDK_ROOT}/vu.software.frame")
+	ps2n_add_guest_test("sdk/same-as-stock-vu/vu" 240 "sdk;same-as-stock;ps2n-vu"
+		"-DELF=${vu_elf}" -DIOP=jit -DVU=jit -DIMAGE=sdk_vu -DUNTIL=done -DWHOLE=1 -DFRAMES=900 -DSAME_AS_STOCK=1 -DVU_PS2N=both)
 
 	ps2n_add_guest_test("frames/vulkan-1x/ps2n-static/vu" 120 "frames;gpu;ps2n-static"
 		${frame_run} -DEE=ps2n -DSTATIC=on -DRENDERER=vulkan -DUPSCALE=1 -DFRAME_SIZE=320x448)

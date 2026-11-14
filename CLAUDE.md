@@ -54,8 +54,21 @@ start's call of the runtime one of one argument: the level run the same,
 FPU's arithmetic: its registers held in SSE registers, and the bits its
 additions keep past the guard bit looked up instead of branched to. With
 profile-guided optimization the level run takes 1.01 times stock PCSX2's
-time, its play as long as stock PCSX2's, still the stock run. Phase 4 needs
-its own approval.
+time, its play as long as stock PCSX2's, still the stock run; there the
+maintainer ended G10. Then, at the maintainer's word, step G11 (ADR 0022):
+the vector units' micro programs compiled ahead of time, begun with a
+measurement (`ps2n-host -vu-report`). In play VU1's micro memory is
+rewritten about 40 times a frame, with 208 distinct pieces of code written
+at 5,405 places, which PCSX2's VU recompiler makes 6,088 programs of; the
+vector units take about a third of play's CPU-thread time. Then, by the
+maintainer's choice, VU1's registers held to the stock run at every sync
+point, and PS2Native's own VU interpreter (`runtime/vu_interp.h`) before
+the translator. On 2026-11-13 the interpreter gave microVU's results on
+16,000 random micro programs (`selftest/tables-and-semantics`), which took
+following microVU's register allocation, VI and XMM, as well as its
+instructions; and with both VUs on it the level run is the stock run at
+every one of its 93,221,937 sync points, VU0's and VU1's registers
+included. Next: the translator. Phase 4 needs its own approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -196,7 +209,8 @@ Decisions:
   FPU's registers in SSE registers (`val::Fpr`) and the masks of its
   additions' guard bit from a table (`kGuardMasks`), the self-test holding
   all 511 exponent differences to PCSX2's recompiler: play as long as
-  stock PCSX2's, with profile-guided optimization.
+  stock PCSX2's, with profile-guided optimization. Ended there by the
+  maintainer on 2026-11-13 (ADR 0022).
 - [ADR 0020](docs/adr/0020-no-claude-references-in-commit-messages.md):
   no commit message references Claude: no `Co-Authored-By` line naming
   Claude, no `Claude-Session` line. The history was rewritten on
@@ -211,6 +225,24 @@ Decisions:
   registers put back): play 1.18 to 1.14 times stock PCSX2's time without
   profile-guided optimization; the FPU's settings read once per function
   tried and taken out.
+- [ADR 0022](docs/adr/0022-vu-micro-programs-compiled-as-step-g11.md):
+  step G11, inside Phase 3: the micro programs the game runs on VU0 and VU1
+  compiled ahead of time by PS2Native's own translator, in the place of
+  PCSX2's VU recompiler (microVU), the stand-in of ADR 0003, following it
+  as ADR 0005 has it; next in ADR 0003's order of work. Begun with a
+  measurement, the host watching the core's two VU providers
+  (`ps2n-host -vu-report`). With it the maintainer chose: G10 ended; VU1's
+  registers held to the stock run at every sync point, as the EE's and
+  VU0's are; PS2Native's own VU interpreter before the translator, as the
+  reference and what runs code a build has not compiled. Both done on
+  2026-11-13: VU1's registers in the sync trace, and the interpreter
+  (`runtime/vu_interp.h`, `ps2n-host -vu-ps2n`), which follows microVU's
+  analysis (`core/include/ps2n/vu_mvu.h`), its record of programs and
+  blocks, its instructions, and its allocation of host registers, where
+  that shows in results (the high half of VI registers; which of two NaNs
+  an AVX addition or multiplication gives). It refuses what it does not
+  follow (`QuirkOf`, and the T and M bits on a branch), none of it in
+  Killzone's code.
 
 ## Layout, build and test
 
@@ -225,7 +257,9 @@ recompiler/               ps2n-recomp, in that same project: analysis and C++ ge
                           and for the BIOS's EE code (bios.cpp)
 runtime/                  what PS2Native adds to the core at run time: the EE provider (dispatcher,
                           fallback interpreter), the record of the blocks PCSX2's recompiler would have formed
-                          (rec_blocks), instruction semantics, the contract for generated code
+                          (rec_blocks), instruction semantics, the contract for generated code; the VU
+                          interpreter (vu_interp), which follows PCSX2's VU recompiler, its first pass in
+                          core/ (ps2n/vu_mvu.h)
 host/                     ps2n-host: console frontend for the PCSX2 core, the test bench; with -window, where a game
                           is played (window.cpp: Windows only so far)
 tests/unit/               unit tests of the build-time tools
@@ -280,7 +314,12 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   thin` links PS2Native's own code (the generated code, the runtime) with
   link-time optimization, PCSX2's code compiled as before; it gave nothing
   over the level run, and `-Lto off` is how the build is used ("G10",
-  "Link-time optimization"). How much host code
+  "Link-time optimization"). What the vector units run: `game.ps1
+  -VuReport` (`ps2n-host -vu-report`) writes `vu-report.txt` among the
+  run's files (what was written into each VU's micro memory, where, with
+  how many contents, where programs were started, how long each ran), with
+  the counts frame by frame and the contents written beside it, which are
+  the game's and stay in the build tree ("G11"). How much host code
   each kind of generated line became: `ps2n-host -code-size <file>` (from
   the host's own debugging information; no machine, about 20 s). To try a
   change to a header on one generated file, compile that file alone with
@@ -337,7 +376,13 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   place, cycle count, registers), `never-further` (ADR 0005: the compiled
   run's output against the stock run's, line by line; CTest runs the two it
   compares first). Also `selftest/tables-and-semantics`: our instruction
-  semantics against PCSX2's interpreter and recompiler.
+  semantics against PCSX2's interpreter and recompiler, and PS2Native's VU
+  interpreter against PCSX2's VU recompiler on random micro programs
+  (`host/selftest_vu.cpp`: 2,000 per VU in each of four settings, a program
+  that differs made as small as it still differs in and printed with the
+  registers it uses). `game.ps1 -VuPs2n 0|1|both` (`ps2n-host
+  -vu-ps2n`) runs those VUs on PS2Native's VU interpreter in PS2Native's
+  runs, never in the stock run one is compared with ("G11").
 - A failing test's files are in `build\windows-clang\ps2n\tests\<test name>`:
   `core.log` (PCSX2's log), `guest.txt`, `actual.txt`.
 - A `lockstep` failure names the event test where the runs part, a

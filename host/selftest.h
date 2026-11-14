@@ -18,9 +18,16 @@ namespace ps2n::selftest
 		uint32_t jit_trials = 400;
 		/// Random instruction words for the decoder and cycle-table checks.
 		uint32_t random_words = 2000000;
+		/// Random micro programs per VU and setting, run on PCSX2's VU
+		/// recompiler and on PS2Native's VU interpreter (selftest_vu.cpp).
+		uint32_t vu_trials = 2000;
 		uint64_t seed = 0x9E3779B97F4A7C15ull;
 	};
 
 	/// Returns the number of failed checks, having written a report to stderr.
 	int Run(const Options& options);
+
+	/// PS2Native's VU interpreter against PCSX2's VU recompiler on random
+	/// micro programs, for each VU. Returns the number that differ.
+	int CheckVuPrograms(uint32_t trials, uint64_t seed);
 } // namespace ps2n::selftest

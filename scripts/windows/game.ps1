@@ -70,6 +70,12 @@ param(
     [switch]$TimeProfile,
     # With -TimeProfile: look from this frame on (ps2n-host -profile-from), to leave the game's startup out.
     [int]$ProfileFrom = 0,
+    # Also write vu-report.txt among the run's files: what was written into the VUs' micro memory and what
+    # they ran, with the counts frame by frame and the contents written beside it (ps2n-host -vu-report).
+    [switch]$VuReport,
+    # Run these VUs' micro programs on PS2Native's VU interpreter (ps2n-host -vu-ps2n): 0, 1 or both. Not in
+    # the stock run a same-as-stock run is compared with.
+    [ValidateSet('', '0', '1', 'both')][string]$VuPs2n = '',
     # Frames at which the wall-clock time is noted, reported after the run with the first and the last frame's
     # (ps2n-host -mark): to time a game's startup and its play apart. Separated by commas, "6600,12000": through
     # powershell -File an array of numbers would arrive as one number.
@@ -205,6 +211,8 @@ if ($Renderer -ne 'null') { $arguments += @("-DRENDERER=$Renderer", "-DUPSCALE=$
 if ($Pad) { $arguments += "-DPAD=$(ForCMake (Resolve-Path -LiteralPath $Pad).Path)" }
 if ($TimeProfile) { $arguments += '-DPROFILE=1' }
 if ($TimeProfile -and $ProfileFrom -gt 0) { $arguments += "-DPROFILE_FROM=$ProfileFrom" }
+if ($VuReport) { $arguments += '-DVU_REPORT=1' }
+if ($VuPs2n) { $arguments += "-DVU_PS2N=$VuPs2n" }
 $markList = @($Marks -split '[,;\s]+' | Where-Object { $_ -ne '' } | ForEach-Object { [int]$_ })
 if ($markList.Count -gt 0) { $arguments += "-DMARKS=$($markList -join ';')" }
 # Every run here is timed, so it is kept on the processor's fastest cores:
