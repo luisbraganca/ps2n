@@ -430,8 +430,6 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
 - Commit messages never reference Claude: leave out the `Co-Authored-By`
   and `Claude-Session` lines a session adds by default
   ([ADR 0020](docs/adr/0020-no-claude-references-in-commit-messages.md)).
-  The maintainer dates each commit a few minutes after the one before it
-  (author and committer date alike): ask how many if they have not said.
 - No BIOS images, game data, or code generated from a game or from a BIOS in
   the repository.
 - PCSX2 (GPL-3.0+) may be reused with attribution. AnyPS5 is GPL-2.0-only:
