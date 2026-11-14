@@ -10,6 +10,8 @@ add_library(ps2n_recomp STATIC
     src/bios.h
     src/codegen.cpp
     src/codegen.h
+    src/vu_codegen.cpp
+    src/vu_codegen.h
 )
 target_include_directories(ps2n_recomp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(ps2n_recomp PUBLIC ps2n_core)

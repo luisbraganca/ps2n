@@ -20,6 +20,8 @@ add_library(ps2n-runtime STATIC
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ops_mmi.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/ops_vu0.h"
 	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/recomp.h"
+	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/vu_ops.h"
+	"${CMAKE_CURRENT_LIST_DIR}/include/ps2n/vu_recomp.h"
 	"${CMAKE_CURRENT_LIST_DIR}/ops_cop2.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/ops_vu0.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/rec_blocks.cpp"
@@ -36,6 +38,7 @@ add_library(ps2n-runtime STATIC
 	"${PS2N_ROOT}/core/src/romdir.cpp"
 	"${PS2N_ROOT}/core/src/strings.cpp"
 	"${PS2N_ROOT}/core/src/vu_mvu.cpp"
+	"${PS2N_ROOT}/core/src/vu_plan.cpp"
 )
 
 # Users include "runtime/<header>", "ps2n/<header>" for the semantics

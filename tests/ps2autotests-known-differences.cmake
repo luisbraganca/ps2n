@@ -1,14 +1,23 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # ps2autotests programs whose output differs from the console recording, per
-# CPU configuration. These tests still run; CTest expects them to fail and
-# reports it when one starts to match.
+# CPU configuration. These tests still run; they are expected to fail by
+# printing something else than the recording, and CTest reports it when one
+# starts to match, or fails in another way (tests/tests.cmake,
+# ps2n_expect_failure).
 #
 # Each list is what a run found, not what was assumed. docs/poc-log.md records
 # the run each list came from. Do not add a name to make a failure go away:
 # find out why it differs first.
 #
 # Variables are named PS2AUTOTESTS_DIFFERS_<configuration>.
+
+# The one program stock PCSX2 with its recompilers does not get through: the
+# host ends without the program's marker, so its stock-jit test fails before
+# any output is compared, and its same-as-stock test for want of a stock run.
+set(PS2AUTOTESTS_NO_STOCK_RUN
+	cpu/ee_fpu/branchdelay      # the recompiler crashes: endless recursion in recBC1T (x86/iFPU.cpp)
+)
 
 # Stock PCSX2 v2.9.170 with its recompilers, BIOS SCPH-70004 v2.00, 2026-11-10:
 # 39 of 55 programs match the console.

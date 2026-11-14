@@ -20,6 +20,8 @@
 
 #include "runtime/ee_provider.h"
 #include "runtime/vu_interp.h"
+
+#include "ps2n/vu_recomp.h"
 #include "runtime/rec_blocks.h"
 
 #include <algorithm>
@@ -70,6 +72,11 @@
 extern const ps2n::ee::ImageInfo* const ps2n_images[];
 extern const size_t ps2n_image_count;
 
+// The blocks of micro code compiled ahead of time that this host is linked
+// with, listed the same way.
+extern const ps2n::vu::ImageInfo* const ps2n_vu_images[];
+extern const size_t ps2n_vu_image_count;
+
 namespace
 {
 	// Guest calls become host calls in compiled code, so the CPU thread gets a
@@ -104,6 +111,27 @@ namespace
 		}
 	}
 
+	// How the blocks of micro code were carried out on PS2Native's VU provider:
+	// compiled ahead of time, or interpreted (`which`: bit 0 VU0, bit 1 VU1).
+	void ReportVuPlans(u32 which)
+	{
+		for (int vu = 0; vu < 2; vu++)
+		{
+			if (!(which & (1u << vu)))
+				continue;
+			const ps2n::vu::PlanStats st = ps2n::vu::Plans(vu);
+			if (!st.plans)
+				continue;
+			std::fprintf(stderr,
+				"ps2n-host: VU%d's blocks of micro code: %llu different ones as they are carried out (%llu steps); %llu of them compiled "
+				"ahead of time (this host has %zu), which ran %llu times; %llu interpreted, which ran %llu times\n",
+				vu, static_cast<unsigned long long>(st.plans), static_cast<unsigned long long>(st.steps),
+				static_cast<unsigned long long>(st.compiled), ps2n::vu::CompiledBlockCount(vu),
+				static_cast<unsigned long long>(st.compiledRuns), static_cast<unsigned long long>(st.interpreted),
+				static_cast<unsigned long long>(st.interpretedRuns));
+		}
+	}
+
 	struct Options
 	{
 		std::string boot_path; // the ELF or disc image to boot
@@ -116,8 +144,11 @@ namespace
 		EEProvider ee = EEProvider::Jit;
 		bool iop_jit = true;
 		bool vu_jit = true;
-		u32 vu_ps2n = 0; // bit 0 VU0, bit 1 VU1: PS2Native's VU interpreter in the place of the core's provider
-		std::string vu_programs_path; // where that interpreter writes a line for each program it records
+		u32 vu_ps2n = 0; // bit 0 VU0, bit 1 VU1: PS2Native's VU provider in the place of the core's
+		std::string vu_programs_path; // where that provider writes a line for each program it records
+		bool vu_static = true; // whether it runs the blocks compiled ahead of time that the host has
+		std::string vu_capture_path; // where the plans of the blocks it had to interpret are written, for the recompiler
+		bool vu_require_compiled = false; // the self-test fails if a block of micro code had to be interpreted
 		GSRendererType renderer = GSRendererType::Null;
 		u32 max_frames = 3600;
 		u32 max_seconds = 60;
@@ -258,11 +289,19 @@ namespace
 			"  -iop jit|interp    PCSX2's IOP recompiler or interpreter (default jit).\n"
 			"  -vu jit|interp     PCSX2's VU recompilers or interpreters (default jit).\n"
 			"  -vu-ps2n 0|1|both  Run VU0's, VU1's or both VUs' micro programs on\n"
-			"                     PS2Native's VU interpreter, which follows PCSX2's VU\n"
-			"                     recompiler (runtime/vu_interp.h). The run stops with an\n"
-			"                     error at what it does not carry out yet.\n"
+			"                     PS2Native's VU provider, which follows PCSX2's VU\n"
+			"                     recompiler (runtime/vu_interp.h): by the blocks compiled\n"
+			"                     ahead of time that this host has, and by its interpreter\n"
+			"                     elsewhere. The run stops with an error at what it does\n"
+			"                     not carry out yet.\n"
 			"  -vu-programs <file>  With -vu-ps2n: write a line for each micro program it\n"
 			"                     records, as PCSX2's recompiler writes them to its log.\n"
+			"  -vu-static on|off  With -vu-ps2n: run the blocks of micro code compiled ahead\n"
+			"                     of time that this host has (default on). Off, PS2Native's\n"
+			"                     VU interpreter carries every block out.\n"
+			"  -vu-capture <file>  With -vu-ps2n (or -selftest): write what the recompiler\n"
+			"                     needs to compile the blocks of micro code that had to be\n"
+			"                     interpreted (ps2n-recomp vu).\n"
 			"  -static on|off     With -ee ps2n: run code compiled ahead of time where there\n"
 			"                     is some for the executable (default on). Off, PS2Native's\n"
 			"                     interpreter runs everything.\n"
@@ -371,6 +410,14 @@ namespace
 			"  -echo              Copy the core's log to the console.\n"
 			"  -selftest          Instead of booting a file, check PS2Native's instruction\n"
 			"                     tables and semantics against the PCSX2 core.\n"
+			"  -selftest-vu <n>   Instead of booting a file, run the self-test's random\n"
+			"                     micro programs alone, the first n for each VU and\n"
+			"                     setting, on PCSX2's VU recompiler and on PS2Native's\n"
+			"                     VU provider. With -vu-capture: for the build that\n"
+			"                     compiles them (scripts/windows/vu-selftest.ps1).\n"
+			"  -vu-require-compiled  With -selftest-vu: fail if a block of those programs\n"
+			"                     had to be interpreted; skipped (PS2N_SKIP) by a host\n"
+			"                     that was not built with them.\n"
 			"  -selftest-trials <n>  Random cases per instruction against PCSX2's\n"
 			"                     recompiler (default 400); ten times as many against\n"
 			"                     its interpreter.\n"
@@ -538,6 +585,20 @@ namespace
 				o.selftest_options.interp_trials = *n * 10;
 				o.selftest_options.jit_trials = *n;
 			}
+			else if (is("-selftest-vu") && has_value)
+			{
+				const std::optional<u32> n = StringUtil::FromChars<u32>(argv[++i]);
+				if (!n || *n == 0)
+				{
+					std::fputs("ps2n-host: -selftest-vu takes a positive number\n", stderr);
+					return false;
+				}
+				o.selftest = true;
+				o.selftest_options.vu_only = true;
+				o.selftest_options.vu_run = *n;
+			}
+			else if (is("-vu-require-compiled"))
+				o.vu_require_compiled = true;
 			else if (is("-bios") && has_value)
 				o.bios_path = argv[++i];
 			else if (is("-data") && has_value)
@@ -590,6 +651,21 @@ namespace
 			}
 			else if (is("-vu-programs") && has_value)
 				o.vu_programs_path = argv[++i];
+			else if (is("-vu-capture") && has_value)
+				o.vu_capture_path = argv[++i];
+			else if (is("-vu-static") && has_value)
+			{
+				const char* value = argv[++i];
+				if (!std::strcmp(value, "on"))
+					o.vu_static = true;
+				else if (!std::strcmp(value, "off"))
+					o.vu_static = false;
+				else
+				{
+					std::fprintf(stderr, "ps2n-host: -vu-static takes on or off, not '%s'\n", value);
+					return false;
+				}
+			}
 			else if (is("-renderer") && has_value)
 			{
 				const char* value = argv[++i];
@@ -748,7 +824,7 @@ namespace
 		// forward slashes, so every path is put in the platform's form here.
 		for (std::string* path : {&o.boot_path, &o.bios_path, &o.data_dir, &o.out_path, &o.times_path, &o.log_path, &o.capture_path,
 				 &o.bios_capture_path, &o.trace_path, &o.trace_against_path, &o.sync_path, &o.sync_against_path, &o.frame_path, &o.pad_path,
-				 &o.profile_path, &o.vu_report_path, &o.vu_programs_path})
+				 &o.profile_path, &o.vu_report_path, &o.vu_programs_path, &o.vu_capture_path})
 			Path::ToNativePath(path);
 		return true;
 	}
@@ -1569,7 +1645,39 @@ namespace
 				// The machine is whole but has executed nothing: the state the
 				// self-test needs.
 				VMManager::SetState(VMState::Running);
-				const int failures = ps2n::selftest::Run(s_options.selftest_options);
+				ps2n::vu::SetCompiledBlocksEnabled(s_options.vu_static);
+				ps2n::vu::SetImages(ps2n_vu_images, ps2n_vu_image_count);
+				// The self-test's own micro programs compiled, as a build with their
+				// capture has them (the image "selftest").
+				bool compiled_selftest = false;
+				for (size_t i = 0; i < ps2n_vu_image_count; i++)
+					compiled_selftest = compiled_selftest || !std::strcmp(ps2n_vu_images[i]->id, "selftest");
+				int failures = 0;
+				if (s_options.vu_require_compiled && !compiled_selftest)
+				{
+					std::fputs("PS2N_SKIP: this host was not built with the self-test's micro programs compiled "
+							   "(scripts/windows/vu-selftest.ps1 builds them in)\n",
+						stderr);
+				}
+				else
+				{
+					failures = ps2n::selftest::Run(s_options.selftest_options);
+					ReportVuPlans(3);
+					const u64 interpreted = ps2n::vu::Plans(0).interpreted + ps2n::vu::Plans(1).interpreted;
+					if (s_options.vu_require_compiled && interpreted)
+					{
+						std::fprintf(stderr,
+							"ps2n-host: %llu blocks of the self-test's micro programs had to be interpreted: the compiled ones this host has "
+							"are of other plans. Make them again (scripts/windows/vu-selftest.ps1).\n",
+							static_cast<unsigned long long>(interpreted));
+						failures++;
+					}
+				}
+				if (!s_options.vu_capture_path.empty() && !ps2n::vu::WriteCapture(s_options.vu_capture_path.c_str()))
+				{
+					std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.vu_capture_path.c_str());
+					failures++;
+				}
 				VMManager::Shutdown(false);
 				s_exit_code.store(failures ? EXIT_ERROR : EXIT_MARKER);
 			}
@@ -1650,6 +1758,8 @@ namespace
 				// PS2Native's VU interpreter in the place of the core's VU providers
 				// (-vu-ps2n). The core chose its providers with the machine, and
 				// chooses again only when a recompiler is switched on or off.
+				ps2n::vu::SetCompiledBlocksEnabled(s_options.vu_static);
+				ps2n::vu::SetImages(ps2n_vu_images, ps2n_vu_image_count);
 				for (int vu = 0; vu < 2; vu++)
 				{
 					if (!(s_options.vu_ps2n & (1u << vu)))
@@ -1742,7 +1852,12 @@ namespace
 				}
 				std::fprintf(stderr, "ps2n-host: stopped at %s after %u frames, EE cycle %llu, EE %s, IOP %s, VU %s\n", reason,
 					s_frames, static_cast<unsigned long long>(cpuRegs.cycle), EEProviderName(s_options.ee),
-					s_options.iop_jit ? "jit" : "interp", s_options.vu_jit ? "jit" : "interp");
+					s_options.iop_jit ? "jit" : "interp",
+					s_options.vu_ps2n == 3 ? "ps2n" :
+					s_options.vu_ps2n == 1 ? "ps2n for VU0" :
+					s_options.vu_ps2n == 2 ? "ps2n for VU1" :
+					s_options.vu_jit ? "jit" :
+										 "interp");
 				std::fprintf(stderr, "ps2n-host: EE COP0 Config %08x (double issue %s), Status %08x, EE cycle rate setting %d\n",
 					cpuRegs.CP0.n.Config, (cpuRegs.CP0.n.Config >> 18) & 1 ? "on" : "off", cpuRegs.CP0.n.Status.val,
 					static_cast<int>(EmuConfig.Speedhacks.EECycleRate));
@@ -1752,15 +1867,34 @@ namespace
 						continue;
 					const ps2n::vu::InterpreterStats& st = ps2n::vu::Stats(vu);
 					std::fprintf(stderr,
-						"ps2n-host: PS2Native's VU%d interpreter: %llu runs, %llu blocks, %llu instruction pairs; %llu blocks analysed, "
-						"%llu programs recorded, %llu indirect jumps, %llu runs stopped for their cycles\n",
+						"ps2n-host: PS2Native's VU%d provider: %llu runs, %llu blocks, %llu instruction pairs; %llu blocks analysed, "
+						"%llu programs recorded, %llu indirect jumps, %llu runs stopped for their cycles; %llu times the program at a "
+						"start or a jump had to be looked for, %llu recorded programs compared with micro memory for that, and %llu "
+						"times it had not: nothing was written where the program found last was compiled from\n",
 						vu, static_cast<unsigned long long>(st.runs), static_cast<unsigned long long>(st.blocks),
 						static_cast<unsigned long long>(st.pairs), static_cast<unsigned long long>(st.compiles),
 						static_cast<unsigned long long>(st.programs), static_cast<unsigned long long>(st.jumps),
-						static_cast<unsigned long long>(st.pauses));
+						static_cast<unsigned long long>(st.pauses), static_cast<unsigned long long>(st.searches),
+						static_cast<unsigned long long>(st.compares), static_cast<unsigned long long>(st.spared));
+					if (st.unknown)
+					{
+						std::fprintf(stderr,
+							"ps2n-host: PS2Native's VU%d provider: the blocks analysed held %llu instructions of encodings PCSX2's VU "
+							"recompiler knows nothing of; they are carried out as it carries them out, which is not at all\n",
+							vu, static_cast<unsigned long long>(st.unknown));
+					}
 					if (const char* what = ps2n::vu::Unsupported(vu))
 						std::fprintf(stderr, "ps2n-host: PS2Native's VU%d interpreter does not carry out yet: %s\n", vu, what);
 					ps2n::vu::LogPrograms(vu, nullptr);
+				}
+				ReportVuPlans(s_options.vu_ps2n);
+				if (s_options.vu_ps2n && !s_options.vu_capture_path.empty())
+				{
+					if (ps2n::vu::WriteCapture(s_options.vu_capture_path.c_str()))
+						std::fprintf(stderr, "ps2n-host: the blocks of micro code that were interpreted, for the recompiler: %s\n",
+							s_options.vu_capture_path.c_str());
+					else
+						std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.vu_capture_path.c_str());
 				}
 				if (s_options.window && s_frames > 1)
 				{

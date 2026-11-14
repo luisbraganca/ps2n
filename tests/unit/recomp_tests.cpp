@@ -8,6 +8,7 @@
 #include "analysis.h"
 #include "bios.h"
 #include "codegen.h"
+#include "vu_codegen.h"
 
 #include "ps2n/assembler.h"
 #include "ps2n/codehash.h"
@@ -1098,7 +1099,174 @@ TEST_CASE(registry_lists_the_images) {
     CHECK_CONTAINS(code, "&ps2n_image_a::image,");
     CHECK_CONTAINS(code, "&ps2n_image_b_c::image,");
     CHECK_CONTAINS(code, "const size_t ps2n_image_count = 2;");
+    CHECK_CONTAINS(code, "const size_t ps2n_vu_image_count = 0;");
     CHECK_THROWS(generateRegistry({"not an identifier"}));
+
+    // The images of compiled micro code are listed apart.
+    const std::string both = generateRegistry({"a"}, {"game", "selftest"});
+    CHECK_CONTAINS(both, "&ps2n_vu_image_game::image,");
+    CHECK_CONTAINS(both, "&ps2n_vu_image_selftest::image,");
+    CHECK_CONTAINS(both, "const size_t ps2n_vu_image_count = 2;");
+    CHECK_THROWS(generateRegistry({"a"}, {"not an identifier"}));
+}
+
+// ---- the vector units' micro code (docs/game-log.md, "G11") ---------------------
+
+TEST_CASE(captures_of_micro_code_are_read) {
+    const VuCapture capture = parseVuCapture(R"(
+# what a run reported
+[[block]]
+vu = 1
+at = 0x1fd8
+key = "whatever a run wrote: it is made again"
+words = [
+  0x8000033c, 0x000002ff, 0x01234567, 0x400002ff,
+]
+steps = [
+  "ViLoad 5 3",
+  "FMACa 0x1e3082c 0x123 0x45",   # a comment
+  "T0Backup",
+]
+
+[[block]]
+vu = 0
+at = 8
+words = []
+steps = [ "ViZero 2", "TBit 0 0" ]
+)", "vu-capture.toml");
+    CHECK_EQ(capture.blocks.size(), size_t{2});
+    const VuCapture::Block& b = capture.blocks[0];
+    CHECK_EQ(b.vu, 1);
+    CHECK_EQ(b.at, 0x1fd8u);
+    CHECK(b.words == (std::vector<uint64_t>{0x000002ff8000033cull, 0x400002ff01234567ull}));
+    CHECK_EQ(b.steps.size(), size_t{3});
+    CHECK(b.steps[0].op == vu::StepOp::ViLoad);
+    CHECK_EQ(b.steps[0].o[0], 5u);
+    CHECK_EQ(b.steps[0].o[1], 3u);
+    CHECK(b.steps[1].op == vu::StepOp::FMACa);
+    CHECK_EQ(b.steps[1].o[0], 0x1e3082cu);
+    CHECK(b.steps[2].op == vu::StepOp::T0Backup);
+    CHECK(b.key == vu::planKey(1, b.steps.data(), b.steps.size()));
+    CHECK_EQ(capture.blocks[1].vu, 0);
+    CHECK_EQ(capture.blocks[1].steps.size(), size_t{2});
+
+    // The key is of the VU and the steps with their operands: the same steps
+    // for the other VU, or with another operand, are another plan.
+    CHECK(!(vu::planKey(0, b.steps.data(), b.steps.size()) == b.key));
+    std::vector<vu::Step> other = b.steps;
+    other[0].o[1] = 4;
+    CHECK(!(vu::planKey(1, other.data(), other.size()) == b.key));
+
+    // Several runs' reports become one: every plan once, in the order of
+    // their keys, and what is written reads back as the same.
+    VuCapture all = capture;
+    all.add(capture);
+    all.add(parseVuCapture("[[block]]\nvu = 1\nsteps = [ \"ViZero 5\" ]\n", "second.toml"));
+    all.normalize();
+    CHECK_EQ(all.blocks.size(), size_t{3});
+    CHECK_EQ(all.blocks[0].vu, 0);
+    const VuCapture again = parseVuCapture(writeVuCapture(all, "a comment"), "written.toml");
+    CHECK_EQ(again.blocks.size(), size_t{3});
+    for (size_t i = 0; i < 3 && i < again.blocks.size(); ++i) {
+        CHECK(again.blocks[i].key == all.blocks[i].key);
+        CHECK(again.blocks[i].steps == all.blocks[i].steps);
+        CHECK(again.blocks[i].words == all.blocks[i].words);
+        CHECK_EQ(again.blocks[i].at, all.blocks[i].at);
+    }
+
+    CHECK(parseVuCapture("# nothing\n", "empty.toml").blocks.empty());
+    CHECK_THROWS(parseVuCapture("vu = 1\n", "x"));                                              // outside a block
+    CHECK_THROWS(parseVuCapture("[[block]]\nsteps = [ \"ViZero 5\" ]\n", "x"));                 // no VU
+    CHECK_THROWS(parseVuCapture("[[block]]\nvu = 2\nsteps = []\n", "x"));                       // no such VU
+    CHECK_THROWS(parseVuCapture("[[block]]\nvu = 1\nsteps = [ \"Banana 5\" ]\n", "x"));         // no such step
+    CHECK_THROWS(parseVuCapture("[[block]]\nvu = 1\nsteps = [ \"ViZero\" ]\n", "x"));           // an operand missing
+    CHECK_THROWS(parseVuCapture("[[block]]\nvu = 1\nsteps = [ \"ViZero 5 6\" ]\n", "x"));       // one too many
+    CHECK_THROWS(parseVuCapture("[[block]]\nvu = 1\nsteps = [ \"ViZero 5\"\n", "x"));           // not closed
+    CHECK_THROWS(parseVuCapture("[[block]]\nvu = 1\nwords = [ 1 ]\nsteps = []\n", "x"));        // half a pair
+    CHECK_THROWS(parseVuCapture("[[block]]\nvu = 1\nsomething = 1\n", "x"));
+}
+
+TEST_CASE(a_plan_becomes_a_function_of_its_steps) {
+    VuCapture capture = parseVuCapture(R"(
+[[block]]
+vu = 1
+at = 0x1fd8
+words = [ 0x8000033c, 0x000002ff ]
+steps = [
+  "ViLoad 5 3",
+  "FMACa 0x1e3082c 0x123 0x45",
+  "TBit 0 1",
+  "T0Backup",
+  "Leave 2 0x29 0x1b09",
+]
+[[block]]
+vu = 0
+steps = []
+)", "vu-capture.toml");
+    capture.normalize();
+
+    VuGenerateOptions options;
+    options.id = "test";
+    VuGenerateStats stats;
+    const std::vector<GeneratedFile> files = generateVuFiles(capture, options, &stats);
+    CHECK_EQ(files.size(), size_t{1});
+    CHECK_EQ(stats.blocks[0], size_t{1});
+    CHECK_EQ(stats.blocks[1], size_t{1});
+    CHECK_EQ(stats.steps, size_t{5});
+    const std::string& code = files[0].text;
+    const std::string name = "b1_" + vu::planKeyText(capture.blocks[1].key);
+    const std::string none = "b0_" + vu::planKeyText(capture.blocks[0].key);
+
+    // Each step is a call of the step's function with its operands as
+    // constants, on the accessor the block was given.
+    CHECK_CONTAINS(code, "namespace ps2n_vu_image_test");
+    CHECK_CONTAINS(code, "static const Link* PS2N_VU_CC " + name + "(Ctx& c, const Link* b)\n{\n\tPS2N_VU_ACCESS a(c, b->base);\n");
+    CHECK_CONTAINS(code, "\tstep::ViLoad(a, 5u, 3u);\n\tstep::FMACa(a, 0x1e3082cu, 0x123u, 0x45u);\n");
+    // A T bit may end the program where it stands: what the steps wrote goes
+    // back first, and the block says which of its T bits it was. The last
+    // step is how the program goes on: the block's link, what the steps wrote
+    // put back, and the block goes on to the next by itself.
+    CHECK_CONTAINS(code, "\tif (step::TBit(a, 0u, 1u))\n\t{\n\t\ta.finish();\n\t\treturn Stop(c, b, kStopTBit + 0u);\n\t}\n"
+                         "\tstep::T0Backup(a);\n\tPS2N_VU_LEAVE(2u, 0x29u, 0x1b09u);\n}");
+    // A plan without that step stops the program at its end, for the provider.
+    CHECK_CONTAINS(code, "static const Link* PS2N_VU_CC " + none + "(Ctx& c, const Link* b)\n{\n\tPS2N_VU_ACCESS a(c, b->base);\n"
+                         "\ta.finish();\n\treturn Stop(c, b, kStopEnd);\n}");
+    // The table the runtime finds them by: the plan's key, the function, the VU.
+    CHECK_CONTAINS(code, strprintf("\t{0x%016llXull, 0x%016llXull, &%s, 1},\n", static_cast<unsigned long long>(capture.blocks[1].key.a),
+                                   static_cast<unsigned long long>(capture.blocks[1].key.b), name.c_str()));
+    CHECK_CONTAINS(code, "const ImageInfo image = {\n\t\"test\",\n\tblocks,\n\t2,");
+    // Where the block was met and its pairs, for whoever reads the file.
+    CHECK_CONTAINS(code, "// VU1, first met at 1fd8: 1 pairs, 5 steps\n//   000002ff:8000033c\n");
+
+    // Spread over several files: the functions declared in a header, the
+    // tables in the main file.
+    options.parts = 2;
+    options.headerName = "vu_test.h";
+    const std::vector<GeneratedFile> parts = generateVuFiles(capture, options);
+    CHECK_EQ(parts.size(), size_t{4});
+    if (parts.size() == 4) {
+        CHECK_EQ(parts[0].suffix, std::string(".cpp"));
+        CHECK_EQ(parts[1].suffix, std::string(".h"));
+        CHECK_EQ(parts[2].suffix, std::string("_part001.cpp"));
+        CHECK_CONTAINS(parts[0].text, "#include \"vu_test.h\"");
+        CHECK_CONTAINS(parts[0].text, "static const BlockInfo blocks[] = {");
+        CHECK_CONTAINS(parts[1].text, "\nconst Link* PS2N_VU_CC " + name + "(Ctx& c, const Link* b);\n");
+        CHECK(contains(parts[2].text + parts[3].text, "\nconst Link* PS2N_VU_CC " + name + "(Ctx& c, const Link* b)\n{"));
+    }
+
+    // A plan's last step is its last.
+    VuCapture wrong = parseVuCapture("[[block]]\nvu = 1\nsteps = [ \"Leave 1 0 0\", \"T0Backup\" ]\n", "x");
+    CHECK_THROWS(generateVuFiles(wrong, options));
+
+    // No blocks at all is still an image: a host built before any run.
+    VuGenerateOptions empty;
+    empty.id = "none";
+    const std::vector<GeneratedFile> nothing = generateVuFiles(VuCapture{}, empty);
+    CHECK_CONTAINS(nothing[0].text, "const ImageInfo image = {\n\t\"none\",\n\tblocks,\n\t0,");
+
+    VuGenerateOptions bad;
+    bad.id = "not an identifier";
+    CHECK_THROWS(generateVuFiles(capture, bad));
 }
 
 // ---- the BIOS's code (docs/game-log.md, "G8") ------------------------------------

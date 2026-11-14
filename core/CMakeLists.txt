@@ -14,6 +14,7 @@ add_library(ps2n_core STATIC
     src/snr2.cpp
     src/strings.cpp
     src/vu_mvu.cpp
+    src/vu_plan.cpp
 )
 add_library(ps2n::core ALIAS ps2n_core)
 target_include_directories(ps2n_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

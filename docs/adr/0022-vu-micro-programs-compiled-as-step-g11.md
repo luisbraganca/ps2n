@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Accepted; under way |
+| Status | Accepted; done on 2026-11-14 |
 | Date | 2026-11-13 |
 | Decided by | Maintainer, on the session's recommendation |
 
@@ -133,10 +133,85 @@ How they were read:
   code a build has not compiled (ADR 0003's rule for code not seen at
   build time). The translator comes after it.
 
+## The translator
+
+With the interpreter in place and the level run on it the stock run, the
+project's status named the translator as next. On 2026-11-14 the
+maintainer's word: "Ok work and whatever we should working next (maybe the
+translator?)"
+
+How it was read:
+
+- **The translator is next**, as this record already had it ("The
+  translator comes after it"). No other choice was open, so none was put
+  to the maintainer first. The step, its work and its pass criterion stay
+  as the game log has them.
+- **What the session decided within that**, by the rules that stand, and
+  which the maintainer may decide otherwise:
+  - *Micro code is compiled block by block, by what a block does.* The
+    measurement had shown the same pieces of code written at thousands of
+    places. What PCSX2's VU recompiler decides for a block when it compiles
+    it does not depend on the place, so it is made once, as a list of steps
+    (the block's *plan*), and one function is compiled for each plan, found
+    at run time by a fingerprint of the plan. The record of programs and
+    blocks stays as microVU keeps it, made as the game runs: it is what
+    keeps the time the stock run's
+    ([ADR 0011](0011-time-is-counted-as-pcsx2s-recompiler-counts-it.md)).
+  - *Micro code no build has compiled is interpreted, reported and
+    captured, and the next build compiles it*, as
+    [ADR 0003](0003-no-jit-in-generated-games.md) has it for the EE's code.
+    The capture is derived from the game and stays in the build tree.
+  - *PS2Native's configurations run both VUs on PS2Native's provider*: the
+    tests, the timed runs, the window. PCSX2's VU recompiler is what the
+    stock run of a comparison uses, and what `game.ps1 -VuPs2n none` puts
+    back. The console-recorded VU programs are also still run with it under
+    compiled EE code (`ps2n-static-microvu`), to tell a fault of the VU
+    provider from one of the EE's.
+  - *The program at a start or an indirect jump is not looked for where it
+    cannot have changed.* microVU compares the programs it has recorded
+    with micro memory after every write into it; the provider skips the
+    comparison where nothing was written into the memory the program found
+    last was compiled from. It changes how the provider does its work, not
+    what it finds: which program and which block run is microVU's choice in
+    every case. It was not put to the maintainer first because it changes
+    neither how time is counted nor what is compared with stock PCSX2, the
+    two things [ADR 0019](0019-performance-as-the-research-lays-it-out.md)
+    sends there.
+  - *An encoding PCSX2's VU recompiler knows nothing of is carried out as
+    it carries it out*, which is not at all
+    ([ADR 0005](0005-never-further-from-the-console-than-pcsx2.md)), and
+    counted and reported, where the interpreter had stopped the run. A
+    console-recorded test (`cpu/vu0_macro/transfer`) starts VU1 on micro
+    memory that holds the lower NOP's word in every upper slot.
+  - *A test that is expected to fail has to fail in its listed way.* With
+    the VU provider under the tests, three of them had passed for a run
+    that stopped at an error. The tests' registration now asks for the
+    driver's words for the listed failure, in the place of CTest's
+    `WILL_FAIL` (`ps2n_expect_failure`, `tests/tests.cmake`).
+
+What was built and measured is in the game log ("G11", from "The
+translator: a block's plan, made once" on). In short, on 2026-11-14: over
+the level run VU1's 42,173 blocks in 6,088 programs have 589 plans; after
+one run and one rebuild every block run of the level script is compiled
+code's, none interpreted, none on PCSX2's VU recompiler; 20,000 random
+micro programs give microVU's results, 1,500 of them on compiled blocks
+alone; every test passes; the level run is the stock run at every sync
+point, VU0's and VU1's registers included, and play takes 0.95 times stock
+PCSX2's time, the whole level run 0.97. The step's pass criterion is met.
+What comes after it is the maintainer's to choose; the IOP's recompiler is
+the stand-in that is left.
+
 ## Consequences
 
 - The game log has the step, its work and its pass criterion ("G11"), and
   what the measurement found.
 - What the measurement writes from the game, the contents of micro memory,
   stays in the build tree with the run's other files.
-- The website's list of steps has G11, under way.
+- The website's list of steps has G11, and its board of what is static
+  has the vector units' micro programs as static since 2026-11-14.
+- The captures of micro code, like the captures of EE code, are derived
+  from the game and stay in the build tree; so do the counts of
+  profile-guided optimization, made again with the micro code compiled.
+- A build's compiled micro code holds for the plans it was made from. A
+  change to how blocks are planned gives them other plans: the blocks are
+  then interpreted, the host says so, and the captures are made again.

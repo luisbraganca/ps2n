@@ -25,6 +25,11 @@
 #   SELFTEST   run ps2n-host -selftest instead of a program
 #   SELFTEST_TRIALS  with SELFTEST: random cases per instruction against PCSX2's
 #              recompiler (ten times as many against its interpreter)
+#   SELFTEST_VU  with SELFTEST: only the random micro programs, the first so
+#              many for each VU and setting (ps2n-host -selftest-vu)
+#   VU_REQUIRE_COMPILED  with SELFTEST_VU: the run fails if a block of those
+#              programs had to be interpreted, and is skipped by a host built
+#              without them (ps2n-host -vu-require-compiled)
 #   LOCKSTEP   compare a compiled run with an interpreted one
 #   SAME_AS_STOCK  compare a compiled run with a run of stock PCSX2
 #   REGISTERS  with SAME_AS_STOCK: "report" lets the runs differ in registers
@@ -36,8 +41,12 @@
 #   WORK_DIR   scratch directory for this test; emptied first
 #   EXPECTED   file the output must equal (a console recording)
 #   EE         jit, interp or ps2n (default jit)
-#   IOP VU     jit or interp (default jit)
-#   STATIC     with EE=ps2n: on or off, whether compiled code is used (default on)
+#   IOP        jit or interp (default jit)
+#   VU         jit, interp or ps2n (default jit). ps2n: both VUs' micro programs
+#              on PS2Native's VU provider, as VU_PS2N=both, in the runs PS2Native
+#              makes; a stock run they are compared with has PCSX2's recompiler
+#   STATIC     with EE=ps2n: on or off, whether compiled code is used (default
+#              on); off, the VU provider interprets every block as well
 #   BIOS_STATIC  with EE=ps2n: off to leave the BIOS to the interpreter even
 #              where the host has it compiled (ps2n-host -bios-static off)
 #   CALL_SITES  with EE=ps2n: off to send every call through a register to the
@@ -84,9 +93,15 @@
 #              vu-report-frames.csv and vu-report-uploads.bin beside it
 #              (ps2n-host -vu-report)
 #   VU_PS2N    0, 1 or both: run those VUs' micro programs on PS2Native's VU
-#              interpreter in the runs PS2Native makes, never in a stock run
+#              provider in the runs PS2Native makes, never in a stock run
 #              they are compared with (ps2n-host -vu-ps2n), and write the
-#              programs it records to vu-programs-0 and -1
+#              programs it records to vu-programs-0 and -1. VU=ps2n is both
+#   VU_STATIC  with VU_PS2N or SELFTEST: off to have every block of micro code
+#              interpreted, the ones the host has compiled too (ps2n-host
+#              -vu-static off)
+#   VU_CAPTURE with VU_PS2N or SELFTEST: a file to write the blocks of micro
+#              code that were interpreted to, for the recompiler (ps2n-host
+#              -vu-capture)
 #   MARKS      frames at which the wall-clock time is noted and reported
 #              (ps2n-host -mark, once each), a list: to time parts of a run
 #   FAST_CORES keep the run on the processor's fastest cores, so that its time
@@ -282,6 +297,18 @@ if(SELFTEST)
 	if(DEFINED SELFTEST_TRIALS)
 		set(trials -selftest-trials ${SELFTEST_TRIALS})
 	endif()
+	if(DEFINED SELFTEST_VU AND NOT "${SELFTEST_VU}" STREQUAL "")
+		list(APPEND trials -selftest-vu ${SELFTEST_VU})
+	endif()
+	if(DEFINED VU_REQUIRE_COMPILED AND VU_REQUIRE_COMPILED)
+		list(APPEND trials -vu-require-compiled)
+	endif()
+	if(DEFINED VU_STATIC AND VU_STATIC STREQUAL "off")
+		list(APPEND trials -vu-static off)
+	endif()
+	if(DEFINED VU_CAPTURE AND NOT "${VU_CAPTURE}" STREQUAL "")
+		list(APPEND trials -vu-capture "${VU_CAPTURE}")
+	endif()
 	ps2n_run("" -selftest ${trials} -seconds ${SECONDS})
 	if(NOT exit_code STREQUAL "0")
 		message(FATAL_ERROR "The self-test failed (exit code ${exit_code}; 3 is the time limit, SECONDS). PCSX2's log: ${WORK_DIR}/core.log")
@@ -332,11 +359,29 @@ if(DEFINED FAST_CORES AND FAST_CORES)
 	list(APPEND limits -fast-cores)
 endif()
 
-# PS2Native's VU interpreter, in the runs PS2Native makes (never the stock
-# run another is compared with).
+# PS2Native's VU provider, in the runs PS2Native makes (never the stock run
+# another is compared with). The core underneath is given its recompiler,
+# which the host then puts PS2Native's provider in the place of.
+if(VU STREQUAL "ps2n")
+	set(VU jit)
+	if(NOT DEFINED VU_PS2N OR "${VU_PS2N}" STREQUAL "")
+		set(VU_PS2N both)
+	endif()
+endif()
 set(vu_ps2n "")
-if(DEFINED VU_PS2N AND NOT "${VU_PS2N}" STREQUAL "")
+set(vu_interpreted "")
+if(DEFINED VU_PS2N AND NOT "${VU_PS2N}" STREQUAL "" AND NOT "${VU_PS2N}" STREQUAL "none")
 	set(vu_ps2n -vu-ps2n ${VU_PS2N} -vu-programs "${WORK_DIR}/vu-programs-")
+	if(DEFINED VU_CAPTURE AND NOT "${VU_CAPTURE}" STREQUAL "")
+		list(APPEND vu_ps2n -vu-capture "${VU_CAPTURE}")
+	endif()
+	# With the EE's compiled code switched off, or by itself: every block of
+	# micro code interpreted.
+	set(vu_interpreted -vu-static off)
+	if((DEFINED VU_STATIC AND VU_STATIC STREQUAL "off") OR STATIC STREQUAL "off")
+		list(APPEND vu_ps2n ${vu_interpreted})
+		set(vu_interpreted "")
+	endif()
 endif()
 
 if(DEFINED SYNC AND SYNC)
@@ -353,7 +398,7 @@ if(LOCKSTEP)
 	message("--- interpreted ---")
 	ps2n_run("-interpreted"
 		-out "${WORK_DIR}/guest-interpreted.txt"
-		-ee ps2n -iop ${IOP} -vu ${VU} -static off ${image} ${vu_ps2n}
+		-ee ps2n -iop ${IOP} -vu ${VU} -static off ${image} ${vu_ps2n} ${vu_interpreted}
 		-trace "${WORK_DIR}/interpreted.trace"
 		${limits} "${ELF}")
 	if(NOT exit_code STREQUAL "${EXPECT_EXIT}")

@@ -23,7 +23,7 @@ The run files, pictures included, are under the git-ignored build tree.
 | G8 The BIOS's EE code | **Done** (2026-11-12, [ADR 0017](adr/0017-bios-ee-code-compiled-as-step-g8.md)): the BIOS's code that runs on the EE under fast boot is compiled ahead of time from the dump the build is given, as four images, its code followed from where it is entered; of it, 51 instructions at boot are still interpreted, each with its cause. What the game copies into kernel memory is the game's code, and is compiled with it. Rebased onto G9: every test passes, and the game is still the stock run over the level script and the interpreted run over its first 4,200 frames. The level run takes 1.18 times stock PCSX2's time, 1.1 s less than with the BIOS interpreted; a test program boots in stock PCSX2's time. Where it stands is in "G8" below. |
 | G9 VU0's instructions in compiled code | **Done** (2026-11-12, [ADR 0018](adr/0018-vu0-instructions-carried-out-by-compiled-code.md), in a worktree of its own): compiled code carries out the game's VU0 instructions itself, inline, where its block has nothing done about VU0 first, and keeps its registers in locals past them. The level run takes 1.19 times stock PCSX2's time (89.5 s against 74.9 s, timed in turn), from 1.21, a gain at the edge of what the measurement shows; the profile has the runtime's share 1.3 s smaller. Still the stock run and the interpreted run. Where it stands is in "G9" below. |
 | G10 Performance | **Done** (2026-11-13, ended there by the maintainer; [ADR 0019](adr/0019-performance-as-the-research-lays-it-out.md), begun 2026-11-12): play measured apart from startup, with nothing drawn and with the hardware renderer (the same time: the CPU thread's), and profiled. Profile-guided optimization of the generated code, trained on another run of the level: play takes 1.13 times stock PCSX2's time, from 1.21, startup 1.07, from 1.11, the whole level run 1.11, from 1.18. Then loops that have reached a fixed point (a time round that leaves the machine as it found it): their times round up to the next event test are not run, their cycles counted at once, the event test made where it would have been. The game waits for each frame in one: play takes 1.08 times stock PCSX2's time, startup 1.05, the whole level run 1.07. The COP2 transfers made by compiled code, and link-time optimization of PS2Native's code: no gain. Then the COP2 instructions that come first in their block, 78% of what compiled code still handed to the runtime for COP2, carried out by compiled code unless VU0 is running a micro program: play takes 1.06 times stock PCSX2's time, the whole level run 1.06. Then the rest of them (`VCALLMS` called the way PCSX2's recompiler calls it, `CFC2` and `CTC2` as moves): nothing the timing shows; the runtime now carries out only those at which VU0 is running. Still the stock run and the interpreted run, and every test passes. In the main tree beside it ([ADR 0021](adr/0021-two-sessions-on-step-g10.md)), each change measured by itself without profile-guided optimization: calls through a register made by compiled code itself, play from 1.18 to 1.16 times stock PCSX2's time; the way a load or store seldom takes made short, the game's code 14% smaller, play 1.14; the FPU's settings read once per function, tried and taken out. `ps2n-host -code-size` says how much host code each kind of generated line becomes. The two together, in one history and with profile-guided optimization: play takes 1.04 times stock PCSX2's time, the whole level run 1.04, still the stock run. On 2026-11-13 a third session measured the website's two charts again (the first 4,200 frames 1.09 times stock PCSX2's time with nothing drawn, from 1.35, and 1.03 with the software renderer, from 1.12; of the six loops, `jump` and `call` now about as fast as PCSX2's recompiler, `mmi` at 1.24 as at P4) and made `lq` and `sq` loads and stores on the locals and a block start's call of the runtime one of one argument (the host 12 MB smaller): play still 1.04 times stock PCSX2's time. Then, at the maintainer's word, the FPU's arithmetic: its registers held in SSE registers, as PCSX2's recompiler holds them, and the bits its additions keep past the guard bit looked up instead of branched to, the self-test holding all 511 cases of that to PCSX2's recompiler. Without profile-guided optimization play went from 1.10 to 1.046 times stock PCSX2's time; with it, play takes as long as stock PCSX2's (0.985 to 1.006 times, six rounds in pairs), the whole level run 1.01. Still the stock run and the interpreted run, and every test passes. Where it stands is in "G10" below. |
-| G11 The vector units' micro programs | **Under way** (2026-11-13, [ADR 0022](adr/0022-vu-micro-programs-compiled-as-step-g11.md)): measured first, the host watching the core's two VU providers (`ps2n-host -vu-report`). In play VU1's micro memory is rewritten about 40 times a frame, yet all it is given over the level run is 208 distinct pieces of code, 1,750 distinct instruction pairs, written at 5,405 places; PCSX2's VU recompiler makes 6,088 programs of them, and spends about a tenth of play's CPU-thread time starting programs, finding which one memory holds and making new ones. VU0 runs one set of code, written once at boot, started 51.5 million times. The vector units take about a third of play's CPU-thread time, as much as the game's compiled EE code. The maintainer's choices with the measurement: VU1's registers held to the stock run at every sync point too, and PS2Native's own VU interpreter before the translator. VU1's registers are now compared: the level run is still the stock run at every one of its 93,221,937 sync points, VU1's registers the same at each, and every test passes. PS2Native's VU interpreter (`runtime/vu_interp.h`) is in place: 16,000 random micro programs give microVU's results, cycle counts and TPC on it, and with both VUs on it the level run is the stock run at every sync point, VU0's and VU1's registers included, over 13.0 billion VU1 instruction pairs and 1.05 billion VU0 ones. Next is the translator. Where it stands is in "G11" below. |
+| G11 The vector units' micro programs | **Done** (2026-11-14, [ADR 0022](adr/0022-vu-micro-programs-compiled-as-step-g11.md), begun 2026-11-13): measured first, the host watching the core's two VU providers (`ps2n-host -vu-report`). In play VU1's micro memory is rewritten about 40 times a frame, yet all it is given over the level run is 208 distinct pieces of code, 1,750 distinct instruction pairs, written at 5,405 places; PCSX2's VU recompiler makes 6,088 programs of them, and spends about a tenth of play's CPU-thread time starting programs, finding which one memory holds and making new ones. VU0 runs one set of code, written once at boot, started 51.5 million times. The vector units took about a third of play's CPU-thread time. The maintainer's choices with the measurement: VU1's registers held to the stock run at every sync point too, and PS2Native's own VU interpreter before the translator. The interpreter (2026-11-13) follows microVU's analysis of a block, its record of programs and blocks, its instructions and, where results show it, its allocation of host registers. The translator (2026-11-14): what microVU's second pass decides for a block is made once, as a list of steps (the block's plan), the same for the same code wherever the game writes it, and each plan is compiled ahead of time as one C++ function, found at run time by a fingerprint of the plan. Over the level run VU1's 42,173 blocks in 6,088 programs have 589 plans. Blocks go on to each other as microVU's do, and the program at a start or a jump is not looked for where it cannot have changed. After one run and one rebuild every one of the level run's 1.19 billion block runs is compiled code's: none is interpreted, and none runs on PCSX2's VU recompiler. The self-test finds the semantics to be microVU's on every case tried: 20,000 random micro programs, in five settings, give its results, cycle counts and TPC, 1,500 of them with every block compiled. Every test passes (468), PS2Native's configurations now on PS2Native's VU provider. The level run is the stock run at every one of its 93,221,937 sync points, VU0's and VU1's registers included, with the same picture at each of the 1,750 frames compared, and over the first 4,200 frames it is the interpreted run at every one of 47,705,744 event tests, the micro code interpreted there too. Play takes 0.95 times stock PCSX2's time (53.4 s against 56.2 s, three rounds in turn), the whole level run 0.97, from 1.00 and 1.01. Where it stands is in "G11" below. |
 
 ## The steps and their pass criteria
 
@@ -62,6 +62,11 @@ scripts\windows\game.ps1 -Image $iso -Config ps2n-static -Frames 4200 -FrameEver
 # What a run had to interpret of the game goes into the capture file; build it in:
 scripts\windows\build.ps1 -GameCapture build\game\killzone\capture.toml
 
+# The same for the vector units' micro code (step G11): the blocks a run had to interpret
+# go into a capture file of their own, and the next build compiles them.
+scripts\windows\game.ps1 -Image $iso -Config ps2n-static -Frames 17500 -Renderer null -Pad tests\games\killzone\level1.pad -Name level1 -VuCapture build\game\killzone\vu-capture.toml
+scripts\windows\build.ps1 -VuCapture build\game\killzone\vu-capture.toml
+
 # The compiled run against the stock run: at every sync point, and the picture at every frame
 # (17 minutes for both runs, and 3 GB in the build tree while it lasts):
 scripts\windows\game.ps1 -Image $iso -Config same-as-stock -Frames 4200 -FrameEvery 1 -Pad tests\games\killzone\start.pad -Name killzone
@@ -92,8 +97,8 @@ scripts\windows\game.ps1 -Image $iso -Play -Name killzone -Config stock-jit
 scripts\windows\window-check.ps1 -Image $iso -Name killzone -Steps '41 shot film.png', '42 key K', '45 shot title.png', '47 close'
 ```
 
-The capture file is derived from the game and lives in the build tree, which
-can be deleted; running and rebuilding as above makes it again.
+The capture files are derived from the game and live in the build tree,
+which can be deleted; running and rebuilding as above makes them again.
 
 What the host and the tools gained for this (all of it general, none of it
 for this game): a disc image run for a number of frames (`EXPECT_EXIT` in
@@ -2669,7 +2674,7 @@ The website keeps the two charts as measured this morning ("Where it
 stands", above), which these figures repeat within the noise; what it now
 says of the level run is from this section.
 
-## G11: the vector units' micro programs (Windows, 2026-11-13)
+## G11: the vector units' micro programs (Windows, 2026-11-13 and 2026-11-14)
 
 The step [ADR 0022](adr/0022-vu-micro-programs-compiled-as-step-g11.md)
 added: the micro programs the game runs on its two vector units compiled
@@ -2952,28 +2957,369 @@ allocation of registers again each time it runs a block, though microVU
 decides it once, when it compiles the block: the comparison run took 2,197
 s with the XMM allocation followed, 1,554 s without (both runs, stock
 PCSX2's and PS2Native's, in each). The allocation could be worked out once
-per block and kept with it.
+per block and kept with it: done the next day, below.
+
+### The translator: a block's plan, made once (2026-11-14)
+
+The maintainer's word for what came next: "Ok work and whatever we should
+working next (maybe the translator?)"
+([ADR 0022](adr/0022-vu-micro-programs-compiled-as-step-g11.md) has how it
+was read). The translator was built in three parts, each held to microVU
+before the next: the plan, the compiled blocks, and the way from one block
+to the next.
+
+**The plan.** Everything microVU's second pass decides when it compiles a
+block (which host instructions, on which operands, in which order, with
+which registers of its allocation) is now worked out once, when the block
+enters the record, and kept with it as a list of *steps*
+(`core/include/ps2n/vu_plan.h`; the 77 kinds of step are in
+`vu_steps.inc`). A step is one small operation with up to five numbers for
+operands: a VI register taken into a host register, a multiply-and-add of
+given registers with a given clamp and flag update, an address worked out,
+a load, a store. The last step says how the block ends, and what microVU's
+code does there to the flags' instances and to P and Q for the next block.
+
+A plan says nothing of where its block is. An address in it (the link of a
+`BAL`, the target of a branch) is a distance from the block's first pair;
+an immediate is in the step, but for the ones microVU reads from micro
+memory as its code runs (the I-bit game fix, Killzone's setting), which a
+step reads there by the pair's place in the block. The blocks after it and
+its cycles are not in it: those are the record's, and depend on what was
+compiled first. So the same code has the same plan wherever it is written
+and whatever program it is part of, which is what the measurement asked
+for ("What it means for the translator" above).
+
+**How many plans the game has.** Over the level run VU1's 42,173 blocks,
+in 6,088 programs, have 589 different plans between them, 17,432 steps;
+515 of them ran, the others being the side of a branch that was never
+taken. VU0's 84 blocks have 49 plans, 1,004 steps, of which 48 ran. Over
+the first 4,200 frames, 39 plans for VU1 and 3 for VU0.
+
+**Steps on an accessor.** Each step is a function, written once
+(`runtime/include/ps2n/vu_ops.h`), on an *accessor* that says where the
+VU's registers are. The interpreter runs a plan step by step on the
+machine's own registers; compiled code calls the same functions on locals.
+The two cannot differ in what a step does.
+
+The self-test's random programs gave microVU's results on plans as they
+had before them, and the level run with every block interpreted by its
+plan took 157 to 168 s with nothing drawn (play about 136 s of it), still
+ending at EE cycle 103,213,332,030.
+
+### Micro code compiled ahead of time (2026-11-14)
+
+**What is generated.** `ps2n-recomp vu <capture>` writes one C++ function
+for each plan: the plan's steps in order, each a call of the step's
+function with its operands as constants (`recompiler/src/vu_codegen.cpp`,
+against `runtime/include/ps2n/vu_recomp.h`). The function takes the VU's
+registers into locals when it begins and puts back the ones a step wrote
+when it ends. Which registers a block reads and writes is in its code, so
+the compiler drops the loads of those it never reads, and nothing is
+counted or looked up for it as the block runs. Nothing else looks at a
+VU's registers while one of its blocks runs: a block runs from its first
+pair to its last on the CPU thread, and what it calls out to (the GIF
+transfer of an XGKICK) reads data memory, which the steps write at once.
+
+**How the host finds it.** A function is named by its plan's key, a
+128-bit fingerprint of the VU and the steps. The host's registry lists the
+images of compiled micro code it was linked with, and the provider gives
+every block whose plan's key one of them has that function. The plan is
+made from what micro memory holds when the block enters the record, so
+compiled micro code is found by what the block does, wherever it is
+written, and no compiled function can be run for code that memory no
+longer holds.
+
+**What a build has not compiled** is interpreted by its plan, counted and
+reported, and written down for the next build, as the EE's code is
+([ADR 0003](adr/0003-no-jit-in-generated-games.md)): `ps2n-host
+-vu-capture <file>` (`game.ps1 -VuCapture`) writes each interpreted block
+with its steps, `ps2n-recomp vu-capture` puts several runs' files
+together, and `build.ps1 -VuCapture <file>` compiles them into the host as
+the image `game`. The capture is derived from the game and stays in the
+build tree. After a run the host says, for each VU, how many different
+plans ran, how many of them were compiled and how often those ran, how
+many were interpreted and how often. The level run's capture has 515
+blocks of VU1's and 48 of VU0's, 15,605 steps; the generated C++ is
+0.7 MB in 16 files. After one run and one rebuild the level run interprets
+no block of micro code: all 1,188,263,852 block runs are compiled code's.
+
+**The self-test on compiled blocks.** `selftest/vu-compiled` runs the
+first 150 random programs of each VU and setting with every block
+compiled ahead of time, and fails if one had to be interpreted
+(`scripts\windows\vu-selftest.ps1` captures them and builds them in, as the
+image `selftest`; without it the test is skipped, not passed). A fault
+planted in one step's function on purpose was found by it, and taken out
+again.
+
+**The first compiled version** had the provider call each block's
+function in a loop and look up what came next. Over the level script it
+was the stock run at every one of 93,221,937 sync points, VU0's and VU1's
+registers the same at each (the FPU's differ at the same 964 as before),
+with the same picture at each of the 1,750 frames compared and the sound
+hardware in the same state at each of 1,750 moments. The level run took
+91.9 s with nothing drawn, play 72.7 s of it: about half the interpreter's
+time, and still 16 s more than stock PCSX2's play.
+
+### From one block to the next, and the program found at less cost (2026-11-14)
+
+What the profile showed after the first compiled version, one change at a
+time. Play is the level run's frames 6,600 to 17,500, with nothing drawn;
+the profiled runs take about a second longer than the others.
+
+| Change | Play |
+|---|--:|
+| Every block interpreted by its plan | about 136 s |
+| Blocks compiled, the provider calling each in a loop | 72.7 s |
+| A block's ways out worked out when it enters the record, not each time it ends | 60.8 s, profiled |
+| Blocks go on to each other | 59.1 s, profiled |
+| The flags' instances reordered as the plan says | 55.9 s, profiled |
+| The program not looked for where it cannot have changed | 52.7 s |
+
+- **Blocks go on to each other**, as microVU's blocks jump to each other.
+  The loop that called each block and the lookups around it were about 16%
+  of play's samples. Now a block's function is given the block's entry in
+  the record (its cycles, its address, the blocks after it); at its end it
+  takes the next block, tests that block's cycles as microVU's code does
+  where a block begins, and calls it in the place of returning, which
+  under clang is a jump (`[[clang::musttail]]`, with a calling convention
+  under which a block saves no registers for its caller). It returns to
+  the provider only when the program stops: at its end, with its cycles
+  used, at a T bit. An interpreted block is entered and left the same way.
+- **The flags' instances.** At a block's end microVU's code sorts the four
+  instances of the status, MAC and clip flags for the next block. Done as
+  the block ran, on the machine's copy, it took 9.4% of play's samples:
+  four narrow stores followed by one wide load of the same bytes, which
+  the processor cannot forward and waits for. The order is known when the
+  plan is made, so it is now part of the plan's last step, and compiled
+  code moves locals.
+- **The program not looked for where it cannot have changed.** microVU
+  forgets which program each start address has at every write into micro
+  memory, 40 a frame, and compares the recorded programs with memory again
+  at the next start or indirect jump there. The provider keeps microVU's
+  rule and spares part of that work: it knows, for each 128 bytes of micro
+  memory, the last write into them; where the program found last at an
+  address is still the first of its list and nothing was written since
+  into the memory it was compiled from, the comparison could only find it
+  equal, and is not made. Clearing what was remembered for all 2,048 start
+  addresses at every write became one count. And an indirect jump keeps
+  the program and block it found last, so that in the same program the
+  block is not searched for again. Over the level run 2,895,390 of
+  6,790,138 searches are spared, and the comparisons of a recorded program
+  with memory went from 8,178,377 to 5,282,987. Which program is found,
+  and which block, is the same in every case: the record is microVU's, as
+  the comparison with the stock run shows below.
+
+### What microVU does not know (2026-11-14)
+
+With PS2Native's VU provider under every test, one console-recorded
+program (`cpu/vu0_macro/transfer`) stopped at something the provider did
+not carry out: its `CTC2` to `CMSAR1` starts VU1 on micro memory that holds
+`8000033C` in every upper slot, the lower NOP's word (PCSX2's source says
+the BIOS writes its two NOPs into each other's slots). microVU has no
+instruction for that encoding, nor for the other holes of its tables
+(`mVUunknown`, `microVU_Tables.inl`): it generates no code for one, and
+its first pass ends the block, and with it the program, after an upper one
+that is not in a delay slot, but for that one word, which it lets pass.
+The provider now does the same
+([ADR 0005](adr/0005-never-further-from-the-console-than-pcsx2.md)), where
+it had refused such encodings, and counts them: after a run the host says
+how many the blocks it analysed held. The self-test has a fifth setting
+for it, with random numbers of its own so that the other four settings'
+programs are the ones they were: unknown encodings in the upper slot, in
+the lower slot, on the E bit's pair and in its delay slot, and the two NOPs
+in each other's slots. 7,735 such instructions in 4,000 programs; nothing
+differs from microVU.
+
+The same test showed something about the tests themselves. Three of its
+configurations on PS2Native's providers are expected to fail, each for a
+cause that is listed, and passed for failing: with the run stopped at an
+error, not for their cause. Only the `lockstep` test, which is expected to
+pass, failed. After the change each fails for its own cause again (the
+same-as-stock comparison parts at sync point 26,961, as listed), and no
+run of the suite stops at an error.
+
+So that it cannot happen again, a test that is expected to fail now has to
+fail in the way that is listed: the driver's words for that failure have
+to appear (`ps2n_expect_failure`, `tests/tests.cmake`), where CTest's
+`WILL_FAIL` took any failure for the expected one. With a file that is not
+a BIOS in the BIOS's place such a test now fails; before, it passed. The
+suite's 73 expected failures each fail in their listed way: 68 by printing
+something else than the recording, 3 by parting from the stock run, and 2
+because stock PCSX2's recompiler does not get through the program.
+
+### Where G11 stands (2026-11-14)
+
+**Profile-guided optimization, made again.** The counts the build used
+were made before any micro code was compiled, so its functions had none.
+The training script (`level1-train.pad`, the level played otherwise) does
+not run quite the same micro code as the timed script: 39 of the blocks
+of VU1's it ran were not in the timed script's capture, and were
+interpreted (85,124 block runs of 899 million). They went into the
+capture, which now has 554 blocks of VU1's and 48 of VU0's, 15,861 steps,
+0.8 MB of C++ in 16 files; with them the training run interprets none.
+The instrumented build, the training run, the merge (54.7 MB of counts)
+and the build with the counts were made again.
+
+**The time.** Stock PCSX2 and the compiled game in turn, three rounds,
+nothing drawn:
+
+| | Startup, three rounds | Play, three rounds |
+|---|---|---|
+| Stock PCSX2 | 16.66, 16.63, 16.58 s | 56.43, 55.92, 56.17 s |
+| Compiled | 17.45, 17.66, 17.46 s | 53.22, 53.79, 53.15 s |
+
+Play takes 0.95 times stock PCSX2's time: 53.39 s against 56.17 s, 0.943
+to 0.962 pair by pair, where at the end of G10 it took as long as stock
+PCSX2's (0.985 to 1.006). Startup takes 1.05 times (17.5 s against
+16.6 s), as before; the whole run (72.1 to 73.0 s against 74.1 to 74.6 s)
+0.97, from 1.01. With the counts made before the micro code was compiled,
+play had taken 52.7 s in one run ("From one block to the next" above): the
+counts made again give nothing that the timing shows.
+
+**Still the stock run.** This build, with blocks going on to each other,
+the program search spared and the counts made again, was compared as the
+first compiled version was. Over the level script the compiled game is the
+stock run at every one of 93,221,937 sync points: the same place at the
+same cycle count, the registers the same, VU0's and VU1's among them, but
+for the FPU's at the same 964 sync points as before, the first 57,130,066
+(the sign of a zero, followed on purpose since G4), with the same picture
+at each of the 1,750 frames compared and the sound hardware in the same
+state at each of 1,750 moments; 51 instructions interpreted, those of the
+BIOS at boot, and no block of micro code.
+
+**And the interpreted run.** Over the first 4,200 frames the compiled game
+is the interpreted run at every one of 47,705,744 event tests, the run's
+fingerprint the one it has had at every step (`F99B5EFD472E87EC`). The
+interpreted run now interprets the micro code as well as the EE's code:
+3,258,254 block runs, VU1's 3,232,014 and VU0's 26,240, by their plans.
+The compiled run carries every one of them out by compiled code.
+
+**The tests.** Every test passes (468, and the unit tests), PS2Native's
+configurations with both VUs on PS2Native's provider; the console-recorded
+VU programs also with PCSX2's VU recompiler under compiled EE code
+(`ps2n-static-microvu`), as before G11. The self-test: 20,000 random micro
+programs, 2,000 on each VU in each of five settings, give microVU's
+results, cycle counts and TPC; 1,500 of them, 150 on each VU in each
+setting, run with every block compiled ahead of time
+(`selftest/vu-compiled`).
+
+**What carries the game's micro programs out.** Over the level run VU1
+ran 13,008,036,570 instruction pairs in 1,077,102,066 block runs, VU0
+1,054,397,962 pairs in 111,161,786: every one of them code compiled ahead
+of time, none interpreted, none on PCSX2's VU recompiler, which is given
+nothing to run where PS2Native's provider is in its place. What a build
+has not compiled runs
+on PS2Native's VU interpreter and is reported, block by block, in the
+run's `vu-capture.toml`: for the level script, nothing.
+
+**Where play's time goes now.** The profile of play on this build (54.3 s
+profiled, 36,223 samples of the CPU thread), beside the one the step began
+with, PCSX2's VU recompiler under the compiled game (57.0 s, "What the
+vector units run, measured"):
+
+| | With PCSX2's VU recompiler | Now |
+|---|--:|--:|
+| The vector units' programs running | 20.3%, 11.6 s | 19.3%, 10.5 s |
+| Starting programs, finding which one memory holds, making new ones | 9.8%, 5.6 s | 9.3%, 5.1 s |
+| The GIF transfers VU1's `XGKICK` starts | 3.2%, 1.8 s | 3.7%, 2.0 s |
+| The game's EE code, compiled ahead of time | 34.1%, 19.4 s | 36.0%, 19.5 s |
+
+The micro code compiled ahead of time takes about a tenth less time than
+the code microVU generated for the same programs. Starting and finding
+programs takes about what it took microVU: `SearchProg` 3.7% of the
+samples, `JumpTo` 1.4%, `memcmp` (the comparisons of a recorded program
+with memory) 1.3%, `Provider::Execute` 1.2%, `EndProgram` 0.9%,
+`BlockManager::search` 0.6%. The record is still searched as microVU
+searches it, 3.9 million times over the level run; that is now the larger
+part of what could be gained on the vector units, and where the time goes
+inside it has not been looked into. Analysing and planning the blocks
+themselves is nothing that shows (`analyzeBlock` and `Compile`, under
+0.1%). What PCSX2 still generates at run time is the IOP's code: 4.7% of
+the samples, 2.5 s.
+
+**The host's memory.** At its most over the level run with nothing drawn,
+the compiled game's host had 1,620 MB in use (its working set; 1,937 MB of
+private memory), stock PCSX2's run in the same host 1,475 MB (1,715 MB).
+What the 145 MB more are has not been broken down; PS2Native's record of
+programs and blocks is part of it.
+
+**The window.** Checked by machine with the sound off, a session of its
+own (`window-check.ps1 -Name g11-window`): the film and the title screen
+at 49.93 frames a second where the console shows 50, both VUs on compiled
+code (2,710,465 block runs of VU1's, 7,945 of VU0's, none interpreted).
+
+**The website's first chart on this build.** The first 4,200 frames,
+logos, a prompt and a film, hardly use the vector units, and take what
+they took: with nothing drawn 12.3, 12.5, 12.6 s against 11.3, 11.3,
+11.5 s under stock PCSX2 (1.10; from the first frame on 11.05, 11.18,
+11.11 s against 9.96, 10.03, 10.07 s, 1.11), and with the software
+renderer 23.7, 23.7, 23.6 s against 22.7, 22.8, 22.8 s (1.04); every run
+ends at EE cycle 24,766,740,046. The chart keeps its numbers of
+2026-11-13.
+
+Where their extra second is, by one profiled run of each with nothing
+drawn (11.3 s and 10.1 s from the first frame, 7,481 and 6,808 samples):
+in the game's own EE code. Compiled, it has 2,755 samples and the runtime
+454, where the code PCSX2's EE recompiler generated has 2,260 in the stock
+run; the IOP's code has 681 and 673, PCSX2's core 3,173 and 3,458, the
+vector units' code 18 and 14. A fifth of the compiled run's
+samples, 1,451, are in one function (`0014FD68`): a loop that waits,
+reading the count register each time round and adding up the time that
+has passed. It never comes back to a state it was in, so it is not one of
+the loops that are skipped ("G10", "Loops that have reached a fixed
+point"). In play the same function is the second of the game's, with 1.4%
+of the samples. What the loop costs under PCSX2's recompiler the profile
+cannot say: its code is not told apart there. Not looked into further.
 
 ## Open
 
 - **What is left of VU0 in the game's EE code.** Since G7 its instructions
   are PS2Native's, but for `VCALLMS` and `VCALLMSR`, which start a micro
-  program and stay PCSX2's function, as in its recompiler. The micro
-  programs run on PCSX2's VU0 recompiler, a stand-in of
+  program and stay PCSX2's function, as in its recompiler. Until G11 the
+  micro programs ran on PCSX2's VU0 recompiler, a stand-in of
   [ADR 0003](adr/0003-no-jit-in-generated-games.md). Since G9 compiled
   code carries a VU0 instruction out itself unless its block has something
   done about VU0 first, and since G10 the transfers as well, and it calls
   PCSX2's function for `VCALLMS` and `VCALLMSR` itself; the runtime carries
   out only what comes where VU0 is running a micro program and has to be
   brought up to date first ("G10", "The rest of the COP2 instructions").
-  The micro programs themselves, VU0's and VU1's, are step G11's: measured
-  so far ("G11").
+  The micro programs themselves, VU0's and VU1's, are compiled ahead of
+  time since G11, and run on PS2Native's VU provider.
+- **The IOP.** Its code, the BIOS's modules and the game's, still runs on
+  PCSX2's IOP recompiler: the one stand-in of
+  [ADR 0003](adr/0003-no-jit-in-generated-games.md) that is left, and the
+  next in its order of work. Not begun; in play it has about 5% of the CPU
+  thread's samples.
+- **What the VU provider does not carry out.** The T and M bits on a
+  branch, the T bit with an XGKICK still to come at its block's end,
+  PCSX2's XGKICK game fix, and the forms whose result under microVU
+  depends on what its allocator held (one component in the field of OPMULA
+  or of an EFU sum, ESUM of VF00 without w). A run that reaches one stops
+  with an error that names it. Killzone's micro code has none of them as
+  far as the first level.
+- **Micro code no build has seen** is interpreted until the next build:
+  each new part of the game brings some (the training script's run met 39
+  blocks of VU1's that the level script's had not). A session in the window
+  writes them down too (`build\game\<name>\play\vu-capture.toml`).
+- **The test programs' micro code is interpreted.** No build compiles a
+  capture of theirs; compiled micro code is tested by the self-test's
+  random programs and by the game.
+- **microVU's cache.** When its 64 MB of host code are full microVU throws
+  its record of programs and blocks away, which PS2Native's provider
+  cannot know: a run long enough could part from the stock run there. The
+  level run fills 43.5 MB of it. PS2Native's own record is not bounded:
+  like microVU it keeps, for each block that ends in an indirect jump, a
+  table with an entry for every pair of micro memory (2,048 for VU1), and
+  how much memory a long session takes has not been measured.
 - **Speed.** 4,200 frames of logos, a prompt and a film took 25.7 s
   compiled against 22.9 s under stock PCSX2 with the software renderer, and
   15.1 s against 11.2 s with nothing drawn, at G3; on 2026-11-13 they take
   23.4 s against 22.7 s, and 12.3 s against 11.3 s ("G10", "Where it
-  stands (main tree, 2026-11-13)"). Where the second that is left with
-  nothing drawn goes has not been profiled.
+  stands (main tree, 2026-11-13)"), and the same on 2026-11-14 with the
+  micro programs compiled. The second that is left with nothing drawn is
+  in the game's own EE code, a fifth of the compiled run in one loop that
+  waits on the count register ("G11", "Where G11 stands"); what could be
+  done about it has not been looked into.
   Over the level run the compiled game took 1.35 times as long as stock
   PCSX2 at G5, all of the difference in the game's own code; after the
   changes of G6 it takes 1.21 to 1.23 times as long (91.7 s against 75.6 s, 91.3 s against 74.3 s), and
@@ -3000,7 +3346,9 @@ per block and kept with it.
   play alone 1.04; with the FPU's registers in SSE registers and the bits
   its additions keep looked up (G10, the main tree, 2026-11-13), 1.01
   (73.7 to 74.7 s against 72.9 to 73.9 s), play alone as long as stock
-  PCSX2's (0.985 to 1.006 times). More than a
+  PCSX2's (0.985 to 1.006 times); with the vector units' micro programs
+  compiled ahead of time (G11, 2026-11-14), 0.97 (72.1 to 73.0 s against
+  74.1 to 74.6 s), play alone 0.95 (0.943 to 0.962). More than a
   third of the
   compiled code's time is now reaching memory through the core's address
   table, where PCSX2's recompiler uses one instruction and a fault ("G6",

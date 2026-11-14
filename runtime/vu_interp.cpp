@@ -8,6 +8,9 @@
 
 #include "ps2n/ops_vu0.h"
 #include "ps2n/vu_mvu.h"
+#include "ps2n/vu_ops.h"
+#include "ps2n/vu_plan.h"
+#include "ps2n/vu_recomp.h"
 
 #include "pcsx2/PrecompiledHeader.h"
 
@@ -24,6 +27,7 @@
 #include <deque>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <smmintrin.h>
@@ -38,6 +42,12 @@ void mVU_XGKICK_(u32 addr);
 void _vuXGKICKTransfermVU(bool flush);
 
 namespace ps2n::vu {
+
+void Xgkick(uint32_t address)
+{
+	mVU_XGKICK_(address);
+}
+
 namespace {
 
 using mvu::Block;
@@ -45,6 +55,27 @@ using mvu::OpInfo;
 using mvu::PipeState;
 
 namespace d = ps2n::ee::vu0::detail;
+
+// ---- plans (ps2n/vu_plan.h) -----------------------------------------------------------------
+
+// A plan, kept once however many blocks of the record have it: its steps,
+// the compiled function a build has for it, if any, and how often it ran.
+struct PlanRecord
+{
+	PlanKey key;
+	std::vector<Step> steps;
+	BlockFn fn = nullptr; // compiled ahead of time; null: the steps are interpreted
+	uint64_t runs = 0;
+	// Where it was first met and what its pairs were then, for a capture.
+	uint32_t at = 0;
+	std::vector<uint64_t> words;
+	bool captured = false; // written to the capture file already
+};
+
+struct PlanKeyHash
+{
+	size_t operator()(const PlanKey& k) const { return static_cast<size_t>(k.a ^ (k.b * 0x9E3779B97F4A7C15ull)); }
+};
 
 constexpr uint32_t kIbit = 1u << 31;
 constexpr uint32_t kEbit = 1u << 30;
@@ -102,8 +133,28 @@ struct TBitEnd
 	EndInfo end;
 };
 
-struct ShadowBlock // microBlock, with what the second pass decided
+// microBlock, with what the second pass decided. It begins with what the
+// block's code is given of it (Link in ps2n/vu_recomp.h, filled in by
+// FinishBlock): the rest is for compiling it and the blocks after it, and for
+// the provider when the program stops there.
+struct ShadowBlock : Link
 {
+	ShadowBlock()
+		: Link{}
+	{
+	}
+
+	bool stop = true; // the run stops at it: it holds something not carried out
+	// Its plan's last step, Leave, for the interpreter: how the program goes
+	// on from it, the opcode of the conditional branch it ends with, what its
+	// link does first.
+	uint8_t leave = 0;
+	uint8_t condOp = 0;
+	uint32_t setup = 0;
+	// The instances the flag registers take when the program stops at this
+	// block ([0]) or ends in it ([1]): status, MAC, clip (getLastFlagInst).
+	uint8_t lastInst[2][3] = {};
+
 	PipeState pState; // the state it was compiled for
 	PipeState pStateEnd; // the state at its end, for an indirect jump
 	Block a; // the first pass
@@ -119,6 +170,7 @@ struct ShadowBlock // microBlock, with what the second pass decided
 	std::unique_ptr<JumpCacheEntry[]> jumpCache;
 	std::string unsupported;
 	std::vector<int8_t> preload; // what mvuPreloadRegisters loads (PreloadOf): VI n, or 16 + VF n
+	PlanRecord* plan = nullptr; // how its pairs are carried out (null with `unsupported`)
 };
 
 class BlockManager // microBlockManager
@@ -175,6 +227,13 @@ public:
 		return b;
 	}
 
+	template <class F>
+	void forEach(F&& f)
+	{
+		for (const std::unique_ptr<ShadowBlock>& b : blocks_)
+			f(*b);
+	}
+
 private:
 	struct Ref
 	{
@@ -205,12 +264,26 @@ struct Vu
 
 	// microProgManager
 	std::vector<std::deque<Program*>> prog; // per pair: the programs started there, most recently found first
+	// What the last search at a start address found (microProgramQuick).
+	// microVU clears all of them at every write into micro memory; here each
+	// says which time round it is of (quickGen), and one of an earlier time
+	// round counts as cleared (QuickAt). `last` and `foundAt` outlive that:
+	// the program found there last, and the number of the last write into
+	// micro memory before it was found (SearchProg).
 	struct Quick
 	{
 		BlockManager* block = nullptr;
 		Program* prog = nullptr;
+		uint64_t gen = 0;
+		Program* last = nullptr;
+		uint64_t foundAt = 0;
 	};
 	std::vector<Quick> quick;
+	uint64_t quickGen = 1;
+	// The writes into micro memory, counted, and for each chunk of micro memory
+	// (kWriteChunk bytes) the number of the last write into it.
+	uint64_t writeGen = 0;
+	std::vector<uint64_t> chunkWrite;
 	Program* cur = nullptr;
 	int cleared = 1;
 	int isSame = -1;
@@ -219,25 +292,21 @@ struct Vu
 	std::vector<std::unique_ptr<Program>> owned;
 	mvu::InfoArray infos;
 	mvu::Settings settings;
+	// The settings a plan is made with, beside those: the VU clamp mode and
+	// the game fixes that change what an instruction gives.
+	d::Clamp clamp = {false, false, false};
+	bool overflowHack = false; // Gamefixes.VUOverflowHack
+	bool addSubHack = false; // Gamefixes.VuAddSubHack
 
-	// microVU's variables
-	uint32_t divFlag = 0;
-	uint32_t VIbackup = 0;
-	uint32_t VIxgkick = 0;
-	uint32_t branch = 0;
-	uint32_t badBranch = 0;
-	uint32_t evilBranch = 0;
-	uint32_t evilevilBranch = 0;
+	// microVU's variables, and what it keeps in host registers while it runs
+	// (ps2n/vu_ops.h).
+	Ctx c;
 	uint32_t totalCycles = 0;
 	int32_t cycles = 0;
 
-	// What microVU keeps in host registers while it runs: four instances of
-	// each flag (the status flag in microVU's layout) and P and Q (xmmPQ:
-	// Q, its other instance, P, its other instance).
-	uint32_t statFlag[4] = {};
-	uint32_t macFlag[4] = {};
-	uint32_t clipFlag[4] = {};
-	uint32_t pq[4] = {};
+	// The plans of the blocks met, each once, by their keys. A plan is not
+	// thrown away with the record: the same code comes back.
+	std::unordered_map<PlanKey, std::unique_ptr<PlanRecord>, PlanKeyHash> plans;
 
 	InterpreterStats stats;
 	std::string unsupported;
@@ -246,6 +315,13 @@ struct Vu
 
 Vu s_vu[2];
 
+// The compiled blocks the host was linked with, by their plans' keys, and
+// whether they are used.
+std::unordered_map<PlanKey, BlockFn, PlanKeyHash> s_compiled[2];
+bool s_useCompiled = true;
+
+constexpr uint32_t kWriteChunk = 128; // sixteen pairs
+
 void ResetVu(Vu& V) // mVUreset
 {
 	V.R = V.index ? &VU1 : &VU0;
@@ -253,6 +329,8 @@ void ResetVu(Vu& V) // mVUreset
 	const uint32_t pairs = V.memSize / 8;
 	V.prog.assign(pairs, {});
 	V.quick.assign(pairs, {});
+	V.writeGen = 0;
+	V.chunkWrite.assign(V.memSize / kWriteChunk, 0);
 	V.owned.clear();
 	V.cur = nullptr;
 	V.cleared = 1;
@@ -261,6 +339,10 @@ void ResetVu(Vu& V) // mVUreset
 	V.lpState = PipeState{};
 	V.R->nextBlockCycles = 0;
 	V.infos.info.assign(pairs, OpInfo{});
+	V.c.R = V.R;
+	V.c.micro = reinterpret_cast<const uint32_t*>(V.R->Micro);
+	V.c.memMask = V.memSize - 8;
+	V.c.index = static_cast<uint32_t>(V.index);
 }
 
 void ClearVu(Vu& V) // mVUclear
@@ -269,9 +351,22 @@ void ClearVu(Vu& V) // mVUclear
 	{
 		V.cleared = 1;
 		V.lpState = PipeState{};
-		for (Vu::Quick& q : V.quick)
-			q = {};
+		V.quickGen++; // every quick reference cleared
 	}
+}
+
+// The quick reference of a start address, cleared if it is from before the
+// last write into micro memory.
+Vu::Quick& QuickAt(Vu& V, uint32_t pair)
+{
+	Vu::Quick& q = V.quick[pair];
+	if (q.gen != V.quickGen) [[unlikely]]
+	{
+		q.block = nullptr;
+		q.prog = nullptr;
+		q.gen = V.quickGen;
+	}
+	return q;
 }
 
 const uint8_t* Micro(const Vu& V) { return V.R->Micro; }
@@ -350,6 +445,26 @@ private:
 	Vu& V_;
 };
 
+// Whether nothing was written, after the write numbered `since`, into the
+// micro memory the program was compiled from, by chunks.
+bool Unwritten(const Vu& V, const Program& prog, uint64_t since)
+{
+	for (const Range& r : prog.ranges)
+	{
+		if (r.end < r.start)
+			return false; // a range left open
+		if (r.end == r.start)
+			continue;
+		const size_t last = std::min(static_cast<size_t>(r.end - 1) / kWriteChunk, V.chunkWrite.size() - 1);
+		for (size_t chunk = static_cast<size_t>(r.start) / kWriteChunk; chunk <= last; chunk++)
+		{
+			if (V.chunkWrite[chunk] > since)
+				return false;
+		}
+	}
+	return true;
+}
+
 bool CmpProg(Vu& V, Program& prog) // mVUcmpProg
 {
 	for (const Range& r : prog.ranges)
@@ -406,39 +521,78 @@ ShadowBlock* BlockFetch(Vu& V, uint32_t startPC, const PipeState& pState, bool f
 	return EntryGet(V, BlocksAt(V, startPC / 8), startPC, pState, fromLp);
 }
 
-ShadowBlock* SearchProg(Vu& V, uint32_t startPC, const PipeState& pState, bool fromLp) // mVUsearchProg
+// mVUsearchProg: the program micro memory holds at the start address
+// (VURegs::start_pc), and its block at `startPC` for the state `pState`.
+//
+// After a write into micro memory microVU has forgotten which program is at
+// each start (ClearVu), and compares the programs recorded for the start with
+// micro memory, the one found last first, until one is equal. Where that one
+// is still the first and nothing was written since into the memory it was
+// compiled from, the comparison can only find it equal: it is not made, and
+// what it would have done is done.
+//
+// `jumpProg`, `jumpBlock`: for an indirect jump, the program its block found
+// here before and the block it found in it. In the same program the search
+// for the block gives that block again (the blocks of a block manager are
+// never taken away, and a search takes the first that fits), so it is not
+// made.
+ShadowBlock* SearchProg(Vu& V, uint32_t startPC, const PipeState& pState, bool fromLp, const Program* jumpProg = nullptr,
+	ShadowBlock* jumpBlock = nullptr)
 {
 	const uint32_t startPair = V.R->start_pc / 8;
-	Vu::Quick& quick = V.quick[startPair];
+	Vu::Quick& quick = QuickAt(V, startPair);
 	std::deque<Program*>& list = V.prog[startPair];
 	if (!quick.prog)
 	{
-		for (auto it = list.begin(); it != list.end(); ++it)
+		Program* found = nullptr;
+		if (quick.last && !list.empty() && list.front() == quick.last && Unwritten(V, *quick.last, quick.foundAt))
 		{
-			if (CmpProg(V, **it))
+			found = quick.last;
+			V.stats.spared++;
+			V.cleared = 0; // as mVUcmpProg leaves them
+			V.cur = found;
+			V.isSame = -1;
+		}
+		else
+		{
+			V.stats.searches++;
+			for (auto it = list.begin(); it != list.end(); ++it)
 			{
-				Program* found = *it;
-				quick.block = found->block[startPC / 8].get();
-				quick.prog = found;
-				list.erase(it);
-				list.push_front(found);
-				if (!quick.block)
-					return BlockFetch(V, startPC, pState, fromLp);
-				return EntryGet(V, *quick.block, startPC, pState, fromLp);
+				V.stats.compares++;
+				if (CmpProg(V, **it))
+				{
+					found = *it;
+					list.erase(it);
+					list.push_front(found);
+					break;
+				}
 			}
 		}
-		V.cleared = 0;
-		V.isSame = 1;
-		V.cur = CreateProg(V, startPair);
-		ShadowBlock* entry = BlockFetch(V, startPC, pState, fromLp);
-		quick.block = V.cur->block[startPC / 8].get();
-		quick.prog = V.cur;
-		list.push_front(V.cur);
-		return entry;
+		if (!found)
+		{
+			V.cleared = 0;
+			V.isSame = 1;
+			V.cur = CreateProg(V, startPair);
+			ShadowBlock* entry = BlockFetch(V, startPC, pState, fromLp);
+			quick.block = V.cur->block[startPC / 8].get();
+			quick.prog = V.cur;
+			quick.last = V.cur;
+			quick.foundAt = V.writeGen;
+			list.push_front(V.cur);
+			return entry;
+		}
+		quick.prog = found;
+		quick.last = found;
+		quick.foundAt = V.writeGen;
 	}
-	V.isSame = -1;
-	V.cur = quick.prog;
-	quick.block = V.cur->block[startPC / 8].get();
+	else
+	{
+		V.isSame = -1;
+		V.cur = quick.prog;
+	}
+	quick.block = quick.prog->block[startPC / 8].get();
+	if (jumpProg && jumpProg == quick.prog)
+		return jumpBlock;
 	if (!quick.block)
 		return BlockFetch(V, startPC, pState, fromLp);
 	return EntryGet(V, *quick.block, startPC, pState, fromLp);
@@ -626,9 +780,11 @@ uint32_t BranchTarget(const Vu& V, uint32_t branchPC, uint32_t lower) // branchA
 	return (((branchPC / 4 + 2) + static_cast<uint32_t>(imm11 * 2)) & mask) * 4;
 }
 
+void PlanBlock(Vu& V, ShadowBlock& b);
+
 // mVUcompile: the first pass (ps2n/vu_mvu.h), then what the second pass
 // does to the record: the ranges, and the blocks a branch leads to.
-ShadowBlock* Compile(Vu& V, uint32_t startPC, const PipeState& pState, bool fromLp)
+ShadowBlock* CompileBlock(Vu& V, uint32_t startPC, const PipeState& pState, bool fromLp)
 {
 	V.stats.compiles++;
 	SetupRange(V, static_cast<int32_t>(startPC), true);
@@ -841,10 +997,35 @@ ShadowBlock* Compile(Vu& V, uint32_t startPC, const PipeState& pState, bool from
 	return b;
 }
 
-// ---- carrying the instructions out (the second pass) ---------------------------------------
-
-constexpr uint32_t kDivI = 0x1040000u;
-constexpr uint32_t kDivD = 0x2080000u;
+// ---- a block's plan: what the second pass decides ---------------------------------------------
+//
+// microVU's second pass generates a block's host code with a register
+// allocator: which host register holds which VI or VF register at each
+// point is decided as the pass goes. Two things about that show in results,
+// so the allocation is followed here, without values, as microVU makes it:
+// the same count of allocations, in the same order.
+//
+// VI registers: inside a block microVU keeps them in host registers, all 32
+// bits of them, and writes the low half back to VURegs at the block's end.
+// What it does to the high half mostly does not show: branches compare 16
+// bits and addresses are masked. Not all of it: FMEQ compares the whole
+// register, ISW and ISWR store the whole of one MFIR sign-extended in place
+// without saying so, and the integer instructions carry the high half on. So
+// a plan has what each host register holds (the steps Vi...), and which VI
+// register is in which is decided as microVU decides it: the least recently
+// used register given up first, the loads at the block's start
+// (mvuPreloadRegisters), the registers a call may change emptied before an
+// XGKICK. A VI register in VURegs always holds its value (the low half of a
+// host register holding it; the steps write both): microVU reads VURegs only
+// for a register no host register holds.
+//
+// VF registers: which XMM register microVU gives each operand matters for
+// one thing. With AVX, PCSX2's emitter swaps the two sources of a
+// commutative instruction (ADDPS, MULPS) when the first is in xmm0 to xmm7
+// and the second in xmm8 to xmm15, for a shorter encoding, and where both
+// sources are NaN x86 gives the first one's. So a step says where the
+// emitter would swap (mode::kSwap), and the values are the VF registers'.
+// xmm15 is P and Q.
 
 // The flag instances a block leaves for the code after it (getLastFlagInst).
 int LastFlagInst(const PipeState& entry, const int* xFlag, int flagType, bool isEbit)
@@ -865,59 +1046,150 @@ void SortFlag(const int* fFlag, int* bFlag, int cycles) // sortFlag
 	}
 }
 
-class Runner
+// What a block's link does (mVUsetupBranch), for its plan's last step: which
+// of the flags' instances are put in a new order and in which
+// (mVUsetupFlags), and whether P and Q are exchanged with their other
+// instances (shufflePQ). The bits are step::Setup's (ps2n/vu_ops.h).
+uint32_t SetupOf(const ShadowBlock& b)
+{
+	const Block& a = b.a;
+	const mvu::FlagCycles& mFC = a.flagCycles;
+	const int* const flags[3] = {mFC.xStatus, mFC.xMac, mFC.xClip};
+	uint32_t setup = 0;
+	for (int k = 0; k < 3; k++)
+	{
+		if (!(a.end.needExactMatch & (1 << k)))
+			continue;
+		int order[4];
+		SortFlag(flags[k], order, mFC.cycles);
+		bool same = true;
+		uint32_t bits = 0;
+		for (int i = 0; i < 4; i++)
+		{
+			bits |= static_cast<uint32_t>(order[i]) << (2 * i);
+			same = same && order[i] == i;
+		}
+		if (!same)
+			setup |= (1u << k) | (bits << (8 + 8 * k));
+	}
+	if (b.linkQ)
+		setup |= 8;
+	if (b.linkP)
+		setup |= 16;
+	return setup;
+}
+
+class Planner
 {
 public:
-	explicit Runner(Vu& V)
+	Planner(const Vu& V, const ShadowBlock& b, std::vector<Step>& out)
 		: V(V)
-		, R(*V.R)
+		, b(b)
+		, out(out)
 		, vu1(V.index != 0)
+		, evil(b.pState.blockType == 2)
+		, ibitHack(V.settings.ibitHack)
+		, clamp(V.clamp)
 	{
 	}
 
-	void Run(uint32_t startPC, uint32_t cycles);
+	// The block's plan, into `out`. False where the block holds something
+	// that is not carried out; `what` says it.
+	bool Run(std::string& what)
+	{
+		const Block& a = b.a;
+		// What changes the code of every block, with the game fix: not followed.
+		if (vu1 && V.settings.xgkickHack)
+			return Fail("the XGKICK game fix", 0, 0, what);
+		// The block's registers in host registers, from none (reset) and the
+		// loads it begins with.
+		ResetGprs();
+		ResetXmms();
+		Preload();
+		for (uint32_t i = 0; i < a.count; i++)
+		{
+			const OpInfo& op = a.ops[i];
+			if (op.uOp.mBit)
+				Emit(StepOp::MFlag);
+			if (!Execute(op, a.words[i], i))
+			{
+				what = what_;
+				return false;
+			}
+			if (op.uOp.tBit && !op.isBdelay && !op.lOp.branch)
+			{
+				// mVUDoTBit: with the T bit enabled, the program ends here.
+				for (size_t k = 0; k < b.tBits.size(); k++)
+				{
+					if (b.tBits[k].pair == i)
+					{
+						Emit(StepOp::TBit, static_cast<uint32_t>(k), vu1 ? 1 : 0);
+						break;
+					}
+				}
+			}
+			if (op.doXGKICK && !op.lOp.isKick)
+				XgkickDelay();
+		}
+		// How the program goes on from the block (the step Leave), and what
+		// its link does first where it has one (mVUsetupBranch).
+		const uint32_t setup = SetupOf(b);
+		switch (b.exit)
+		{
+			case Exit::Branch: Emit(StepOp::Leave, 1, 0, setup); break;
+			case Exit::CondBranch: Emit(StepOp::Leave, 2, a.count >= 2 ? static_cast<uint32_t>(a.words[a.count - 2]) >> 25 : 0, setup); break;
+			case Exit::Jump: Emit(StepOp::Leave, 3, 0, setup); break;
+			case Exit::EvilJump: Emit(StepOp::Leave, 4, 0, setup); break;
+			// The program stops or ends here, which is the provider's; these
+			// three link first all the same.
+			case Exit::MBit:
+			case Exit::CondBranchEBit:
+			case Exit::EvilJumpEBit: Emit(StepOp::Leave, 0, 0, setup); break;
+			default: Emit(StepOp::Leave, 0, 0, 0); break;
+		}
+		return true;
+	}
 
 private:
-	// ---- registers -----------------------------------------------------------------------
-	__m128 VF(uint32_t r) const { return d::Float(_mm_load_si128(reinterpret_cast<const __m128i*>(R.VF[r].UL))); }
-	__m128 ACC() const { return d::Float(_mm_load_si128(reinterpret_cast<const __m128i*>(R.ACC.UL))); }
-	void WriteVF(uint32_t r, uint32_t dest, __m128 v)
+	void Emit(StepOp op, uint32_t o0 = 0, uint32_t o1 = 0, uint32_t o2 = 0, uint32_t o3 = 0, uint32_t o4 = 0)
 	{
-		if (r == 0)
-			return;
-		__m128i* reg = reinterpret_cast<__m128i*>(R.VF[r].UL);
-		_mm_store_si128(reg, d::Merge(_mm_load_si128(reg), d::Int(v), dest));
+		Step s;
+		s.op = op;
+		s.o[0] = o0;
+		s.o[1] = o1;
+		s.o[2] = o2;
+		s.o[3] = o3;
+		s.o[4] = o4;
+		out.push_back(s);
 	}
-	void WriteACC(uint32_t dest, __m128 v)
+
+	bool Fail(const char* reason, uint32_t code, uint32_t pair, std::string& what)
 	{
-		__m128i* reg = reinterpret_cast<__m128i*>(R.ACC.UL);
-		_mm_store_si128(reg, d::Merge(_mm_load_si128(reg), d::Int(v), dest));
+		char text[160];
+		std::snprintf(text, sizeof(text), "VU%d: %s (%08x) at %04x", V.index, reason, code, (b.a.startPC + pair * 8) & (V.memSize - 8));
+		what = text;
+		return false;
 	}
-	uint32_t VI(uint32_t r) const { return R.VI[r & 15].US[0]; }
+	bool Fail(const char* reason, uint32_t code, uint32_t pair) { return Fail(reason, code, pair, what_); }
+
+	// An encoding microVU knows nothing of (mVUunknown): the code it generates
+	// for it is none, so the plan has no step for it. (Its first pass ends the
+	// block after one, unless it is 8000033C, the lower NOP's word.) Counted,
+	// for the report.
+	bool Unknown()
+	{
+		unknown_++;
+		return true;
+	}
 
 	// ---- VI registers in host registers (microRegAlloc's GPR side, microVU_IR.h) -----------
-	//
-	// Inside a block microVU keeps VI registers in host registers, all 32 bits
-	// of them, and writes the low half back to VURegs at the block's end. What
-	// it does to the high half mostly does not show: branches compare 16 bits
-	// and addresses are masked. Not all of it: FMEQ compares the whole register,
-	// ISW and ISWR store the whole of one MFIR sign-extended in place without
-	// saying so, and the integer instructions carry the high half on. So the
-	// interpreter holds what each host register holds, and which VI register
-	// is in which is decided as microVU decides it, from its allocations in the
-	// order its second pass makes them: the least recently used register given
-	// up first, the loads at the block's start (mvuPreloadRegisters), the
-	// registers a call may change emptied before an XGKICK. R.VI always holds
-	// a register's value (the low half of a host register holding it): microVU
-	// reads VURegs only for a register no host register holds.
-	struct HostGpr // microMapGPR, and the register's contents
+	struct HostGpr // microMapGPR
 	{
 		int vi = -1; // VIreg: -1 nothing (a temporary)
 		int count = 0;
 		bool needed = false;
 		bool dirty = false;
 		bool zext = false; // isZeroExtended
-		uint32_t value = 0;
 	};
 	HostGpr gpr_[16];
 	int counter_ = 0;
@@ -929,7 +1201,7 @@ private:
 		counter_ = 0;
 	}
 	// mvuPreloadRegisters, as the block's compile found it (ShadowBlock::preload).
-	void Preload(const ShadowBlock& b)
+	void Preload()
 	{
 		for (const int8_t e : b.preload)
 		{
@@ -986,7 +1258,7 @@ private:
 				continue;
 			if (backup)
 			{
-				V.VIbackup = g.value; // writeVIBackup
+				Emit(StepOp::ViBackup, static_cast<uint32_t>(i)); // writeVIBackup
 				backup = false;
 			}
 			if (g.needed)
@@ -1014,7 +1286,7 @@ private:
 			const int x = FindFreeGpr();
 			WriteBackGpr(x, true);
 			HostGpr& g = gpr_[x];
-			g.value = 0;
+			Emit(StepOp::ViZero, static_cast<uint32_t>(x));
 			g.vi = -1;
 			g.dirty = false;
 			g.count = thisCounter;
@@ -1038,11 +1310,11 @@ private:
 						WriteBackGpr(x, true);
 						if (backup && gpr_[x].vi != write)
 						{
-							gpr_[x].value = VI(write);
-							V.VIbackup = gpr_[x].value;
+							Emit(StepOp::ViLoad, static_cast<uint32_t>(x), static_cast<uint32_t>(write));
+							Emit(StepOp::ViBackup, static_cast<uint32_t>(x));
 							backup = false;
 						}
-						gpr_[x].value = zextIfDirty ? (gpr_[i].value & 0xffff) : gpr_[i].value;
+						Emit(zextIfDirty ? StepOp::ViCopyZ : StepOp::ViCopy, static_cast<uint32_t>(x), static_cast<uint32_t>(i));
 						gpr_[x].zext = zextIfDirty;
 						std::swap(x, i);
 					}
@@ -1055,12 +1327,12 @@ private:
 				}
 				else if (zextIfDirty && !gpr_[i].zext)
 				{
-					gpr_[i].value &= 0xffff;
+					Emit(StepOp::ViZext, static_cast<uint32_t>(i));
 					gpr_[i].zext = true;
 				}
 				gpr_[i].needed = true;
 				if (backup)
-					V.VIbackup = gpr_[i].value;
+					Emit(StepOp::ViBackup, static_cast<uint32_t>(i));
 				return i;
 			}
 		}
@@ -1071,14 +1343,14 @@ private:
 		HostGpr& g = gpr_[x];
 		if (backup && load >= 0 && write > 0 && load != write)
 		{
-			g.value = VI(write);
-			V.VIbackup = g.value;
+			Emit(StepOp::ViLoad, static_cast<uint32_t>(x), static_cast<uint32_t>(write));
+			Emit(StepOp::ViBackup, static_cast<uint32_t>(x));
 			backup = false;
 		}
 		if (load > 0)
-			g.value = VI(load);
+			Emit(StepOp::ViLoad, static_cast<uint32_t>(x), static_cast<uint32_t>(load));
 		else if (load == 0)
-			g.value = 0;
+			Emit(StepOp::ViZero, static_cast<uint32_t>(x));
 		g.vi = load;
 		g.zext = true;
 		if (write >= 0)
@@ -1089,8 +1361,8 @@ private:
 			if (backup)
 			{
 				if (load < 0 && write > 0)
-					g.value = VI(write);
-				V.VIbackup = g.value;
+					Emit(StepOp::ViLoad, static_cast<uint32_t>(x), static_cast<uint32_t>(write));
+				Emit(StepOp::ViBackup, static_cast<uint32_t>(x));
 			}
 		}
 		g.count = thisCounter;
@@ -1098,30 +1370,25 @@ private:
 		return x;
 	}
 	void Done(int i) { gpr_[i].needed = false; } // clearNeeded
-	// moveVIToGPR: a VI register into a temporary, the high half from the low.
-	uint32_t MoveVi(uint32_t vi, bool signExtend = false)
+	// The VI register a host register holds, which a result written to it goes
+	// to as well; 0 for none.
+	uint32_t ViOf(int i) const { return gpr_[i].vi > 0 ? static_cast<uint32_t>(gpr_[i].vi) : 0; }
+	// moveVIToGPR: the host register of a VI register that is only read, for
+	// the step that reads it next; kNone for VI00.
+	uint32_t MoveVi(uint32_t vi)
 	{
 		if (vi == 0)
-			return 0;
+			return kNone;
 		const int s = AllocGpr(static_cast<int>(vi));
-		const uint32_t v = gpr_[s].value;
 		Done(s);
-		return signExtend ? static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(v))) : (v & 0xffff);
-	}
-	// The result of an instruction in the host register it was given: the VI
-	// register's value is its low half.
-	void Put(int i, uint32_t value)
-	{
-		gpr_[i].value = value;
-		if (gpr_[i].vi > 0)
-			R.VI[gpr_[i].vi].US[0] = static_cast<u16>(value);
+		return static_cast<uint32_t>(s);
 	}
 	// The VI register written: a host register for it alone (allocGPR(-1, vi)),
-	// given the value.
-	void WriteVi(const OpInfo& op, uint32_t vi, uint32_t value)
+	// given the value on its way (t0).
+	void WriteVi(const OpInfo& op, uint32_t vi)
 	{
 		const int t = AllocGpr(-1, static_cast<int>(vi), op.lOp.backupVI);
-		Put(t, value);
+		Emit(StepOp::ViSetT, static_cast<uint32_t>(t), ViOf(t));
 		Done(t);
 	}
 	void FlushCallerSavedGprs() // flushCallerSavedRegisters, its VI half
@@ -1137,14 +1404,6 @@ private:
 	}
 
 	// ---- VF registers in host registers (microRegAlloc's XMM side) --------------------------
-	//
-	// Which XMM register microVU gives each operand matters for one thing:
-	// with AVX, PCSX2's emitter swaps the two sources of a commutative
-	// instruction (ADDPS, MULPS) when the first is in xmm0 to xmm7 and the
-	// second in xmm8 to xmm15, for a shorter encoding, and where both sources
-	// are NaN x86 gives the first one's. So the allocation is followed as the
-	// VI registers' is, in the same order (the two share microVU's count),
-	// without the values: the values are the VF registers'. xmm15 is P and Q.
 	struct HostXmm // microMapXMM
 	{
 		int vf = -1; // VFreg: -1 a temporary, 0 VF00 (or a register written as it), 32 ACC
@@ -1314,9 +1573,10 @@ private:
 		}
 	}
 	// Whether the emitter swaps the sources of a commutative instruction on
-	// these two registers (EmitSIMDImpl: a two-byte VEX prefix needs the
-	// second source in xmm0 to xmm7, the first may be any).
-	static bool Swapped(int first, int second) { return UseAvx() && second >= 8 && first < 8; }
+	// these two registers, when it writes AVX (EmitSIMDImpl: a two-byte VEX
+	// prefix needs the second source in xmm0 to xmm7, the first may be any).
+	static bool Swapped(int first, int second) { return second >= 8 && first < 8; }
+
 	// The XMM allocations of the fourth table's lower instructions that have no
 	// VI register, in microVU's order (microVU_Lower.inl); the others make
 	// theirs among their VI allocations. ESUM's addition is a commutative one.
@@ -1435,110 +1695,36 @@ private:
 		if (t2 >= 0)
 			DoneXmm(t2);
 	}
-	d::Clamp ClampSettings() const
-	{
-		const auto& rec = EmuConfig.Cpu.Recompiler;
-		return vu1 ? d::Clamp{rec.vu1Overflow, rec.vu1ExtraOverflow, rec.vu1SignOverflow}
-				   : d::Clamp{rec.vu0Overflow, rec.vu0ExtraOverflow, rec.vu0SignOverflow};
-	}
-	uint32_t Live(uint32_t pc) const { return MicroWords(V)[pc / 4]; } // ptr32[&curI] as the code runs
 
-	// ---- flags (mVUupdateFlags, mVUdivSet) -------------------------------------------------
-	void UpdateFlags(const OpInfo& op, __m128 result, uint32_t dest, bool modXYZW = true)
+	// ---- what the settings and the analysis decided, for a step's operands -------------------
+	uint32_t ClampBits() const
 	{
-		static constexpr uint16_t flipMask[16] = {0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15};
-		if (!op.sFlag.doFlag && !op.mFlag.doFlag)
-			return;
-		const bool single = (dest == 8 || dest == 4 || dest == 2 || dest == 1) && modXYZW;
-		__m128 t2 = result;
-		if (op.mFlag.doFlag && !single)
-			t2 = d::Float(_mm_shuffle_epi32(d::Int(result), 0x1B));
-		uint32_t sReg = 0;
+		return (clamp.overflow ? mode::kOverflow : 0) | (clamp.extra ? mode::kExtra : 0) | (clamp.sign ? mode::kSign : 0);
+	}
+	// Where an instruction's flags go (mVUupdateFlags); what it does not look
+	// at is left out, so that the same code gives the same steps.
+	uint32_t FlagBits(const OpInfo& op) const
+	{
+		uint32_t fl = 0;
 		if (op.sFlag.doFlag)
 		{
-			sReg = V.statFlag[op.sFlag.lastWrite];
-			if (op.sFlag.doNonSticky)
-				sReg &= 0xfffc00ffu;
-		}
-		// One component: microVU computes it in the first lane and takes its flags
-		// there; here it is in its own lane.
-		const int shiftDown = single ? ((dest & 8) ? 0 : ((dest & 4) ? 1 : ((dest & 2) ? 2 : 3))) : 0;
-		const uint32_t andXYZW = single ? 1u : (op.mFlag.doFlag ? dest : flipMask[dest]);
-		uint32_t mReg = (static_cast<uint32_t>(_mm_movemask_ps(t2)) >> shiftDown) & andXYZW;
-		mReg <<= 4;
-		mReg |= (static_cast<uint32_t>(_mm_movemask_ps(d::CMPEQPS(_mm_setzero_ps(), t2))) >> shiftDown) & andXYZW;
-		if (op.sFlag.doFlag && EmuConfig.Gamefixes.VUOverflowHack)
-		{
-			const __m128 mag = _mm_and_ps(t2, d::All(0x7fffffffu));
-			const uint32_t big = (static_cast<uint32_t>(_mm_movemask_ps(d::CMPNLTPS(mag, d::All(0x7f7fffffu)))) >> shiftDown) & andXYZW;
-			if (big)
-			{
-				sReg |= 0x820000u;
-				if (op.mFlag.doFlag)
-					mReg |= big << 12;
-			}
+			fl |= flag::kStatus | (op.sFlag.doNonSticky ? flag::kNonSticky : 0) |
+				  (static_cast<uint32_t>(op.sFlag.lastWrite) << flag::kStatusLastShift) |
+				  (static_cast<uint32_t>(op.sFlag.write) << flag::kStatusWriteShift) | (V.overflowHack ? flag::kOverflowHack : 0);
 		}
 		if (op.mFlag.doFlag)
-		{
-			if (single && !(dest & 1))
-				mReg <<= (dest & 8) ? 3 : ((dest & 4) ? 2 : 1);
-			V.macFlag[op.mFlag.write] = mReg;
-		}
-		if (op.sFlag.doFlag)
-		{
-			mReg &= 0xff;
-			sReg |= mReg;
-			if (op.sFlag.doNonSticky)
-				sReg |= mReg << 8;
-			V.statFlag[op.sFlag.write] = sReg;
-		}
+			fl |= flag::kMac | (static_cast<uint32_t>(op.mFlag.write) << flag::kMacWriteShift);
+		return fl;
 	}
-
-	void DivSet(const OpInfo& op) // mVUdivSet
+	uint32_t FmacMode(const OpInfo& op, d::Second k, uint32_t clampOps) const
 	{
-		if (!op.doDivFlag)
-			return;
-		if (!op.sFlag.doFlag)
-			V.statFlag[op.sFlag.write] = V.statFlag[op.sFlag.lastWrite];
-		V.statFlag[op.sFlag.write] = (V.statFlag[op.sFlag.write] & 0xfff3ffffu) | V.divFlag;
+		uint32_t m = (static_cast<uint32_t>(k) << mode::kSecondShift) | (clampOps << mode::kClampShift) | ClampBits();
+		if (k == d::Second::Q && op.readQ)
+			m |= mode::kReadQ;
+		return m;
 	}
 
 	// ---- the upper instructions (microVU_Upper.inl) -----------------------------------------
-	enum class Second
-	{
-		Vector,
-		Bc,
-		I,
-		Q,
-	};
-	struct Operand
-	{
-		__m128 v;
-		bool clampable;
-	};
-	Operand Fetch(const OpInfo& op, Second k, uint32_t ft, uint32_t bc) const
-	{
-		switch (k)
-		{
-			case Second::Vector: return {VF(ft), ft != 0};
-			case Second::Bc: return {d::All(R.VF[ft].UL[bc]), true};
-			// setupFtReg loads I as allocReg(33, 0, xyzw): a register written as
-			// VF00's (VFreg 0, isZero false), which checkVFClamp clamps.
-			case Second::I: return {d::All(R.VI[REG_I].UL), true};
-			case Second::Q: break;
-		}
-		return {d::All(V.pq[op.readQ]), true};
-	}
-
-	enum class Kind
-	{
-		Add,
-		Sub,
-		Mul,
-		Max,
-		Min,
-		AddI,
-	};
 
 	// setupFtReg's allocations: Ft's host register, and tempFt's (-1: none).
 	struct FtRegs
@@ -1546,15 +1732,15 @@ private:
 		int ft;
 		int tempFt;
 	};
-	FtRegs SetupFt(const OpInfo& op, Second k, uint32_t clamp, uint32_t dest, uint32_t ft)
+	FtRegs SetupFt(const OpInfo& op, d::Second k, uint32_t clampOps, uint32_t dest, uint32_t ft)
 	{
-		const d::Clamp c = ClampSettings();
+		const d::Clamp c = clamp;
 		const bool single = d::Single(dest);
 		switch (k)
 		{
-			case Second::Vector:
+			case d::Second::Vector:
 			{
-				const bool willClamp = c.extra || ((clamp & d::cFt) && !c.extra && (c.overflow || c.sign));
+				const bool willClamp = c.extra || ((clampOps & d::cFt) && !c.extra && (c.overflow || c.sign));
 				if (single && dest != 8) // _XYZW_SS2
 				{
 					const int r = AllocXmm(static_cast<int>(ft), 0, static_cast<int>(dest));
@@ -1567,19 +1753,19 @@ private:
 				}
 				return {AllocXmm(static_cast<int>(ft)), -1};
 			}
-			case Second::Bc:
+			case d::Second::Bc:
 			{
 				const int whole = AllocXmm(static_cast<int>(ft));
 				const int r = AllocXmm();
 				DoneXmm(whole);
 				return {r, r};
 			}
-			case Second::I:
+			case d::Second::I:
 			{
 				const int r = AllocXmm(33, 0, static_cast<int>(dest));
 				return {r, r};
 			}
-			case Second::Q:
+			case d::Second::Q:
 				break;
 		}
 		if (!c.extra && single && !op.readQ)
@@ -1597,25 +1783,24 @@ private:
 			DoneXmm(t2);
 	}
 
-	void FMACa(const OpInfo& op, Kind kind, Second k, bool toAcc, uint32_t clamp, uint32_t code)
+	void FMACa(const OpInfo& op, d::Kind kind, d::Second k, bool toAcc, uint32_t clampOps, uint32_t code)
 	{
-		const uint32_t dest = (code >> 21) & 0xF, fd = (code >> 6) & 31, fs = (code >> 11) & 31, ft = (code >> 16) & 31, bc = code & 3;
+		const uint32_t dest = (code >> 21) & 0xF, fd = (code >> 6) & 31, fs = (code >> 11) & 31, ft = (code >> 16) & 31;
 		const bool single = d::Single(dest);
-		if (kind == Kind::Sub && k == Second::Vector && fs == ft) // doSafeSub
+		const bool minMax = kind == d::Kind::Max || kind == d::Kind::Min;
+		uint32_t m = FmacMode(op, k, clampOps) | static_cast<uint32_t>(kind) | (toAcc ? mode::kToAcc : 0);
+		if (kind == d::Kind::AddI && single && V.addSubHack)
+			m |= mode::kAddSubHack;
+		if (kind == d::Kind::Sub && k == d::Second::Vector && fs == ft) // doSafeSub
 		{
 			const int r = AllocXmm(-1, toAcc ? 32 : static_cast<int>(fd), static_cast<int>(dest));
 			FlagTemps(op, dest, false, false);
 			DoneXmm(r);
-			const __m128 zero = _mm_setzero_ps();
-			if (toAcc)
-				WriteACC(dest, zero);
-			else
-				WriteVF(fd, dest, zero);
-			UpdateFlags(op, zero, dest);
+			Emit(StepOp::FMACa, code, m, FlagBits(op));
 			return;
 		}
 		// The host registers, as mVU_FMACa allocates them.
-		const FtRegs f = SetupFt(op, k, clamp, dest, ft);
+		const FtRegs f = SetupFt(op, k, clampOps, dest, ft);
 		int sReg, accReg = -1;
 		if (toAcc)
 		{
@@ -1626,57 +1811,30 @@ private:
 		{
 			sReg = AllocXmm(static_cast<int>(fs), static_cast<int>(fd), static_cast<int>(dest));
 		}
-		if (kind == Kind::Max || kind == Kind::Min)
+		if (minMax)
 			MinMaxTemps(single);
-		const bool swap = !single && (kind == Kind::Add || kind == Kind::Mul || kind == Kind::AddI) && Swapped(sReg, f.ft);
+		const bool swap = !single && (kind == d::Kind::Add || kind == d::Kind::Mul || kind == d::Kind::AddI) && Swapped(sReg, f.ft);
 		if (toAcc)
 		{
 			FlagTemps(op, dest, true, f.tempFt >= 0);
 			DoneXmm(accReg);
 		}
-		else if (kind != Kind::Max && kind != Kind::Min)
+		else if (!minMax)
 		{
 			FlagTemps(op, dest, f.tempFt >= 0, false);
 		}
 		DoneXmm(sReg);
 		DoneXmm(f.ft);
-
-		const d::Clamp c = ClampSettings();
-		Operand t = Fetch(op, k, ft, bc);
-		__m128 s = VF(fs);
-		const bool sClampable = fs != 0;
-		if (clamp & d::cFt)
-			t.v = d::Clamp2(t.v, c, t.clampable, false);
-		if (clamp & d::cFs)
-			s = d::Clamp2(s, c, sClampable, false);
-		__m128 r;
-		switch (kind)
-		{
-			case Kind::Add: r = d::Compute(d::Arith::Add, s, sClampable, t.v, t.clampable, c, swap); break;
-			case Kind::Sub: r = d::Compute(d::Arith::Sub, s, sClampable, t.v, t.clampable, c); break;
-			case Kind::Mul: r = d::Compute(d::Arith::Mul, s, sClampable, t.v, t.clampable, c, swap); break;
-			case Kind::Max: r = d::MinMax(s, t.v, false); break;
-			case Kind::Min: r = d::MinMax(s, t.v, true); break;
-			default:
-				if (single && EmuConfig.Gamefixes.VuAddSubHack) [[unlikely]]
-					r = d::TriAceAdd(s, t.v, dest);
-				else
-					r = d::Compute(d::Arith::Add, s, sClampable, t.v, t.clampable, c, swap);
-				break;
-		}
-		if (toAcc)
-			WriteACC(dest, r);
-		else
-			WriteVF(fd, dest, r);
-		if (kind != Kind::Max && kind != Kind::Min)
-			UpdateFlags(op, r, dest);
+		if (swap)
+			m |= mode::kSwap;
+		Emit(StepOp::FMACa, code, m, minMax ? 0 : FlagBits(op));
 	}
 
-	void FMACb(const OpInfo& op, bool subtract, Second k, uint32_t clamp, uint32_t code) // MADDA, MSUBA
+	void FMACb(const OpInfo& op, bool subtract, d::Second k, uint32_t clampOps, uint32_t code) // MADDA, MSUBA
 	{
-		const uint32_t dest = (code >> 21) & 0xF, fs = (code >> 11) & 31, ft = (code >> 16) & 31, bc = code & 3;
+		const uint32_t dest = (code >> 21) & 0xF, fs = (code >> 11) & 31, ft = (code >> 16) & 31;
 		const bool single = d::Single(dest);
-		const FtRegs f = SetupFt(op, k, clamp, dest, ft);
+		const FtRegs f = SetupFt(op, k, clampOps, dest, ft);
 		const int sReg = AllocXmm(static_cast<int>(fs), 0, static_cast<int>(dest));
 		const int accReg = AllocXmm(32, 32, 0xf, false);
 		const bool swapMul = !single && Swapped(sReg, f.ft);
@@ -1696,26 +1854,15 @@ private:
 		DoneXmm(accReg);
 		DoneXmm(sReg);
 		DoneXmm(f.ft);
-
-		const d::Clamp c = ClampSettings();
-		Operand t = Fetch(op, k, ft, bc);
-		__m128 s = VF(fs);
-		const bool sClampable = fs != 0;
-		if (clamp & d::cFt)
-			t.v = d::Clamp2(t.v, c, t.clampable, false);
-		if (clamp & d::cFs)
-			s = d::Clamp2(s, c, sClampable, false);
-		const __m128 product = d::Compute(d::Arith::Mul, s, sClampable, t.v, t.clampable, c, swapMul);
-		const __m128 r = d::Compute(subtract ? d::Arith::Sub : d::Arith::Add, ACC(), true, product, sClampable, c, swapAdd);
-		WriteACC(dest, r);
-		UpdateFlags(op, r, dest);
+		Emit(StepOp::FMACb, code,
+			FmacMode(op, k, clampOps) | (subtract ? mode::kSubtract : 0) | (swapMul ? mode::kSwap : 0) | (swapAdd ? mode::kSwapAdd : 0), FlagBits(op));
 	}
 
-	void FMACc(const OpInfo& op, Second k, uint32_t clamp, uint32_t code) // MADD
+	void FMACc(const OpInfo& op, d::Second k, uint32_t clampOps, uint32_t code) // MADD
 	{
-		const uint32_t dest = (code >> 21) & 0xF, fd = (code >> 6) & 31, fs = (code >> 11) & 31, ft = (code >> 16) & 31, bc = code & 3;
+		const uint32_t dest = (code >> 21) & 0xF, fd = (code >> 6) & 31, fs = (code >> 11) & 31, ft = (code >> 16) & 31;
 		const bool single = d::Single(dest);
-		const FtRegs f = SetupFt(op, k, clamp, dest, ft);
+		const FtRegs f = SetupFt(op, k, clampOps, dest, ft);
 		const int accReg = AllocXmm(32);
 		const int sReg = AllocXmm(static_cast<int>(fs), static_cast<int>(fd), static_cast<int>(dest));
 		const bool swapMul = !single && Swapped(sReg, f.ft);
@@ -1724,29 +1871,14 @@ private:
 		DoneXmm(sReg);
 		DoneXmm(f.ft);
 		DoneXmm(accReg);
-
-		const d::Clamp c = ClampSettings();
-		Operand t = Fetch(op, k, ft, bc);
-		__m128 acc = ACC();
-		__m128 s = VF(fs);
-		const bool sClampable = fs != 0;
-		if (clamp & d::cFt)
-			t.v = d::Clamp2(t.v, c, t.clampable, false);
-		if (clamp & d::cFs)
-			s = d::Clamp2(s, c, sClampable, false);
-		if (clamp & d::cACC)
-			acc = d::Clamp2(acc, c, true, false);
-		const __m128 product = d::Compute(d::Arith::Mul, s, sClampable, t.v, t.clampable, c, swapMul);
-		const __m128 r = d::Compute(d::Arith::Add, product, sClampable, acc, true, c, swapAdd);
-		WriteVF(fd, dest, r);
-		UpdateFlags(op, r, dest);
+		Emit(StepOp::FMACc, code, FmacMode(op, k, clampOps) | (swapMul ? mode::kSwap : 0) | (swapAdd ? mode::kSwapAdd : 0), FlagBits(op));
 	}
 
-	void FMACd(const OpInfo& op, Second k, uint32_t clamp, uint32_t code) // MSUB
+	void FMACd(const OpInfo& op, d::Second k, uint32_t clampOps, uint32_t code) // MSUB
 	{
-		const uint32_t dest = (code >> 21) & 0xF, fd = (code >> 6) & 31, fs = (code >> 11) & 31, ft = (code >> 16) & 31, bc = code & 3;
+		const uint32_t dest = (code >> 21) & 0xF, fd = (code >> 6) & 31, fs = (code >> 11) & 31, ft = (code >> 16) & 31;
 		const bool single = d::Single(dest);
-		const FtRegs f = SetupFt(op, k, clamp, dest, ft);
+		const FtRegs f = SetupFt(op, k, clampOps, dest, ft);
 		const int sReg = AllocXmm(static_cast<int>(fs), 0, static_cast<int>(dest));
 		const int dReg = AllocXmm(32, static_cast<int>(fd), static_cast<int>(dest));
 		const bool swapMul = !single && Swapped(sReg, f.ft);
@@ -1754,244 +1886,75 @@ private:
 		DoneXmm(dReg);
 		DoneXmm(f.ft);
 		DoneXmm(sReg);
-
-		const d::Clamp c = ClampSettings();
-		Operand t = Fetch(op, k, ft, bc);
-		__m128 s = VF(fs);
-		__m128 acc = ACC();
-		const bool sClampable = fs != 0;
-		if (clamp & d::cFt)
-			t.v = d::Clamp2(t.v, c, t.clampable, false);
-		if (clamp & d::cFs)
-			s = d::Clamp2(s, c, sClampable, false);
-		if (clamp & d::cACC)
-			acc = d::Clamp2(acc, c, true, false);
-		const __m128 product = d::Compute(d::Arith::Mul, s, sClampable, t.v, t.clampable, c, swapMul);
-		const __m128 r = d::Compute(d::Arith::Sub, acc, true, product, sClampable, c);
-		WriteVF(fd, dest, r);
-		UpdateFlags(op, r, dest);
+		Emit(StepOp::FMACd, code, FmacMode(op, k, clampOps) | (swapMul ? mode::kSwap : 0), FlagBits(op));
 	}
 
-	// Whether a conditional branch with this word goes, its value compared as
-	// 16 bits (condBranch's CMP of mVU.branch).
-	static bool Taken(uint32_t lower, uint32_t value)
-	{
-		const int16_t v = static_cast<int16_t>(value);
-		switch (lower >> 25)
-		{
-			case 0x28: return v == 0; // IBEQ
-			case 0x29: return v != 0; // IBNE
-			case 0x2C: return v < 0; // IBLTZ
-			case 0x2D: return v > 0; // IBGTZ
-			case 0x2E: return v <= 0; // IBLEZ
-			case 0x2F: return v >= 0; // IBGEZ
-		}
-		return false;
-	}
-	// A block of one pair, run after a branch whose delay slot held another
-	// (isEvilBlock).
-	bool EvilBlock() const { return block_ && block_->pState.blockType == 2; }
-	const ShadowBlock* block_ = nullptr;
+	bool Upper(const OpInfo& op, uint32_t code, uint32_t pair);
+	bool Lower(const OpInfo& op, uint32_t code, uint32_t pair);
+	bool LowerT3(const OpInfo& op, uint32_t code, uint32_t pair, int table);
+	bool Execute(const OpInfo& op, uint64_t words, uint32_t pair);
 
-	bool Upper(const OpInfo& op, uint32_t code, uint32_t pc);
-	bool Lower(const OpInfo& op, uint32_t code, uint32_t pc);
-	bool LowerT3(const OpInfo& op, uint32_t code, uint32_t pc, int table);
-	bool Execute(const OpInfo& op, uint64_t words, uint32_t pc);
-	void Ibit(uint32_t code, uint32_t pc);
-
-	bool Fail(const char* what, uint32_t code, uint32_t pc)
+	void DivSet(const OpInfo& op) // mVUdivSet
 	{
-		if (V.unsupported.empty())
-		{
-			char text[160];
-			std::snprintf(text, sizeof(text), "VU%d: %s (%08x) at %04x", V.index, what, code, pc);
-			V.unsupported = text;
-		}
-		return false;
+		if (!op.doDivFlag)
+			return;
+		Emit(StepOp::DivSet, op.sFlag.write, op.sFlag.lastWrite, op.sFlag.doFlag ? 0 : 1);
 	}
 
-	// ---- the ends of blocks and programs (microVU_Branch.inl) --------------------------------
-	void SetupFlags(const ShadowBlock& b)
+	// I, from the lower word of an I-bit pair (doIbit).
+	void Ibit(uint32_t code, uint32_t pair)
 	{
-		const mvu::FlagCycles& mFC = b.a.flagCycles;
-		const uint8_t exact = b.a.end.needExactMatch;
-		if (exact & 1)
+		if (ibitHack)
 		{
-			int bStatus[4];
-			SortFlag(mFC.xStatus, bStatus, mFC.cycles);
-			const uint32_t s[4] = {V.statFlag[0], V.statFlag[1], V.statFlag[2], V.statFlag[3]};
-			for (int i = 0; i < 4; i++)
-				V.statFlag[i] = s[bStatus[i]];
+			Emit(StepOp::IbitLive, pair);
+			return;
 		}
-		if (exact & 2)
-		{
-			int bMac[4];
-			SortFlag(mFC.xMac, bMac, mFC.cycles);
-			const uint32_t m[4] = {V.macFlag[0], V.macFlag[1], V.macFlag[2], V.macFlag[3]};
-			for (int i = 0; i < 4; i++)
-				V.macFlag[i] = m[bMac[i]];
-		}
-		if (exact & 4)
-		{
-			int bClip[4];
-			SortFlag(mFC.xClip, bClip, mFC.cycles);
-			const uint32_t cl[4] = {V.clipFlag[0], V.clipFlag[1], V.clipFlag[2], V.clipFlag[3]};
-			for (int i = 0; i < 4; i++)
-				V.clipFlag[i] = cl[bClip[i]];
-		}
-	}
-
-	void SetupBranch(const ShadowBlock& b) // mVUsetupBranch
-	{
-		SetupFlags(b);
-		if (b.linkP || b.linkQ)
-		{
-			if (b.linkQ)
-				std::swap(V.pq[0], V.pq[1]);
-			if (b.linkP)
-				std::swap(V.pq[2], V.pq[3]);
-		}
-	}
-
-	// mVUendProgram; isEbit: 0 the program pauses, 1 or 2 it ends. `e`: what
-	// the end was compiled with, when not the block's own end (mVUDTendProgram).
-	void EndProgram(const ShadowBlock& b, int isEbit, uint32_t tpc, const EndInfo* e = nullptr)
-	{
-		if (!e)
-			e = &b.end;
-		const bool ebit = isEbit != 0;
-		const mvu::FlagCycles& mFC = b.a.flagCycles;
-		const int fStatus = LastFlagInst(b.pState, mFC.xStatus, 0, ebit);
-		const int fMac = LastFlagInst(b.pState, mFC.xMac, 1, ebit);
-		const int fClip = LastFlagInst(b.pState, mFC.xClip, 2, ebit);
-		int qInst = 0, pInst = 0;
-		if (ebit)
-		{
-			qInst = e->qInst;
-			pInst = e->pInst;
-			if (e->doDivFlag)
-				V.statFlag[fStatus] = (V.statFlag[fStatus] & 0xfff3ffffu) | V.divFlag;
-			if (e->doXGKICK)
-				XgkickDelay();
-			if (vu1 && EmuConfig.Gamefixes.XgKickHack)
-				Fail("the XGKICK game fix", 0, tpc);
-			if (!V.cleared)
-				V.lpState = PipeState{}; // mVU0clearlpStateJIT, mVU1clearlpStateJIT
-		}
-		// P and Q
-		R.VI[REG_Q].UL = V.pq[qInst ? 1 : 0];
-		R.pending_q = V.pq[qInst ? 0 : 1];
-		if (vu1)
-		{
-			R.VI[REG_P].UL = V.pq[pInst ? 3 : 2];
-			R.pending_p = V.pq[pInst ? 2 : 3];
-		}
-		// The flags
-		R.VI[REG_STATUS_FLAG].UL = d::Normalize(V.statFlag[fStatus]);
-		R.VI[REG_MAC_FLAG].UL = V.macFlag[fMac] & 0xffff;
-		R.VI[REG_CLIP_FLAG].UL = V.clipFlag[fClip];
-		if (!ebit)
-		{
-			std::memcpy(R.micro_macflags, V.macFlag, sizeof(V.macFlag));
-			std::memcpy(R.micro_clipflags, V.clipFlag, sizeof(V.clipFlag));
-			std::memcpy(R.micro_statusflags, V.statFlag, sizeof(V.statFlag));
-		}
-		else
-		{
-			const uint32_t clip = R.VI[REG_CLIP_FLAG].UL, mac = R.VI[REG_MAC_FLAG].UL, status = V.statFlag[fStatus];
-			for (int i = 0; i < 4; i++)
-			{
-				R.micro_clipflags[i] = clip;
-				R.micro_macflags[i] = mac;
-				R.micro_statusflags[i] = status;
-			}
-		}
-		if (ebit && (EmuConfig.Gamefixes.VUSyncHack || EmuConfig.Gamefixes.FullVU0SyncHack))
-			R.nextBlockCycles = 0;
-		R.VI[REG_TPC].UL = tpc;
-		if (ebit)
-			VU0.VI[REG_VPU_STAT].UL &= vu1 ? ~0x100u : ~0x001u;
+		uint32_t i = code;
+		if (clamp.overflow && (i & 0x7fffffffu) >= 0x7f800000u)
+			i = (0x80000000u & i) | 0x7f7fffffu;
+		Emit(StepOp::IbitConst, i);
 	}
 
 	void XgkickDelay() // mVU_XGKICK_DELAY
 	{
 		FlushCallerSavedXmms();
 		FlushCallerSavedGprs();
-		mVU_XGKICK_(V.VIxgkick);
+		Emit(StepOp::Xgkick);
 	}
 
-	// mVUcompileJIT: an indirect jump's target, as the start of a program of
-	// its own, through the jump cache of the block it leaves.
-	ShadowBlock* JumpTo(ShadowBlock* from, uint32_t target)
+	// The address of a quadword: an address register and the instruction's
+	// immediate, which with the I-bit game fix is read from micro memory as the
+	// code runs.
+	void EaOf(uint32_t reg, uint32_t code, uint32_t pair)
 	{
-		V.stats.jumps++;
-		R.start_pc = target;
-		JumpCacheEntry& jc = from->jumpCache[target / 8];
-		if (jc.prog && jc.prog == V.quick[target / 8].prog)
-			return jc.block;
-		ShadowBlock* to = SearchProg(V, target, from->pStateEnd, false);
-		jc.prog = V.quick[target / 8].prog;
-		jc.block = to;
-		return to;
+		const uint32_t h = MoveVi(reg);
+		if (ibitHack)
+			Emit(StepOp::Ea, h, vu1 ? 1 : 0, 1, 0, pair);
+		else
+			Emit(StepOp::Ea, h, vu1 ? 1 : 0, 0, step::Imm11(code), 0);
 	}
 
-	// ---- the EFU's arithmetic (microVU_Lower.inl) --------------------------------------------
-	static __m128 DPPS71(__m128 a)
-	{
-		__asm__("dpps $0x71, %0, %0" : "+x"(a));
-		return a;
-	}
-	__m128 SumXYZ(uint32_t reg) const { return DPPS71(VF(reg)); } // mVU_sumXYZ
-
-	// 1 / x: one loaded into its own register, then SSE_DIVSS.
-	__m128 Rcp(__m128 x) const { return d::Compute(d::Arith::Div, d::Scalar(0x3f800000u), true, x, true, ClampSettings()); }
-
-	// mVU_EATAN_: the series of `t` in odd powers, plus pi / 4.
-	__m128 Atan(__m128 t) const
-	{
-		static constexpr uint32_t kT[7] = {0xbeaaa61cu, 0x3e4c40a6u, 0xbe0e6c63u, 0x3dc577dfu, 0xbd6501c4u, 0x3cb31652u, 0xbb84d7e7u};
-		const d::Clamp c = ClampSettings();
-		__m128 pq = d::MULPS(t, d::Scalar(0x3f7ffff5u)); // T1
-		__m128 t2 = t;
-		for (uint32_t k : kT)
-		{
-			t2 = d::Compute(d::Arith::Mul, t2, true, t, true, c);
-			t2 = d::Compute(d::Arith::Mul, t2, true, t, true, c);
-			const __m128 t1 = d::MULPS(t2, d::Scalar(k));
-			pq = d::Compute(d::Arith::Add, pq, true, t1, true, c);
-		}
-		return d::ADDSS(pq, d::Scalar(0x3f490fdbu)); // pi / 4
-	}
-
-	Vu& V;
-	VURegs& R;
+	const Vu& V;
+	const ShadowBlock& b;
+	std::vector<Step>& out;
 	const bool vu1;
+	const bool evil; // a block of one pair, run after a branch whose delay slot held another (isEvilBlock)
+	const bool ibitHack;
+	const d::Clamp clamp;
+	std::string what_;
+	uint32_t unknown_ = 0;
+
+public:
+	uint32_t unknown() const { return unknown_; }
 };
 
-// I, from the lower word of an I-bit pair (doIbit).
-void Runner::Ibit(uint32_t code, uint32_t pc)
-{
-	if (EmuConfig.Gamefixes.IbitHack)
-	{
-		R.VI[REG_I].UL = Live(pc);
-	}
-	else
-	{
-		uint32_t i = code;
-		if (vu1 ? EmuConfig.Cpu.Recompiler.vu1Overflow : EmuConfig.Cpu.Recompiler.vu0Overflow)
-		{
-			if ((i & 0x7fffffffu) >= 0x7f800000u)
-				i = (0x80000000u & i) | 0x7f7fffffu;
-		}
-		R.VI[REG_I].UL = i;
-	}
-}
-
-bool Runner::Upper(const OpInfo& op, uint32_t code, uint32_t pc)
+bool Planner::Upper(const OpInfo& op, uint32_t code, uint32_t pair)
 {
 	using d::cACC;
 	using d::cFs;
 	using d::cFt;
+	using K = d::Kind;
+	using S = d::Second;
 	const uint32_t dest = (code >> 21) & 0xF;
 	const bool ps = dest == 0xF;
 	const uint32_t op6 = code & 0x3f;
@@ -2001,50 +1964,50 @@ bool Runner::Upper(const OpInfo& op, uint32_t code, uint32_t pc)
 		const uint32_t col = op6 & 3;
 		switch (op6 >> 2)
 		{
-			case 0x0: FMACa(op, Kind::Add, Second::Bc, false, 0, code); return true; // ADDbc
-			case 0x1: FMACa(op, Kind::Sub, Second::Bc, false, ps ? (cFs | cFt) : 0, code); return true; // SUBbc
-			case 0x2: FMACc(op, Second::Bc, cFs, code); return true; // MADDbc (micro mode: MADDw too)
-			case 0x3: FMACd(op, Second::Bc, 0, code); return true; // MSUBbc
-			case 0x4: FMACa(op, Kind::Max, Second::Bc, false, 0, code); return true; // MAXbc
-			case 0x5: FMACa(op, Kind::Min, Second::Bc, false, 0, code); return true; // MINIbc
-			case 0x6: FMACa(op, Kind::Mul, Second::Bc, false, ps ? (cFs | cFt) : cFs, code); return true; // MULbc
+			case 0x0: FMACa(op, K::Add, S::Bc, false, 0, code); return true; // ADDbc
+			case 0x1: FMACa(op, K::Sub, S::Bc, false, ps ? (cFs | cFt) : 0, code); return true; // SUBbc
+			case 0x2: FMACc(op, S::Bc, cFs, code); return true; // MADDbc (micro mode: MADDw too)
+			case 0x3: FMACd(op, S::Bc, 0, code); return true; // MSUBbc
+			case 0x4: FMACa(op, K::Max, S::Bc, false, 0, code); return true; // MAXbc
+			case 0x5: FMACa(op, K::Min, S::Bc, false, 0, code); return true; // MINIbc
+			case 0x6: FMACa(op, K::Mul, S::Bc, false, ps ? (cFs | cFt) : cFs, code); return true; // MULbc
 			case 0x7:
 				switch (col)
 				{
-					case 0: FMACa(op, Kind::Mul, Second::Q, false, ps ? (cFs | cFt) : cFs, code); return true; // MULq
-					case 1: FMACa(op, Kind::Max, Second::I, false, 0, code); return true; // MAXi
-					case 2: FMACa(op, Kind::Mul, Second::I, false, ps ? (cFs | cFt) : cFs, code); return true; // MULi
-					default: FMACa(op, Kind::Min, Second::I, false, 0, code); return true; // MINIi
+					case 0: FMACa(op, K::Mul, S::Q, false, ps ? (cFs | cFt) : cFs, code); return true; // MULq
+					case 1: FMACa(op, K::Max, S::I, false, 0, code); return true; // MAXi
+					case 2: FMACa(op, K::Mul, S::I, false, ps ? (cFs | cFt) : cFs, code); return true; // MULi
+					default: FMACa(op, K::Min, S::I, false, 0, code); return true; // MINIi
 				}
 			case 0x8:
 				switch (col)
 				{
-					case 0: FMACa(op, Kind::Add, Second::Q, false, 0, code); return true; // ADDq
-					case 1: FMACc(op, Second::Q, 0, code); return true; // MADDq
-					case 2: FMACa(op, Kind::AddI, Second::I, false, 0, code); return true; // ADDi
-					default: FMACc(op, Second::I, 0, code); return true; // MADDi
+					case 0: FMACa(op, K::Add, S::Q, false, 0, code); return true; // ADDq
+					case 1: FMACc(op, S::Q, 0, code); return true; // MADDq
+					case 2: FMACa(op, K::AddI, S::I, false, 0, code); return true; // ADDi
+					default: FMACc(op, S::I, 0, code); return true; // MADDi
 				}
 			case 0x9:
 				switch (col)
 				{
-					case 0: FMACa(op, Kind::Sub, Second::Q, false, ps ? (cFs | cFt) : 0, code); return true; // SUBq
-					case 1: FMACd(op, Second::Q, 0, code); return true; // MSUBq
-					case 2: FMACa(op, Kind::Sub, Second::I, false, ps ? (cFs | cFt) : 0, code); return true; // SUBi
-					default: FMACd(op, Second::I, 0, code); return true; // MSUBi
+					case 0: FMACa(op, K::Sub, S::Q, false, ps ? (cFs | cFt) : 0, code); return true; // SUBq
+					case 1: FMACd(op, S::Q, 0, code); return true; // MSUBq
+					case 2: FMACa(op, K::Sub, S::I, false, ps ? (cFs | cFt) : 0, code); return true; // SUBi
+					default: FMACd(op, S::I, 0, code); return true; // MSUBi
 				}
 			case 0xA:
 				switch (col)
 				{
-					case 0: FMACa(op, Kind::Add, Second::Vector, false, 0, code); return true; // ADD
-					case 1: FMACc(op, Second::Vector, 0, code); return true; // MADD
-					case 2: FMACa(op, Kind::Mul, Second::Vector, false, ps ? (cFs | cFt) : cFs, code); return true; // MUL
-					default: FMACa(op, Kind::Max, Second::Vector, false, 0, code); return true; // MAX
+					case 0: FMACa(op, K::Add, S::Vector, false, 0, code); return true; // ADD
+					case 1: FMACc(op, S::Vector, 0, code); return true; // MADD
+					case 2: FMACa(op, K::Mul, S::Vector, false, ps ? (cFs | cFt) : cFs, code); return true; // MUL
+					default: FMACa(op, K::Max, S::Vector, false, 0, code); return true; // MAX
 				}
 			default:
 				switch (col)
 				{
-					case 0: FMACa(op, Kind::Sub, Second::Vector, false, ps ? (cFs | cFt) : 0, code); return true; // SUB
-					case 1: FMACd(op, Second::Vector, 0, code); return true; // MSUB (micro mode: no clamp)
+					case 0: FMACa(op, K::Sub, S::Vector, false, ps ? (cFs | cFt) : 0, code); return true; // SUB
+					case 1: FMACd(op, S::Vector, 0, code); return true; // MSUB (micro mode: no clamp)
 					case 2: // OPMSUB
 					{
 						const uint32_t fd = (code >> 6) & 31;
@@ -2056,64 +2019,47 @@ bool Runner::Upper(const OpInfo& op, uint32_t code, uint32_t pc)
 						DoneXmm(tReg);
 						FlagTemps(op, dest, false, false);
 						DoneXmm(accReg);
-						const d::Clamp c = ClampSettings();
-						const __m128 t = d::Float(_mm_shuffle_epi32(d::Int(VF(ft)), 0xD2));
-						const __m128 s = d::Float(_mm_shuffle_epi32(d::Int(VF(fs)), 0xC9));
-						__m128 product = d::Compute(d::Arith::Mul, s, fs != 0, t, ft != 0, c, swap);
-						if (d::Single(dest))
-							product = d::Float(_mm_shuffle_epi32(d::Int(product), 0x00));
-						const __m128 r = d::Compute(d::Arith::Sub, ACC(), true, product, fs != 0, c);
-						WriteVF(fd, dest, r);
-						UpdateFlags(op, r, dest);
+						Emit(StepOp::Opmsub, code, ClampBits() | (swap ? mode::kSwap : 0), FlagBits(op));
 						return true;
 					}
-					default: FMACa(op, Kind::Min, Second::Vector, false, 0, code); return true; // MINI
+					default: FMACa(op, K::Min, S::Vector, false, 0, code); return true; // MINI
 				}
 		}
 	}
 	if (op6 < 0x3C)
-		return Fail("an unknown upper instruction", code, pc);
+		return Unknown();
 
 	const uint32_t row = (code >> 6) & 0x1f;
 	const uint32_t col = op6 & 3;
 	switch (row)
 	{
-		case 0: FMACa(op, Kind::Add, Second::Bc, true, 0, code); return true; // ADDAbc
-		case 1: FMACa(op, Kind::Sub, Second::Bc, true, 0, code); return true; // SUBAbc
-		case 2: FMACb(op, false, Second::Bc, cFs, code); return true; // MADDAbc
-		case 3: FMACb(op, true, Second::Bc, 0, code); return true; // MSUBAbc
+		case 0: FMACa(op, K::Add, S::Bc, true, 0, code); return true; // ADDAbc
+		case 1: FMACa(op, K::Sub, S::Bc, true, 0, code); return true; // SUBAbc
+		case 2: FMACb(op, false, S::Bc, cFs, code); return true; // MADDAbc
+		case 3: FMACb(op, true, S::Bc, 0, code); return true; // MSUBAbc
 		case 4: // ITOF0/4/12/15
 		{
 			if (ft == 0)
 				return true;
 			DoneXmm(AllocXmm(static_cast<int>(fs), static_cast<int>(ft), static_cast<int>(dest), !(fs == ft && dest == 0xf)));
 			static constexpr uint32_t kScale[4] = {0, 0x3D800000u, 0x39800000u, 0x38000000u};
-			__m128 v = d::CVTDQ2PS(d::Int(VF(fs)));
-			if (kScale[col])
-				v = d::MULPS(v, d::All(kScale[col]));
-			WriteVF(ft, dest, v);
+			Emit(StepOp::Itof, code, kScale[col]);
 			return true;
 		}
 		case 5: // FTOI0/4/12/15
 		{
 			if (ft == 0)
 				return true;
-			{
-				const int sReg = AllocXmm(static_cast<int>(fs), static_cast<int>(ft), static_cast<int>(dest), !(fs == ft && dest == 0xf));
-				const int t1 = AllocXmm();
-				DoneXmm(sReg);
-				DoneXmm(t1);
-			}
+			const int sReg = AllocXmm(static_cast<int>(fs), static_cast<int>(ft), static_cast<int>(dest), !(fs == ft && dest == 0xf));
+			const int t1 = AllocXmm();
+			DoneXmm(sReg);
+			DoneXmm(t1);
 			static constexpr uint32_t kScale[4] = {0, 0x41800000u, 0x45800000u, 0x47000000u};
-			__m128 v = VF(fs);
-			if (kScale[col])
-				v = d::MULPS(v, d::All(kScale[col]));
-			const __m128i positiveOverflow = _mm_cmpgt_epi32(d::Int(v), _mm_set1_epi32(0x4EFFFFFF));
-			WriteVF(ft, dest, d::Float(_mm_xor_si128(d::CVTTPS2DQ(v), positiveOverflow)));
+			Emit(StepOp::Ftoi, code, kScale[col]);
 			return true;
 		}
 		case 6: // MULAbc
-			FMACa(op, Kind::Mul, Second::Bc, true, col == 3 ? (ps ? (cFs | cFt) : cFs) : cFs, code);
+			FMACa(op, K::Mul, S::Bc, true, col == 3 ? (ps ? (cFs | cFt) : cFs) : cFs, code);
 			return true;
 		default: break;
 	}
@@ -2122,11 +2068,11 @@ bool Runner::Upper(const OpInfo& op, uint32_t code, uint32_t pc)
 		case 0:
 			switch (row)
 			{
-				case 7: FMACa(op, Kind::Mul, Second::Q, true, 0, code); return true; // MULAq
-				case 8: FMACa(op, Kind::Add, Second::Q, true, 0, code); return true; // ADDAq
-				case 9: FMACa(op, Kind::Sub, Second::Q, true, 0, code); return true; // SUBAq
-				case 10: FMACa(op, Kind::Add, Second::Vector, true, 0, code); return true; // ADDA
-				case 11: FMACa(op, Kind::Sub, Second::Vector, true, 0, code); return true; // SUBA
+				case 7: FMACa(op, K::Mul, S::Q, true, 0, code); return true; // MULAq
+				case 8: FMACa(op, K::Add, S::Q, true, 0, code); return true; // ADDAq
+				case 9: FMACa(op, K::Sub, S::Q, true, 0, code); return true; // SUBAq
+				case 10: FMACa(op, K::Add, S::Vector, true, 0, code); return true; // ADDA
+				case 11: FMACa(op, K::Sub, S::Vector, true, 0, code); return true; // SUBA
 			}
 			break;
 		case 1:
@@ -2136,22 +2082,22 @@ bool Runner::Upper(const OpInfo& op, uint32_t code, uint32_t pc)
 					if (ft)
 					{
 						DoneXmm(AllocXmm(static_cast<int>(fs), static_cast<int>(ft), static_cast<int>(dest), !(fs == ft && dest == 0xf)));
-						WriteVF(ft, dest, _mm_and_ps(VF(fs), d::All(0x7FFFFFFFu)));
+						Emit(StepOp::Abs, code);
 					}
 					return true;
-				case 8: FMACb(op, false, Second::Q, 0, code); return true; // MADDAq
-				case 9: FMACb(op, true, Second::Q, 0, code); return true; // MSUBAq
-				case 10: FMACb(op, false, Second::Vector, 0, code); return true; // MADDA
-				case 11: FMACb(op, true, Second::Vector, 0, code); return true; // MSUBA
+				case 8: FMACb(op, false, S::Q, 0, code); return true; // MADDAq
+				case 9: FMACb(op, true, S::Q, 0, code); return true; // MSUBAq
+				case 10: FMACb(op, false, S::Vector, 0, code); return true; // MADDA
+				case 11: FMACb(op, true, S::Vector, 0, code); return true; // MSUBA
 			}
 			break;
 		case 2:
 			switch (row)
 			{
-				case 7: FMACa(op, Kind::Mul, Second::I, true, 0, code); return true; // MULAi
-				case 8: FMACa(op, Kind::Add, Second::I, true, 0, code); return true; // ADDAi
-				case 9: FMACa(op, Kind::Sub, Second::I, true, 0, code); return true; // SUBAi
-				case 10: FMACa(op, Kind::Mul, Second::Vector, true, 0, code); return true; // MULA
+				case 7: FMACa(op, K::Mul, S::I, true, 0, code); return true; // MULAi
+				case 8: FMACa(op, K::Add, S::I, true, 0, code); return true; // ADDAi
+				case 9: FMACa(op, K::Sub, S::I, true, 0, code); return true; // SUBAi
+				case 10: FMACa(op, K::Mul, S::Vector, true, 0, code); return true; // MULA
 				case 11: // OPMULA
 				{
 					const int tReg = AllocXmm(static_cast<int>(ft), 0, static_cast<int>(dest));
@@ -2160,21 +2106,7 @@ bool Runner::Upper(const OpInfo& op, uint32_t code, uint32_t pc)
 					DoneXmm(tReg);
 					FlagTemps(op, dest, false, false);
 					DoneXmm(sReg);
-					const d::Clamp c = ClampSettings();
-					__m128 s, t;
-					if (d::Single(dest))
-					{
-						s = _mm_setzero_ps();
-						t = _mm_setzero_ps();
-					}
-					else
-					{
-						s = d::Float(_mm_shuffle_epi32(d::Int(VF(fs)), 0xC9));
-						t = d::Float(_mm_shuffle_epi32(d::Int(VF(ft)), 0xD2));
-					}
-					const __m128 r = d::Compute(d::Arith::Mul, s, fs != 0, t, ft != 0, c, swap);
-					WriteACC(dest, r);
-					UpdateFlags(op, r, dest);
+					Emit(StepOp::Opmula, code, ClampBits() | (swap ? mode::kSwap : 0), FlagBits(op));
 					return true;
 				}
 			}
@@ -2184,115 +2116,68 @@ bool Runner::Upper(const OpInfo& op, uint32_t code, uint32_t pc)
 			{
 				case 7: // CLIP
 				{
-					{
-						const int sReg = AllocXmm(static_cast<int>(fs), 0, 0xf);
-						const int tReg = AllocXmm(static_cast<int>(ft), 0, 0x1);
-						const int t1 = AllocXmm();
-						const int t2 = AllocXmm();
-						DoneXmm(sReg);
-						DoneXmm(tReg);
-						DoneXmm(t1);
-						DoneXmm(t2);
-					}
-					const __m128i fsv = d::Int(VF(fs));
-					__m128i ftv = _mm_set1_epi32(static_cast<int>(R.VF[ft].UL[3]));
-					uint32_t prev = V.clipFlag[op.cFlag.lastWrite] << 6;
-					const __m128i expo = _mm_and_si128(fsv, _mm_set1_epi32(0x7f800000));
-					__m128i t1 = _mm_cmpeq_epi32(expo, _mm_setzero_si128());
-					t1 = _mm_andnot_si128(t1, fsv); // a denormal component reads as +0
-					ftv = _mm_and_si128(ftv, _mm_set1_epi32(0x7fffffff));
-					__m128i neg = _mm_xor_si128(t1, _mm_set1_epi32(static_cast<int>(0x80000000u)));
-					const __m128i gtPos = _mm_cmpgt_epi32(t1, ftv);
-					const __m128i gtNeg = _mm_cmpgt_epi32(neg, ftv);
-					__m128i packed = _mm_blend_epi16(gtNeg, gtPos, 0x55);
-					packed = _mm_packs_epi16(packed, packed);
-					const uint32_t bits = static_cast<uint32_t>(_mm_movemask_epi8(packed)) & 0x3f;
-					V.clipFlag[op.cFlag.write] = (prev & 0xffffff) | bits;
+					const int sReg = AllocXmm(static_cast<int>(fs), 0, 0xf);
+					const int tReg = AllocXmm(static_cast<int>(ft), 0, 0x1);
+					const int t1 = AllocXmm();
+					const int t2 = AllocXmm();
+					DoneXmm(sReg);
+					DoneXmm(tReg);
+					DoneXmm(t1);
+					DoneXmm(t2);
+					Emit(StepOp::Clip, code, op.cFlag.lastWrite, op.cFlag.write);
 					return true;
 				}
-				case 8: FMACb(op, false, Second::I, 0, code); return true; // MADDAi
-				case 9: FMACb(op, true, Second::I, 0, code); return true; // MSUBAi
+				case 8: FMACb(op, false, S::I, 0, code); return true; // MADDAi
+				case 9: FMACb(op, true, S::I, 0, code); return true; // MSUBAi
 				case 11: return true; // NOP
 			}
 			break;
 	}
-	return Fail("an unknown upper instruction", code, pc);
+	return Unknown();
 }
 
-bool Runner::Lower(const OpInfo& op, uint32_t code, uint32_t pc)
+bool Planner::Lower(const OpInfo& op, uint32_t code, uint32_t pair)
 {
 	const uint32_t it = (code >> 16) & 0xF, is = (code >> 11) & 0xF, id = (code >> 6) & 0xF;
 	const uint32_t ft = (code >> 16) & 31, fs = (code >> 11) & 31;
 	const uint32_t dest = (code >> 21) & 0xF;
-	const bool ibitHack = EmuConfig.Gamefixes.IbitHack;
-	auto imm11 = [&]() -> int32_t {
-		const uint32_t w = ibitHack ? Live(pc) : code;
-		return static_cast<int32_t>(w << 21) >> 21;
+	const uint32_t lane = (dest & 8) ? 0 : ((dest & 4) ? 1 : ((dest & 2) ? 2 : 3));
+	// The link of a BAL or JALR, on its way (t0).
+	auto link = [&]() {
+		if (!op.lOp.evilBranch)
+			Emit(StepOp::T0Link, pair * 8 + 16);
+		else
+			Emit(StepOp::T0LinkEvil, evil ? 1 : 0);
 	};
-	auto imm15 = [&]() -> uint32_t {
-		const uint32_t w = ibitHack ? Live(pc) : code;
-		return ((w >> 10) & 0x7800) | (w & 0x7ff);
-	};
-	// mVUaddrFix: a quadword address in data memory, in bytes.
-	auto addr = [&](uint32_t a) -> uint8_t* {
-		if (vu1)
-			return VU1.Mem + ((a & 0x3ff) << 4);
-		if (a & 0x400)
-			return reinterpret_cast<uint8_t*>(VU1.VF) + ((a & 0x3f) << 4);
-		return VU0.Mem + ((a & 0xff) << 4);
-	};
-	auto loadReg = [&](uint32_t reg, const uint8_t* p) {
-		if (op.lOp.noWriteVF)
-			return;
-		WriteVF(reg, dest, d::Float(_mm_loadu_si128(reinterpret_cast<const __m128i*>(p))));
-	};
-	auto saveReg = [&](uint8_t* p) {
-		alignas(16) uint32_t v[4];
-		_mm_store_si128(reinterpret_cast<__m128i*>(v), d::Int(VF(fs)));
-		uint32_t* m = reinterpret_cast<uint32_t*>(p);
-		if (dest & 8) m[0] = v[0];
-		if (dest & 4) m[1] = v[1];
-		if (dest & 2) m[2] = v[2];
-		if (dest & 1) m[3] = v[3];
-	};
+	// Where a B, BAL or conditional branch goes, from the block's start (branchAddr).
+	const uint32_t target = pair * 8 + 8 + step::Imm11(code) * 8;
 
 	switch (code >> 25)
 	{
 		// The address registers through moveVIToGPR (none for VI00); ILW and ISW
 		// with VI00 take a constant address (mVUoptimizeConstantAddr), the same.
 		case 0x00: // LQ
-		{
-			const uint32_t base = MoveVi(is);
+			EaOf(is, code, pair);
 			DoneXmm(AllocXmm(-1, static_cast<int>(ft), static_cast<int>(dest)));
-			loadReg(ft, addr(base + static_cast<uint32_t>(imm11())));
+			if (!op.lOp.noWriteVF)
+				Emit(StepOp::LoadQ, ft, dest);
 			return true;
-		}
 		case 0x01: // SQ
-		{
-			const uint32_t base = MoveVi(it);
+			EaOf(it, code, pair);
 			DoneXmm(AllocXmm(static_cast<int>(fs), dest == 0xf ? -1 : 0, static_cast<int>(dest)));
-			saveReg(addr(base + static_cast<uint32_t>(imm11())));
+			Emit(StepOp::StoreQ, fs, dest);
 			return true;
-		}
 		case 0x04: // ILW
-		{
-			const uint8_t* p = addr(MoveVi(is) + static_cast<uint32_t>(imm11()));
-			const int lane = (dest & 8) ? 0 : ((dest & 4) ? 1 : ((dest & 2) ? 2 : 3));
-			uint16_t v;
-			std::memcpy(&v, p + lane * 4, 2);
-			WriteVi(op, it, v);
+			EaOf(is, code, pair);
+			Emit(StepOp::T0Rd16, lane);
+			WriteVi(op, it);
 			return true;
-		}
 		case 0x05: // ISW: all 32 bits of the host register (zero-extended if written in the block)
 		{
-			uint8_t* p = addr(MoveVi(is) + static_cast<uint32_t>(imm11()));
+			EaOf(is, code, pair);
 			const int t = AllocGpr(static_cast<int>(it), -1, false, true);
-			const uint32_t v = gpr_[t].value;
+			Emit(StepOp::Wr32, static_cast<uint32_t>(t), dest);
 			Done(t);
-			if (dest & 8) std::memcpy(p + 0, &v, 4);
-			if (dest & 4) std::memcpy(p + 4, &v, 4);
-			if (dest & 2) std::memcpy(p + 8, &v, 4);
-			if (dest & 1) std::memcpy(p + 12, &v, 4);
 			return true;
 		}
 		case 0x08: // IADDIU
@@ -2301,42 +2186,46 @@ bool Runner::Lower(const OpInfo& op, uint32_t code, uint32_t pc)
 			const bool add = (code >> 25) == 0x08;
 			if (add && is == 0)
 			{
-				WriteVi(op, it, imm15());
+				if (ibitHack)
+					Emit(StepOp::T0Live, pair, 0);
+				else
+					Emit(StepOp::T0Const, step::Imm15(code));
+				WriteVi(op, it);
 				return true;
 			}
 			const int s = AllocGpr(static_cast<int>(is), static_cast<int>(it), op.lOp.backupVI);
-			Put(s, add ? gpr_[s].value + imm15() : gpr_[s].value - imm15());
+			if (ibitHack)
+				Emit(StepOp::ViAddLive, static_cast<uint32_t>(s), ViOf(s), pair, add ? 0 : 1);
+			else
+				Emit(StepOp::ViAddK, static_cast<uint32_t>(s), ViOf(s), add ? step::Imm15(code) : 0u - step::Imm15(code));
 			Done(s);
 			return true;
 		}
 		case 0x10: // FCEQ
-		{
-			const uint32_t v = V.clipFlag[op.cFlag.read] ^ (code & 0xffffff);
-			WriteVi(op, 1, (v - 1) >> 31);
+			Emit(StepOp::T0Fceq, op.cFlag.read, code & 0xffffff);
+			WriteVi(op, 1);
 			return true;
-		}
-		case 0x11: V.clipFlag[op.cFlag.write] = code & 0xffffff; return true; // FCSET
+		case 0x11: // FCSET
+			Emit(StepOp::Fcset, op.cFlag.write, code & 0xffffff);
+			return true;
 		case 0x12: // FCAND
-		{
-			const uint32_t v = (V.clipFlag[op.cFlag.read] & (code & 0xffffff)) + 0xffffff;
-			WriteVi(op, 1, v >> 24);
+			Emit(StepOp::T0Fcand, op.cFlag.read, code & 0xffffff);
+			WriteVi(op, 1);
 			return true;
-		}
 		case 0x13: // FCOR
-		{
-			const uint32_t v = (V.clipFlag[op.cFlag.read] | (code & 0xffffff)) + 1;
-			WriteVi(op, 1, v >> 24);
+			Emit(StepOp::T0Fcor, op.cFlag.read, code & 0xffffff);
+			WriteVi(op, 1);
 			return true;
-		}
-		case 0x1C: WriteVi(op, it, V.clipFlag[op.cFlag.read] & 0xfff); return true; // FCGET
+		case 0x1C: // FCGET
+			Emit(StepOp::T0Fcget, op.cFlag.read);
+			WriteVi(op, it);
+			return true;
 		case 0x18: // FMEQ: all 32 bits of is's host register against the MAC flag
 		case 0x1A: // FMAND
 		case 0x1B: // FMOR
 		{
-			const uint32_t mac = V.macFlag[op.mFlag.read] & 0xffff;
 			const int t = AllocGpr(static_cast<int>(is), static_cast<int>(it), op.lOp.backupVI);
-			const uint32_t v = gpr_[t].value;
-			Put(t, (code >> 25) == 0x18 ? ((v ^ mac) - 1) >> 31 : (code >> 25) == 0x1A ? (v & mac) : (v | mac));
+			Emit(StepOp::Fmop, static_cast<uint32_t>(t), ViOf(t), op.mFlag.read, (code >> 25) == 0x18 ? 0 : (code >> 25) == 0x1A ? 1 : 2);
 			Done(t);
 			return true;
 		}
@@ -2356,13 +2245,8 @@ bool Runner::Lower(const OpInfo& op, uint32_t code, uint32_t pc)
 			if (imm12 & 0x0200) imm |= 0x0800000; // OS
 			if (imm12 & 0x0400) imm |= 0x1000000; // IS
 			if (imm12 & 0x0800) imm |= 0x2000000; // DS
-			uint32_t s = V.statFlag[op.sFlag.read];
-			for (uint32_t group : {0x0f00u, 0xf000u, 0x000fu, 0x00f0u})
-			{
-				if (s & group)
-					s |= group;
-			}
-			WriteVi(op, it, ((s ^ imm) - 1) >> 31);
+			Emit(StepOp::T0Fseq, op.sFlag.read, imm);
+			WriteVi(op, it);
 			return true;
 		}
 		case 0x15: // FSSET: the sticky bits from the immediate
@@ -2375,53 +2259,40 @@ bool Runner::Lower(const OpInfo& op, uint32_t code, uint32_t pc)
 			if (imm12 & 0x0200) imm |= 0x0800000; // OS
 			if (imm12 & 0x0400) imm |= 0x1000000; // IS
 			if (imm12 & 0x0800) imm |= 0x2000000; // DS
-			if (!(op.sFlag.doFlag || op.doDivFlag))
-				V.statFlag[op.sFlag.write] = V.statFlag[op.sFlag.lastWrite];
-			V.statFlag[op.sFlag.write] = (V.statFlag[op.sFlag.write] & 0xfff00u) | imm;
+			Emit(StepOp::Fsset, op.sFlag.write, op.sFlag.lastWrite, (op.sFlag.doFlag || op.doDivFlag) ? 0 : 1, imm);
 			return true;
 		}
 		case 0x16: // FSAND
 		case 0x17: // FSOR
 		{
 			const uint32_t imm12 = (((code >> 21) & 1) << 11) | (code & 0x7ff);
-			const uint32_t s = d::Normalize(V.statFlag[op.sFlag.read]);
-			WriteVi(op, it, (code >> 25) == 0x16 ? (s & imm12) : (s | imm12));
+			Emit((code >> 25) == 0x16 ? StepOp::T0Fsand : StepOp::T0Fsor, op.sFlag.read, imm12);
+			WriteVi(op, it);
 			return true;
 		}
 		case 0x20: // B: the block's end does it, but where a branch is in another's delay slot
 		case 0x21: // BAL
 		{
-			const uint32_t target = BranchTarget(V, pc, code);
 			if ((code >> 25) == 0x21)
 			{
-				if (!op.lOp.evilBranch)
-					WriteVi(op, it, ((pc + 16) & (V.memSize - 8)) / 8);
-				else
-					WriteVi(op, it, ((EvilBlock() ? V.evilBranch : V.badBranch) + 8) >> 3);
+				link();
+				WriteVi(op, it);
 			}
-			if (op.lOp.badBranch)
-				V.badBranch = target;
-			if (op.lOp.evilBranch)
-				(EvilBlock() ? V.evilevilBranch : V.evilBranch) = target;
+			const uint32_t vars = (op.lOp.badBranch ? 2u : 0u) | (op.lOp.evilBranch ? (evil ? 8u : 4u) : 0u);
+			if (vars)
+				Emit(StepOp::BranchRel, vars, target);
 			return true;
 		}
 		case 0x24: // JR
 		case 0x25: // JALR
 		{
 			// normJumpPass2
-			const uint32_t target = (MoveVi(is) << 3) & (V.memSize - 8);
-			if (!op.lOp.evilBranch)
-				V.branch = target;
-			else
-				(EvilBlock() ? V.evilevilBranch : V.evilBranch) = target;
-			if (op.lOp.badBranch)
-				V.badBranch = target;
+			Emit(StepOp::T0Jump, MoveVi(is));
+			Emit(StepOp::BranchT, (op.lOp.evilBranch ? (evil ? 8u : 4u) : 1u) | (op.lOp.badBranch ? 2u : 0u));
 			if ((code >> 25) == 0x25)
 			{
-				if (!op.lOp.evilBranch)
-					WriteVi(op, it, ((pc + 16) & (V.memSize - 8)) / 8);
-				else
-					WriteVi(op, it, ((EvilBlock() ? V.evilBranch : V.badBranch) + 8) >> 3);
+				link();
+				WriteVi(op, it);
 			}
 			return true;
 		}
@@ -2434,41 +2305,30 @@ bool Runner::Lower(const OpInfo& op, uint32_t code, uint32_t pc)
 		{
 			// Compared as 16 bits at the block's end (condBranch), so the high
 			// halves do not matter; the allocations do.
-			uint32_t v = op.lOp.memReadIs ? V.VIbackup : MoveVi(is);
+			if (op.lOp.memReadIs)
+				Emit(StepOp::T0Backup);
+			else
+				Emit(StepOp::T0FromH, MoveVi(is));
 			if ((code >> 25) <= 0x29)
 			{
 				if (op.lOp.memReadIt)
 				{
-					v ^= V.VIbackup;
+					Emit(StepOp::T0XorBackup);
 				}
 				else
 				{
 					const int t = AllocGpr(static_cast<int>(it));
-					v ^= gpr_[t].value;
+					Emit(StepOp::T0XorH, static_cast<uint32_t>(t));
 					Done(t);
 				}
 			}
-			if (!op.lOp.badBranch && !op.lOp.evilBranch)
-			{
-				V.branch = v;
-				return true;
-			}
-			// condEvilBranch: where each of the two branches goes.
-			const uint32_t target = BranchTarget(V, pc, code);
-			const bool taken = Taken(code, v);
-			if (op.lOp.badBranch)
-			{
-				V.branch = v;
-				V.badBranch = taken ? target : ((pc + 16) & (V.memSize - 8));
-			}
-			else if (EvilBlock())
-			{
-				V.evilevilBranch = taken ? target : V.evilBranch + 8;
-			}
+			// condEvilBranch, where a branch is in another's delay slot: where
+			// each of the two goes.
+			const uint32_t kind = (!op.lOp.badBranch && !op.lOp.evilBranch) ? 0 : op.lOp.badBranch ? 1 : evil ? 2 : 3;
+			if (kind == 0)
+				Emit(StepOp::CondSet, 0, 0, 0, 0);
 			else
-			{
-				V.evilBranch = taken ? target : V.badBranch + 8;
-			}
+				Emit(StepOp::CondSet, kind, code >> 25, target, pair * 8 + 16);
 			return true;
 		}
 		case 0x40:
@@ -2478,9 +2338,9 @@ bool Runner::Lower(const OpInfo& op, uint32_t code, uint32_t pc)
 					if (is == 0 || it == 0)
 					{
 						const int s = AllocGpr(static_cast<int>(is ? is : it), -1);
-						const int d = AllocGpr(-1, static_cast<int>(id), op.lOp.backupVI);
-						Put(d, gpr_[s].value);
-						Done(d);
+						const int dst = AllocGpr(-1, static_cast<int>(id), op.lOp.backupVI);
+						Emit(StepOp::ViMove, static_cast<uint32_t>(dst), ViOf(dst), static_cast<uint32_t>(s));
+						Done(dst);
 						Done(s);
 						return true;
 					}
@@ -2490,9 +2350,9 @@ bool Runner::Lower(const OpInfo& op, uint32_t code, uint32_t pc)
 				{
 					const int t = AllocGpr(static_cast<int>(it), -1);
 					const int s = AllocGpr(static_cast<int>(is), static_cast<int>(id), op.lOp.backupVI);
-					const uint32_t a = gpr_[s].value, b = gpr_[t].value;
 					const uint32_t low = code & 0x3f;
-					Put(s, low == 0x30 ? a + b : (it == is) ? a : (low == 0x34 ? (a & b) : (a | b)));
+					Emit(StepOp::ViAlu, static_cast<uint32_t>(s), static_cast<uint32_t>(t), ViOf(s),
+						low == 0x30 ? 0 : (it == is) ? 4 : (low == 0x34 ? 2 : 3));
 					Done(s);
 					Done(t);
 					return true;
@@ -2502,26 +2362,32 @@ bool Runner::Lower(const OpInfo& op, uint32_t code, uint32_t pc)
 					{
 						const int t = AllocGpr(static_cast<int>(it), -1);
 						const int s = AllocGpr(static_cast<int>(is), static_cast<int>(id), op.lOp.backupVI);
-						Put(s, gpr_[s].value - gpr_[t].value);
+						Emit(StepOp::ViAlu, static_cast<uint32_t>(s), static_cast<uint32_t>(t), ViOf(s), 1);
 						Done(s);
 						Done(t);
 					}
 					else
 					{
-						WriteVi(op, id, 0);
+						Emit(StepOp::T0Const, 0);
+						WriteVi(op, id);
 					}
 					return true;
 				case 0x32: // IADDI: the immediate sign-extended to 32 bits
 				{
-					const uint32_t w = ibitHack ? Live(pc) : code;
-					const uint32_t imm5 = static_cast<uint32_t>(static_cast<int32_t>(w << 21) >> 27);
 					if (is == 0)
 					{
-						WriteVi(op, it, imm5);
+						if (ibitHack)
+							Emit(StepOp::T0Live, pair, 2);
+						else
+							Emit(StepOp::T0Const, step::Imm5(code));
+						WriteVi(op, it);
 						return true;
 					}
 					const int s = AllocGpr(static_cast<int>(is), static_cast<int>(it), op.lOp.backupVI);
-					Put(s, gpr_[s].value + imm5);
+					if (ibitHack)
+						Emit(StepOp::ViAddLive, static_cast<uint32_t>(s), ViOf(s), pair, 2);
+					else
+						Emit(StepOp::ViAddK, static_cast<uint32_t>(s), ViOf(s), step::Imm5(code));
 					Done(s);
 					return true;
 				}
@@ -2532,34 +2398,29 @@ bool Runner::Lower(const OpInfo& op, uint32_t code, uint32_t pc)
 				{
 					const int table = static_cast<int>(code & 3);
 					LowerXmm(op, code, table, (code >> 6) & 0x1f);
-					return LowerT3(op, code, pc, table);
+					return LowerT3(op, code, pair, table);
 				}
 			}
 			break;
 	}
-	return Fail("an unknown lower instruction", code, pc);
+	return Unknown();
 }
 
-bool Runner::LowerT3(const OpInfo& op, uint32_t code, uint32_t pc, int table)
+bool Planner::LowerT3(const OpInfo& op, uint32_t code, uint32_t pair, int table)
 {
 	const uint32_t row = (code >> 6) & 0x1f;
 	const uint32_t it = (code >> 16) & 0xF, is = (code >> 11) & 0xF;
 	const uint32_t ft = (code >> 16) & 31, fs = (code >> 11) & 31;
 	const uint32_t dest = (code >> 21) & 0xF;
-	const uint32_t fsf = (code >> 21) & 3, ftf = (code >> 23) & 3;
-	const d::Clamp c = ClampSettings();
-
-	// The FDIV and EFU instructions: Q to its instance now, P to its own;
-	// DIV, SQRT and RSQRT also set the division flags (divFlag).
-	auto writeP = [&](__m128 v) { V.pq[2 + (op.writeP ? 1 : 0)] = d::Bits(v); };
-	auto component = [&](uint32_t reg, uint32_t f) { return d::Scalar(R.VF[reg].UL[f]); };
-	auto isZero = [&](__m128 v) { return (_mm_movemask_ps(d::CMPEQPS(_mm_setzero_ps(), v)) & 1) != 0; };
-	auto clamp1 = [&](__m128 v, bool clampable) { return d::Clamp1(v, c, clampable, true); }; // mVUclamp1(..., 8, true)
-	auto sumXYZ = [&](uint32_t reg) { return SumXYZ(reg); };
-	auto efu = [&](auto&& compute) {
-		if (!vu1)
-			return true; // VU0 has no EFU
-		writeP(compute());
+	const uint32_t fsf = (code >> 21) & 3;
+	const uint32_t lane = (dest & 8) ? 0 : ((dest & 4) ? 1 : ((dest & 2) ? 2 : 3));
+	const uint32_t vu1Bit = vu1 ? 1 : 0;
+	const uint32_t qMode = ClampBits() | (op.writeQ ? mode::kWriteQ : 0);
+	// The EFU's instructions: P to its own instance. VU0 has no EFU.
+	auto efu = [&](EfuOp which) {
+		if (vu1)
+			Emit(StepOp::Efu, static_cast<uint32_t>(which), code,
+				ClampBits() | (op.writeP ? mode::kWriteP : 0) | ((which == EfuOp::Esum && esumSwap_) ? mode::kSwap : 0));
 		return true;
 	};
 
@@ -2568,208 +2429,121 @@ bool Runner::LowerT3(const OpInfo& op, uint32_t code, uint32_t pc, int table)
 		case 0:
 			switch (row)
 			{
-				case 12: WriteVF(ft, dest, VF(fs)); return true; // MOVE
+				case 12: Emit(StepOp::Move, code); return true; // MOVE
 				case 13: // LQI
 				{
-					uint32_t a = 0;
 					if (is)
 					{
 						const int r = AllocGpr(static_cast<int>(is), static_cast<int>(is), op.lOp.backupVI);
-						a = static_cast<uint32_t>(static_cast<int16_t>(gpr_[r].value));
-						Put(r, gpr_[r].value + 1);
+						Emit(StepOp::EaH, static_cast<uint32_t>(r), vu1Bit, 1);
+						Emit(StepOp::ViAddK, static_cast<uint32_t>(r), ViOf(r), 1);
 						Done(r);
+					}
+					else
+					{
+						Emit(StepOp::EaZero, vu1Bit);
 					}
 					if (!op.lOp.noWriteVF)
 					{
 						DoneXmm(AllocXmm(-1, static_cast<int>(ft), static_cast<int>(dest)));
-						const uint8_t* p = vu1 ? VU1.Mem + ((a & 0x3ff) << 4)
-											   : ((a & 0x400) ? reinterpret_cast<uint8_t*>(VU1.VF) + ((a & 0x3f) << 4) : VU0.Mem + ((a & 0xff) << 4));
-						WriteVF(ft, dest, d::Float(_mm_loadu_si128(reinterpret_cast<const __m128i*>(p))));
+						Emit(StepOp::LoadQ, ft, dest);
 					}
 					return true;
 				}
-				case 14: // DIV
-				{
-					__m128 s = component(fs, fsf);
-					const __m128 t = component(ft, ftf);
-					if (isZero(t))
-					{
-						V.divFlag = isZero(s) ? kDivI : kDivD;
-						s = _mm_xor_ps(s, t);
-						s = _mm_and_ps(s, d::All(0x80000000u));
-						s = _mm_or_ps(s, d::All(0x7f7fffffu));
-					}
-					else
-					{
-						V.divFlag = 0;
-						s = d::Compute(d::Arith::Div, s, fs != 0, t, ft != 0, c);
-						s = clamp1(s, fs != 0);
-					}
-					V.pq[op.writeQ ? 1 : 0] = d::Bits(s);
-					return true;
-				}
+				case 14: Emit(StepOp::Div, code, qMode); return true; // DIV
 				case 15: // MTIR: the whole float in the host register
 				{
 					const int s = AllocXmm(static_cast<int>(fs), 0, 1 << (3 - fsf));
-					WriteVi(op, it, R.VF[fs].UL[fsf]);
+					Emit(StepOp::T0VfLane, fs, fsf);
+					WriteVi(op, it);
 					DoneXmm(s);
 					return true;
 				}
 				case 16: // RNEXT: the next of R's sequence
 				{
 					const int temp = AllocGpr(); // a temporary for it
-					uint32_t r = R.VI[REG_R].UL;
-					const uint32_t bit = ((r >> 4) & 1) ^ ((r >> 22) & 1);
-					r = (((r << 1) ^ bit) & 0x007fffffu) | 0x3f800000u;
-					R.VI[REG_R].UL = r;
 					if (!op.lOp.noWriteVF)
-					{
 						DoneXmm(AllocXmm(-1, static_cast<int>(ft), static_cast<int>(dest)));
-						WriteVF(ft, dest, d::All(r));
-					}
+					Emit(StepOp::Rnext, code, op.lOp.noWriteVF ? 1 : 0);
 					Done(temp);
 					return true;
 				}
 				case 25: // MFP
 					if (vu1)
-						WriteVF(ft, dest, d::All(V.pq[2 + (op.readP ? 1 : 0)]));
+						Emit(StepOp::Mfp, code, op.readP ? 1 : 0);
 					return true;
 				case 26: // XTOP
 					if (vu1)
-						WriteVi(op, it, R.GetVifRegs().top);
+					{
+						Emit(StepOp::T0Vif, 0);
+						WriteVi(op, it);
+					}
 					return true;
 				case 27: // XGKICK
 					if (!vu1)
 						return true;
-					if (EmuConfig.Gamefixes.XgKickHack)
-						return Fail("the XGKICK game fix", code, pc);
 					if (op.doXGKICK)
 						XgkickDelay();
 					{
 						const int r = AllocGpr(static_cast<int>(is), -1);
-						V.VIxgkick = gpr_[r].value;
+						Emit(StepOp::SetXgkick, static_cast<uint32_t>(r));
 						Done(r);
 					}
 					return true;
-				case 28: return efu([&] { return sumXYZ(fs); }); // ESADD
-				case 29: // EATANxy
-					return efu([&] {
-						const __m128 v = VF(fs);
-						const __m128 x = v;
-						const __m128 y = d::Float(_mm_shuffle_epi32(d::Int(v), 0x01));
-						__m128 num = d::Compute(d::Arith::Sub, y, true, x, fs != 0, c);
-						const __m128 den = d::Compute(d::Arith::Add, x, fs != 0, y, true, c);
-						num = d::Compute(d::Arith::Div, num, true, den, true, c);
-						return Atan(num);
-					});
-				case 30: // ESQRT
-					return efu([&] { return d::SQRTSS(_mm_and_ps(component(fs, fsf), d::All(0x7fffffffu))); });
-				case 31: // ESIN: x + s2 x^3 + s3 x^5 + s4 x^7 + s5 x^9
-					return efu([&] {
-						const __m128 x = component(fs, fsf);
-						__m128 pq = x;
-						__m128 f = d::Compute(d::Arith::Mul, x, fs != 0, x, fs != 0, c); // x^2
-						const __m128 t1 = f;
-						f = d::Compute(d::Arith::Mul, f, fs != 0, pq, true, c); // x^3
-						__m128 t2 = f;
-						f = d::MULPS(f, d::Scalar(0xbe2aaaa4u)); // S2
-						pq = d::Compute(d::Arith::Add, pq, true, f, fs != 0, c);
-						for (uint32_t k : {0x3c08873eu, 0xb94fb21fu}) // S3, S4
-						{
-							t2 = d::Compute(d::Arith::Mul, t2, true, t1, true, c);
-							f = d::MULPS(t2, d::Scalar(k));
-							pq = d::Compute(d::Arith::Add, pq, true, f, fs != 0, c);
-						}
-						t2 = d::Compute(d::Arith::Mul, t2, true, t1, true, c);
-						t2 = d::MULPS(t2, d::Scalar(0x362e9c14u)); // S5
-						return d::Compute(d::Arith::Add, pq, true, t2, true, c);
-					});
+				case 28: return efu(EfuOp::Esadd);
+				case 29: return efu(EfuOp::EatanXY);
+				case 30: return efu(EfuOp::Esqrt);
+				case 31: return efu(EfuOp::Esin);
 			}
 			break;
 		case 1:
 			switch (row)
 			{
-				case 12: WriteVF(ft, dest, d::Float(_mm_shuffle_epi32(d::Int(VF(fs)), 0x39))); return true; // MR32
+				case 12: Emit(StepOp::Mr32, code); return true; // MR32
 				case 13: // SQI
 				{
-					uint32_t a = 0;
 					if (it)
 					{
 						const int r = AllocGpr(static_cast<int>(it), static_cast<int>(it), op.lOp.backupVI);
-						a = gpr_[r].value & 0xffff;
-						Put(r, gpr_[r].value + 1);
+						Emit(StepOp::EaH, static_cast<uint32_t>(r), vu1Bit, 0);
+						Emit(StepOp::ViAddK, static_cast<uint32_t>(r), ViOf(r), 1);
 						Done(r);
 					}
-					DoneXmm(AllocXmm(static_cast<int>(fs), dest == 0xf ? -1 : 0, static_cast<int>(dest)));
-					uint8_t* p = vu1 ? VU1.Mem + ((a & 0x3ff) << 4)
-									 : ((a & 0x400) ? reinterpret_cast<uint8_t*>(VU1.VF) + ((a & 0x3f) << 4) : VU0.Mem + ((a & 0xff) << 4));
-					alignas(16) uint32_t v[4];
-					_mm_store_si128(reinterpret_cast<__m128i*>(v), d::Int(VF(fs)));
-					uint32_t* m = reinterpret_cast<uint32_t*>(p);
-					if (dest & 8) m[0] = v[0];
-					if (dest & 4) m[1] = v[1];
-					if (dest & 2) m[2] = v[2];
-					if (dest & 1) m[3] = v[3];
-					return true;
-				}
-				case 14: // SQRT
-				{
-					__m128 t = component(ft, ftf);
-					V.divFlag = 0;
-					if (static_cast<int32_t>(d::Bits(t)) < 0) // testNeg: invalid, and the magnitude's root
+					else
 					{
-						V.divFlag = kDivI;
-						t = _mm_and_ps(t, d::All(0x7fffffffu));
+						Emit(StepOp::EaZero, vu1Bit);
 					}
-					if (vu1 ? EmuConfig.Cpu.Recompiler.vu1Overflow : EmuConfig.Cpu.Recompiler.vu0Overflow)
-						t = d::MINSS(t, d::Scalar(0x7f7fffffu));
-					V.pq[op.writeQ ? 1 : 0] = d::Bits(d::SQRTSS(t));
+					DoneXmm(AllocXmm(static_cast<int>(fs), dest == 0xf ? -1 : 0, static_cast<int>(dest)));
+					Emit(StepOp::StoreQ, fs, dest);
 					return true;
 				}
+				case 14: Emit(StepOp::Sqrt, code, qMode); return true; // SQRT
 				case 15: // MFIR: sign-extends the host register in place, saying nothing
 				{
 					const int t = AllocXmm(-1, static_cast<int>(ft), static_cast<int>(dest));
-					int32_t v = 0;
+					uint32_t h = kNone;
 					if (is)
 					{
 						const int r = AllocGpr(static_cast<int>(is), -1);
-						gpr_[r].value = static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(gpr_[r].value)));
-						v = static_cast<int32_t>(gpr_[r].value);
+						h = static_cast<uint32_t>(r);
 						Done(r);
 					}
 					DoneXmm(t);
-					WriteVF(ft, dest, d::Float(_mm_set1_epi32(v)));
+					Emit(StepOp::Mfir, h, code);
 					return true;
 				}
 				case 16: // RGET
 					if (!op.lOp.noWriteVF)
-						WriteVF(ft, dest, d::All(R.VI[REG_R].UL));
+						Emit(StepOp::Rget, code);
 					return true;
 				case 26: // XITOP
-					WriteVi(op, it, R.GetVifRegs().itop & (vu1 ? 0x3ff : 0xff));
+					Emit(StepOp::T0Vif, vu1 ? 2 : 1);
+					WriteVi(op, it);
 					return true;
-				case 28: return efu([&] { return Rcp(sumXYZ(fs)); }); // ERSADD
-				case 29: // EATANxz
-					return efu([&] {
-						const __m128 v = VF(fs);
-						const __m128 x = v;
-						const __m128 z = d::Float(_mm_shuffle_epi32(d::Int(v), 0x02));
-						__m128 num = d::Compute(d::Arith::Sub, z, true, x, fs != 0, c);
-						const __m128 den = d::Compute(d::Arith::Add, x, fs != 0, z, true, c);
-						num = d::Compute(d::Arith::Div, num, true, den, true, c);
-						return Atan(num);
-					});
-				case 30: // ERSQRT
-					return efu([&] { return Rcp(d::SQRTSS(_mm_and_ps(component(fs, fsf), d::All(0x7fffffffu)))); });
-				case 31: // EATAN: of (x - 1) / (x + 1)
-					return efu([&] {
-						const __m128 x = component(fs, fsf);
-						const __m128 one = d::Scalar(0x3f800000u);
-						__m128 f = d::SUBPS(x, one); // the first lanes: SUBSS
-						const __m128 pq = d::ADDSS(x, one);
-						f = d::Compute(d::Arith::Div, f, fs != 0, pq, true, c);
-						return Atan(f);
-					});
+				case 28: return efu(EfuOp::Ersadd);
+				case 29: return efu(EfuOp::EatanXZ);
+				case 30: return efu(EfuOp::Ersqrt);
+				case 31: return efu(EfuOp::Eatan);
 			}
 			break;
 		case 2:
@@ -2777,101 +2551,35 @@ bool Runner::LowerT3(const OpInfo& op, uint32_t code, uint32_t pc, int table)
 			{
 				case 13: // LQD: the address register decremented first
 				{
-					const uint8_t* p;
 					if (is || !vu1)
 					{
 						const int r = AllocGpr(static_cast<int>(is), static_cast<int>(is), op.lOp.backupVI); // VU0's VI00: a temporary
-						Put(r, gpr_[r].value - 1);
-						const uint32_t a = static_cast<uint32_t>(static_cast<int16_t>(gpr_[r].value));
+						Emit(StepOp::ViAddK, static_cast<uint32_t>(r), ViOf(r), 0xffffffffu);
+						Emit(StepOp::EaH, static_cast<uint32_t>(r), vu1Bit, 1);
 						Done(r);
-						p = vu1 ? VU1.Mem + ((a & 0x3ff) << 4)
-								: ((a & 0x400) ? reinterpret_cast<uint8_t*>(VU1.VF) + ((a & 0x3f) << 4) : VU0.Mem + ((a & 0xff) << 4));
 					}
 					else
 					{
-						p = VU1.Mem + (0xffff & (V.memSize - 8)); // as microVU addresses it
+						Emit(StepOp::EaFixed); // as microVU addresses it
 					}
 					if (!op.lOp.noWriteVF)
 					{
 						DoneXmm(AllocXmm(-1, static_cast<int>(ft), static_cast<int>(dest)));
-						WriteVF(ft, dest, d::Float(_mm_loadu_si128(reinterpret_cast<const __m128i*>(p))));
+						Emit(StepOp::LoadQ, ft, dest);
 					}
 					return true;
 				}
-				case 14: // RSQRT
-				{
-					__m128 s = component(fs, fsf);
-					__m128 t = component(ft, ftf);
-					V.divFlag = 0;
-					if (static_cast<int32_t>(d::Bits(t)) < 0)
-					{
-						V.divFlag = kDivI;
-						t = _mm_and_ps(t, d::All(0x7fffffffu));
-					}
-					t = d::SQRTSS(t);
-					if (isZero(t))
-					{
-						V.divFlag = isZero(s) ? kDivI : kDivD;
-						s = _mm_and_ps(s, d::All(0x80000000u));
-						s = _mm_or_ps(s, d::All(0x7f7fffffu));
-					}
-					else
-					{
-						s = d::Compute(d::Arith::Div, s, fs != 0, t, true, c);
-						s = clamp1(s, fs != 0);
-					}
-					V.pq[op.writeQ ? 1 : 0] = d::Bits(s);
-					return true;
-				}
+				case 14: Emit(StepOp::Rsqrt, code, qMode); return true; // RSQRT
 				case 15: // ILWR
-				{
-					const int lane = (dest & 8) ? 0 : ((dest & 4) ? 1 : ((dest & 2) ? 2 : 3));
-					const uint32_t a = MoveVi(is);
-					const uint8_t* p = vu1 ? VU1.Mem + ((a & 0x3ff) << 4)
-										   : ((a & 0x400) ? reinterpret_cast<uint8_t*>(VU1.VF) + ((a & 0x3f) << 4) : VU0.Mem + ((a & 0xff) << 4));
-					uint16_t v;
-					std::memcpy(&v, p + lane * 4, 2);
-					WriteVi(op, it, v);
+					Emit(StepOp::Ea, MoveVi(is), vu1Bit, 0, 0, 0);
+					Emit(StepOp::T0Rd16, lane);
+					WriteVi(op, it);
 					return true;
-				}
-				case 16: // RINIT
-					if (fs || fsf == 3)
-						R.VI[REG_R].UL = (R.VF[fs].UL[fsf] & 0x007fffffu) | 0x3f800000u;
-					else
-						R.VI[REG_R].UL = 0x3f800000u;
-					return true;
-				case 28: return efu([&] { return d::SQRTSS(sumXYZ(fs)); }); // ELENG
-				case 29: // ESUM: x + y + z + w, as (x + w) + (y + z)
-					return efu([&] {
-						__m128 f = VF(fs);
-						__m128 t1 = d::Float(_mm_shuffle_epi32(d::Int(f), 0x1b));
-						f = d::Compute(d::Arith::Add, f, fs != 0, t1, true, c, esumSwap_);
-						t1 = d::Float(_mm_shuffle_epi32(d::Int(f), 0x01));
-						return d::Compute(d::Arith::Add, f, fs != 0, t1, true, c);
-					});
-				case 30: return efu([&] { return Rcp(component(fs, fsf)); }); // ERCPR
-				case 31: // EEXP: 1 / (1 + e1 x + e2 x^2 + ... + e6 x^6)^4
-					return efu([&] {
-						const __m128 x = component(fs, fsf);
-						__m128 pq = d::MULPS(x, d::Scalar(0x3e7fffa8u)); // E1
-						pq = d::ADDSS(pq, d::Scalar(0x3f800000u));
-						__m128 t1 = d::Compute(d::Arith::Mul, x, fs != 0, x, fs != 0, c); // x^2
-						__m128 t2 = t1;
-						t1 = d::MULPS(t1, d::Scalar(0x3d0007f4u)); // E2
-						pq = d::Compute(d::Arith::Add, pq, true, t1, true, c);
-						for (uint32_t k : {0x3b29d3ffu, 0x3933e553u, 0x36b63510u}) // E3, E4, E5
-						{
-							t2 = d::Compute(d::Arith::Mul, t2, true, x, fs != 0, c);
-							t1 = d::MULPS(t2, d::Scalar(k));
-							pq = d::Compute(d::Arith::Add, pq, true, t1, true, c);
-						}
-						t2 = d::Compute(d::Arith::Mul, t2, true, x, fs != 0, c);
-						t2 = d::MULPS(t2, d::Scalar(0x353961acu)); // E6
-						pq = d::Compute(d::Arith::Add, pq, true, t2, true, c);
-						pq = d::Compute(d::Arith::Mul, pq, true, pq, true, c);
-						pq = d::Compute(d::Arith::Mul, pq, true, pq, true, c);
-						return Rcp(pq);
-					});
+				case 16: Emit(StepOp::Rinit, code); return true; // RINIT
+				case 28: return efu(EfuOp::Eleng);
+				case 29: return efu(EfuOp::Esum);
+				case 30: return efu(EfuOp::Ercpr);
+				case 31: return efu(EfuOp::Eexp);
 			}
 			break;
 		default:
@@ -2879,78 +2587,58 @@ bool Runner::LowerT3(const OpInfo& op, uint32_t code, uint32_t pc, int table)
 			{
 				case 13: // SQD: the address register decremented first
 				{
-					uint8_t* p;
 					if (it || !vu1)
 					{
 						const int r = AllocGpr(static_cast<int>(it), static_cast<int>(it), op.lOp.backupVI); // VU0's VI00: a temporary
-						Put(r, gpr_[r].value - 1);
-						const uint32_t a = gpr_[r].value & 0xffff;
+						Emit(StepOp::ViAddK, static_cast<uint32_t>(r), ViOf(r), 0xffffffffu);
+						Emit(StepOp::EaH, static_cast<uint32_t>(r), vu1Bit, 0);
 						Done(r);
-						p = vu1 ? VU1.Mem + ((a & 0x3ff) << 4)
-								: ((a & 0x400) ? reinterpret_cast<uint8_t*>(VU1.VF) + ((a & 0x3f) << 4) : VU0.Mem + ((a & 0xff) << 4));
 					}
 					else
 					{
-						p = VU1.Mem + (0xffff & (V.memSize - 8)); // as microVU addresses it
+						Emit(StepOp::EaFixed); // as microVU addresses it
 					}
 					DoneXmm(AllocXmm(static_cast<int>(fs), dest == 0xf ? -1 : 0, static_cast<int>(dest)));
-					alignas(16) uint32_t v[4];
-					_mm_store_si128(reinterpret_cast<__m128i*>(v), d::Int(VF(fs)));
-					uint32_t w[4];
-					std::memcpy(w, p, 16);
-					if (dest & 8) w[0] = v[0];
-					if (dest & 4) w[1] = v[1];
-					if (dest & 2) w[2] = v[2];
-					if (dest & 1) w[3] = v[3];
-					std::memcpy(p, w, 16);
+					Emit(StepOp::StoreQ, fs, dest);
 					return true;
 				}
 				case 14: return true; // WAITQ: its stall is the analysis'
 				case 15: // ISWR
 				{
-					const uint32_t a = MoveVi(is);
-					uint8_t* p = vu1 ? VU1.Mem + ((a & 0x3ff) << 4)
-									 : ((a & 0x400) ? reinterpret_cast<uint8_t*>(VU1.VF) + ((a & 0x3f) << 4) : VU0.Mem + ((a & 0xff) << 4));
+					Emit(StepOp::Ea, MoveVi(is), vu1Bit, 0, 0, 0);
 					const int r = AllocGpr(static_cast<int>(it), -1, false, true); // all 32 bits, as ISW
-					const uint32_t v = gpr_[r].value;
+					Emit(StepOp::Wr32, static_cast<uint32_t>(r), dest);
 					Done(r);
-					if (dest & 8) std::memcpy(p + 0, &v, 4);
-					if (dest & 4) std::memcpy(p + 4, &v, 4);
-					if (dest & 2) std::memcpy(p + 8, &v, 4);
-					if (dest & 1) std::memcpy(p + 12, &v, 4);
 					return true;
 				}
-				case 16: // RXOR
-					if (fs || fsf == 3)
-						R.VI[REG_R].UL ^= R.VF[fs].UL[fsf] & 0x7fffffu;
-					return true;
-				case 28: return efu([&] { return Rcp(d::SQRTSS(sumXYZ(fs))); }); // ERLENG
+				case 16: Emit(StepOp::Rxor, code); return true; // RXOR
+				case 28: return efu(EfuOp::Erleng);
 				case 30: return true; // WAITP
 			}
 			break;
 	}
-	return Fail("an unknown lower instruction", code, pc);
+	return Unknown();
 }
 
-bool Runner::Execute(const OpInfo& op, uint64_t words, uint32_t pc) // mVUexecuteInstruction
+bool Planner::Execute(const OpInfo& op, uint64_t words, uint32_t pair) // mVUexecuteInstruction
 {
 	const uint32_t lower = static_cast<uint32_t>(words);
 	const uint32_t upper = static_cast<uint32_t>(words >> 32);
 	if (op.lOp.isNOP)
 	{
-		if (!Upper(op, upper, pc))
+		if (!Upper(op, upper, pair))
 			return false;
 		DivSet(op);
 		if (op.uOp.iBit)
-			Ibit(lower, pc);
+			Ibit(lower, pair);
 		return true;
 	}
 	if (!op.swapOps)
 	{
-		if (!Upper(op, upper, pc))
+		if (!Upper(op, upper, pair))
 			return false;
 		DivSet(op);
-		return Lower(op, lower, pc);
+		return Lower(op, lower, pair);
 	}
 	if (op.backupVF && !op.lOp.noWriteVF)
 	{
@@ -2960,210 +2648,400 @@ bool Runner::Execute(const OpInfo& op, uint64_t words, uint32_t pc) // mVUexecut
 		const int t1 = AllocXmm(static_cast<int>(reg));
 		const int t2 = AllocXmm();
 		DoneXmm(t1);
-		const __m128i before = _mm_load_si128(reinterpret_cast<const __m128i*>(R.VF[reg].UL));
-		if (!Lower(op, lower, pc))
+		if (reg)
+			Emit(StepOp::VfSave, reg);
+		if (!Lower(op, lower, pair))
 			return false;
 		DoneXmm(AllocXmm(static_cast<int>(reg), static_cast<int>(reg), 0xf, false));
-		const __m128i after = _mm_load_si128(reinterpret_cast<const __m128i*>(R.VF[reg].UL));
-		_mm_store_si128(reinterpret_cast<__m128i*>(R.VF[reg].UL), before);
-		if (!Upper(op, upper, pc))
+		if (reg)
+			Emit(StepOp::VfSwap, reg);
+		if (!Upper(op, upper, pair))
 			return false;
 		DivSet(op);
 		DoneXmm(AllocXmm(-1, static_cast<int>(reg), 0xf));
 		DoneXmm(t2);
 		if (reg)
-			_mm_store_si128(reinterpret_cast<__m128i*>(R.VF[reg].UL), after);
+			Emit(StepOp::VfRestore, reg);
 		return true;
 	}
-	if (!Lower(op, lower, pc))
+	if (!Lower(op, lower, pair))
 		return false;
-	if (!Upper(op, upper, pc))
+	if (!Upper(op, upper, pair))
 		return false;
 	DivSet(op);
 	return true;
 }
 
+struct ShadowBlock;
+BlockFn BlockFnOf(const ShadowBlock& b);
+
+// What a block's code is given of it (Link), worked out once from its
+// analysis: how it is carried out and the blocks after it; and which
+// instances the flag registers take when the program stops or ends there.
+void FinishBlock(ShadowBlock& b)
+{
+	const Block& a = b.a;
+	b.cycles = a.cycles;
+	b.base = a.startPC;
+	b.pairs = a.count;
+	b.stop = b.exit == Exit::Unsupported || !b.unsupported.empty() || !b.plan;
+	b.fn = BlockFnOf(b);
+	b.condOp = a.count >= 2 ? static_cast<uint8_t>(static_cast<uint32_t>(a.words[a.count - 2]) >> 25) : 0;
+	const bool leaves = b.plan && !b.plan->steps.empty() && b.plan->steps.back().op == StepOp::Leave;
+	b.leave = leaves ? static_cast<uint8_t>(b.plan->steps.back().o[0]) : 0;
+	b.setup = leaves ? b.plan->steps.back().o[2] : 0;
+	b.next[0] = b.notTaken;
+	b.next[1] = b.taken;
+
+	const mvu::FlagCycles& mFC = a.flagCycles;
+	const int* const flags[3] = {mFC.xStatus, mFC.xMac, mFC.xClip};
+	for (int k = 0; k < 3; k++)
+	{
+		b.lastInst[0][k] = static_cast<uint8_t>(LastFlagInst(b.pState, flags[k], k, false));
+		b.lastInst[1][k] = static_cast<uint8_t>(LastFlagInst(b.pState, flags[k], k, true));
+	}
+}
+
+// A block's plan, made when the block is compiled: its own record if no block
+// before it had the same, and the compiled function a build has for it.
+void PlanBlock(Vu& V, ShadowBlock& b)
+{
+	b.plan = nullptr;
+	if (b.exit == Exit::Unsupported || !b.unsupported.empty())
+	{
+		FinishBlock(b);
+		return; // a block the run stops at
+	}
+	std::vector<Step> steps;
+	steps.reserve(b.a.count * 4);
+	std::string what;
+	Planner planner(V, b, steps);
+	if (!planner.Run(what))
+	{
+		b.unsupported = what;
+		FinishBlock(b);
+		return;
+	}
+	V.stats.unknown += planner.unknown();
+	const PlanKey key = planKey(V.index, steps.data(), steps.size());
+	auto it = V.plans.find(key);
+	if (it == V.plans.end())
+	{
+		auto record = std::make_unique<PlanRecord>();
+		record->key = key;
+		record->steps = std::move(steps);
+		record->at = b.a.startPC;
+		record->words = b.a.words;
+		if (s_useCompiled)
+		{
+			const auto compiled = s_compiled[V.index].find(key);
+			if (compiled != s_compiled[V.index].end())
+				record->fn = compiled->second;
+		}
+		it = V.plans.emplace(key, std::move(record)).first;
+	}
+	b.plan = it->second.get();
+	FinishBlock(b);
+}
+
+// Every block of the record takes its plan's compiled function again: after
+// the compiled blocks the host has, or whether they are used, changed.
+void TakeCompiled(Vu& V)
+{
+	for (auto& [key, record] : V.plans)
+	{
+		const auto found = s_compiled[V.index].find(key);
+		record->fn = (s_useCompiled && found != s_compiled[V.index].end()) ? found->second : nullptr;
+	}
+	for (const std::unique_ptr<Program>& prog : V.owned)
+	{
+		for (const std::unique_ptr<BlockManager>& bm : prog->block)
+		{
+			if (bm)
+				bm->forEach([](ShadowBlock& b) { b.fn = BlockFnOf(b); });
+		}
+	}
+}
+
+ShadowBlock* Compile(Vu& V, uint32_t startPC, const PipeState& pState, bool fromLp)
+{
+	ShadowBlock* b = CompileBlock(V, startPC, pState, fromLp);
+	PlanBlock(V, *b);
+	return b;
+}
+
+// ---- carrying a plan out ---------------------------------------------------------------------
+
+// A plan's steps, one after the other (ps2n/vu_ops.h), up to its last, Leave.
+// 0, or 1 + which of the block's T bits ended the program.
+uint32_t Exec(Ctx& c, const Step* s, const Step* end)
+{
+	step::Mem a{c};
+	for (; s != end; ++s)
+	{
+		const uint32_t* o = s->o;
+		switch (s->op)
+		{
+#define PS2N_VU_ARGS0
+#define PS2N_VU_ARGS1 , o[0]
+#define PS2N_VU_ARGS2 , o[0], o[1]
+#define PS2N_VU_ARGS3 , o[0], o[1], o[2]
+#define PS2N_VU_ARGS4 , o[0], o[1], o[2], o[3]
+#define PS2N_VU_ARGS5 , o[0], o[1], o[2], o[3], o[4]
+#define PS2N_VU_STEP(name, operands) \
+	case StepOp::name: \
+		step::name(a PS2N_VU_ARGS##operands); \
+		break;
+#define PS2N_VU_STEP_CONTROL(name, operands)
+#include "ps2n/vu_steps.inc"
+#undef PS2N_VU_STEP_CONTROL
+#undef PS2N_VU_STEP
+#undef PS2N_VU_ARGS0
+#undef PS2N_VU_ARGS1
+#undef PS2N_VU_ARGS2
+#undef PS2N_VU_ARGS3
+#undef PS2N_VU_ARGS4
+#undef PS2N_VU_ARGS5
+			case StepOp::TBit:
+				if (step::TBit(a, o[0], o[1]))
+					return o[0] + 1;
+				break;
+			case StepOp::Leave: // the block's end: the caller's
+			case StepOp::Count:
+				return 0;
+		}
+	}
+	return 0;
+}
+
+// A block whose plan no build has compiled: its steps interpreted, and then
+// on to the next block as a compiled one goes.
+const Link* PS2N_VU_CC InterpretBlock(Ctx& c, const Link* b)
+{
+	const ShadowBlock& block = *static_cast<const ShadowBlock*>(b);
+	PlanRecord& plan = *block.plan;
+	plan.runs++;
+	c.interpreted++;
+	c.base = b->base;
+	std::memset(c.h, 0, sizeof(c.h)); // the host registers hold nothing (reset)
+	const uint32_t ended = Exec(c, plan.steps.data(), plan.steps.data() + plan.steps.size());
+	if (ended)
+		return Stop(c, b, kStopTBit + ended - 1);
+	const uint32_t how = block.leave, op = block.condOp, setup = block.setup;
+	step::Mem a{c};
+	PS2N_VU_LEAVE(how, op, setup);
+}
+
+// A block that holds something not carried out: the program stops at it.
+const Link* PS2N_VU_CC StopBlock(Ctx& c, const Link* b)
+{
+	return Stop(c, b, kStopUnsupported);
+}
+
+// How a block is carried out: by the compiled function a build has for its
+// plan, or by the interpreter.
+BlockFn BlockFnOf(const ShadowBlock& b)
+{
+	if (b.stop)
+		return &StopBlock;
+	return b.plan->fn ? b.plan->fn : &InterpretBlock;
+}
+
+// ---- running programs: where they start and stop (microVU_Branch.inl) ------------------------
+
+class Runner
+{
+public:
+	explicit Runner(Vu& V)
+		: V(V)
+		, c(V.c)
+		, R(*V.R)
+		, vu1(V.index != 0)
+	{
+	}
+
+	void Run(uint32_t startPC, uint32_t cycles);
+
+private:
+	// mVUendProgram; isEbit: 0 the program pauses, 1 or 2 it ends. `e`: what
+	// the end was compiled with, when not the block's own end (mVUDTendProgram).
+	void EndProgram(const ShadowBlock& b, int isEbit, uint32_t tpc, const EndInfo* e = nullptr)
+	{
+		if (!e)
+			e = &b.end;
+		const bool ebit = isEbit != 0;
+		const int fStatus = b.lastInst[ebit][0];
+		const int fMac = b.lastInst[ebit][1];
+		const int fClip = b.lastInst[ebit][2];
+		int qInst = 0, pInst = 0;
+		if (ebit)
+		{
+			qInst = e->qInst;
+			pInst = e->pInst;
+			if (e->doDivFlag)
+				c.statFlag[fStatus] = (c.statFlag[fStatus] & 0xfff3ffffu) | c.divFlag;
+			if (e->doXGKICK)
+				Xgkick(c.VIxgkick); // mVU_XGKICK_DELAY
+			if (!V.cleared)
+				V.lpState = PipeState{}; // mVU0clearlpStateJIT, mVU1clearlpStateJIT
+		}
+		// P and Q
+		R.VI[REG_Q].UL = c.pq[qInst ? 1 : 0];
+		R.pending_q = c.pq[qInst ? 0 : 1];
+		if (vu1)
+		{
+			R.VI[REG_P].UL = c.pq[pInst ? 3 : 2];
+			R.pending_p = c.pq[pInst ? 2 : 3];
+		}
+		// The flags
+		R.VI[REG_STATUS_FLAG].UL = d::Normalize(c.statFlag[fStatus]);
+		R.VI[REG_MAC_FLAG].UL = c.macFlag[fMac] & 0xffff;
+		R.VI[REG_CLIP_FLAG].UL = c.clipFlag[fClip];
+		if (!ebit)
+		{
+			std::memcpy(R.micro_macflags, c.macFlag, sizeof(c.macFlag));
+			std::memcpy(R.micro_clipflags, c.clipFlag, sizeof(c.clipFlag));
+			std::memcpy(R.micro_statusflags, c.statFlag, sizeof(c.statFlag));
+		}
+		else
+		{
+			const uint32_t clip = R.VI[REG_CLIP_FLAG].UL, mac = R.VI[REG_MAC_FLAG].UL, status = c.statFlag[fStatus];
+			for (int i = 0; i < 4; i++)
+			{
+				R.micro_clipflags[i] = clip;
+				R.micro_macflags[i] = mac;
+				R.micro_statusflags[i] = status;
+			}
+		}
+		if (ebit && (EmuConfig.Gamefixes.VUSyncHack || EmuConfig.Gamefixes.FullVU0SyncHack))
+			R.nextBlockCycles = 0;
+		R.VI[REG_TPC].UL = tpc;
+		if (ebit)
+			VU0.VI[REG_VPU_STAT].UL &= vu1 ? ~0x100u : ~0x001u;
+	}
+
+	// The program stopped at the end of block `b`: what the block's code does
+	// there in microVU.
+	void EndAt(const ShadowBlock& b)
+	{
+		switch (b.exit)
+		{
+			case Exit::EBit:
+			case Exit::BranchEBit:
+				EndProgram(b, 1, b.exitPC);
+				break;
+			case Exit::MBit: // the block has linked (mVUsetupBranch) already
+				V.lpState = b.pStateEnd;
+				if (EmuConfig.Gamefixes.VUSyncHack || EmuConfig.Gamefixes.FullVU0SyncHack)
+					R.nextBlockCycles = 0;
+				EndProgram(b, 0, b.exitPC);
+				break;
+			case Exit::CondBranchEBit:
+			{
+				// condBranch links first (mVUsetupBranch), which the block has
+				// done, then ends the program.
+				const bool taken = step::Taken(b.condOp, c.branch);
+				EndProgram(b, 2, taken ? b.target : b.notTakenPC);
+				break;
+			}
+			case Exit::JumpEBit:
+				EndProgram(b, 2, c.branch);
+				break;
+			case Exit::EvilJumpEBit:
+			{
+				const uint32_t target = c.evilBranch;
+				c.evilBranch = c.evilevilBranch;
+				EndProgram(b, 2, target);
+				// normJumpCompile stores arg1regd in TPC after mVUendProgram,
+				// which has used that register (ecx, gprT2, on Windows) for
+				// the clip flag last. (On Linux it is edi, which the call to
+				// mVU1clearlpStateJIT leaves as it may: nothing to follow.)
+				R.VI[REG_TPC].UL = R.VI[REG_CLIP_FLAG].UL;
+				break;
+			}
+			default:
+				break; // a block that links on does not stop the program at its end
+		}
+	}
+
+	Vu& V;
+	Ctx& c;
+	VURegs& R;
+	const bool vu1;
+};
+
 void Runner::Run(uint32_t startPC, uint32_t cycles)
 {
 	V.stats.runs++;
 	// mVUexecute
-	V.cycles = static_cast<int32_t>(cycles);
+	c.cycles = static_cast<int32_t>(cycles);
 	V.totalCycles = cycles;
 	const uint32_t vuLimit = vu1 ? 0x3ff8 : 0xff8;
-	ShadowBlock* b = SearchProg(V, startPC & vuLimit, V.lpState, true);
+	const Link* b = SearchProg(V, startPC & vuLimit, V.lpState, true);
 
 	// mVUdispatcherAB: the control register, P and Q, the flags.
 	const uint32_t vuFPCR = vu1 ? EmuConfig.Cpu.VU1FPCR.bitmask : EmuConfig.Cpu.VU0FPCR.bitmask;
 	const bool fpcr = EmuConfig.Cpu.FPUFPCR.bitmask != vuFPCR;
 	if (fpcr)
 		_mm_setcsr(vuFPCR);
-	V.pq[0] = R.VI[REG_Q].UL;
-	V.pq[1] = R.pending_q;
-	V.pq[2] = R.VI[REG_P].UL;
-	V.pq[3] = vu1 ? R.pending_p : R.VI[REG_P].UL;
-	std::memcpy(V.macFlag, R.micro_macflags, sizeof(V.macFlag));
-	std::memcpy(V.clipFlag, R.micro_clipflags, sizeof(V.clipFlag));
-	std::memcpy(V.statFlag, R.micro_statusflags, sizeof(V.statFlag));
+	c.pq[0] = R.VI[REG_Q].UL;
+	c.pq[1] = R.pending_q;
+	c.pq[2] = R.VI[REG_P].UL;
+	c.pq[3] = vu1 ? R.pending_p : R.VI[REG_P].UL;
+	std::memcpy(c.macFlag, R.micro_macflags, sizeof(c.macFlag));
+	std::memcpy(c.clipFlag, R.micro_clipflags, sizeof(c.clipFlag));
+	std::memcpy(c.statFlag, R.micro_statusflags, sizeof(c.statFlag));
 
-	const bool syncHack = EmuConfig.Gamefixes.VUSyncHack;
-	while (b)
+	// The blocks, each going on to the next by itself, until the program
+	// stops: before a block whose cycles it has not (mVUtestCycles), at a
+	// block's end, at a T bit.
+	c.syncHack = EmuConfig.Gamefixes.VUSyncHack ? 1 : 0;
+	c.stop = 0;
+	c.at = nullptr;
+	if (Enter(c, b))
 	{
-		if (b->exit == Exit::Unsupported || !b->unsupported.empty())
-		{
-			if (V.unsupported.empty())
-				V.unsupported = b->unsupported;
-			break;
-		}
-		// mVUtestCycles
-		const int32_t left = syncHack ? V.cycles - static_cast<int32_t>(b->a.cycles) : V.cycles - 1;
-		if (left < 0)
-		{
-			V.lpState = b->pState; // copyPLState
-			if (syncHack || EmuConfig.Gamefixes.FullVU0SyncHack)
-				R.nextBlockCycles = b->a.cycles;
-			EndProgram(*b, 0, b->a.startPC);
-			V.stats.pauses++;
-			break;
-		}
-		V.cycles -= static_cast<int32_t>(b->a.cycles);
-		V.stats.blocks++;
-		// The block's VI registers in host registers, from none (reset) and the
-		// loads it begins with.
-		ResetGprs();
-		ResetXmms();
-		Preload(*b);
+		do
+			b = b->fn(c, b);
+		while (b);
+	}
 
-		const Block& a = b->a;
-		block_ = b;
-		bool ok = true;
-		bool ended = false;
-		for (uint32_t i = 0; i < a.count && ok && !ended; i++)
-		{
-			const OpInfo& op = a.ops[i];
-			const uint32_t pc = (a.startPC + i * 8) & (V.memSize - 8);
-			if (op.uOp.mBit)
-				R.flags |= VUFLAG_MFLAGSET;
-			if (vu1 && op.lOp.kickcycles && EmuConfig.Gamefixes.XgKickHack)
-				ok = Fail("the XGKICK game fix", 0, pc);
-			if (ok)
-				ok = Execute(op, a.words[i], pc);
-			V.stats.pairs++;
-			if (ok && op.uOp.tBit && !op.isBdelay && !op.lOp.branch && (VU0.VI[REG_FBRST].UL & (vu1 ? 0x800u : 0x8u)))
-			{
-				// mVUDoTBit: the T bit enabled, the program ends here.
-				for (const TBitEnd& t : b->tBits)
-				{
-					if (t.pair != i)
-						continue;
-					VU0.VI[REG_VPU_STAT].UL |= vu1 ? 0x400u : 0x4u;
-					R.flags |= VUFLAG_INTCINTERRUPT;
-					EndProgram(*b, 1, t.tpc, &t.end);
-					ended = true;
-					break;
-				}
-				if (ended)
-					break;
-			}
-			if (ok && op.doXGKICK && !(op.lOp.isKick))
-				XgkickDelay();
-		}
-		if (!ok)
-			break;
-		if (ended)
-		{
-			b = nullptr;
-			continue;
-		}
-
-		switch (b->exit)
-		{
-			case Exit::EBit:
-				EndProgram(*b, 1, b->exitPC);
-				b = nullptr;
-				break;
-			case Exit::MBit:
-				SetupBranch(*b);
-				V.lpState = b->pStateEnd;
-				if (EmuConfig.Gamefixes.VUSyncHack || EmuConfig.Gamefixes.FullVU0SyncHack)
-					R.nextBlockCycles = 0;
-				EndProgram(*b, 0, b->exitPC);
-				b = nullptr;
-				break;
-			case Exit::Branch:
-				SetupBranch(*b);
-				b = b->taken;
-				break;
-			case Exit::BranchEBit:
-				EndProgram(*b, 1, b->exitPC);
-				b = nullptr;
-				break;
-			case Exit::CondBranch:
-			case Exit::CondBranchEBit:
-			{
-				const int16_t v = static_cast<int16_t>(V.branch);
-				const uint32_t lower = static_cast<uint32_t>(a.words[a.count - 2]);
-				bool taken = false;
-				switch (lower >> 25)
-				{
-					case 0x28: taken = v == 0; break; // IBEQ
-					case 0x29: taken = v != 0; break; // IBNE
-					case 0x2C: taken = v < 0; break; // IBLTZ
-					case 0x2D: taken = v > 0; break; // IBGTZ
-					case 0x2E: taken = v <= 0; break; // IBLEZ
-					case 0x2F: taken = v >= 0; break; // IBGEZ
-				}
-				if (b->exit == Exit::CondBranchEBit)
-				{
-					SetupBranch(*b);
-					EndProgram(*b, 2, taken ? b->target : b->notTakenPC);
-					b = nullptr;
-					break;
-				}
-				SetupBranch(*b);
-				b = taken ? b->taken : b->notTaken;
-				break;
-			}
-			case Exit::Jump:
-				SetupBranch(*b);
-				b = JumpTo(b, V.branch);
-				break;
-			case Exit::JumpEBit:
-				EndProgram(*b, 2, V.branch);
-				b = nullptr;
-				break;
-			case Exit::EvilJump:
-			case Exit::EvilJumpEBit:
-			{
-				SetupBranch(*b);
-				const uint32_t target = V.evilBranch;
-				V.evilBranch = V.evilevilBranch;
-				if (b->exit == Exit::EvilJumpEBit)
-				{
-					EndProgram(*b, 2, target);
-					// normJumpCompile stores arg1regd in TPC after mVUendProgram,
-					// which has used that register (ecx, gprT2, on Windows) for
-					// the clip flag last. (On Linux it is edi, which the call to
-					// mVU1clearlpStateJIT leaves as it may: nothing to follow.)
-					R.VI[REG_TPC].UL = R.VI[REG_CLIP_FLAG].UL;
-					b = nullptr;
-					break;
-				}
-				b = JumpTo(b, target);
-				break;
-			}
-			case Exit::Unsupported:
-				b = nullptr;
-				break;
-		}
+	const ShadowBlock& at = *static_cast<const ShadowBlock*>(c.at);
+	if (c.stop == kStopCycles)
+	{
+		V.lpState = at.pState; // copyPLState
+		if (c.syncHack || EmuConfig.Gamefixes.FullVU0SyncHack)
+			R.nextBlockCycles = at.cycles;
+		EndProgram(at, 0, at.base);
+		V.stats.pauses++;
+	}
+	else if (c.stop == kStopEnd)
+	{
+		EndAt(at);
+	}
+	else if (c.stop >= kStopTBit)
+	{
+		// mVUDoTBit: the T bit enabled, the program ends there.
+		const TBitEnd& t = at.tBits[c.stop - kStopTBit];
+		c.pairs -= at.pairs - (t.pair + 1); // the pairs after it did not run
+		VU0.VI[REG_VPU_STAT].UL |= vu1 ? 0x400u : 0x4u;
+		R.flags |= VUFLAG_INTCINTERRUPT;
+		EndProgram(at, 1, t.tpc, &t.end);
+	}
+	else if (V.unsupported.empty())
+	{
+		V.unsupported = at.unsupported.empty() ? std::string("a block without a plan") : at.unsupported;
 	}
 
 	if (fpcr)
 		_mm_setcsr(EmuConfig.Cpu.FPUFPCR.bitmask);
+	V.stats.blocks = c.blocks;
+	V.stats.pairs = c.pairs;
+	V.stats.interpreted = c.interpreted;
 
 	// mVUcleanUp
-	V.cycles = static_cast<int32_t>(V.totalCycles) - std::max(0, V.cycles);
-	R.cycle += static_cast<uint32_t>(V.cycles);
-	const uint32_t passed = static_cast<uint32_t>(std::min(V.cycles, 3000)) * static_cast<uint32_t>(EmuConfig.Speedhacks.EECycleSkip);
+	const int32_t used = static_cast<int32_t>(V.totalCycles) - std::max(0, c.cycles);
+	R.cycle += static_cast<uint32_t>(used);
+	const uint32_t passed = static_cast<uint32_t>(std::min(used, 3000)) * static_cast<uint32_t>(EmuConfig.Speedhacks.EECycleSkip);
 	if (passed > 0)
 	{
 		const s64 vu0Offset = static_cast<s64>(VU0.cycle - cpuRegs.cycle);
@@ -3177,16 +3055,21 @@ void Runner::Run(uint32_t startPC, uint32_t cycles)
 
 // ---- the provider -------------------------------------------------------------------------
 
-mvu::Settings ReadSettings()
+void ReadSettings(Vu& V)
 {
-	mvu::Settings s;
+	mvu::Settings& s = V.settings;
 	s.flagHack = EmuConfig.Speedhacks.vuFlagHack;
 	s.ibitHack = EmuConfig.Gamefixes.IbitHack;
 	s.xgkickHack = EmuConfig.Gamefixes.XgKickHack;
 	s.vuSyncHack = EmuConfig.Gamefixes.VUSyncHack;
 	s.fullVu0SyncHack = EmuConfig.Gamefixes.FullVU0SyncHack;
 	s.eeCycleRate = EmuConfig.Speedhacks.EECycleRate;
-	return s;
+	const auto& rec = EmuConfig.Cpu.Recompiler;
+	V.clamp = V.index ? d::Clamp{rec.vu1Overflow, rec.vu1ExtraOverflow, rec.vu1SignOverflow} :
+						d::Clamp{rec.vu0Overflow, rec.vu0ExtraOverflow, rec.vu0SignOverflow};
+	V.overflowHack = EmuConfig.Gamefixes.VUOverflowHack;
+	V.addSubHack = EmuConfig.Gamefixes.VuAddSubHack;
+	V.c.avx = UseAvx() ? 1 : 0;
 }
 
 class Provider final : public BaseVUmicroCPU
@@ -3221,7 +3104,7 @@ public:
 			return;
 		if (!V.unsupported.empty())
 			return; // stopped at what it does not carry out
-		V.settings = ReadSettings();
+		ReadSettings(V);
 		R.VI[REG_TPC].UL <<= 3;
 		Runner(V).Run(R.VI[REG_TPC].UL, cycles);
 		R.VI[REG_TPC].UL >>= 3;
@@ -3231,7 +3114,23 @@ public:
 			hwIntcIrq(m_Idx ? 7 : 6);
 		}
 	}
-	void Clear(u32, u32) override { ClearVu(s_vu[m_Idx]); }
+	// A write into micro memory, announced before it is made.
+	void Clear(u32 addr, u32 size) override
+	{
+		Vu& V = s_vu[m_Idx];
+		if (size && !V.chunkWrite.empty())
+		{
+			// Which chunks it reaches, for the searches that need not be made
+			// (SearchProg); past the end of micro memory, from its start again.
+			V.writeGen++;
+			const u32 chunks = static_cast<u32>(V.chunkWrite.size());
+			const u32 first = (addr & (V.memSize - 1)) / kWriteChunk;
+			const u32 count = std::min(chunks, ((addr & (kWriteChunk - 1)) + size + kWriteChunk - 1) / kWriteChunk);
+			for (u32 i = 0; i < count; i++)
+				V.chunkWrite[(first + i) % chunks] = V.writeGen;
+		}
+		ClearVu(V);
+	}
 	void ResumeXGkick() override {}
 };
 
@@ -3239,6 +3138,25 @@ Provider s_provider0(0);
 Provider s_provider1(1);
 
 } // namespace
+
+// ---- what a block's code calls (ps2n/vu_recomp.h) -----------------------------------------
+
+// mVUcompileJIT: an indirect jump's target, as the start of a program of its
+// own, through the jump cache of the block it leaves.
+const Link* JumpTo(Ctx& c, const Link* fromLink, uint32_t target)
+{
+	Vu& V = s_vu[c.index];
+	ShadowBlock* from = const_cast<ShadowBlock*>(static_cast<const ShadowBlock*>(fromLink));
+	V.stats.jumps++;
+	V.R->start_pc = target;
+	JumpCacheEntry& jc = from->jumpCache[target / 8];
+	if (jc.prog && jc.prog == QuickAt(V, target / 8).prog) [[likely]]
+		return jc.block;
+	ShadowBlock* to = SearchProg(V, target, from->pStateEnd, false, jc.prog, jc.block);
+	jc.prog = QuickAt(V, target / 8).prog;
+	jc.block = to;
+	return to;
+}
 
 BaseVUmicroCPU* Interpreter(int vu)
 {
@@ -3273,6 +3191,89 @@ bool LogPrograms(int vu, const char* path)
 		return true;
 	V.log = std::fopen(path, "wb");
 	return V.log != nullptr;
+}
+
+void SetImages(const ImageInfo* const* images, size_t count)
+{
+	for (auto& map : s_compiled)
+		map.clear();
+	for (size_t i = 0; i < count; i++)
+	{
+		const ImageInfo& image = *images[i];
+		for (uint32_t k = 0; k < image.block_count; k++)
+		{
+			const BlockInfo& block = image.blocks[k];
+			s_compiled[block.vu ? 1 : 0][PlanKey{block.key_a, block.key_b}] = block.fn;
+		}
+	}
+	// The plans and blocks met so far take the compiled functions there are now.
+	for (int vu = 0; vu < 2; vu++)
+	{
+		s_vu[vu].index = vu;
+		TakeCompiled(s_vu[vu]);
+	}
+}
+
+void SetCompiledBlocksEnabled(bool enabled)
+{
+	s_useCompiled = enabled;
+	for (int vu = 0; vu < 2; vu++)
+	{
+		s_vu[vu].index = vu;
+		TakeCompiled(s_vu[vu]);
+	}
+}
+
+size_t CompiledBlockCount(int vu)
+{
+	return s_compiled[vu ? 1 : 0].size();
+}
+
+PlanStats Plans(int vu)
+{
+	PlanStats st;
+	for (const auto& [key, record] : s_vu[vu ? 1 : 0].plans)
+	{
+		st.plans++;
+		st.steps += record->steps.size();
+		if (record->fn)
+			st.compiled++;
+		else if (record->runs)
+			st.interpreted++;
+	}
+	const InterpreterStats& run = s_vu[vu ? 1 : 0].stats;
+	st.interpretedRuns = run.interpreted;
+	st.compiledRuns = run.blocks - run.interpreted;
+	return st;
+}
+
+bool WriteCapture(const char* path)
+{
+	std::FILE* f = std::fopen(path, "wb");
+	if (!f)
+		return false;
+	std::fputs("# The blocks of micro code a run carried out by PS2Native's VU interpreter, as their plans\n"
+			   "# (core/include/ps2n/vu_plan.h). Give this file to the recompiler (ps2n-recomp vu) to have\n"
+			   "# them compiled.\n",
+		f);
+	for (int vu = 0; vu < 2; vu++)
+	{
+		// In the order of their keys, so that the same run writes the same file.
+		std::vector<const PlanRecord*> records;
+		for (const auto& [key, record] : s_vu[vu].plans)
+		{
+			if (!record->fn && record->runs)
+				records.push_back(record.get());
+		}
+		std::sort(records.begin(), records.end(), [](const PlanRecord* x, const PlanRecord* y) { return x->key < y->key; });
+		for (const PlanRecord* record : records)
+		{
+			const std::string text =
+				planText(vu, record->steps.data(), record->steps.size(), record->at, record->words.data(), record->words.size());
+			std::fwrite(text.data(), 1, text.size(), f);
+		}
+	}
+	return std::fclose(f) == 0;
 }
 
 } // namespace ps2n::vu

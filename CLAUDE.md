@@ -17,7 +17,8 @@ ahead-of-time static recompilation. This repository is a reboot of
   fallback interpreter and the PCSX2 core run a program together. Read it
   before touching `runtime/` or `recompiler/`: how time is counted (exactly
   as PCSX2's EE recompiler counts it, by the blocks it would have formed) is
-  a contract between the two.
+  a contract between the two. Its last section is the same for the vector
+  units' micro programs.
 
 ## Status
 
@@ -60,7 +61,7 @@ the vector units' micro programs compiled ahead of time, begun with a
 measurement (`ps2n-host -vu-report`). In play VU1's micro memory is
 rewritten about 40 times a frame, with 208 distinct pieces of code written
 at 5,405 places, which PCSX2's VU recompiler makes 6,088 programs of; the
-vector units take about a third of play's CPU-thread time. Then, by the
+vector units took about a third of play's CPU-thread time. Then, by the
 maintainer's choice, VU1's registers held to the stock run at every sync
 point, and PS2Native's own VU interpreter (`runtime/vu_interp.h`) before
 the translator. On 2026-11-13 the interpreter gave microVU's results on
@@ -68,7 +69,23 @@ the translator. On 2026-11-13 the interpreter gave microVU's results on
 following microVU's register allocation, VI and XMM, as well as its
 instructions; and with both VUs on it the level run is the stock run at
 every one of its 93,221,937 sync points, VU0's and VU1's registers
-included. Next: the translator. Phase 4 needs its own approval.
+included. On 2026-11-14 the translator: what microVU's second pass decides
+for a block is made once, as a list of steps (the block's plan,
+`core/include/ps2n/vu_plan.h`), the same for the same code wherever the
+game writes it, and each plan is compiled ahead of time as one C++
+function (`ps2n-recomp vu`), which the host finds by a fingerprint of the
+plan; blocks go on to each other as microVU's do, and the program at a
+start or a jump is not looked for where it cannot have changed. Over the
+level run VU1's 42,173 blocks in 6,088 programs have 589 plans, and after
+one run and one rebuild every block run is compiled code's: nothing of the
+game's micro code is interpreted, and nothing of it runs on PCSX2's VU
+recompiler. 20,000 random micro programs give microVU's results, 1,500 of
+them on compiled blocks alone; every test passes (468), PS2Native's
+configurations on its own VU provider; the level run is the stock run at
+every sync point, VU0's and VU1's registers included, and takes 0.97 times
+stock PCSX2's time, its play 0.95. G11's pass criterion is met. What comes
+next is the maintainer's to choose: the IOP's recompiler is the one
+stand-in left (ADR 0003). Phase 4 needs its own approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -242,7 +259,14 @@ Decisions:
   that shows in results (the high half of VI registers; which of two NaNs
   an AVX addition or multiplication gives). It refuses what it does not
   follow (`QuirkOf`, and the T and M bits on a branch), none of it in
-  Killzone's code.
+  Killzone's code. The translator, at the maintainer's word on 2026-11-14
+  ("maybe the translator?"), done that day: a block's plan
+  (`ps2n/vu_plan.h`, the steps' semantics in `ps2n/vu_ops.h`), compiled
+  micro code found by its plan's key (`ps2n-recomp vu`,
+  `ps2n/vu_recomp.h`), blocks no build has compiled interpreted and
+  captured (`ps2n-host -vu-capture`, `build.ps1 -VuCapture`), PS2Native's
+  configurations on PS2Native's VU provider. What the session decided
+  within the step is listed there, for the maintainer to decide otherwise.
 
 ## Layout, build and test
 
@@ -252,14 +276,18 @@ third_party/ps2autotests  hardware-verified PS2 test programs, a pinned submodul
 cmake/ps2n-inject.cmake   adds PS2Native's targets to PCSX2's own CMake project without touching it
 CMakeLists.txt, core/     build-time tools, a project of their own with no PCSX2 dependency: the
                           instruction decoder, disassembler, assembler, ELF/IRX/SNR2 readers, the reader of a
-                          BIOS image's directory (romdir)
+                          BIOS image's directory (romdir); for the vector units, the first pass of PCSX2's VU
+                          recompiler (ps2n/vu_mvu.h) and a block of micro code as a list of steps, its plan
+                          (ps2n/vu_plan.h, vu_steps.inc), both used by the runtime too
 recompiler/               ps2n-recomp, in that same project: analysis and C++ generation for EE executables
-                          and for the BIOS's EE code (bios.cpp)
+                          and for the BIOS's EE code (bios.cpp), and C++ generation for the blocks of micro
+                          code that runs captured (vu_codegen.cpp)
 runtime/                  what PS2Native adds to the core at run time: the EE provider (dispatcher,
                           fallback interpreter), the record of the blocks PCSX2's recompiler would have formed
                           (rec_blocks), instruction semantics, the contract for generated code; the VU
-                          interpreter (vu_interp), which follows PCSX2's VU recompiler, its first pass in
-                          core/ (ps2n/vu_mvu.h)
+                          provider (vu_interp), which follows PCSX2's VU recompiler: its record of programs
+                          and blocks, the planner, the interpreter of plans; the steps' semantics
+                          (ps2n/vu_ops.h) and the contract for compiled micro code (ps2n/vu_recomp.h)
 host/                     ps2n-host: console frontend for the PCSX2 core, the test bench; with -window, where a game
                           is played (window.cpp: Windows only so far)
 tests/unit/               unit tests of the build-time tools
@@ -350,6 +378,30 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   Without -Bios the BIOS is interpreted. Nothing generated from the BIOS
   may leave the build tree (ADR 0007). `ps2n-recomp bios-info <BIOS image>`
   says what the analysis finds in it.
+- The vector units' micro code (step G11): in PS2Native's configurations
+  both VUs run on PS2Native's VU provider (`ps2n-host -vu-ps2n both`;
+  `game.ps1 -VuPs2n none` puts PCSX2's VU recompiler back under them; the
+  stock run of a comparison never has PS2Native's). It carries a block of
+  micro code out by the function a build compiled for it, found by a
+  fingerprint of what the block does (its plan's key), and by its
+  interpreter otherwise.
+  `game.ps1 -VuCapture build\game\<name>\vu-capture.toml` adds the blocks a
+  run had to interpret to that file (`ps2n-host -vu-capture`, `ps2n-recomp
+  vu-capture`), and `scripts\windows\build.ps1 -VuCapture <file>` compiles
+  them into the host, into `build\windows-clang\ps2n\generated\vu` (the
+  build tree remembers the file; `-VuCapture none` forgets it). After a run
+  the host says, for each VU, how many different blocks of micro code ran,
+  how many of them compiled and how many interpreted, and how often: for
+  the level run "interpreted" must be zero. `game.ps1 -VuStatic off`
+  (`ps2n-host -vu-static off`) has every block interpreted, the reference
+  for the compiled ones. `scripts\windows\vu-selftest.ps1 -Bios <BIOS
+  image>` captures the self-test's first random programs and builds them
+  in (`build.ps1 -VuSelftestCapture`), for the test `selftest/vu-compiled`:
+  run it again whenever that test says blocks had to be interpreted, which
+  is what any change to how blocks are planned does. So does a game's
+  capture go stale: run the game with `-VuCapture` again and rebuild. The
+  captures are derived from the game and stay in the build tree. The
+  execution model's "The vector units' micro programs" says how it works.
 - Playing the game: `scripts\windows\game.ps1 -Image <disc image> -Play
   -Name <name>` opens it in a window, at the console's speed, with sound,
   the keyboard and the first controller (`ps2n-host -help` has the keys),
@@ -357,7 +409,8 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   same window. What a game keeps between sessions (memory card, the
   console's settings) is in `build\game\<name>\play`, and so is what the
   last session had to interpret of the game (`capture.toml`; `-Capture
-  <file>` adds it to the file `build.ps1 -GameCapture` takes). Windows
+  <file>` adds it to the file `build.ps1 -GameCapture` takes) and of its
+  micro code (`vu-capture.toml`; `-VuCapture <file>` likewise). Windows
   only so far.
   A session that checks the window does it with the sound off, because the
   sound comes out of the maintainer's speakers:
@@ -369,20 +422,27 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   (console recordings), `programs` (our own, `tests/programs/*.s`, built with
   `ps2n-recomp assemble`) and `sdk` (C programs built with ps2sdk, binaries in
   `tests/sdk/bin`). Configurations: `stock-jit`, `stock-interp`
-  (PCSX2 as it ships), `ps2n-ee` (our provider, interpreting), `ps2n-static`
-  (our provider, the program compiled ahead of time), `lockstep` (the compiled
-  run compared with the interpreted one at every event test), `same-as-stock`
-  (ADR 0011: the compiled run compared with a stock run at every sync point:
-  place, cycle count, registers), `never-further` (ADR 0005: the compiled
-  run's output against the stock run's, line by line; CTest runs the two it
-  compares first). Also `selftest/tables-and-semantics`: our instruction
-  semantics against PCSX2's interpreter and recompiler, and PS2Native's VU
-  interpreter against PCSX2's VU recompiler on random micro programs
-  (`host/selftest_vu.cpp`: 2,000 per VU in each of four settings, a program
-  that differs made as small as it still differs in and printed with the
-  registers it uses). `game.ps1 -VuPs2n 0|1|both` (`ps2n-host
-  -vu-ps2n`) runs those VUs on PS2Native's VU interpreter in PS2Native's
-  runs, never in the stock run one is compared with ("G11").
+  (PCSX2 as it ships), `ps2n-ee` (our providers, the EE's and the VUs',
+  interpreting), `ps2n-static` (our providers, the program compiled ahead of
+  time; a test program's micro code is interpreted, no build having
+  captured it), `lockstep` (the compiled run compared with the interpreted
+  one at every event test), `same-as-stock` (ADR 0011: the compiled run
+  compared with a stock run at every sync point: place, cycle count,
+  registers, VU0's and VU1's among them), `never-further` (ADR 0005: the
+  compiled run's output against the stock run's, line by line; CTest runs
+  the two it compares first), and for the console-recorded VU programs
+  `ps2n-static-microvu` (compiled EE code with PCSX2's VU recompiler under
+  it, as before G11: tells a fault of the VU provider from one of the
+  EE's). Also `selftest/tables-and-semantics`: our instruction semantics
+  against PCSX2's interpreter and recompiler, and PS2Native's VU provider
+  against PCSX2's VU recompiler on random micro programs
+  (`host/selftest_vu.cpp`: 2,000 per VU in each of five settings, the fifth
+  with encodings PCSX2's VU recompiler knows nothing of; a program that
+  differs is made as small as it still differs in and printed with the
+  registers it uses); and `selftest/vu-compiled`, the first 150 of those
+  programs per VU and setting with every block compiled ahead of time
+  (skipped without the self-test's capture in the build, failed when a
+  block had to be interpreted).
 - A failing test's files are in `build\windows-clang\ps2n\tests\<test name>`:
   `core.log` (PCSX2's log), `guest.txt`, `actual.txt`.
 - A `lockstep` failure names the event test where the runs part, a
@@ -404,7 +464,12 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   interpreter" names the addresses. "The BIOS interpreted" says, piece by
   piece, what of the BIOS was; with the BIOS compiled, that is 48
   instructions at boot (blocks counted double) and one `di`/`eret` at
-  `8000517C`.
+  `8000517C`. "VU0's blocks of micro code" and "VU1's" say how many
+  different ones ran, compiled and interpreted; a line of its own says how
+  many instructions of encodings PCSX2's VU recompiler knows nothing of
+  the blocks held (carried out as it carries them out: not at all), and
+  another names what the VU provider does not carry out, where the run
+  stopped at it.
 - The Linux scripts have never been run. Only the maintainer can run them.
 - Never run stock `pcsx2-gsrunner` here: it writes into the maintainer's own
   `Documents\PCSX2`.

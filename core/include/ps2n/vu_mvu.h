@@ -30,6 +30,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <type_traits>
 #include <vector>
 
 namespace ps2n::vu::mvu {
@@ -63,7 +64,8 @@ struct PipeState
 	uint8_t VI[16] = {};
 	RegCycles VF[32] = {};
 
-	bool operator==(const PipeState&) const = default;
+	// Every byte of it is a value (it has no padding): compared as memory.
+	bool operator==(const PipeState& other) const { return std::memcmp(this, &other, sizeof(PipeState)) == 0; }
 
 	// The first eight bytes as microVU packs them, in the order above.
 	uint64_t quick64() const
@@ -73,6 +75,9 @@ struct PipeState
 			static_cast<uint64_t>(blockType) << 48 | static_cast<uint64_t>(r) << 56;
 	}
 };
+
+static_assert(std::has_unique_object_representations_v<PipeState> && sizeof(PipeState) == 160,
+              "PipeState is compared as memory: it may hold no padding");
 
 // ---- what the first pass decides for one instruction pair (microOp) -----------------
 

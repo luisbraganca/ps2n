@@ -5,6 +5,7 @@
 #include "analysis.h"
 #include "bios.h"
 #include "codegen.h"
+#include "vu_codegen.h"
 
 #include "ps2n/assembler.h"
 #include "ps2n/elf.h"
@@ -70,8 +71,22 @@ void usage() {
         "      of the inputs: a program that is rebuilt after every run then keeps a\n"
         "      capture that only grows.\n"
         "\n"
-        "  ps2n-recomp registry --out <file.cpp> <id>...\n"
-        "      Writes the list of images a host is linked with.\n"
+        "  ps2n-recomp vu <capture>... --out <file.cpp> [--id <name>] [--parts <n>] [--no-comments]\n"
+        "      Translates blocks of the vector units' micro code into C++ against\n"
+        "      ps2n/vu_recomp.h: the plans of the blocks runs had to interpret (the\n"
+        "      host's -vu-capture files), one function for each, found at run time by\n"
+        "      its plan's key. Names the generated namespace ps2n_vu_image_<name>\n"
+        "      (default: vu). What this writes is derived from the programs whose\n"
+        "      micro code it was: it belongs in the build tree.\n"
+        "\n"
+        "  ps2n-recomp vu-capture --out <file> <capture>...\n"
+        "      Puts what several runs reported of micro code (the host's -vu-capture\n"
+        "      files) into one file, each plan once. The output may be one of the\n"
+        "      inputs.\n"
+        "\n"
+        "  ps2n-recomp registry --out <file.cpp> [--vu <id>]... <id>...\n"
+        "      Writes the list of images a host is linked with; --vu names an image\n"
+        "      of compiled micro code.\n"
         "\n"
         "  ps2n-recomp assemble <file.s> --out <file.elf>\n"
         "      Assembles a test program written for PS2Native's own small R5900\n"
@@ -92,6 +107,7 @@ struct Args {
     std::filesystem::path outside;
     std::string id;
     std::vector<std::filesystem::path> captures;
+    std::vector<std::string> vuIds;
     bool symbols = true;
     bool comments = true;
     unsigned parts = 1;
@@ -114,6 +130,7 @@ Args parse(int argc, char** argv) {
         else if (arg == "--outside") a.outside = value();
         else if (arg == "--id") a.id = value();
         else if (arg == "--capture") a.captures.emplace_back(value());
+        else if (arg == "--vu") a.vuIds.push_back(value());
         else if (arg == "--no-symbols") a.symbols = false;
         else if (arg == "--no-comments") a.comments = false;
         else if (arg == "--parts") {
@@ -403,7 +420,52 @@ int capture(const Args& a) {
 int registry(const Args& a) {
     if (a.out.empty()) throw Error("registry needs --out <file.cpp>");
     if (a.out.has_parent_path()) std::filesystem::create_directories(a.out.parent_path());
-    writeFileIfChanged(a.out, generateRegistry(a.positional));
+    writeFileIfChanged(a.out, generateRegistry(a.positional, a.vuIds));
+    return 0;
+}
+
+// What runs reported of micro code, put together: each plan once.
+VuCapture loadVuCaptures(const std::vector<std::string>& files, const std::filesystem::path& out) {
+    VuCapture all;
+    for (const std::string& file : files) {
+        // The output may be named among the inputs before it exists.
+        if (!std::filesystem::exists(file) && std::filesystem::path(file) == out) continue;
+        all.add(loadVuCaptureFile(file));
+    }
+    all.normalize();
+    return all;
+}
+
+int vuCompile(const Args& a) {
+    if (a.out.empty()) throw Error("vu needs --out <file.cpp>");
+    const VuCapture capture = loadVuCaptures(a.positional, {});
+
+    VuGenerateOptions go;
+    go.id = a.id.empty() ? "vu" : a.id;
+    go.comments = a.comments;
+    go.parts = a.parts;
+    if (go.parts > 1) go.headerName = a.out.stem().string() + ".h";
+    VuGenerateStats stats;
+    const std::vector<GeneratedFile> files = generateVuFiles(capture, go, &stats);
+    if (a.out.has_parent_path()) std::filesystem::create_directories(a.out.parent_path());
+    for (const GeneratedFile& file : files) {
+        const std::filesystem::path path = file.suffix == ".cpp" ? a.out : a.out.parent_path() / (a.out.stem().string() + file.suffix);
+        writeFileIfChanged(path, file.text);
+    }
+    std::printf("%s: %zu blocks of VU0's micro code and %zu of VU1's, %zu steps\n", go.id.c_str(), stats.blocks[0], stats.blocks[1],
+                stats.steps);
+    return 0;
+}
+
+int vuCapture(const Args& a) {
+    if (a.out.empty()) throw Error("vu-capture needs --out <file>");
+    if (a.positional.empty()) throw Error("vu-capture takes one or more capture files");
+    const VuCapture all = loadVuCaptures(a.positional, a.out);
+    if (a.out.has_parent_path()) std::filesystem::create_directories(a.out.parent_path());
+    writeFileIfChanged(a.out, writeVuCapture(all, "What runs reported of the vector units' micro code, put together by ps2n-recomp vu-capture."));
+    size_t count[2] = {0, 0};
+    for (const VuCapture::Block& b : all.blocks) ++count[b.vu ? 1 : 0];
+    std::printf("%s: %zu blocks of VU0's micro code and %zu of VU1's\n", a.out.string().c_str(), count[0], count[1]);
     return 0;
 }
 
@@ -466,6 +528,8 @@ int main(int argc, char** argv) {
         if (a.command == "bios-info") return biosInfo(a);
         if (a.command == "capture") return capture(a);
         if (a.command == "registry") return registry(a);
+        if (a.command == "vu") return vuCompile(a);
+        if (a.command == "vu-capture") return vuCapture(a);
         if (a.command == "assemble") return assemble(a);
         if (a.command == "disasm") return disasm(a);
         throw Error("unknown command '" + a.command + "'");

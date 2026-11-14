@@ -42,6 +42,11 @@ code is right and this file needs fixing.
   for every address at which PCSX2's EE recompiler would hold a compiled
   block, the block as it would have compiled it. Nothing in it generates
   code.
+- **The vector units' micro programs** have a provider of their own, made
+  the same way in small: code compiled ahead of time for the blocks of
+  micro code a build has seen, an interpreter for the rest, and a record
+  that follows PCSX2's VU recompiler as the record of blocks follows its EE
+  recompiler ("The vector units' micro programs" at the end).
 
 There is no guest state outside the core, but for the length of a stretch
 of straight-line compiled code. Registers are `cpuRegs` and `fpuRegs`,
@@ -769,20 +774,32 @@ with each instruction's count.
 
 The micro programs VU0 and VU1 run are run by a provider of the core's
 (`CpuVU0`, `CpuVU1`): PCSX2's VU recompiler (microVU) as it ships, or
-PS2Native's VU interpreter (`runtime/vu_interp.h`, `ps2n-host -vu-ps2n`),
-which the host puts in its place (step G11, ADR 0022). The interpreter is to
-be what the compiled code of the micro programs is checked against, and
-what runs the micro code a build has not compiled.
+PS2Native's VU provider (`runtime/vu_interp.h`), which the host puts in its
+place in PS2Native's configurations (`ps2n-host -vu-ps2n`; step G11,
+ADR 0022). PS2Native's provider carries a block of micro code out by code
+compiled ahead of time where the host has it, and by its interpreter
+elsewhere; what it had to interpret it reports and writes down for the next
+build, as the EE's provider does. The definitions are in code:
+[core/include/ps2n/vu_mvu.h](../core/include/ps2n/vu_mvu.h) (microVU's
+analysis of a block), [core/include/ps2n/vu_plan.h](../core/include/ps2n/vu_plan.h)
+and [vu_steps.inc](../core/include/ps2n/vu_steps.inc) (what a block does, as
+a list of steps), [runtime/include/ps2n/vu_ops.h](../runtime/include/ps2n/vu_ops.h)
+(the steps' semantics), [runtime/include/ps2n/vu_recomp.h](../runtime/include/ps2n/vu_recomp.h)
+(the contract compiled micro code is written against),
+[runtime/vu_interp.cpp](../runtime/vu_interp.cpp) (the record of programs and
+blocks, the planner, the interpreter) and
+[recompiler/src/vu_codegen.cpp](../recompiler/src/vu_codegen.cpp) (what is
+generated).
 
 **It follows microVU, not the console** (ADR 0005), in its results and in
 its time (ADR 0011): VU1's progress and its writes into its memory reach
 the EE through the GIF, the VIF and the VU's registers, so a different
 count of cycles would part the run from the stock run. microVU decides
 everything but the values in a first pass over each block, from the state
-of the pipeline the block is entered with (`core/include/ps2n/vu_mvu.h`,
-its port, without PCSX2); the interpreter carries the block out with that
-and with microVU's host instructions in the same order on the same
-operands, under the VU's floating-point control register.
+of the pipeline the block is entered with (`vu_mvu.h`, its port, without
+PCSX2); the block is carried out with that and with microVU's host
+instructions in the same order on the same operands, under the VU's
+floating-point control register.
 
 **What microVU compiled before matters.** A block microVU has compiled is
 used again for an entry state that matches eight bytes of the 96 of its
@@ -791,19 +808,104 @@ state asks for an exact match: the stalls a block runs with are those of
 the state it was first compiled for. microVU knows a program by where it
 starts and by what micro memory held where it compiled from, compares
 those ranges again after each write into micro memory, and compiles a new
-program when none matches. The interpreter keeps the same record, in the
+program when none matches. The provider keeps the same record, in the
 same order (both sides of a conditional branch when the branch is
 compiled, an indirect jump's target when it is taken, through a cache of
 jumps like microVU's), so that it runs each block with the stalls microVU
 runs it with. Over the game's first 4,200 frames it records the same
 programs as microVU, line for line with what microVU writes to the core's
-log.
+log. The record is made as the game runs, from what micro memory holds: it
+is which block comes after which, and how many cycles each takes. It holds
+no code.
+
+**A block's plan.** What microVU's second pass decides when it compiles a
+block (which host instructions, on which operands, in which order, with
+which registers of its allocation) the provider works out once, when the
+block enters the record, and keeps as a list of *steps* (`vu_plan.h`; the
+steps are listed in `vu_steps.inc`). A step is one small operation with up
+to five numbers for operands: a VI register taken into a host register, a
+multiply-and-add of given registers with a given clamp and flag update, an
+address worked out, a store. The last step, `Leave`, says how the block
+ends: the program's end, a branch, a conditional branch, an indirect jump,
+and what microVU's code does there to the flags' instances and to P and Q
+for the next block. A plan says nothing of where the block is: an address
+in it (the link of a `BAL`, the target of a branch) is a distance
+from the block's first pair, and an immediate is in the step, but for the
+ones microVU reads from micro memory as its code runs (the I-bit game fix),
+which a step reads there by the pair's place in the block. What is not in
+the plan is the record's: the blocks after it, and its cycles. So the same
+code has the same plan wherever it is written and whatever program it is
+part of: over the level run, the 42,173 blocks of VU1's 6,088 programs
+have 589 plans between them.
+
+**Steps on an accessor.** Each step is a function (`vu_ops.h`), written
+once, on an *accessor* that says where the VU's registers are. The
+interpreter runs a plan step by step on the machine's own registers
+(`step::Mem`). Compiled code calls the same functions on locals
+(`step::Locals`, `vu_recomp.h`), so the two cannot differ in what a step
+does, only in where it keeps the registers meanwhile.
+
+**Compiled blocks.** `ps2n-recomp vu` writes one C++ function for each plan
+of a capture (below): the plan's steps in order, each a call of the step's
+function with its operands as constants. The function takes the VU's
+registers into locals when it begins and puts back the ones a step wrote
+when it ends; which those are is in the code, so the compiler drops the
+loads of registers the block never reads and nothing is counted as it
+runs. That is sound because nothing else looks at a VU's registers while
+one of its blocks runs: a block runs from its first pair to its last on
+the CPU thread, and what it calls out to (the GIF transfer of an XGKICK)
+reads data memory, which the steps write at once. A function is named by
+its plan's *key*, a 128-bit fingerprint of the VU and the steps
+(`planKey`). The host's registry lists the images of compiled micro code
+it was linked with (`ps2n_vu_images`), and the provider gives every block
+whose plan's key one of them has that function. Compiled micro code is so
+found by what a block does, not by where it is or what it was compiled
+from: the plan is made from what micro memory holds when the block enters
+the record, so there is no question here whether memory still holds the
+code that was compiled.
+
+**Blocks go on to each other**, as microVU's blocks jump to each other. A
+block's function is given the block's entry in the record (`Link`: its
+cycles, its address, the blocks after it). At its end it reorders the
+flags' instances and swaps P and Q as its plan says, puts its registers
+back, takes the next block (the branch's target, the block after a branch
+not taken, or for an indirect jump the block `JumpTo` finds as microVU's
+`mVUcompileJIT` finds it), tests that block's cycles as microVU's code
+does where a block begins (`Enter`, microVU's `mVUtestCycles`), and calls
+it in the place of returning (a jump: `[[clang::musttail]]`, under a
+calling convention with which a block saves no registers for its caller).
+It returns to the provider only when the program stops: at its end, with
+its cycles used, at a T bit, or at something that is not carried out. An
+interpreted block is entered and left the same way, so compiled and
+interpreted blocks follow each other in any order.
+
+**Code no build has compiled** is interpreted, counted and reported: after
+a run the host says how many different plans each VU ran, how many of
+them were compiled and how often those ran, how many were interpreted and
+how often. `ps2n-host -vu-capture <file>` (`game.ps1 -VuCapture`) writes
+the interpreted ones down, each with its steps; `ps2n-recomp vu-capture`
+puts several runs' files together, and `build.ps1 -VuCapture <file>`
+compiles them into the host. `ps2n-host -vu-static off` has every block
+interpreted, the compiled ones too: the reference for them.
+
+**Finding the program, at less cost.** microVU's rule is kept and part of
+its cost is not. After each write into micro memory microVU forgets which
+program each start address has, and at the next start or indirect jump
+there compares the programs recorded for it with micro memory, the one
+found last first. The provider also keeps, for each 128 bytes of micro
+memory, the number of the last write into them. Where the program found
+last at an address is still the first of its list and nothing was written
+since into the memory it was compiled from, the comparison could only
+find it equal: it is not made, and what it would have done is done. And an
+indirect jump keeps the program and the block it found last: in the same
+program the search for the block gives that block again, and is not made.
+Over the level run 2,895,390 of 6,790,138 searches are spared so.
 
 **What its register allocation does.** Some of microVU's results depend on
-which host registers its allocator gave an operand. The interpreter keeps
-microVU's allocation of both kinds of register, in the order microVU's
-second pass makes it (one count of allocations for both), and follows
-this:
+which host registers its allocator gave an operand. The planner goes
+through microVU's allocation of both kinds of register, in the order
+microVU's second pass makes it (one count of allocations for both), once,
+when it makes the plan, and the steps say what follows from it:
 
 - *VI registers* live in 32-bit host registers within a block (eight of
   them, the least recently used given up first, some loaded at the block's
@@ -811,29 +913,51 @@ this:
   their low half is written back. FMEQ compares the whole register, ISW and
   ISWR store the whole of one that MFIR sign-extended in place, MTIR leaves
   a whole float in one, and the integer instructions carry the high half
-  on. The interpreter keeps what each host register holds, allocated as
-  microVU allocates them.
+  on. The steps name the host register each VI register is in, and load,
+  copy and give them up where microVU's code does.
 - *XMM registers*: a register microVU does not hold is loaded as an
   instruction's field asks (one component alone, VF00 without w as zeros),
   one it holds is copied whole. OPMULA and the EFU's sums (ESADD, ERSADD,
   ELENG, ERLENG, ESUM) load their operand so and read its other lanes too,
   so with one component in their field (which assemblers do not write)
-  their result depends on what microVU held: the interpreter refuses them.
+  their result depends on what microVU held: the provider refuses them.
   And with AVX, PCSX2's emitter swaps the two sources of a commutative
   instruction (ADDPS, MULPS) when that makes its encoding shorter (the
   first in xmm0 to xmm7, the second in xmm8 to xmm15): where both are NaN,
   x86 gives the first source's, so which NaN a packed addition or
-  multiplication gives depends on the registers. The interpreter swaps
-  them where the emitter does, on a processor with AVX, as PCSX2 decides
-  from the processor.
+  multiplication gives depends on the registers. A step says whether the
+  emitter swaps them, and they are swapped on a processor with AVX, as
+  PCSX2 decides from the processor.
+
+**What is not carried out.** The T and M bits on a branch, the T bit with
+an XGKICK still to come at its block's end, PCSX2's XGKICK game fix, and
+the forms above whose result depends on what microVU's allocator held: a
+block that holds one of them has no plan, and a program that reaches it
+stops the run with an error that names it. An encoding microVU knows
+nothing of is carried out as microVU carries it out, which is not at all
+(it generates no code for one, and ends the block, and with it the
+program, after one in the upper slot that is not in a delay slot, but for
+the lower NOP's word there, which it lets pass); the host says after a run
+how many the blocks it analysed held.
 
 **What is not reproduced.** microVU throws its record away when its 64 MB
-of host code are full (`mVUreset`), which the interpreter cannot know; a
+of host code are full (`mVUreset`), which the provider cannot know; a
 run long enough to fill it could part from the stock run there (the level
 run fills 43.5 MB). The same swap of two NaNs in VU0's macro mode (COP2
 instructions in EE code): there the registers are the EE recompiler's,
 which compiled EE code does not have, so an addition or multiplication of
 two NaNs there can give the other NaN than stock PCSX2's; no run has shown
-it. The self-test (`host/selftest_vu.cpp`) runs random micro programs on
-microVU and on the interpreter and compares everything the VU holds
-afterwards, its cycle count included: on 16,000 of them, nothing differs.
+it.
+
+**How it is held to microVU.** The self-test (`host/selftest_vu.cpp`) runs
+random micro programs on microVU and on the provider and compares
+everything the VU holds afterwards, its cycle count included: on 20,000 of
+them, in five settings, nothing differs. `selftest/vu-compiled` runs the
+first 150 programs of each VU and setting with every block compiled ahead
+of time, and fails if one had to be interpreted; without that capture in
+the build it is skipped, not passed
+(`scripts\windows\vu-selftest.ps1` captures and builds them; the capture is
+in the build tree). The test programs and the game are held to the stock
+run with the VUs on the provider (`same-as-stock`, VU0's and VU1's
+registers at every sync point), and to the run with everything
+interpreted, the micro code too (`lockstep`).

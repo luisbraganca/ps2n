@@ -13,9 +13,10 @@ The configurations:
 
   stock-jit     PCSX2's recompilers: the reference
   stock-interp  PCSX2's interpreters
-  ps2n-ee       PS2Native's EE provider, interpreting everything
-  ps2n-static   PS2Native's EE provider with the game's code compiled ahead of
-                time (build it in first: scripts\windows\build.ps1 -Game <elf>)
+  ps2n-ee       PS2Native's EE and VU providers, interpreting everything
+  ps2n-static   PS2Native's EE and VU providers with the game's code compiled
+                ahead of time (build it in first: scripts\windows\build.ps1
+                -Game <elf>, and for the vector units' micro code -VuCapture)
   lockstep      ps2n-ee and then ps2n-static, the second compared with the
                 first at every event test
   same-as-stock stock-jit and then ps2n-static, the second compared with the
@@ -31,6 +32,13 @@ are derived from the game: keep them out of the repository.
 
 With -Capture, what the run reports for the recompiler is added to that file
 (ps2n-recomp capture), which scripts\windows\build.ps1 -GameCapture takes.
+With -VuCapture, the blocks of the vector units' micro code that the run had
+to interpret are added to that file (ps2n-recomp vu-capture), which
+scripts\windows\build.ps1 -VuCapture takes.
+
+In PS2Native's configurations the vector units' micro programs run on
+PS2Native's VU provider (-VuPs2n none puts PCSX2's VU recompiler back under
+them, as before step G11).
 
 With -Play the game is played instead: in a window, at the console's speed,
 with sound, on the keyboard and on the first controller, until the window is
@@ -73,9 +81,16 @@ param(
     # Also write vu-report.txt among the run's files: what was written into the VUs' micro memory and what
     # they ran, with the counts frame by frame and the contents written beside it (ps2n-host -vu-report).
     [switch]$VuReport,
-    # Run these VUs' micro programs on PS2Native's VU interpreter (ps2n-host -vu-ps2n): 0, 1 or both. Not in
-    # the stock run a same-as-stock run is compared with.
-    [ValidateSet('', '0', '1', 'both')][string]$VuPs2n = '',
+    # Which VUs' micro programs run on PS2Native's VU provider (ps2n-host -vu-ps2n): none, 0, 1 or both. Left out:
+    # both in PS2Native's configurations, none under stock PCSX2. Never in the stock run a same-as-stock run is
+    # compared with.
+    [ValidateSet('', 'none', '0', '1', 'both')][string]$VuPs2n = '',
+    # off has PS2Native's VU provider interpret every block of micro code, the ones the host has compiled too
+    # (ps2n-host -vu-static off), to time the two or to have a reference.
+    [ValidateSet('on', 'off')][string]$VuStatic = 'on',
+    # Add the blocks of micro code the run had to interpret to this file (ps2n-recomp vu-capture), which
+    # scripts\windows\build.ps1 -VuCapture takes.
+    [string]$VuCapture = '',
     # Frames at which the wall-clock time is noted, reported after the run with the first and the last frame's
     # (ps2n-host -mark): to time a game's startup and its play apart. Separated by commas, "6600,12000": through
     # powershell -File an array of numbers would arrive as one number.
@@ -117,6 +132,11 @@ $providers = @{
     'same-as-stock' = @('ps2n', 'jit', 'jit', 'on')
 }
 $p = $providers[$Config]
+
+# The VUs on PS2Native's VU provider: both of them wherever PS2Native's EE
+# provider runs, unless -VuPs2n says otherwise.
+$vuOurs = if ($VuPs2n) { $VuPs2n } elseif ($p[0] -eq 'ps2n') { 'both' } else { 'none' }
+if ($vuOurs -ne 'none' -and $p[0] -ne 'ps2n') { throw "-VuPs2n is for PS2Native's configurations, not $Config." }
 
 if ($Play) {
     if ($Config -eq 'lockstep' -or $Config -eq 'same-as-stock') {
@@ -163,6 +183,13 @@ if ($Play) {
         Remove-Item -LiteralPath $reported -ErrorAction SilentlyContinue
         $hostArgs += @('-capture', $reported)
     }
+    # The same for the blocks of the vector units' micro code.
+    $vuReported = Join-Path $session 'vu-capture.toml'
+    if ($vuOurs -ne 'none') {
+        Remove-Item -LiteralPath $vuReported -ErrorAction SilentlyContinue
+        $hostArgs += @('-vu-ps2n', $vuOurs, '-vu-capture', $vuReported)
+        if ($VuStatic -eq 'off') { $hostArgs += @('-vu-static', 'off') }
+    }
     $hostArgs += $imagePath
 
     $env:PATH = (Join-Path $root 'deps\windows-x64\deps\bin') + ';' + $env:PATH
@@ -182,6 +209,11 @@ if ($Play) {
         $recomp = Join-Path $root 'build\tools-windows\bin\ps2n-recomp.exe'
         $target = if ([IO.Path]::IsPathRooted($Capture)) { $Capture } else { Join-Path $root $Capture }
         & $recomp capture --out $target $target $reported
+    }
+    if ($VuCapture -and $vuOurs -ne 'none' -and (Test-Path -LiteralPath $vuReported)) {
+        $recomp = Join-Path $root 'build\tools-windows\bin\ps2n-recomp.exe'
+        $target = if ([IO.Path]::IsPathRooted($VuCapture)) { $VuCapture } else { Join-Path $root $VuCapture }
+        & $recomp vu-capture --out $target $target $vuReported
     }
     exit $code
 }
@@ -212,7 +244,12 @@ if ($Pad) { $arguments += "-DPAD=$(ForCMake (Resolve-Path -LiteralPath $Pad).Pat
 if ($TimeProfile) { $arguments += '-DPROFILE=1' }
 if ($TimeProfile -and $ProfileFrom -gt 0) { $arguments += "-DPROFILE_FROM=$ProfileFrom" }
 if ($VuReport) { $arguments += '-DVU_REPORT=1' }
-if ($VuPs2n) { $arguments += "-DVU_PS2N=$VuPs2n" }
+if ($vuOurs -ne 'none') {
+    $arguments += "-DVU_PS2N=$vuOurs"
+    if ($VuStatic -eq 'off') { $arguments += '-DVU_STATIC=off' }
+    # What the run had to interpret of the micro code is always written down among its files.
+    $arguments += "-DVU_CAPTURE=$(ForCMake (Join-Path $work 'vu-capture.toml'))"
+}
 $markList = @($Marks -split '[,;\s]+' | Where-Object { $_ -ne '' } | ForEach-Object { [int]$_ })
 if ($markList.Count -gt 0) { $arguments += "-DMARKS=$($markList -join ';')" }
 # Every run here is timed, so it is kept on the processor's fastest cores:
@@ -258,6 +295,14 @@ if ($Capture -and $p[0] -eq 'ps2n') {
         $recomp = Join-Path $root 'build\tools-windows\bin\ps2n-recomp.exe'
         $target = if ([IO.Path]::IsPathRooted($Capture)) { $Capture } else { Join-Path $root $Capture }
         & $recomp capture --out $target $target $reported
+    }
+}
+if ($VuCapture -and $vuOurs -ne 'none') {
+    $reported = Join-Path $work 'vu-capture.toml'
+    if (Test-Path $reported) {
+        $recomp = Join-Path $root 'build\tools-windows\bin\ps2n-recomp.exe'
+        $target = if ([IO.Path]::IsPathRooted($VuCapture)) { $VuCapture } else { Join-Path $root $VuCapture }
+        & $recomp vu-capture --out $target $target $reported
     }
 }
 exit 0

@@ -63,6 +63,7 @@ namespace ps2n::host::profile
 		enum Kind
 		{
 			kGame, // the game's code, compiled ahead of time
+			kMicro, // the vector units' micro code, compiled ahead of time (ps2n-recomp vu)
 			kRuntime, // PS2Native's runtime: dispatcher, block record, interpreter, instruction semantics
 			kCore, // PCSX2's core, the C++ of it
 			kGenerated, // host code PCSX2's recompilers generated at run time
@@ -72,6 +73,7 @@ namespace ps2n::host::profile
 		};
 		constexpr const char* kKindNames[kKindCount] = {
 			"the game's code, compiled ahead of time",
+			"the vector units' micro code, compiled ahead of time",
 			"PS2Native's runtime",
 			"PCSX2's core",
 			"host code PCSX2 generated at run time",
@@ -302,6 +304,8 @@ namespace ps2n::host::profile
 				line.SizeOfStruct = sizeof(line);
 				DWORD column = 0;
 				const bool located = SymGetLineFromAddr64(process, address, &column, &line) && line.FileName;
+				if (name.find("ps2n_vu_image_") != std::string::npos)
+					return {kMicro, name};
 				if (name.find("ps2n_image_") != std::string::npos)
 					return {kGame, name, located ? std::string(line.FileName) : std::string(), located ? static_cast<u32>(line.LineNumber) : 0,
 						static_cast<u64>(displacement)};

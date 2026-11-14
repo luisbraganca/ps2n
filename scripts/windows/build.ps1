@@ -23,6 +23,16 @@ repository. -BiosCapture adds what runs reported of the BIOS
 (ps2n-host -bios-capture). Both are remembered like -Game; "none" takes
 them out.
 
+With -VuCapture, the vector units' micro code that runs of a game wrote
+down is compiled into the host as well (docs\adr\0022): the blocks they had
+to interpret (ps2n-host -vu-capture, which scripts\windows\game.ps1
+-VuCapture puts together into one file), each as one function, found at
+run time by what the block is and not by where the game put it. What is
+generated stays in the build tree. -VuSelftestCapture does the same for
+the self-test's random micro programs (scripts\windows\vu-selftest.ps1
+makes the capture and calls this). Both are remembered like -Game; "none"
+takes them out.
+
 With -Pcsx2Source, another PCSX2 source tree is built in the place of the pinned
 submodule: to try PS2Native on a newer PCSX2 before the submodule is moved,
 or to check a change someone made to PCSX2 against the tests here. Give it a
@@ -53,6 +63,11 @@ param(
     [string]$Bios = '',
     # What earlier runs reported of the BIOS for the recompiler (ps2n-host -bios-capture), or "none".
     [string]$BiosCapture = '',
+    # What runs of a game reported of the vector units' micro code (ps2n-host -vu-capture), to compile into the host,
+    # or "none". Remembered by the build tree, as -Game is.
+    [string]$VuCapture = '',
+    # The same from the host's self-test (scripts\windows\vu-selftest.ps1 makes it), or "none".
+    [string]$VuSelftestCapture = '',
     # Profile-guided optimization of the generated code (docs/adr/0019): "generate" builds it to count where it goes
     # (a run then writes the counts where LLVM_PROFILE_FILE says), "use" builds it with the merged counts given as
     # -PgoData (llvm-profdata merge), "off" without either. Remembered by the build tree, as -Game is.
@@ -129,6 +144,14 @@ if ($Bios) {
 if ($BiosCapture) {
     $biosCapturePath = if ($BiosCapture -eq 'none') { '' } else { ForCMake (Resolve-Path -LiteralPath $BiosCapture).Path }
     $gameSettings += "-DPS2N_BIOS_CAPTURE=$biosCapturePath"
+}
+if ($VuCapture) {
+    $vuCapturePath = if ($VuCapture -eq 'none') { '' } else { ForCMake (Resolve-Path -LiteralPath $VuCapture).Path }
+    $gameSettings += "-DPS2N_VU_CAPTURE=$vuCapturePath"
+}
+if ($VuSelftestCapture) {
+    $vuSelftestPath = if ($VuSelftestCapture -eq 'none') { '' } else { ForCMake (Resolve-Path -LiteralPath $VuSelftestCapture).Path }
+    $gameSettings += "-DPS2N_VU_SELFTEST_CAPTURE=$vuSelftestPath"
 }
 if ($Pgo) {
     $gameSettings += "-DPS2N_PGO=$(if ($Pgo -eq 'off') { '' } else { $Pgo })"

@@ -112,6 +112,68 @@ namespace
 	constexpr u32 kNopUpper = 0x000002ffu;
 	constexpr u32 kNopLower = 0x8000033cu;
 
+	// In one mode a program holds encodings microVU knows nothing of
+	// (mVUunknown, microVU_Tables.inl): it generates no code for one, and its
+	// first pass ends the block, and with it the program, after an upper one
+	// that is not in a delay slot. One upper word is exempt from that: the
+	// lower NOP's, which the BIOS writes into the upper slots.
+	bool s_unknownOften = false;
+
+	u32 UnknownUpper(Rng& rng)
+	{
+		const u32 fields = (Dest(rng) << 21) | (Vf(rng) << 16) | (Vf(rng) << 11);
+		switch (rng.Below(3))
+		{
+			case 0: // the first table's empty entries
+				return fields | (Vf(rng) << 6) | (0x30 + rng.Below(12));
+			case 1: // the four second tables' rows from 12 on
+				return fields | ((12 + rng.Below(20)) << 6) | 0x3C | rng.Below(4);
+			default: // and the one hole among their first twelve
+				return fields | (10u << 6) | 0x3F;
+		}
+	}
+
+	u32 UnknownLower(Rng& rng)
+	{
+		const u32 low = rng.Next32() & 0x01ffffffu;
+		switch (rng.Below(4))
+		{
+			case 0: // the holes among the first table's instructions
+			{
+				static constexpr u32 kOps[] = {0x02, 0x03, 0x06, 0x07, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x19, 0x1D, 0x1E, 0x1F, 0x22, 0x23,
+					0x26, 0x27, 0x2A, 0x2B};
+				return (kOps[rng.Below(static_cast<u32>(std::size(kOps)))] << 25) | low;
+			}
+			case 1: // its entries after them, but for the one that leads to the second table
+			{
+				const u32 op = 0x30 + rng.Below(0x4F);
+				return ((op >= 0x40 ? op + 1 : op) << 25) | low;
+			}
+			case 2: // the second table's empty entries
+			{
+				static constexpr u32 kLast[] = {0x33, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B};
+				const u32 k = rng.Below(0x30 + static_cast<u32>(std::size(kLast)));
+				return (0x40u << 25) | (low & ~0x3fu) | (k < 0x30 ? k : kLast[k - 0x30]);
+			}
+			default: // the rows of the four third tables that have no instruction
+			{
+				static constexpr u32 kRows[4] = {
+					(1u << 12) | (1u << 13) | (1u << 14) | (1u << 15) | (1u << 16) | (1u << 25) | (1u << 26) | (1u << 27) | (1u << 28) | (1u << 29) |
+						(1u << 30) | (1u << 31),
+					(1u << 12) | (1u << 13) | (1u << 14) | (1u << 15) | (1u << 16) | (1u << 26) | (1u << 28) | (1u << 29) | (1u << 30) | (1u << 31),
+					(1u << 13) | (1u << 14) | (1u << 15) | (1u << 16) | (1u << 28) | (1u << 29) | (1u << 30) | (1u << 31),
+					(1u << 13) | (1u << 14) | (1u << 15) | (1u << 16) | (1u << 28) | (1u << 30),
+				};
+				for (;;)
+				{
+					const u32 table = rng.Below(4), row = rng.Below(32);
+					if (!(kRows[table] & (1u << row)))
+						return (0x40u << 25) | (low & ~0x7ffu) | (row << 6) | 0x3C | table;
+				}
+			}
+		}
+	}
+
 	// A lower instruction for pair `pair` of `count`; a branch only where its
 	// delay slot is not the program's last pairs, and forward.
 	u32 RandomLower(Rng& rng, bool vu1, u32 pair, u32 count, bool mayBranch, bool& branched)
@@ -566,11 +628,15 @@ namespace
 		return c;
 	}
 
-	int CheckPrograms(int vu, u32 trials, Rng& rng, const char* what)
+	// `run`: how many of the programs are run, from the first; the rest are
+	// only made, so that the random numbers go on as if they had run.
+	int CheckPrograms(int vu, u32 trials, u32 run, Rng& rng, const char* what)
 	{
 		const u32 memSize = MemSize(vu);
 		int failures = 0;
 		u32 pairs = 0;
+		u32 ran = 0;
+		const u64 unknownBefore = ps2n::vu::Stats(vu).unknown;
 		for (u32 trial = 0; trial < trials; trial++)
 		{
 			// The program: count pairs, the last with the E bit, then its delay slot.
@@ -596,12 +662,36 @@ namespace
 					const bool mayBranch = !afterEvil && (!delaySlot || rng.Below(4) == 0);
 					lower = RandomLower(rng, vu != 0, i, count, mayBranch, branched);
 				}
+				// In the mode of the encodings microVU knows nothing of: one in the
+				// upper slot, one in the lower slot, or the BIOS's two NOPs in each
+				// other's slots (the upper one's word is then I's value).
+				bool reversed = false;
+				if (s_unknownOften)
+				{
+					const u32 kind = rng.Below(10);
+					if (kind == 0)
+					{
+						upper = (upper & 0x80000000u) | UnknownUpper(rng);
+					}
+					else if (kind == 1 && !(upper & 0x80000000u))
+					{
+						lower = UnknownLower(rng);
+						branched = false;
+					}
+					else if (kind == 2 && !delaySlot)
+					{
+						upper = kNopLower;
+						lower = kNopUpper;
+						branched = false;
+						reversed = true;
+					}
+				}
 				afterEvil = delaySlot && branched;
 				// The T bit, sometimes, where the interpreter carries it out (not
 				// on a branch), and the D bit, which microVU leaves alone.
-				if (!branched && rng.Below(16) == 0)
+				if (!branched && !reversed && rng.Below(16) == 0)
 					upper |= 0x08000000u;
-				if (rng.Below(16) == 0)
+				if (!reversed && rng.Below(16) == 0)
 					upper |= 0x10000000u;
 				c.words[i * 2] = lower;
 				c.words[i * 2 + 1] = upper;
@@ -611,7 +701,14 @@ namespace
 			c.words[count * 2 + 1] = kNopUpper | 0x40000000u; // E
 			c.words[count * 2 + 2] = kNopLower;
 			c.words[count * 2 + 3] = kNopUpper;
-			pairs += count + 2;
+			// In that mode, sometimes on the E bit's pair too, where the block ends
+			// before the E bit's delay slot, and in the delay slot.
+			if (s_unknownOften && rng.Below(6) == 0)
+				c.words[count * 2 + 1] = UnknownUpper(rng) | 0x40000000u;
+			if (s_unknownOften && rng.Below(6) == 0)
+				c.words[count * 2 + 3] = UnknownUpper(rng);
+			if (trial < run)
+				pairs += count + 2;
 
 			c.start = RandomMachine(vu, rng);
 			c.fbrst = rng.Below(2) ? 0x808u : 0u; // the T bit enabled for both VUs, or not
@@ -624,6 +721,9 @@ namespace
 					c.slices.push_back(1 + rng.Below(48));
 			}
 
+			if (trial >= run)
+				continue;
+			ran++;
 			const std::string difference = RunCase(vu, c);
 			if (difference.empty())
 				continue;
@@ -655,7 +755,7 @@ namespace
 					row("IQqP", s0, sa, sb);
 					std::fprintf(stderr, "selftest:     vi01-05 %04x %04x %04x %04x %04x, FBRST %03x\n", m0.VI[1], m0.VI[2], m0.VI[3], m0.VI[4], m0.VI[5], small.fbrst);
 				}
-				for (u32 i = 0; i < small.count + 1; i++)
+				for (u32 i = 0; i < small.count + 2; i++) // the E bit's pair and its delay slot too
 				{
 					const u32 upper = small.words[i * 2 + 1], lower = small.words[i * 2];
 					if ((upper & ~0xf8000000u) == kNopUpper && lower == kNopLower && !(upper & 0xf8000000u))
@@ -668,15 +768,26 @@ namespace
 			if (ps2n::vu::Unsupported(vu))
 				ps2n::vu::ClearUnsupported(vu); // for the next case
 		}
-		std::fprintf(stderr, "selftest: VU%d micro programs (%s): %u programs, %u instruction pairs, %d differ from PCSX2's VU recompiler\n",
-			vu, what, trials, pairs, failures);
+		// How many instructions of such encodings were in the blocks analysed, the
+		// ones of programs made smaller for a report among them.
+		char unknown[64] = "";
+		if (s_unknownOften)
+		{
+			std::snprintf(unknown, sizeof(unknown), " (%llu instructions of such encodings in the blocks analysed)",
+				static_cast<unsigned long long>(ps2n::vu::Stats(vu).unknown - unknownBefore));
+		}
+		std::fprintf(stderr, "selftest: VU%d micro programs (%s): %u programs, %u instruction pairs%s, %d differ from PCSX2's VU recompiler\n",
+			vu, what, ran, pairs, unknown, failures);
 		return failures;
 	}
 } // namespace
 
-int ps2n::selftest::CheckVuPrograms(uint32_t trials, uint64_t seed)
+int ps2n::selftest::CheckVuPrograms(uint32_t trials, uint32_t run, uint64_t seed)
 {
 	Rng rng{seed ^ 0x5655u};
+	// The last mode has random numbers of its own: the programs of the others
+	// are the ones they were before it was added.
+	Rng rngUnknown{seed ^ 0x554E4B4E4F574E55ull};
 	auto& fixes = EmuConfig.Gamefixes;
 	const bool ibit = fixes.IbitHack;
 	const u32 fbrst = VU0.VI[REG_FBRST].UL;
@@ -685,13 +796,14 @@ int ps2n::selftest::CheckVuPrograms(uint32_t trials, uint64_t seed)
 	const bool o1 = rec.vu1Overflow, e1 = rec.vu1ExtraOverflow, s1 = rec.vu1SignOverflow;
 	static const struct
 	{
-		bool overflow, ibit, nans;
+		bool overflow, ibit, nans, unknown;
 		const char* what;
 	} kModes[] = {
-		{false, false, false, "clamp mode None"},
-		{false, true, false, "clamp mode None and the I-bit game fix (Killzone's)"},
-		{true, false, false, "clamp mode Normal"},
-		{false, false, true, "clamp mode None, a third of the floats NaN"},
+		{false, false, false, false, "clamp mode None"},
+		{false, true, false, false, "clamp mode None and the I-bit game fix (Killzone's)"},
+		{true, false, false, false, "clamp mode Normal"},
+		{false, false, true, false, "clamp mode None, a third of the floats NaN"},
+		{false, false, false, true, "clamp mode None, with encodings PCSX2's VU recompiler knows nothing of"},
 	};
 	int failures = 0;
 	for (int vu = 0; vu < 2; vu++)
@@ -703,10 +815,12 @@ int ps2n::selftest::CheckVuPrograms(uint32_t trials, uint64_t seed)
 			rec.vu0SignOverflow = rec.vu1SignOverflow = false;
 			fixes.IbitHack = mode.ibit;
 			s_nanOften = mode.nans;
-			failures += CheckPrograms(vu, trials, rng, mode.what);
+			s_unknownOften = mode.unknown;
+			failures += CheckPrograms(vu, trials, run, mode.unknown ? rngUnknown : rng, mode.what);
 		}
 	}
 	s_nanOften = false;
+	s_unknownOften = false;
 	rec.vu0Overflow = o0;
 	rec.vu0ExtraOverflow = e0;
 	rec.vu0SignOverflow = s0;

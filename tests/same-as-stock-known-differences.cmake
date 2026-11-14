@@ -2,8 +2,9 @@
 #
 # Programs whose compiled run is not the run of stock PCSX2 with its
 # recompilers, sync point by sync point (the <suite>/same-as-stock/* tests,
-# ADR 0011). These tests still run; CTest expects them to fail and reports it
-# when one starts to pass.
+# ADR 0011). These tests still run; they are expected to fail by parting from
+# the stock run, and CTest reports it when one starts to pass, or fails in
+# another way (tests/tests.cmake, ps2n_expect_failure).
 #
 # Time is counted as PCSX2's recompiler counts it, so a run only parts from
 # the stock run where something is computed differently on purpose (ADR 0005:

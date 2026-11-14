@@ -21,6 +21,13 @@ namespace ps2n::selftest
 		/// Random micro programs per VU and setting, run on PCSX2's VU
 		/// recompiler and on PS2Native's VU interpreter (selftest_vu.cpp).
 		uint32_t vu_trials = 2000;
+		/// Of those, how many of each VU and setting are run, from the first: the
+		/// rest are made (so that the ones run are the same programs whatever
+		/// this says) and left alone. For the programs a build has compiled
+		/// (scripts/windows/vu-selftest.ps1).
+		uint32_t vu_run = ~0u;
+		/// Only the micro programs, none of the other checks.
+		bool vu_only = false;
 		uint64_t seed = 0x9E3779B97F4A7C15ull;
 	};
 
@@ -29,5 +36,6 @@ namespace ps2n::selftest
 
 	/// PS2Native's VU interpreter against PCSX2's VU recompiler on random
 	/// micro programs, for each VU. Returns the number that differ.
-	int CheckVuPrograms(uint32_t trials, uint64_t seed);
+	/// Of each VU and setting, the first `run` of the `trials` programs are run.
+	int CheckVuPrograms(uint32_t trials, uint32_t run, uint64_t seed);
 } // namespace ps2n::selftest

@@ -62,7 +62,7 @@ page.
 | 38,478,822 moments, 3 GB, 4,199 frames, 47,705,744 event tests, 1.11% | game-log.md, "G3", "4,200 frames, with the button press" |
 | The first chart: 22.7 s and 23.4 s, 11.3 s and 12.3 s, the three runs of each, 1.03 and 1.09 | game-log.md, "G10", "Where it stands (main tree, 2026-11-13)" |
 | 25.7 s and 15.1 s, 1.12 and 1.35 for the first 4,200 frames on 2026-11-11 | game-log.md, "G3", "4,200 frames, with the button press" |
-| 1.35 and 1.01 for the run into the first level, its play as long as under stock PCSX2; the changes named in the first chart's note | game-log.md, the table at the top: G5, G6 ("seven changes"), G7, G8, G9, G10 |
+| 1.35 and 0.97 for the run into the first level, its play 0.95 times stock PCSX2's; the changes named in the first chart's note | game-log.md, the table at the top: G5, G6 ("seven changes"), G7, G8, G9, G10, G11 |
 | 1.21 to 1.23 times for the run into the first level | game-log.md, "G6", "What each change gave" |
 | G4: "played by the maintainer in a window, with sound and a controller, on Windows" | game-log.md, "G4", "A window, sound and a controller" |
 | 59 of 63 test programs | game-log.md, "The timing difference", "What was measured" |
@@ -70,8 +70,10 @@ page.
 | The longer run: three and a half minutes of the first level, 93,221,937 moments, 1,750 pictures compared | game-log.md, "G4", "The compiled game against stock PCSX2" |
 | 51 instructions interpreted in the first 4,200 frames, at boot; the BIOS kernel "Static"; G8's 1.18 times | game-log.md, "G8": "The game's code in kernel memory, compiled with the game", "What is still interpreted, and why", "The time" |
 | G10's 1.01 times, its play as long as stock PCSX2's | game-log.md, "G10", "The FPU's arithmetic on SSE registers (main tree, 2026-11-13)" |
-| G11: 40 times a frame, 208 pieces, 5,405 places, 6,088 programs, a third of the time | game-log.md, "G11", "What the vector units run, measured" |
-| G11: 16,000 random programs; the level the same run at every one of its 93 million comparisons with both vector units on the interpreter | game-log.md, "G11", "The interpreter against microVU, on random programs" and "PS2Native's VU interpreter" ("The level run") |
+| G11: 6,088 programs | game-log.md, "G11", "What the vector units run, measured" |
+| G11: 589 different blocks | game-log.md, "G11", "The translator: a block's plan, made once" |
+| G11: 20,000 random programs; nothing interpreted in the run into the first level, none on PCSX2's recompiler; still the stock run; 0.97 and 0.95 times stock PCSX2's time | game-log.md, "G11", "Where G11 stands" |
+| "What is static": the vector units' micro programs static, the IOP's modules a stand-in | game-log.md, "G11", "Where G11 stands"; [ADR 0003](../adr/0003-no-jit-in-generated-games.md) |
 | 40 of 55, 39, 38, and "on no line" | [ADR 0005](../adr/0005-never-further-from-the-console-than-pcsx2.md) |
 | 204 instructions, 4,077,475 and 36,976,118 cases | [poc-log.md](../poc-log.md), "Increment 5" |
 | The six loops: the ratios and the milliseconds, "a few percent from one build to the next" | game-log.md, "G10", "Where it stands (main tree, 2026-11-13)" and "The website's two charts, measured again" |
