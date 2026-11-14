@@ -25,7 +25,10 @@ The run files, pictures included, are under the git-ignored build tree.
 | G10 Performance | **Done** (2026-11-13, ended there by the maintainer; [ADR 0019](adr/0019-performance-as-the-research-lays-it-out.md), begun 2026-11-12): play measured apart from startup, with nothing drawn and with the hardware renderer (the same time: the CPU thread's), and profiled. Profile-guided optimization of the generated code, trained on another run of the level: play takes 1.13 times stock PCSX2's time, from 1.21, startup 1.07, from 1.11, the whole level run 1.11, from 1.18. Then loops that have reached a fixed point (a time round that leaves the machine as it found it): their times round up to the next event test are not run, their cycles counted at once, the event test made where it would have been. The game waits for each frame in one: play takes 1.08 times stock PCSX2's time, startup 1.05, the whole level run 1.07. The COP2 transfers made by compiled code, and link-time optimization of PS2Native's code: no gain. Then the COP2 instructions that come first in their block, 78% of what compiled code still handed to the runtime for COP2, carried out by compiled code unless VU0 is running a micro program: play takes 1.06 times stock PCSX2's time, the whole level run 1.06. Then the rest of them (`VCALLMS` called the way PCSX2's recompiler calls it, `CFC2` and `CTC2` as moves): nothing the timing shows; the runtime now carries out only those at which VU0 is running. Still the stock run and the interpreted run, and every test passes. In the main tree beside it ([ADR 0021](adr/0021-two-sessions-on-step-g10.md)), each change measured by itself without profile-guided optimization: calls through a register made by compiled code itself, play from 1.18 to 1.16 times stock PCSX2's time; the way a load or store seldom takes made short, the game's code 14% smaller, play 1.14; the FPU's settings read once per function, tried and taken out. `ps2n-host -code-size` says how much host code each kind of generated line becomes. The two together, in one history and with profile-guided optimization: play takes 1.04 times stock PCSX2's time, the whole level run 1.04, still the stock run. On 2026-11-13 a third session measured the website's two charts again (the first 4,200 frames 1.09 times stock PCSX2's time with nothing drawn, from 1.35, and 1.03 with the software renderer, from 1.12; of the six loops, `jump` and `call` now about as fast as PCSX2's recompiler, `mmi` at 1.24 as at P4) and made `lq` and `sq` loads and stores on the locals and a block start's call of the runtime one of one argument (the host 12 MB smaller): play still 1.04 times stock PCSX2's time. Then, at the maintainer's word, the FPU's arithmetic: its registers held in SSE registers, as PCSX2's recompiler holds them, and the bits its additions keep past the guard bit looked up instead of branched to, the self-test holding all 511 cases of that to PCSX2's recompiler. Without profile-guided optimization play went from 1.10 to 1.046 times stock PCSX2's time; with it, play takes as long as stock PCSX2's (0.985 to 1.006 times, six rounds in pairs), the whole level run 1.01. Still the stock run and the interpreted run, and every test passes. Where it stands is in "G10" below. |
 | G11 The vector units' micro programs | **Done** (2026-11-14, [ADR 0022](adr/0022-vu-micro-programs-compiled-as-step-g11.md), begun 2026-11-13): measured first, the host watching the core's two VU providers (`ps2n-host -vu-report`). In play VU1's micro memory is rewritten about 40 times a frame, yet all it is given over the level run is 208 distinct pieces of code, 1,750 distinct instruction pairs, written at 5,405 places; PCSX2's VU recompiler makes 6,088 programs of them, and spends about a tenth of play's CPU-thread time starting programs, finding which one memory holds and making new ones. VU0 runs one set of code, written once at boot, started 51.5 million times. The vector units took about a third of play's CPU-thread time. The maintainer's choices with the measurement: VU1's registers held to the stock run at every sync point too, and PS2Native's own VU interpreter before the translator. The interpreter (2026-11-13) follows microVU's analysis of a block, its record of programs and blocks, its instructions and, where results show it, its allocation of host registers. The translator (2026-11-14): what microVU's second pass decides for a block is made once, as a list of steps (the block's plan), the same for the same code wherever the game writes it, and each plan is compiled ahead of time as one C++ function, found at run time by a fingerprint of the plan. Over the level run VU1's 42,173 blocks in 6,088 programs have 589 plans. Blocks go on to each other as microVU's do, and the program at a start or a jump is not looked for where it cannot have changed. After one run and one rebuild every one of the level run's 1.19 billion block runs is compiled code's: none is interpreted, and none runs on PCSX2's VU recompiler. The self-test finds the semantics to be microVU's on every case tried: 20,000 random micro programs, in five settings, give its results, cycle counts and TPC, 1,500 of them with every block compiled. Every test passes (468), PS2Native's configurations now on PS2Native's VU provider. The level run is the stock run at every one of its 93,221,937 sync points, VU0's and VU1's registers included, with the same picture at each of the 1,750 frames compared, and over the first 4,200 frames it is the interpreted run at every one of 47,705,744 event tests, the micro code interpreted there too. Play takes 0.95 times stock PCSX2's time (53.4 s against 56.2 s, three rounds in turn), the whole level run 0.97, from 1.00 and 1.01. Where it stands is in "G11" below. |
 | G12 The IOP's code | **Done** (2026-11-14, [ADR 0023](adr/0023-the-iops-code-compiled-as-step-g12.md)): measured first, the host watching the core's IOP provider (`ps2n-host -iop-report`). Over the level run the IOP runs about 10,600 different blocks of code, 58,000 instructions, nearly all of them formed in the first 250 frames and 17 after the level has loaded; 85% of its cycles pass in stretches that end where its kernel's idle loop is; the host spends 16% of the run inside its provider, most of that not in the IOP's code but around it. The same address holds different code at different times: the IOP is started three times, the last with the game's own modules. The IOP's place and registers are now held to the stock run at every sync point. PS2Native's IOP provider keeps the record of blocks PCSX2's IOP recompiler keeps, and carries a block out by its interpreter or by a function compiled ahead of time: one C++ function for each block as that recompiler formed it, found by a fingerprint of its instructions wherever the IOP's kernel loaded them. After one run and one rebuild every one of the level run's 911 million block runs of IOP code is compiled code's (8,023 blocks): none is interpreted, and none runs on PCSX2's IOP recompiler, whose own table holds no block after the run. The self-test finds the provider to be PCSX2's IOP recompiler on 4,000 random programs, in registers, memory, time and the blocks each holds, 1,500 of them with every block compiled; it found a form on which that recompiler loses a jump's target, which the provider stops at. Every test passes (469). The level run is the stock run at every one of its 93,221,937 sync points, the IOP's place and registers included, once both runs start with the console's clock at the same time (the first comparison found the two reading different times of day), and over the first 4,200 frames it is the interpreted run at every one of 47,705,744 event tests, the IOP's code interpreted there too. Play takes 0.95 times stock PCSX2's time (53.7 s against 56.6 s, three rounds in turn), the whole level run 0.97: what they took with PCSX2's IOP recompiler under the compiled game. No recompiler of PCSX2's for PS2 code now carries out anything in the run into the first level. Where it stands is in "G12" below. |
-| G13 Playing on | **Not begun** (2026-11-14, [ADR 0024](adr/0024-further-into-the-game-before-phase-3-ends.md)): the next step, chosen by the maintainer when G12 was done. The maintainer plays on in the window, beyond what the scripts reach; what each session had to interpret, of the game's code, of the micro code and of the IOP's, goes into the captures and is compiled into the next build, which is checked again and reported on. It waits for the first session. |
+| G13 Playing on | **In progress** (2026-11-14, [ADR 0024](adr/0024-further-into-the-game-before-phase-3-ends.md)): the next step, chosen by the maintainer when G12 was done. The maintainer plays on in the window, beyond what the scripts reach; what each session had to interpret, of the game's code, of the micro code and of the IOP's, goes into the captures and is compiled into the next build, which is checked again and reported on. The first session, 2 minutes 48 seconds into the first level on PCSX2's hardware renderer, interpreted none of the game's EE code, 26 blocks of VU1's micro code and 791 blocks of the IOP's, 772 of them in the memory card's modules, which the scripted runs never meet (they have no memory card); all of them are compiled into the build since; every test passes, and the scripted runs are still the stock run and the interpreted run. Where it stands is in "G13" below. |
+| G14 How a game is shown | **Not begun** (2026-11-14, [ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)): at the maintainer's word, the window's defaults: PCSX2's Vulkan renderer, a picture of 1920 by 1080, the game drawn at three times the console's resolution. |
+| G15 PCSX2's patches; widescreen | **Not begun** (2026-11-14, [ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)): PCSX2's patches available to the host, and a game's widescreen patch applied by default when there is one. Where the patches come from is put to the maintainer first. |
+| G16 The frame-rate patch | **Not begun** (2026-11-14, [ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)): a game's frame-rate patch applied by default when there is one, its speed measured. |
 
 ## The steps and their pass criteria
 
@@ -45,6 +48,9 @@ The run files, pictures included, are under the git-ignored build tree.
 | G11 The vector units' micro programs ([ADR 0022](adr/0022-vu-micro-programs-compiled-as-step-g11.md)) | The micro programs the game runs on VU0 and VU1 compiled ahead of time by PS2Native's own translator, in the place of PCSX2's VU recompiler (microVU), following it as every family follows PCSX2's recompiler ([ADR 0005](adr/0005-never-further-from-the-console-than-pcsx2.md)). Measured first: what is written into micro memory, what is started where, how long it runs. VU1's registers then held to the stock run at every sync point, as the EE's and VU0's are. Then PS2Native's own VU interpreter, on semantics of its own, VU0's code first: the reference, and what runs code a build has not compiled. Then the translator, checked against it. | The game's micro programs are carried out by code compiled ahead of time, or by PS2Native's VU interpreter where a build has not compiled them, each such place listed; none by PCSX2's VU recompiler. The self-test finds the semantics to be microVU's on every case tried. Every test passes, and the game is still the stock run, VU1's registers included, and the interpreted run. The level run's time measured against stock PCSX2. |
 | G12 The IOP's code ([ADR 0023](adr/0023-the-iops-code-compiled-as-step-g12.md)) | The I/O processor's code, the BIOS's modules and the game's, compiled ahead of time by PS2Native's own translator, in the place of PCSX2's IOP recompiler, the last stand-in of [ADR 0003](adr/0003-no-jit-in-generated-games.md), following it as every family follows PCSX2's recompiler. Measured first: what the IOP runs, from where, how often its code changes, how long it takes. The IOP's place and registers then held to the stock run at every sync point. Then PS2Native's own IOP provider: the record of blocks PCSX2's IOP recompiler keeps, and an interpreter of them, the reference and what runs code a build has not compiled. Then the translator, checked against it. | The IOP's code is carried out by code compiled ahead of time, or by PS2Native's IOP interpreter where a build has not compiled it, each such place listed; none by PCSX2's IOP recompiler. The self-test finds the provider to be PCSX2's IOP recompiler on every case tried. Every test passes, and the game is still the stock run, the IOP's place and registers included, and the interpreted run. The level run's time measured against stock PCSX2. |
 | G13 Playing on ([ADR 0024](adr/0024-further-into-the-game-before-phase-3-ends.md)) | Further into the game than the scripts reach, before Phase 3 ends. The maintainer plays on in the window; each session writes down what it had to interpret (the game's EE code, the micro code, the IOP's code). That goes into the captures, and the build is made again and checked again. For each part of the game played: how much code no build had seen, on which processor, and what went wrong, if anything, with its cause. | What the sessions had to interpret is compiled into the next build and reported, part by part. After each rebuild every test passes and the scripted runs are still the stock run and the interpreted run. What goes wrong in play is listed with its cause, and put right by a change that is not for this game alone or left with its reason. How far is far enough is the maintainer's to say. (The criterion is the session's proposal: ADR 0024.) |
+| G14 How a game is shown ([ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)) | The window's defaults: PCSX2's Vulkan renderer; a picture of 1920 by 1080, or as large as the screen allows at those proportions; the game drawn at three times the console's resolution. Each can still be changed (`game.ps1 -Renderer`, `-Upscale`). The comparisons keep the software renderer, which draws the same picture on every machine. | The window check passes on Vulkan with those defaults, at the console's pace, the picture the size asked for. Every test passes, and the scripted runs are unchanged. |
+| G15 PCSX2's patches; widescreen ([ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)) | PCSX2's patches made available to the host, from where the maintainer chooses. A game's widescreen patch applied by default when PCSX2 has one: in the window, and in a scripted run that asks for it, on both sides of a comparison alike. A patch that changes the game's code is met as code nothing was compiled from: interpreted, reported, captured, and compiled by the next build. | Killzone in 16:9 in the window. After one rebuild nothing of the patched code is interpreted. A scripted run with the patch is the stock run with the patch, and the interpreted run. Every test passes. |
+| G16 The frame-rate patch ([ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)) | The same for a game's frame-rate patch, when PCSX2 has one, applied by default. | As for G15, and the speed measured against stock PCSX2 with the same patch; in the window at the console's pace, or what it falls short by reported. |
 
 The brief's rules for this phase: reusable solutions, no game-specific
 hardcoding unless unavoidable, and no wizard or packaging yet.
@@ -3634,6 +3640,83 @@ recompiler compiles there and PS2Native's provider looks up by their
 instructions: the one in the other's place makes no difference that the
 timing shows. The chart keeps its numbers of 2026-11-13.
 
+## G13: playing on (Windows, 2026-11-14)
+
+Step G13 ([ADR 0024](adr/0024-further-into-the-game-before-phase-3-ends.md)):
+the maintainer plays further into the game than the scripts reach, in the
+window; what each session had to interpret goes into the captures, is
+compiled into the next build, and the build is checked again.
+
+### The first session (2026-11-14)
+
+Started for the maintainer at their word ("Can you run it for me please?")
+with the command in "How to run it": 8,358 frames, 2 minutes 48 seconds,
+closed in the first level (the last picture: the squad behind a ridge, a
+prompt to zoom with R3). The window kept 49.75 frames a second where the
+console shows 50. The picture was PCSX2's hardware renderer, Direct3D 12,
+which PCSX2 chooses for this computer when a window does not say
+(`game.ps1 -Play` leaves the renderer to it), at the console's own
+resolution; its cache of pipelines was found stale when the session began
+and was made again. The maintainer's word on it: "The game looks good,
+considering it's using software render, no FPS patch, no widescreen patch
+and no upscale." (The log says Direct3D 12, not the software renderer. No
+upscaling was asked for, and no patch could be applied: PCSX2's
+`patches.zip`, from which its widescreen and other patches come, is not
+among the host's resources.)
+
+What the session had to interpret, processor by processor:
+
+| | Interpreted | Block runs interpreted |
+|---|--:|--:|
+| The game's EE code | nothing (the BIOS's 51 instructions at boot, as always) | – |
+| VU0's micro code | nothing | – |
+| VU1's micro code | 26 blocks | 52,397 of 210,622,960 |
+| The IOP's code | 791 blocks, of 8,765 different ones | 528,062 of 442,597,942 |
+
+Where the IOP's 791 were first met: the memory card's modules, 772 of them
+(`mcman` 515, `secrman_for_cex` 193, `mcserv` 64); the game's sound driver
+(`PSound_R`) 7; the disc drive's driver 7; the heap library 4; the thread
+manager 1. The scripted runs have no memory card in the console; a session
+in the window has the one the sessions share. VU1's 26 are micro code the
+level script does not reach.
+
+They went into the captures (VU1's blocks from 554 to 580; the IOP's from
+8,023 to 8,814, 50,704 instructions; the game's EE capture unchanged), and
+the build was made again: the recompiler wrote them out and the build
+compiled them in, eleven seconds, only the generated parts having changed.
+The counts of profile-guided optimization were not made again, so the new
+blocks have none.
+
+**Checked again.** With them built in, the level run is still the stock
+run at every one of its 93,221,937 sync points: the same place and time,
+and the same registers, the IOP's and the VUs' among them, but for the
+FPU's at the same 964; the same picture at each of the 1,750 frames
+compared, and the sound hardware in the same state at each of 1,750
+moments. Over the first 4,200 frames it is the interpreted run at every
+one of 47,705,744 event tests (`DBCD0205447FBA7C`, as at G12). A window
+check, muted, to the title screen, with a copy of the memory card the
+sessions use: 8,209 different blocks of IOP code ran, every one of them
+compiled (G12's check, with a card of its own, had interpreted 349), and
+none of the micro code was interpreted. The host has 15,220 blocks of IOP
+code compiled, the self-test's among them, and 1,550 of VU1's.
+
+None of these checks runs the session's 817 blocks against anything: the
+scripted runs do not reach them, and a session in the window is not
+compared. What holds them to PCSX2 is that the same translator made them
+that the self-tests and the scripted runs hold to it. Recording a
+session's input, so that it can be run again and compared as the scripted
+runs are, was put to the maintainer, who chose it (ADR 0024, "Sessions
+recorded, to be run again"); it is the next thing built for G13.
+
+**One test given more time.** In the first run of the suite after the
+rebuild, `selftest/tables-and-semantics` was stopped by its own time limit,
+in the middle of its random IOP programs; nothing in it had differed. The
+limit was the test driver's 60 seconds, set when the self-test was a
+fraction of what it is now: by itself it takes 38 s, beside the rest of the
+suite it took 48 s at the end of G12, and that time more than 60. It has a
+limit of its own now, 300 s (`tests/tests.cmake`), and every test passes
+(469; the self-test 51 s beside the suite).
+
 ## Open
 
 - **What is left of VU0 in the game's EE code.** Since G7 its instructions
@@ -3776,8 +3859,14 @@ timing shows. The chart keeps its numbers of 2026-11-13.
   first level. Longer sessions go where no script has been: each writes
   down what it had to interpret, for a rebuild. Stock PCSX2 opens in the
   same window (`-Config stock-jit`) for whoever wants the two side by
-  side. This is the next step, G13
-  ([ADR 0024](adr/0024-further-into-the-game-before-phase-3-ends.md)).
+  side. This is step G13
+  ([ADR 0024](adr/0024-further-into-the-game-before-phase-3-ends.md)),
+  begun on 2026-11-14 with a session of 2 minutes 48 seconds ("G13").
+- **A session cannot be compared with the stock run.** Its input and its
+  time are live, so the code a session reaches that the scripts do not is
+  compiled and run, but not held to the stock run sync point by sync point
+  as the scripted runs are. Recording a session's input, to run it again
+  without a window and compare it, is being built (ADR 0024).
 - **The window on Linux.** Not written: `ps2n-host -window` says so there.
   `pcsx2-gsrunner` has the X11 window to go by.
 - **The pictures the runs saved have only been looked at by the AI

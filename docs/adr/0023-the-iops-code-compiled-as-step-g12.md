@@ -240,3 +240,16 @@ choose.
 - PCSX2's IOP recompiler throws its whole record away when its room for
   host code is full, which PS2Native's provider cannot know. The level run
   fills 1.85 MB of its 32 MB.
+
+## The issue (2026-11-14)
+
+The maintainer opened PCSX2's issue 15192 on 2026-11-14, "IOP recompiler
+can lose the jump target for JR and JALR", in their own words; the session
+wrote none of it. Read by the session the same day: what it says holds by
+reading PCSX2's code, its reproduction with `JR` included (a store of the
+jump's own register in the delay slot keeps `psxTrySwapDelaySlot` from
+moving it ahead of the jump). The session told the maintainer two things:
+that the correction they describe has to change the type in both places of
+each function, the allocation and the check after the delay slot; and that
+the issue does not say the self-test that found the defect was written by
+an AI session and ran on PCSX2's core inside PS2Native.

@@ -112,8 +112,19 @@ PCSX2's for PS2 code carries anything out, and none of ADR 0003's
 stand-ins is in use. The next step, at the maintainer's word the same day
 (ADR 0024), is G13: further into the game before Phase 3 ends, the
 maintainer playing on in the window and what each session had to
-interpret compiled into the next build. It has not begun: it waits for
-the maintainer's first session. Phase 4 needs its own approval.
+interpret compiled into the next build. The first session, the same
+evening (2 minutes 48 seconds, into the first level, on PCSX2's hardware
+renderer), interpreted none of the game's EE code, 26 blocks of VU1's
+micro code and 791 blocks of the IOP's, 772 of them in the memory card's
+modules (the scripted runs have no memory card). They are compiled into
+the build since; every test passes, and the scripted runs are still the
+stock run and the interpreted run. At the maintainer's word the same
+night: sessions are recorded, to be run again and compared as the
+scripted runs are (ADR 0024), and the steps after G13 are G14 to G16
+(ADR 0025): the window's defaults (Vulkan, a picture of 1920 by 1080, the
+game drawn at three times the console's resolution), then PCSX2's
+patches, with a game's widescreen and frame-rate patches applied by
+default when there are any. Phase 4 needs its own approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -167,9 +178,10 @@ Decisions:
   and the correction are the maintainer's to write, not a session's. The
   two issues, PCSX2's numbers 15185 and 15186, were opened on 2026-11-11.
   15186 was answered within the hour: the defect and its correction were
-  confirmed there. 15185 had no reply on 2026-11-12: from 2026-12-11, look
-  by reading only whether it has one, and tell the maintainer. PCSX2's team
-  asked there that no LLM-generated issues be sent.
+  confirmed there, and PCSX2 corrected it that night (in `v2.9.173`).
+  15185 had no reply on 2026-11-14: from 2026-12-11, look by reading only
+  whether it has one, and tell the maintainer. PCSX2's team asked there
+  that no LLM-generated issues be sent.
 - [ADR 0011](docs/adr/0011-time-is-counted-as-pcsx2s-recompiler-counts-it.md):
   time is counted exactly as PCSX2's EE recompiler counts it. A run on
   PS2Native is the stock run, sync point for sync point; a difference is a
@@ -190,7 +202,8 @@ Decisions:
   long as it costs nothing in speed and changes nothing on screen. (Had the
   issue been ignored for 30 days, the correction would have been carried
   locally; it was confirmed instead.) `tests/programs/countcarry.s` shows
-  it.
+  it. PCSX2 corrected it on 2026-11-12, first in `v2.9.173`; PS2Native
+  still pins `v2.9.170`, and moving the pin is a decision of its own.
 - [ADR 0014](docs/adr/0014-the-website-is-served-from-docs.md): the project
   has a website, one page that GitHub Pages serves from `docs/` as it is
   (`docs/.nojekyll`). The documentation stays where it is; the site is
@@ -320,7 +333,8 @@ Decisions:
   0): the provider stops at that form. On 2026-11-14 the maintainer chose
   to tell PCSX2 themselves, in an issue of their own, and asked for a
   draft to go by; the session wrote none, as ADR 0010 has it, and gave
-  where the defect is and how it is seen (the ADR's section on it).
+  where the defect is and how it is seen (the ADR's section on it). The
+  maintainer opened it the same day: PCSX2's issue 15192.
 - [ADR 0024](docs/adr/0024-further-into-the-game-before-phase-3-ends.md):
   the next step, G13, inside Phase 3, at the maintainer's word on
   2026-11-14 ("Ok", to the session's recommendation): further into the
@@ -330,9 +344,25 @@ Decisions:
   session puts that into the captures, makes the build again, checks it
   again and reports what new code each part of the game brought, and what
   went wrong. The step's criterion is the session's proposal, and how far
-  is far enough is the maintainer's to say. Not begun: its first move is
-  a session of the maintainer's (`game.ps1 -Play` with `-Capture`,
-  `-VuCapture` and `-IopCapture`; the game log's "How to run it").
+  is far enough is the maintainer's to say. Begun on 2026-11-14 with a
+  first session of the maintainer's (`game.ps1 -Play` with `-Capture`,
+  `-VuCapture` and `-IopCapture`; the game log's "How to run it", and
+  "G13" for what it brought). The maintainer's answer after it ("1.
+  Yes"): a session records what it takes to run it again (its
+  controller's input frame by frame, its memory card and its clock at the
+  start), and a session is run again without a window and compared.
+- [ADR 0025](docs/adr/0025-how-a-game-is-shown-and-its-patches.md): how
+  a game is shown by default, at the maintainer's word on 2026-11-14
+  ("I want the defaults to be: 1920x1080, Vulkan, Automatically apply
+  Widescreen/FPS patches if available"; "let's split into several
+  steps"): G14, the window's defaults (PCSX2's Vulkan renderer, a picture
+  of 1920 by 1080, the game drawn at three times the console's
+  resolution, each changeable); G15, PCSX2's patches available to the
+  host and a game's widescreen patch applied by default, where the
+  patches come from put to the maintainer first (a new dependency); G16,
+  a game's frame-rate patch likewise, its speed measured. The comparisons
+  keep the software renderer. Phase 4's wizard starts from these
+  defaults.
 
 ## Layout, build and test
 

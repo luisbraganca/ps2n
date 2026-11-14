@@ -197,8 +197,11 @@ function(ps2n_add_program_tests suite name elf expected image)
 endfunction()
 
 # The host's self-test: PS2Native's decoder, cycle table and instruction
-# semantics against PCSX2's opcode table, interpreter and recompiler.
-ps2n_add_guest_test("selftest/tables-and-semantics" 600 "selftest" -DSELFTEST=1)
+# semantics against PCSX2's opcode table, interpreter and recompiler, then
+# the random programs of the VU and IOP providers. Its own time limit, not
+# the test driver's 60 seconds: it takes 38 s by itself and up to a minute
+# and more beside the rest of the suite (2026-11-14).
+ps2n_add_guest_test("selftest/tables-and-semantics" 600 "selftest" -DSELFTEST=1 -DSECONDS=300)
 
 # The same random micro programs carried out by code compiled ahead of time
 # (step G11): the first so many for each VU and setting, whose blocks a build

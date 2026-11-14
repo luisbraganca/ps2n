@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Accepted; not begun |
+| Status | Accepted; in progress |
 | Date | 2026-11-14 |
 | Decided by | Maintainer, on the session's recommendation |
 
@@ -68,11 +68,44 @@ otherwise.
 
 ## Consequences
 
-- The game log has the step in its two tables, as not begun, and the
-  command for a session that keeps what it had to interpret ("How to run
-  it").
+- The game log has the step in its two tables, the command for a session
+  that keeps what it had to interpret ("How to run it"), and what each
+  session brought ("G13").
 - The step's first move is the maintainer's: a session in the window.
+  The first was on 2026-11-14, started for them at their word ("Can you
+  run it for me please?"); the game log has what it brought ("G13").
 - The window check of G12 showed what to expect of the IOP: a session
   there has a memory card, which the scripted runs do not, and it
   interpreted 349 blocks, of the memory card's modules above all, that no
   script reaches.
+
+## Sessions recorded, to be run again (2026-11-14)
+
+After the first session, the session's report put the question this record
+had left for then. As it was put:
+
+"**Record sessions so they can be replayed?** I recommend yes. The window
+would save your controller input frame by frame, plus copies of the memory
+card and the clock at the start. I could then replay the session without a
+window and compare it with stock PCSX2 at every sync point, as I do for the
+scripted runs. A replay can drift from what you saw on screen, but both
+sides of the comparison get exactly the same input. It means a change to
+the host. Without it, the code you reach is compiled but never compared."
+
+The maintainer's word: "1. Yes"
+
+How it was read:
+
+- **A session in the window writes down what it takes to run it again**:
+  the controller's input frame by frame, in the form of the scripts the
+  scripted runs take (`-pad`); the memory card as it was when the session
+  began; the time the console's clock started at.
+- **A session written down is run again without a window**, as a scripted
+  run is, and held to the stock run sync point by sync point and to the
+  interpreted run, after what it brought has been compiled. That becomes
+  part of G13's check after each session.
+- **A replay is the session as the machine took it in at frame
+  boundaries.** Where it parts from what the maintainer saw (the hardware
+  renderer's picture against the software renderer's, input that came
+  between two frames), it is still one run, which both sides of a
+  comparison get alike.

@@ -86,3 +86,22 @@ above; `tests/programs/countcarry.s` says when that day has come.
   `EntryHi` matters to a program that reads it back, or that writes the TLB
   without setting it first. A game that behaves differently from a console
   around the fourteenth second of anything is where to look.
+
+## Corrected in PCSX2 (2026-11-12)
+
+PCSX2 corrected it the night the issue was opened: the commit `82cac38b2a`,
+"R5900: Use correct store width for cop0 count", on 2026-11-12, with the
+correction the issue suggested (the store made 32 bits wide), and the issue
+was closed as done. The first of PCSX2's versions with it is `v2.9.173`;
+the latest on 2026-11-14 is `v2.9.179`. Looked up by reading only.
+
+PS2Native still pins `v2.9.170`
+([ADR 0004](0004-proof-of-concept-environment.md)), so it goes on
+reproducing the carry, as this record has it. Moving the pin to a version
+that has the correction is a decision of its own, not yet put to the
+maintainer: every comparison is with stock PCSX2, so the stock runs change
+with it, and every rule PS2Native follows from PCSX2's recompilers (the
+EE's blocks, microVU's analysis, the IOP's blocks) has to be checked against
+the newer code first. When the pin moves, `MFC0` goes back to a 32-bit
+addition and `tests/programs/countcarry.s` prints what PCSX2's interpreter
+prints.
