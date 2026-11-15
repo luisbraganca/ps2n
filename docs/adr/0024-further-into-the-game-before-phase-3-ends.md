@@ -114,3 +114,30 @@ Built on 2026-11-14 (game log, "G13", "Sessions written down, and run
 again"). To be written down, the console's clock in a window is now set by
 the host, to this computer's time of day, where it had been left to the
 core, which takes the time of day itself.
+
+## The patches a session was played with (2026-11-15)
+
+With G17 done (ADR 0025), the session's report put this as it was put:
+"A recorded session doesn't note which patches it was played with, so
+replaying it needs -Patches widescreen,fps added by hand (forgetting it
+gives a replay that isn't the session). Should sessions note their
+patches, so a replay picks them up by itself?", with "Yes, as a small next
+step" recommended ("The session writes down its patches and overclock, and
+a replay applies them unless told otherwise. Checked with a replay as
+today.") against "Not now". The maintainer's answer: "Yes, as a small next
+step".
+
+How it was read:
+
+- **A session writes down the patches it was played with** (`patches
+  widescreen,fps`, or `none`) and, where it was given one, PCSX2's EE cycle
+  rate (`ee-cycle-rate 0`), beside its clock.
+- **A run of it again applies them**, unless it is given its own
+  (`-patches`, `-ee-cycle-rate`; `game.ps1 -Patches`, `-EeCycleRate`).
+- **The overclock a patch's note asks for is not written down as a rate.**
+  In the session the note set it when the game's executable started; a rate
+  given to a run is set from the machine's start, the BIOS's code included,
+  so written down as one it would make another run. The patches written
+  down ask for it again, at the same moment.
+- **A session written down before** has no patches line, and is run again
+  with none unless it is given them.

@@ -379,7 +379,9 @@ Decisions:
   "G13" for what it brought). The maintainer's answer after it ("1.
   Yes"): a session records what it takes to run it again (its
   controller's input frame by frame, its memory card and its clock at the
-  start), and a session is run again without a window and compared.
+  start), and a session is run again without a window and compared. On
+  2026-11-15 ("Yes, as a small next step"): it records the patches it was
+  played with too, which a run of it again applies.
 - [ADR 0025](docs/adr/0025-how-a-game-is-shown-and-its-patches.md): how
   a game is shown by default, at the maintainer's word on 2026-11-14
   ("I want the defaults to be: 1920x1080, Vulkan, Automatically apply
@@ -602,12 +604,12 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   IOP's code (`iop-capture.toml`; `-IopCapture <file>`). Every session is
   written down to be run again, in `build\game\<name>\play\sessions\<time>`
   (its controller frame by frame, the clock it started at, its memory
-  cards and NVRAM as they were, a new card where a slot had none;
-  `ps2n-host -record`), and `game.ps1 -Replay <that folder>` runs it again
-  without a window, in any configuration, `same-as-stock` included, given
-  the patches it was played with (`-Patches widescreen,fps`; a session
-  does not write them down); each run says whether it is the session at
-  every fingerprint of its registers (ADR 0024, step G13). In a
+  cards and NVRAM as they were, a new card where a slot had none, the
+  patches it was played with; `ps2n-host -record`), and `game.ps1 -Replay
+  <that folder>` runs it again without a window, in any configuration,
+  `same-as-stock` included, with those patches (a session written down
+  before they were is given them: `-Patches`); each run says whether it is
+  the session at every fingerprint of its registers (ADR 0024, step G13). In a
   window the console's clock starts at this computer's time of day; every
   other run starts it at one fixed time (`ps2n-host -clock fixed`), or at
   the replayed session's, so that two runs are the same machine. Windows

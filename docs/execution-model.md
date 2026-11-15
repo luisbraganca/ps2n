@@ -752,10 +752,14 @@ compared as it is played: its input and its time are live. So a session
 writes down what it takes to run it again (`ps2n-host -record`,
 `host/session_record.h`): the controller in port 1 frame by frame, as
 PCSX2's input recording keeps it (eighteen bytes: the buttons, both sticks,
-the pressure of each button that has one), the clock it started at, and
-every 50 frames a fingerprint of the EE's and the IOP's registers;
+the pressure of each button that has one), the clock it started at, the
+game's patches it was played with and the EE cycle rate it was given, if
+any, and every 50 frames a fingerprint of the EE's and the IOP's registers;
 `game.ps1 -Play` puts the memory cards and the NVRAM it began with beside
-that. The core takes input in at a frame boundary and the game reads it
+that. (The overclock a patch's note asks for is not written down as a rate:
+the note set it when the game's executable started, and the patches,
+applied again, set it again then; a rate given to a run is set from the
+machine's start.) The core takes input in at a frame boundary and the game reads it
 during the frame that follows, so a run given the same bytes at the same
 boundaries (`ps2n-host -input`, by PCSX2's own `PadData`) is the same
 machine with the same input: `game.ps1 -Replay <session>` runs it in any

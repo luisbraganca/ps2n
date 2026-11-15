@@ -21,9 +21,17 @@
 //
 //   # comments
 //   clock 2026-11-14T23:45:07     the console's clock when the machine started
+//   patches widescreen,fps        the game's patches it was played with (-patches;
+//                                 none for none), with the EE overclock their note
+//                                 asks for, which a replay's patches ask for again
+//   ee-cycle-rate 0               PCSX2's EE cycle rate, only where the session was
+//                                 given one (-ee-cycle-rate)
 //   41 pad FFFF7F7F7F7F00000000000000000000FF00   at frame 41, the 18 bytes
 //   50 state 0123456789ABCDEF     at the start of frame 50, the registers' fingerprint
 //   end 8358                      the number of frames the session ran
+//
+// A session written down before the patches were (2026-11-15) has no
+// patches line: it is run again with none unless it is given them.
 #pragma once
 
 #include <array>
@@ -41,9 +49,11 @@ namespace ps2n::host::session
 	std::optional<Clock> ParseClock(const std::string& text);
 	std::string FormatClock(const Clock& clock);
 
-	/// Starts writing a session down into `directory`/input.txt. False when
-	/// the file cannot be made.
-	bool StartRecording(const std::string& directory, const Clock& clock);
+	/// Starts writing a session down into `directory`/input.txt: its clock, its
+	/// patches ("widescreen,fps", "none"), and PCSX2's EE cycle rate where it was
+	/// given one. False when the file cannot be made.
+	bool StartRecording(const std::string& directory, const Clock& clock, const std::string& patches,
+		std::optional<int> ee_cycle_rate);
 
 	/// What a replay needs before the machine starts: reads `path`. False, with
 	/// a message, when it cannot be read or is not such a file.
@@ -51,6 +61,8 @@ namespace ps2n::host::session
 	{
 		std::optional<Clock> clock;
 		std::optional<uint32_t> frames;
+		std::optional<std::string> patches; // as -patches takes them
+		std::optional<int> ee_cycle_rate;
 	};
 	bool LoadReplay(const std::string& path, ReplayInfo* info);
 

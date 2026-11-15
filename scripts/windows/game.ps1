@@ -124,13 +124,15 @@ param(
     [string]$Pad = '',
     # A session played in the window, run again without one (step G13): its folder under
     # build\game\<name>\play\sessions. The run gets the session's controller, clock, memory cards and
-    # NVRAM, and as many frames as it had unless -Frames says otherwise; any configuration, a comparison
-    # included.
+    # NVRAM, as many frames as it had unless -Frames says otherwise, and the patches it was played with
+    # unless -Patches does (a session written down before 2026-11-15 has none written down); any
+    # configuration, a comparison included.
     [string]$Replay = '',
     # The game's patches to apply (ADR 0025): none, or widescreen and fps (the frame-rate patch), separated
     # by a comma, with the EE overclock a patch applied asks for in its note. Left out: widescreen,fps with
-    # -Play, none otherwise; a comparison applies them to both of its runs. The game's own patch file is
-    # taken from the archive of the PCSX2 installed on this computer, into the run's data folder.
+    # -Play, the session's with -Replay, none otherwise; a comparison applies them to both of its runs. The
+    # game's own patch file is taken from the archive of the PCSX2 installed on this computer, into the
+    # run's data folder.
     [string]$Patches = '',
     # PCSX2's EE cycle rate setting (ps2n-host -ee-cycle-rate): 1, 2 and 3 its overclock of 130%, 180% and
     # 300%, -1 to -3 75%, 60% and 50%, 0 its default; given, a patch does not change it. Left out: 0, or
@@ -320,10 +322,10 @@ $arguments = @(
     "-DFRAMES=$Frames", "-DSECONDS=$Seconds", '-DUNTIL=@@ no such line @@', '-DEXPECT_EXIT=2', '-DWHOLE=1', '-DTIMES=1')
 if ($Renderer -ne 'null') { $arguments += @("-DRENDERER=$Renderer", "-DUPSCALE=$Upscale", "-DFRAME_EVERY=$FrameEvery") }
 if ($Pad) { $arguments += "-DPAD=$(ForCMake (Resolve-Path -LiteralPath $Pad).Path)" }
-if ($Patches) {
-    $arguments += "-DPATCHES=$Patches"
-    if ($patchArchive) { $arguments += "-DPATCH_ARCHIVE=$(ForCMake $patchArchive)" }
-}
+if ($Patches) { $arguments += "-DPATCHES=$Patches" }
+# The archive the game's patch file is taken from: for -Patches, and for a session run again, which has
+# the patches it was played with.
+if ($patchArchive -and ($Patches -or $Replay)) { $arguments += "-DPATCH_ARCHIVE=$(ForCMake $patchArchive)" }
 if ($PSBoundParameters.ContainsKey('EeCycleRate')) { $arguments += "-DEE_CYCLE_RATE=$EeCycleRate" }
 if ($Replay) {
     if ($Pad) { throw "-Replay has the session's own controller: leave -Pad out." }

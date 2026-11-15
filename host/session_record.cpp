@@ -142,7 +142,8 @@ namespace ps2n::host::session
 		return fmt::format("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}", clock[0], clock[1], clock[2], clock[3], clock[4], clock[5]);
 	}
 
-	bool StartRecording(const std::string& directory, const Clock& clock)
+	bool StartRecording(const std::string& directory, const Clock& clock, const std::string& patches,
+		std::optional<int> ee_cycle_rate)
 	{
 		s_record_path = Path::Combine(directory, "input.txt");
 		s_record = FileSystem::OpenCFile(s_record_path.c_str(), "wb");
@@ -157,9 +158,13 @@ namespace ps2n::host::session
 			"# <frame> pad <18 bytes>: what the controller in port 1 held from that frame on, as PCSX2's input\n"
 			"# recording keeps it. <frame> state <fingerprint>: the EE's and the IOP's registers at the start of\n"
 			"# that frame. The memory cards and the console's NVRAM as they were when the session began are\n"
-			"# beside this file.\n"
-			"clock %s\n",
-			FormatClock(clock).c_str());
+			"# beside this file. patches: the game's patches it was played with, with the EE overclock their\n"
+			"# note asks for; ee-cycle-rate: PCSX2's EE cycle rate, where the session was given one.\n"
+			"clock %s\n"
+			"patches %s\n",
+			FormatClock(clock).c_str(), patches.c_str());
+		if (ee_cycle_rate)
+			std::fprintf(s_record, "ee-cycle-rate %d\n", *ee_cycle_rate);
 		return true;
 	}
 
@@ -192,6 +197,17 @@ namespace ps2n::host::session
 			{
 				info->frames = StringUtil::FromChars<u32>(words[1]);
 				good = info->frames.has_value();
+			}
+			else if (words[0] == "patches" && words.size() == 2)
+			{
+				// Checked by the host, as -patches is.
+				info->patches = std::string(words[1]);
+				good = true;
+			}
+			else if (words[0] == "ee-cycle-rate" && words.size() == 2)
+			{
+				info->ee_cycle_rate = StringUtil::FromChars<s32>(words[1]);
+				good = info->ee_cycle_rate.has_value();
 			}
 			else if (words.size() == 3)
 			{

@@ -331,14 +331,17 @@ namespace
 			"                     with -input, the session's.\n"
 			"  -record <dir>      With -window: write the session down in <dir>/input.txt,\n"
 			"                     to be run again (host/session_record.h): the controller\n"
-			"                     in port 1 frame by frame, the clock it started at, and a\n"
+			"                     in port 1 frame by frame, the clock it started at, its\n"
+			"                     patches and the EE cycle rate it was given, and a\n"
 			"                     fingerprint of the registers every 50 frames. The memory\n"
 			"                     cards and the NVRAM it began with go beside it\n"
 			"                     (game.ps1 -Play copies them there).\n"
 			"  -input <file>      Run a session written down with -record again, without a\n"
-			"                     window: its controller, its clock and its number of\n"
-			"                     frames, unless -clock or -frames say otherwise. Reports\n"
-			"                     whether the run is the session at every fingerprint.\n"
+			"                     window: its controller, its clock, its number of frames,\n"
+			"                     its patches and its EE cycle rate, unless -clock,\n"
+			"                     -frames, -patches or -ee-cycle-rate say otherwise.\n"
+			"                     Reports whether the run is the session at every\n"
+			"                     fingerprint.\n"
 			"  -patches none|widescreen,fps  Apply the game's widescreen patch and its\n"
 			"                     frame-rate patch (the group of its patch file whose name\n"
 			"                     says FPS; none where several do), where PCSX2's archive\n"
@@ -544,6 +547,33 @@ namespace
 		return true;
 	}
 
+	// The game's patches as -patches takes them and a session writes them down:
+	// none, or widescreen and fps, separated by a comma.
+	bool ParsePatches(std::string_view value, bool* widescreen, bool* fps)
+	{
+		*widescreen = false;
+		*fps = false;
+		if (value == "none")
+			return true;
+		for (const std::string_view kind : StringUtil::SplitString(value, ',', true))
+		{
+			if (kind == "widescreen")
+				*widescreen = true;
+			else if (kind == "fps")
+				*fps = true;
+			else
+				return false;
+		}
+		return true;
+	}
+
+	std::string PatchesText(bool widescreen, bool fps)
+	{
+		if (widescreen && fps)
+			return "widescreen,fps";
+		return widescreen ? "widescreen" : fps ? "fps" : "none";
+	}
+
 	bool ParseCommandLine(int argc, char* argv[])
 	{
 		Options& o = s_options;
@@ -584,23 +614,10 @@ namespace
 				o.memcards_dir = argv[++i];
 			else if (is("-patches") && has_value)
 			{
-				const std::string_view value = argv[++i];
-				o.patch_widescreen = false;
-				o.patch_fps = false;
-				if (value != "none")
+				if (!ParsePatches(argv[++i], &o.patch_widescreen, &o.patch_fps))
 				{
-					for (const std::string_view kind : StringUtil::SplitString(value, ',', true))
-					{
-						if (kind == "widescreen")
-							o.patch_widescreen = true;
-						else if (kind == "fps")
-							o.patch_fps = true;
-						else
-						{
-							std::fprintf(stderr, "ps2n-host: -patches takes none, or widescreen and fps, not '%s'\n", argv[i]);
-							return false;
-						}
-					}
+					std::fprintf(stderr, "ps2n-host: -patches takes none, or widescreen and fps, not '%s'\n", argv[i]);
+					return false;
 				}
 				patches_given = true;
 			}
@@ -1052,8 +1069,10 @@ namespace
 
 		if (!o.input_path.empty())
 		{
-			// A session run again: its clock, and as many frames as it had,
-			// unless told otherwise.
+			// A session run again: its clock, as many frames as it had, its
+			// patches and the EE cycle rate it was given, unless told
+			// otherwise. (The overclock a patch's note asks for is not written
+			// down: the note asks for it again, at the same moment.)
 			ps2n::host::session::ReplayInfo info;
 			if (!ps2n::host::session::LoadReplay(o.input_path, &info))
 				return false;
@@ -1061,6 +1080,22 @@ namespace
 				o.clock_at = info.clock;
 			if (!frames_given && info.frames)
 				o.max_frames = *info.frames;
+			if (!patches_given && info.patches && !ParsePatches(*info.patches, &o.patch_widescreen, &o.patch_fps))
+			{
+				std::fprintf(stderr, "ps2n-host: %s: patches '%s' are not ones -patches takes\n", o.input_path.c_str(),
+					info.patches->c_str());
+				return false;
+			}
+			if (!o.ee_cycle_rate_given && info.ee_cycle_rate)
+			{
+				if (*info.ee_cycle_rate < -3 || *info.ee_cycle_rate > 3)
+				{
+					std::fprintf(stderr, "ps2n-host: %s: ee-cycle-rate %d is not -3 to 3\n", o.input_path.c_str(), *info.ee_cycle_rate);
+					return false;
+				}
+				o.ee_cycle_rate = *info.ee_cycle_rate;
+				o.ee_cycle_rate_given = true;
+			}
 		}
 		return true;
 	}
@@ -2569,7 +2604,10 @@ namespace
 
 		if (!InitializeConfig())
 			return EXIT_ERROR;
-		if (!s_options.record_dir.empty() && !ps2n::host::session::StartRecording(s_options.record_dir, s_clock_used))
+		if (!s_options.record_dir.empty() &&
+			!ps2n::host::session::StartRecording(s_options.record_dir, s_clock_used,
+				PatchesText(s_options.patch_widescreen, s_options.patch_fps),
+				s_options.ee_cycle_rate_given ? std::optional<int>(s_options.ee_cycle_rate) : std::nullopt))
 			return EXIT_ERROR;
 		if (!s_options.pad_path.empty() && !LoadPadScript(s_options.pad_path))
 			return EXIT_ERROR;

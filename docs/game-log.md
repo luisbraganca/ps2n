@@ -115,10 +115,10 @@ scripts\windows\game.ps1 -Image $iso -Play -Name killzone
 # The same under stock PCSX2, to compare by eye and ear (the memory card is shared):
 scripts\windows\game.ps1 -Image $iso -Play -Name killzone -Config stock-jit
 # Every session is written down (build\game\<name>\play\sessions\<time>); run one again, here
-# held to stock PCSX2 at every sync point, with the patches and the overclock it was played with
-# (in the window both patches and the overclock their note asks for, since G17; for a session
-# from before, -EeCycleRate 0 as well, and -Patches as it had them):
-scripts\windows\game.ps1 -Image $iso -Config same-as-stock -Replay build\game\killzone\play\sessions\<time> -Patches widescreen,fps -Name replay
+# held to stock PCSX2 at every sync point, with the patches it was played with, which it wrote
+# down (a session written down before the evening of 2026-11-15 has none written down: give it
+# -Patches as it had them, and for one from before G17, -EeCycleRate 0 as well):
+scripts\windows\game.ps1 -Image $iso -Config same-as-stock -Replay build\game\killzone\play\sessions\<time> -Name replay
 # Playing on (step G13): what the session had to interpret, of the game's code, of the micro
 # code and of the IOP's, is added to the three capture files, and the next build compiles it.
 scripts\windows\game.ps1 -Image $iso -Play -Name killzone -Capture build\game\killzone\capture.toml -VuCapture build\game\killzone\vu-capture.toml -IopCapture build\game\killzone\iop-capture.toml
@@ -3761,6 +3761,13 @@ execution model, "A session played in a window, run again"):
   test driver's `MEMCARDS_FROM` and `NVRAM_FROM`). A slot the session began
   without a card in gets a new one, as the core made one when the session
   began (since G17: "G17", "A session run again").
+- **The game's patches it was played with** (since 2026-11-15, at the
+  maintainer's word, ADR 0024): `patches widescreen,fps`, or `none`, and
+  PCSX2's EE cycle rate where the session was given one. A run of it again
+  applies them unless it is given its own. The overclock a patch's note
+  asks for is not written down as a rate: the patches, applied again, ask
+  for it again when the game's executable starts, as they did in the
+  session, where a rate given to a run is set from the machine's start.
 - **A fingerprint of the EE's and the IOP's registers every 50 frames**, so
   that a replay says whether it is the session, and from which frame it is
   not.
@@ -4119,6 +4126,19 @@ the session at every one of its 186 fingerprints, and the compiled run is
 the stock run at every one of 70,451,268 sync points, every register
 included, with the same picture and sound state at the end.
 
+That run was given its patches (`-Patches widescreen,fps`): a session did
+not write down the patches it was played with. At the maintainer's word
+(ADR 0024, "The patches a session was played with") it now does, and a run
+of it again applies them unless it is given its own. Two sessions of 2,000
+frames in the window, each in a play folder of its own, one with both
+patches by default and one given `-EeCycleRate 0`: the first wrote down
+`patches widescreen,fps`, the second that and `ee-cycle-rate 0`. Run
+again with nothing more given, the first applied both patches with the
+overclock their note asks for, the second both at the default rate ("left
+out: -ee-cycle-rate 0 given"), and each is the session at every one of its
+40 fingerprints; the first, as a comparison, is the stock run at every one
+of 10,412,734 sync points. Every test passes (519).
+
 ## Open
 
 - **What is left of VU0 in the game's EE code.** Since G7 its instructions
@@ -4201,11 +4221,6 @@ included, with the same picture and sound state at the end.
   group (11 files of the archive have one): the patch is then applied at
   the default rate, and the report says nothing of an overclock. Killzone's
   is read; the archive's 866 such files were not checked one by one.
-- **A session does not write down its patches.** In the window both
-  patches and the overclock their note asks for are the default; a session
-  run again without a window is given them (`-Patches widescreen,fps`; for
-  a session from before G17, `-EeCycleRate 0` too), or it is not the
-  session.
 - **Speed.** 4,200 frames of logos, a prompt and a film took 25.7 s
   compiled against 22.9 s under stock PCSX2 with the software renderer, and
   15.1 s against 11.2 s with nothing drawn, at G3; on 2026-11-13 they take
