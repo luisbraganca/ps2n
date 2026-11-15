@@ -194,6 +194,25 @@ function(ps2n_add_program_tests suite name elf expected image)
 			ps2n_expect_failure("${test}" "The compiled run is not the stock run")
 		endif()
 	endif()
+
+	# The same at PCSX2's EE cycle rates other than its default (step G17, ADR
+	# 0025), both runs with the setting: its overclock of 130%, 180% and 300%,
+	# and its 75% and 50%, which between them take every way the recompiler
+	# has of counting a block's cycles (scaleblockcycles in iR5900.cpp). For
+	# PS2Native's own programs and the ps2sdk ones.
+	if(suite STREQUAL "programs" OR suite STREQUAL "sdk")
+		foreach(rate_entry IN ITEMS "1|130" "2|180" "3|300" "-1|75" "-3|50")
+			string(REPLACE "|" ";" rate_fields "${rate_entry}")
+			list(GET rate_fields 0 rate)
+			list(GET rate_fields 1 percent)
+			set(test "${suite}/same-as-stock-ee${percent}/${name}")
+			ps2n_add_guest_test("${test}" 240 "${suite};same-as-stock"
+				"-DELF=${elf}" -DIOP=ps2n -DVU=ps2n "-DIMAGE=${image}" -DSAME_AS_STOCK=1 "-DEE_CYCLE_RATE=${rate}" ${ARGN})
+			if(name IN_LIST ${suite_upper}_DIFFERS_same-as-stock)
+				ps2n_expect_failure("${test}" "The compiled run is not the stock run")
+			endif()
+		endforeach()
+	endif()
 endfunction()
 
 # The host's self-test: PS2Native's decoder, cycle table and instruction

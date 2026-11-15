@@ -55,7 +55,7 @@ page.
 | On the page | From |
 |---|---|
 | The phases and their states | `CLAUDE.md`, "Status" |
-| Steps G0 to G16 and their states | [game-log.md](../game-log.md), the table at the top |
+| Steps G0 to G17 and their states | [game-log.md](../game-log.md), the table at the top |
 | 1,003,452 instructions, 22,668 functions | game-log.md, "What is on the disc" |
 | 1.8 s, 152.4 MB, 119 s | game-log.md, "G2" |
 | 463 places, 5,079 instructions, then none | game-log.md, "G3", "One rebuild is enough" |
@@ -80,6 +80,7 @@ page.
 | G14: Vulkan, three times the console's resolution, a picture of 1920 by 1080, full screen where a window that size does not fit | game-log.md, "G14" |
 | G15: the widescreen patch from the installed PCSX2, applied by default; Killzone in 16:9, drawn wide by the game itself | game-log.md, "G15" |
 | G16: the frame-rate patch applied by default; 41 new pictures a second in the first level where 25; the console's pace in the window; the code the patch changes compiled ahead of time; 1.00 times stock PCSX2's time with the same patch | game-log.md, "G16" |
+| G17: the EE overclock a patch asks for applied with it, time counted as PCSX2 counts it at that setting; 46 new pictures a second in the first level where 41; still the stock run; 1.00 times stock PCSX2's time with the same setting | game-log.md, "G17" |
 | The longer run: "the second processor's place and registers compared too since 2026-11-14" | game-log.md, "G12", "The IOP's place and registers held to the stock run" and "Where G12 stands" |
 | 40 of 55, 39, 38, and "on no line" | [ADR 0005](../adr/0005-never-further-from-the-console-than-pcsx2.md) |
 | 204 instructions, 4,077,475 and 36,976,118 cases | [poc-log.md](../poc-log.md), "Increment 5" |

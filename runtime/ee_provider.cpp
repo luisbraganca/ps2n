@@ -20,7 +20,6 @@
 //
 // Not implemented, and so different from PCSX2's recompiler (the list is in
 // docs/execution-model.md):
-//  - the EE cycle rate setting (counted as its default, 0);
 //  - GoemonTlbHack (a game fix PCSX2 applies at JAL and JR);
 //  - its throwing away of every block when it runs out of room for code.
 
@@ -88,12 +87,36 @@ namespace
 
 	bool s_exit_requested = false;
 	bool s_executing = false;
-	bool s_cycle_rate_reported = false;
 	bool s_full_clamp_reported = false;
 
 	// Every block is to be thrown away before the next one is formed (the
 	// recompiler's eeRecNeedsReset).
 	bool s_blocks_need_reset = false;
+
+	// The cost of a block of each number of eighths below kCycleTable, and
+	// what a flush keeps of them, at the rate ps2n::ee::cycleRate says.
+	void MakeCycleTable()
+	{
+		for (uint32_t eighths = 0; eighths < ps2n::ee::kCycleTable; eighths++)
+			ps2n::ee::cycleTable[eighths] = ps2n::ee::scaledBlockCycles(eighths);
+		const int32_t rate = ps2n::ee::cycleRate;
+		ps2n::ee::remainderMask = rate > 1 ? (1u << (rate + 2)) - 1 : 7u;
+	}
+
+	// recResetRaw(): every block thrown away. Those formed from here on count
+	// by the EE cycle rate setting as it is now (ps2n/recomp.h): the
+	// recompiler reads it whenever it forms one, and the core throws every
+	// block away whenever it changes.
+	void ResetBlocks()
+	{
+		const int32_t rate = EmuConfig.Speedhacks.EECycleRate;
+		if (rate != ps2n::ee::cycleRate)
+		{
+			ps2n::ee::cycleRate = rate;
+			MakeCycleTable();
+		}
+		blocks::Reset();
+	}
 
 	// ---- compiled code -------------------------------------------------------
 	const ImageInfo* const* s_images = nullptr;
@@ -838,7 +861,7 @@ namespace
 		if (s_blocks_need_reset)
 		{
 			s_blocks_need_reset = false;
-			blocks::Reset();
+			ResetBlocks();
 		}
 
 		Block* block = blocks::Form(pc);
@@ -1033,7 +1056,7 @@ namespace
 		if (info & blocks::kFlush)
 		{
 			cpuRegs.cycle += ps2n::ee::blockCycles(eighths);
-			eighths &= 7;
+			eighths = ps2n::ee::blockRemainder(eighths);
 		}
 
 		if (info & (blocks::kCop2Sync | blocks::kCop2Finish | blocks::kFastmem | blocks::kForcesEventTest | blocks::kEndsBlock)) [[unlikely]]
@@ -1456,7 +1479,7 @@ namespace
 		else
 		{
 			s_blocks_need_reset = false;
-			blocks::Reset();
+			ResetBlocks();
 			s_exit_requested = false;
 		}
 	}
@@ -1481,12 +1504,6 @@ namespace
 		char here;
 		s_stack_base = reinterpret_cast<uptr>(&here);
 
-		if (EmuConfig.Speedhacks.EECycleRate != 0 && !s_cycle_rate_reported)
-		{
-			s_cycle_rate_reported = true;
-			Console.Warning("ps2n: the EE cycle rate setting (%d) is not implemented; the EE is counted at its normal rate",
-				static_cast<int>(EmuConfig.Speedhacks.EECycleRate));
-		}
 		if (FullFpuClampMode() && !s_full_clamp_reported)
 		{
 			s_full_clamp_reported = true;
@@ -1496,7 +1513,7 @@ namespace
 		if (s_blocks_need_reset)
 		{
 			s_blocks_need_reset = false;
-			blocks::Reset();
+			ResetBlocks();
 		}
 		if (!s_bios_looked_for)
 			UseBios();
@@ -1963,6 +1980,41 @@ namespace
 	}
 } // namespace
 
+int32_t ps2n::ee::cycleRate = 0;
+uint32_t ps2n::ee::cycleTable[kCycleTable];
+uint32_t ps2n::ee::remainderMask = 7;
+
+namespace
+{
+	// The default rate's, before anything runs (the self-test counts by it
+	// too, without a reset).
+	struct CycleTableAtStart
+	{
+		CycleTableAtStart() { MakeCycleTable(); }
+	} s_cycle_table_at_start;
+} // namespace
+
+uint32_t ps2n::ee::scaledBlockCycles(uint32_t eighths)
+{
+	// scaleblockcycles_calculation(), pcsx2/x86/ix86-32/iR5900.cpp, as it is
+	// written there: a block of five cycles or fewer (40 eighths) counts as at
+	// the default rate; 1 divides the cycles by 1.3 in single precision, 2 and
+	// 3 shift the eighths by 4 and 5, -1 to -3 multiply them by 5 to 9 32nds.
+	const int32_t rate = cycleRate;
+	uint32_t cycles;
+	if (rate == 0 || eighths <= 40 || rate < -99 || rate > 3)
+		cycles = eighths >> 3;
+	else if (rate > 1)
+		cycles = eighths >> (2 + rate);
+	else if (rate == 1)
+		cycles = static_cast<uint32_t>(static_cast<float>(eighths >> 3) / 1.3f);
+	else if (rate == -1)
+		cycles = (eighths <= 80 || eighths > 168 ? 5u : 7u) * eighths / 32;
+	else
+		cycles = (static_cast<uint32_t>(5 + (-2 * (rate + 1))) * eighths) >> 5;
+	return cycles < 1 ? 1 : cycles;
+}
+
 uint32_t ps2n::ee::cop2Instruction(uint32_t pc, uint32_t start, uint32_t eighths)
 {
 	Step& step = StepAt(start, pc);
@@ -1976,7 +2028,7 @@ uint32_t ps2n::ee::cop2Instruction(uint32_t pc, uint32_t start, uint32_t eighths
 	if (step.info & blocks::kFlush)
 	{
 		cpuRegs.cycle += blockCycles(eighths);
-		eighths &= 7;
+		eighths = blockRemainder(eighths);
 	}
 	if (step.info & (blocks::kCop2Sync | blocks::kCop2Finish))
 		Cop2Prologue(step);

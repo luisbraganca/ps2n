@@ -133,10 +133,43 @@ namespace ps2n::ee
 	// and after anything that may have changed the core's it takes it again
 	// (PS2N_TIME). What the local saves is reading the count back from memory
 	// at the end of every block, which is where a short loop spends its time.
+	//
+	// PCSX2's EE cycle rate setting (Speedhacks.EECycleRate, its overclock and
+	// underclock) changes the cost of a block of more than five cycles. Its
+	// recompiler reads the setting whenever it forms a block, and any change
+	// to it throws every block away before the next is formed
+	// (VMManager::CheckForCPUConfigChanges), so the runtime reads it whenever
+	// it throws its record of blocks away, and counts by it from then on.
+	extern int32_t cycleRate;
+
+	// scaleblockcycles_calculation() in PCSX2's iR5900.cpp, at the rate the
+	// runtime last read (ee_provider.cpp).
+	uint32_t scaledBlockCycles(uint32_t eighths);
+
+	// What it gives for a block of fewer than kCycleTable eighths, made
+	// whenever the runtime reads the rate. The recompiler works a block's cost
+	// out once, when it forms the block; compiled code finds it here at the end
+	// of every block (at 130%, calling scaledBlockCycles() there took an eighth
+	// of the level run).
+	inline constexpr uint32_t kCycleTable = 4096;
+	extern uint32_t cycleTable[kCycleTable];
+
 	inline uint32_t blockCycles(uint32_t eighths)
 	{
-		const uint32_t cycles = eighths >> 3;
-		return cycles ? cycles : 1;
+		if (eighths < kCycleTable) [[likely]]
+			return cycleTable[eighths];
+		return scaledBlockCycles(eighths);
+	}
+
+	// What scaleblockcycles_clear() keeps of the count when the cycles so far
+	// are added before the block ends: the eighths below a cycle, and at a
+	// rate above 1, in a block of more than five cycles so far, more of them
+	// (remainderMask, made with cycleTable).
+	extern uint32_t remainderMask;
+
+	inline uint32_t blockRemainder(uint32_t eighths)
+	{
+		return eighths & (eighths > 40 ? remainderMask : 7u);
 	}
 
 	// What compiled code knows of a block (ImageInfo::blocks, `ps2n_end`): the
@@ -517,7 +550,7 @@ namespace ps2n::ee
 		const uint32_t ps2n_eighths = (acc_) + (eighths_); \
 		ps2n_cycle += ::ps2n::ee::blockCycles(ps2n_eighths); \
 		cpuRegs.cycle = ps2n_cycle; \
-		(acc_) = ps2n_eighths & 7u; \
+		(acc_) = ::ps2n::ee::blockRemainder(ps2n_eighths); \
 	} while (0)
 
 // A call of a compiled function that is expected to return to `ret_`.
@@ -597,7 +630,7 @@ namespace ps2n::ee
 			const uint32_t ps2n_eighths = (acc_) + (eighths_); \
 			ps2n_cycle += ::ps2n::ee::blockCycles(ps2n_eighths); \
 			cpuRegs.cycle = ps2n_cycle; \
-			(acc_) = ps2n_eighths & 7u; \
+			(acc_) = ::ps2n::ee::blockRemainder(ps2n_eighths); \
 		} \
 		else \
 		{ \

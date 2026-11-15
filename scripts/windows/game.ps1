@@ -128,10 +128,14 @@ param(
     # included.
     [string]$Replay = '',
     # The game's patches to apply (ADR 0025): none, or widescreen and fps (the frame-rate patch), separated
-    # by a comma. Left out: widescreen,fps with -Play, none otherwise; a comparison applies them to both of
-    # its runs. The game's own patch file is taken from the archive of the PCSX2 installed on this
-    # computer, into the run's data folder.
+    # by a comma, with the EE overclock a patch applied asks for in its note. Left out: widescreen,fps with
+    # -Play, none otherwise; a comparison applies them to both of its runs. The game's own patch file is
+    # taken from the archive of the PCSX2 installed on this computer, into the run's data folder.
     [string]$Patches = '',
+    # PCSX2's EE cycle rate setting (ps2n-host -ee-cycle-rate): 1, 2 and 3 its overclock of 130%, 180% and
+    # 300%, -1 to -3 75%, 60% and 50%, 0 its default; given, a patch does not change it. Left out: 0, or
+    # what a patch asks for.
+    [ValidateRange(-3, 3)][int]$EeCycleRate = 0,
     # Wall-clock limit of each run.
     [int]$Seconds = 1800,
     # Names the run's folder.
@@ -234,6 +238,7 @@ if ($Play) {
     $hostArgs += @('-record', $record)
     if ($Patches) { $hostArgs += @('-patches', $Patches) }
     if ($patchArchive) { $hostArgs += @('-patch-archive', $patchArchive) }
+    if ($PSBoundParameters.ContainsKey('EeCycleRate')) { $hostArgs += @('-ee-cycle-rate', "$EeCycleRate") }
 
     # Someone playing goes where no script has been. What the session had to
     # interpret of the game is written down for the recompiler, as after any
@@ -319,6 +324,7 @@ if ($Patches) {
     $arguments += "-DPATCHES=$Patches"
     if ($patchArchive) { $arguments += "-DPATCH_ARCHIVE=$(ForCMake $patchArchive)" }
 }
+if ($PSBoundParameters.ContainsKey('EeCycleRate')) { $arguments += "-DEE_CYCLE_RATE=$EeCycleRate" }
 if ($Replay) {
     if ($Pad) { throw "-Replay has the session's own controller: leave -Pad out." }
     $replayDir = (Resolve-Path -LiteralPath $Replay).Path

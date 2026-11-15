@@ -91,10 +91,13 @@
 #              fps, or both)
 #   PATCH_ARCHIVE  PCSX2's archive of patches to take the game's file from
 #              (ps2n-host -patch-archive)
+#   EE_CYCLE_RATE  PCSX2's EE cycle rate setting, its overclock (ps2n-host
+#              -ee-cycle-rate)
 #   INPUT      a session played in the window and written down, to run again
 #              (ps2n-host -input): its controller, its clock, its frames
 #   MEMCARDS_FROM  a folder whose Mcd001.ps2 and Mcd002.ps2 every run gets a
-#              copy of, in the slots (ps2n-host -memcards)
+#              copy of, in the slots (ps2n-host -memcards); a slot the folder
+#              has no card for gets a new one, as in a window
 #   NVRAM_FROM a folder whose NVRAM files for the BIOS (<bios>.nvm, .mec)
 #              every run gets a copy of, in place of a fresh NVRAM
 #   FRAME_EVERY  with a renderer that draws: also fingerprint the frame on
@@ -405,6 +408,9 @@ if(DEFINED PATCHES AND NOT "${PATCHES}" STREQUAL "")
 endif()
 if(DEFINED PATCH_ARCHIVE AND NOT "${PATCH_ARCHIVE}" STREQUAL "")
 	list(APPEND limits -patch-archive "${PATCH_ARCHIVE}")
+endif()
+if(DEFINED EE_CYCLE_RATE AND NOT "${EE_CYCLE_RATE}" STREQUAL "")
+	list(APPEND limits -ee-cycle-rate ${EE_CYCLE_RATE})
 endif()
 if(DEFINED TIMES AND TIMES)
 	list(APPEND limits -times "${WORK_DIR}/times.txt")

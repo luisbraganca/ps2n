@@ -133,15 +133,26 @@ archive; Killzone in 16:9, nothing of its code interpreted, and a run with
 the patch is the stock run with it, the FPU's sign of a zero aside, and
 the interpreted run. G16 the same day: the game's frame-rate patch applied
 by default with it (the group of its patch file whose name says FPS, none
-where several do), without PCSX2's EE overclock, which PS2Native does not
-implement (put to the maintainer). In the first level Killzone shows 41
-new pictures a second where it showed 25; the code the patch changes is
-compiled as a second version of its function, nothing interpreted after
-one rebuild; a run with both patches is the stock run with them, the
-FPU's sign of a zero aside, and the interpreted run, and takes 1.00 times
-stock PCSX2's time with the same patches, its play 0.98 (without them
-0.975 and 0.95, as before); in the window the console's pace, as stock
-PCSX2 keeps it. G13
+where several do), at first without the EE overclock its note asks for.
+In the first level Killzone shows 41 new pictures a second where it showed
+25; the code the patch changes is compiled as a second version of its
+function, nothing interpreted after one rebuild; a run with both patches
+is the stock run with them, the FPU's sign of a zero aside, and the
+interpreted run, and takes 1.00 times stock PCSX2's time with the same
+patches, its play 0.98 (without them 0.975 and 0.95, as before); in the
+window the console's pace, as stock PCSX2 keeps it. G17 the same day, at
+the maintainer's word: the EE overclock a patch asks for in its note
+applied with it (130% for Killzone, with which stock PCSX2 shows 46 new
+pictures a second in play where 41), and time counted as PCSX2's
+recompiler counts it at that setting, at every rate it has (every test
+program held to stock PCSX2 at five of them; 519 tests, all passing). The
+level run with both patches and the overclock is the stock run with them,
+the FPU's sign of a zero aside, and the interpreted run, nothing of it
+interpreted after one rebuild, and takes 1.00 times stock PCSX2's time
+with the same setting, its play 0.98, a block's cost read from a table
+made when the setting is read (calling PCSX2's formula at every block's
+end took 1.22); in the window the console's pace. A session run again now
+gets a new memory card where it began without one, as the window did. G13
 goes on as the maintainer plays further. Phase 4 needs its own approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
@@ -385,10 +396,13 @@ Decisions:
   maintainer's answer on 2026-11-15, "The installed PCSX2"): the
   repository it is made from declares no license, and where a packaged
   game gets its patches is Phase 4's. A frame-rate patch is the group of
-  the game's patch file whose name says FPS (none where several do),
-  applied without PCSX2's EE overclock (`EECycleRate`), which PS2Native
-  does not implement and which would change how time is counted: put to
-  the maintainer with G16's measurement.
+  the game's patch file whose name says FPS (none where several do). At
+  the maintainer's word on 2026-11-15 ("Sure apply recommended PCSX2
+  patches"), step G17: where a patch applied asks in its note for PCSX2's
+  EE overclock (`EECycleRate`), the host applies it (the percentage the
+  note names, 130% where it names none; `-ee-cycle-rate` given keeps its
+  own), and PS2Native counts time as PCSX2's recompiler counts it with that
+  setting; a comparison gives stock PCSX2 the same setting.
 
 ## Layout, build and test
 
@@ -568,14 +582,16 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   screen that size, in a window on a larger one (Alt+Enter or F11
   switches; ADR 0025, step G14; `-Renderer`, `-Upscale` and `-WindowSize`
   change them), with the game's widescreen and frame-rate patches where
-  the installed PCSX2's archive has them, its films kept at 4:3 (steps G15
-  and G16; `-Patches none` leaves both out, `-Patches widescreen` the
-  frame-rate one; the game's patch file is copied into the run's data
-  folder), at the
+  the installed PCSX2's archive has them, its films kept at 4:3, and the EE
+  overclock the frame-rate patch asks for (steps G15 to G17; `-Patches
+  none` leaves both out, `-Patches widescreen` the frame-rate one,
+  `-EeCycleRate 0` the overclock; the game's patch file is copied into the
+  run's data folder), at the
   console's speed, with sound, the keyboard and the first controller
   (`ps2n-host -help` has the keys), until the window is closed; `-Config
   stock-jit` puts stock PCSX2 in the same window. `game.ps1 -Patches
-  widescreen,fps` gives a comparison's two runs the patches. A session
+  widescreen,fps` gives a comparison's two runs the patches and the
+  overclock their note asks for. A session
   in the window takes `-Pad`, `-Frames` and `-Marks` as a scripted run
   does: the game log's "How to run it" has the session that measures the
   pace in play. What a game keeps between sessions (memory card, the
@@ -586,10 +602,12 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   IOP's code (`iop-capture.toml`; `-IopCapture <file>`). Every session is
   written down to be run again, in `build\game\<name>\play\sessions\<time>`
   (its controller frame by frame, the clock it started at, its memory
-  cards and NVRAM as they were; `ps2n-host -record`), and `game.ps1
-  -Replay <that folder>` runs it again without a window, in any
-  configuration, `same-as-stock` included; each run says whether it is the
-  session at every fingerprint of its registers (ADR 0024, step G13). In a
+  cards and NVRAM as they were, a new card where a slot had none;
+  `ps2n-host -record`), and `game.ps1 -Replay <that folder>` runs it again
+  without a window, in any configuration, `same-as-stock` included, given
+  the patches it was played with (`-Patches widescreen,fps`; a session
+  does not write them down); each run says whether it is the session at
+  every fingerprint of its registers (ADR 0024, step G13). In a
   window the console's clock starts at this computer's time of day; every
   other run starts it at one fixed time (`ps2n-host -clock fixed`), or at
   the replayed session's, so that two runs are the same machine. Windows
@@ -616,7 +634,10 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   every event test, the IOP's state in the fingerprint), `same-as-stock`
   (ADR 0011: the compiled run compared with a stock run at every sync
   point: place, cycle count, the IOP's PC and cycle count, and the
-  registers, VU0's, VU1's and the IOP's among them), `never-further`
+  registers, VU0's, VU1's and the IOP's among them), for the `programs`
+  and `sdk` suites `same-as-stock-ee130`, `-ee180`, `-ee300`, `-ee75` and
+  `-ee50` (the same comparison with PCSX2's EE cycle rate at that setting
+  on both sides, step G17), `never-further`
   (ADR 0005: the compiled run's output against the stock run's, line by
   line; CTest runs the two it compares first), and for the console-recorded
   VU programs `ps2n-static-microvu` (compiled EE code with PCSX2's VU and

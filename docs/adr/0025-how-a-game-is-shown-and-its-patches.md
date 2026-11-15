@@ -1,8 +1,8 @@
-# ADR 0025: How a game is shown by default, and PCSX2's patches, as steps G14 to G16
+# ADR 0025: How a game is shown by default, and PCSX2's patches, as steps G14 to G17
 
 | | |
 |---|---|
-| Status | Accepted; G14 done on 2026-11-14, G15 and G16 on 2026-11-15 |
+| Status | Accepted; G14 done on 2026-11-14, G15, G16 and G17 on 2026-11-15 |
 | Date | 2026-11-14 |
 | Decided by | Maintainer, on the session's recommendations |
 
@@ -86,6 +86,10 @@ The session proposes them; the maintainer may order or cut them otherwise.
 - **G16, the frame-rate patch:** the same for a game's frame-rate patch,
   when there is one, with its speed measured: the game then does more work
   every second.
+- **G17, the EE overclock a patch asks for** (added on 2026-11-15, at the
+  maintainer's answer below, "The EE overclock a frame-rate patch asks
+  for"): applied with the patch that asks for it, and time counted as
+  PCSX2's recompiler counts it with it.
 
 ## Full screen (2026-11-14)
 
@@ -186,7 +190,90 @@ otherwise:
   applied without it, as stock PCSX2 applies it with its default settings:
   in the first level the game shows 41 new pictures a second, where it
   showed 25 (the game log, "G16"). Put to the maintainer with that
-  measurement.
+  measurement, whose answer, below, has the host apply it since G17.
+
+## The EE overclock a frame-rate patch asks for (2026-11-15)
+
+With G16 done, as it was put: "Killzone's frame-rate patch says it "might
+need EE Overclock (130%)": a PCSX2 setting that lets the main processor do
+30% more work per frame. PS2Native doesn't have that setting, so the patch
+runs without it, which is also what stock PCSX2 does by default. Result: 41
+new pictures a second in the first level, where the patch aims for 50. What
+should I do about the overclock?", with measuring first recommended ("Count
+the pictures stock PCSX2 shows with its 130% setting, in the same kind of
+run as today's. [...] Nothing changes in how PS2Native counts time, and you
+decide with the number."), against building it now ("It changes how time
+is counted, which is your call") and leaving it. The maintainer's answer:
+"Sure apply recommended PCSX2 patches".
+
+How it was read: what a patch recommends is applied with it. Where the
+frame-rate patch the host applies says it needs an EE overclock, the host
+applies that overclock, PCSX2's EE cycle rate setting (`EECycleRate`) at the
+percentage the patch names, as a player of stock PCSX2 who follows the
+patch's note would. For the compiled game that means counting time as
+PCSX2's recompiler counts it with that setting, where until now it was
+counted only as at the default
+([ADR 0011](0011-time-is-counted-as-pcsx2s-recompiler-counts-it.md)): a
+change to how time is counted, which the answer decides. A comparison then
+gives stock PCSX2 the same setting.
+
+What the archive asks for: 866 of its 4,709 patch files say a patch of
+theirs might need an EE overclock, 835 of them in a group whose name says
+FPS; they name 130% (418 times), 180% (181) or 300% (23), or no figure, in
+words that vary ("Might need EE Overclock (130%).", "Might need EE overclock
+at 180%.", "Unlocked at 60 FPS. Might need enable EE Overclock to be
+stable."). A patch file has no setting for it: PCSX2 reads only the picture's
+aspect ratio and its interlacing from one. (PCSX2's own database of game
+settings sets the EE cycle rate for 55 games; not for Killzone.)
+
+It is a step of its own, G17, begun with the measurement that was
+recommended, which its comparisons need anyway: what stock PCSX2 shows at
+130%. Should that be no more than without, it goes back to the maintainer
+before anything is built. It was more: over the first 53 seconds of play,
+46.2 new pictures a second where 41.0 without the overclock, and 50 in 21
+of those seconds where 7 (the game log, "G17"). So the step went on.
+
+What the session decided within G17, for the maintainer to decide
+otherwise:
+
+- **Which note asks for it, and how much.** A group's note is its lines in
+  the patch file under its name: its description, its comments (no group's
+  name in the archive speaks of an overclock; 11 files do before their
+  first group, which the host does not read). A line of a
+  group the host applies that speaks of an overclock or of the cycle rate
+  asks for 130%, 180% or 300% where it names one of them (the first, where
+  it names two: "130-180%"), for the setting it gives where it gives one
+  ("to 2"), and for 130%, the mildest, where it names none; where lines ask
+  for several, for the most. The host sets PCSX2's setting to it (1, 2 or
+  3) when it applies the patch, and its report says so.
+- **A setting given is kept.** `ps2n-host -ee-cycle-rate` (`game.ps1
+  -EeCycleRate`), -3 to 3, sets PCSX2's setting for any run; given, a
+  note does not change it, and the report says what the note asked for and
+  that it was left out. `-EeCycleRate 0` runs the frame-rate patch as G16
+  did.
+- **Time is counted as PCSX2's recompiler counts it with the setting**: a
+  block's cost (`scaleblockcycles`) and what a flush keeps of it
+  (`scaleblockcycles_clear`), at every rate PCSX2 has. The runtime reads the
+  setting whenever it throws its record of blocks away, where PCSX2 throws
+  its blocks away whenever the setting changes; a patch's setting arrives
+  when the game's executable starts, before any of its blocks is formed.
+  PCSX2's VU recompiler scales VU0's block cycles by the same setting,
+  which PS2Native's VU provider already followed.
+- **At the end of a block, a table.** PCSX2's recompiler works a block's
+  cost out once, when it forms it. The compiled game first called the
+  formula at the end of every block, which at 130% took an eighth of the
+  level run; it now reads the cost from a table the runtime makes when it
+  reads the setting.
+- **Tested at five rates.** The comparison with stock PCSX2 at every sync
+  point, for every test program of the `programs` and `sdk` suites, at
+  130%, 180%, 300%, 75% and 50% on both sides (`same-as-stock-ee130` and
+  the like; 60% is counted by the formula of 50%, with another factor).
+
+Done on 2026-11-15: Killzone's frame-rate patch is applied with 130% in the
+window. The level run with both patches and the overclock is the stock run
+with them at every one of 103,579,794 sync points, the FPU's sign of a zero
+aside, and the interpreted run, and takes 1.00 times stock PCSX2's time
+with the same setting, its play 0.98 (the game log, "G17").
 
 ## Consequences
 

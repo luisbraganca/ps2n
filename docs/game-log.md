@@ -29,6 +29,7 @@ The run files, pictures included, are under the git-ignored build tree.
 | G14 How a game is shown | **Done** (2026-11-14, [ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)): at the maintainer's word, the window's defaults: PCSX2's Vulkan renderer, the game drawn at three times the console's resolution, a picture of 1920 by 1080, full screen where a window that size does not fit (the maintainer's choice), each still changeable. A check asks the host for the picture on display, which on this computer is the only way to see what Vulkan presents. In the window at the console's pace (49.7 to 49.9 frames a second of 50); every test passes. Where it stands is in "G14" below. |
 | G15 PCSX2's patches; widescreen | **Done** (2026-11-15, [ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)): the game's widescreen patch applied by default in the window, taken from the archive of the PCSX2 installed on this computer (the maintainer's choice; one file copied per run into the run's data folder, since Windows will not let the build link to it). Killzone in 16:9, drawn wide by the game itself. The patch writes data, not code: nothing of the game's code interpreted. Every test passes; a run with the patch is the stock run with it, the FPU's sign of a zero aside, and the interpreted run. Where it stands is in "G15" below. |
 | G16 The frame-rate patch | **Done** (2026-11-15, [ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)): the game's frame-rate patch applied by default in the window with the widescreen patch: the group of its patch file whose name says FPS, none where several do. Without PCSX2's EE overclock, which PS2Native does not implement: put to the maintainer. In its first level Killzone shows 41.0 new pictures a second where it showed 24.9. The code the patch changes is compiled after one rebuild, as a second version of its function: nothing interpreted. A run with both patches is the stock run with them, the FPU's sign of a zero aside, and the interpreted run, and takes 1.00 times stock PCSX2's time with the same patches, its play 0.98. In the window at the console's pace (50.0 frames a second in play), as stock PCSX2 is. Every test passes. Where it stands is in "G16" below. |
+| G17 The EE overclock a patch asks for | **Done** (2026-11-15, [ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)): at the maintainer's word, where a patch the host applies asks in its note for PCSX2's EE overclock, the host applies it: Killzone's frame-rate patch with 130%. Measured first: with it stock PCSX2 shows 46.2 new pictures a second in the first level, where 41.0 without, 50 in 21 of 53 seconds where 7. Time is counted as PCSX2's recompiler counts it at that setting, at every rate it has; every test program is the stock run at every sync point at five of them (519 tests, all passing). The level run with both patches and the overclock is the stock run with them, the FPU's sign of a zero aside, and the interpreted run; after one rebuild nothing of it is interpreted. Calling PCSX2's formula at the end of every block took 1.22 times stock PCSX2's time; a table made when the setting is read takes 1.00, play 0.98, and 1.02 at the default rate. In the window at the console's pace, as stock PCSX2 is. A session run again now gets a new memory card where the session began without one, and is the session. Where it stands is in "G17" below. |
 
 ## The steps and their pass criteria
 
@@ -51,6 +52,7 @@ The run files, pictures included, are under the git-ignored build tree.
 | G14 How a game is shown ([ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)) | The window's defaults: PCSX2's Vulkan renderer; a picture of 1920 by 1080, or as large as the screen allows at those proportions; the game drawn at three times the console's resolution. Each can still be changed (`game.ps1 -Renderer`, `-Upscale`). The comparisons keep the software renderer, which draws the same picture on every machine. | The window check passes on Vulkan with those defaults, at the console's pace, the picture the size asked for. Every test passes, and the scripted runs are unchanged. |
 | G15 PCSX2's patches; widescreen ([ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)) | PCSX2's patches made available to the host, from where the maintainer chooses. A game's widescreen patch applied by default when PCSX2 has one: in the window, and in a scripted run that asks for it, on both sides of a comparison alike. A patch that changes the game's code is met as code nothing was compiled from: interpreted, reported, captured, and compiled by the next build. | Killzone in 16:9 in the window. After one rebuild nothing of the patched code is interpreted. A scripted run with the patch is the stock run with the patch, and the interpreted run. Every test passes. |
 | G16 The frame-rate patch ([ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)) | The same for a game's frame-rate patch, when PCSX2 has one, applied by default. | As for G15, and the speed measured against stock PCSX2 with the same patch; in the window at the console's pace, or what it falls short by reported. |
+| G17 The EE overclock a patch asks for ([ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)) | Measured first: the pictures stock PCSX2 shows in play at 130% with both patches; no more than without, and it goes back to the maintainer. Then, where a patch the host applies asks in its note for PCSX2's EE overclock, the host applies it, in the window and in a scripted run alike, on both sides of a comparison, and time is counted as PCSX2's recompiler counts it at that setting, at every rate it has. | Every test program is the stock run at every sync point at 130%, 180%, 300%, 75% and 50%. After one rebuild nothing of the level run with both patches and the overclock is interpreted, and it is the stock run with them, what differs listed, and the interpreted run. Every test passes. The speed measured against stock PCSX2 with the same setting; in the window at the console's pace, or what it falls short by reported. (The criterion is the session's proposal.) |
 
 The brief's rules for this phase: reusable solutions, no game-specific
 hardcoding unless unavoidable, and no wizard or packaging yet.
@@ -91,7 +93,9 @@ scripts\windows\game.ps1 -Image $iso -Config lockstep -Frames 900 -Name killzone
 # Into the first level and through three and a half minutes of play there (step G4;
 # 30 minutes for both runs, and 7.5 GB in the build tree while it lasts):
 scripts\windows\game.ps1 -Image $iso -Config same-as-stock -Frames 17500 -FrameEvery 10 -Pad tests\games\killzone\level1.pad -Name level1
-# The same with the game's widescreen and frame-rate patches, on both sides (steps G15 and G16):
+# The same with the game's widescreen and frame-rate patches, on both sides (steps G15 and G16),
+# and the EE overclock the frame-rate patch asks for, on both sides too (step G17; -EeCycleRate 0
+# leaves it out):
 scripts\windows\game.ps1 -Image $iso -Config same-as-stock -Frames 17500 -FrameEvery 10 -Pad tests\games\killzone\level1.pad -Name level1 -Patches widescreen,fps
 
 # The pictures a run saved, sixty to a sheet, to look a whole run over:
@@ -111,8 +115,10 @@ scripts\windows\game.ps1 -Image $iso -Play -Name killzone
 # The same under stock PCSX2, to compare by eye and ear (the memory card is shared):
 scripts\windows\game.ps1 -Image $iso -Play -Name killzone -Config stock-jit
 # Every session is written down (build\game\<name>\play\sessions\<time>); run one again, here
-# held to stock PCSX2 at every sync point:
-scripts\windows\game.ps1 -Image $iso -Config same-as-stock -Replay build\game\killzone\play\sessions\<time> -Name replay
+# held to stock PCSX2 at every sync point, with the patches and the overclock it was played with
+# (in the window both patches and the overclock their note asks for, since G17; for a session
+# from before, -EeCycleRate 0 as well, and -Patches as it had them):
+scripts\windows\game.ps1 -Image $iso -Config same-as-stock -Replay build\game\killzone\play\sessions\<time> -Patches widescreen,fps -Name replay
 # Playing on (step G13): what the session had to interpret, of the game's code, of the micro
 # code and of the IOP's, is added to the three capture files, and the next build compiles it.
 scripts\windows\game.ps1 -Image $iso -Play -Name killzone -Capture build\game\killzone\capture.toml -VuCapture build\game\killzone\vu-capture.toml -IopCapture build\game\killzone\iop-capture.toml
@@ -3752,7 +3758,9 @@ execution model, "A session played in a window, run again"):
   `game.ps1 -Play` copies them into the session's folder
   (`build\game\<name>\play\sessions\<time>`) before the machine starts, and
   every run of a replay gets copies of its own (`ps2n-host -memcards`; the
-  test driver's `MEMCARDS_FROM` and `NVRAM_FROM`).
+  test driver's `MEMCARDS_FROM` and `NVRAM_FROM`). A slot the session began
+  without a card in gets a new one, as the core made one when the session
+  began (since G17: "G17", "A session run again").
 - **A fingerprint of the EE's and the IOP's registers every 50 frames**, so
   that a replay says whether it is the session, and from which frame it is
   not.
@@ -3885,8 +3893,9 @@ a game's frame-rate patch applied by default, where PCSX2 has one.
   and names both, and with one group whose name says FPS it applies that
   one.
   Killzone's patch says it "might need EE Overclock (130%)", a setting of
-  PCSX2's that PS2Native does not implement (ADR 0025, "The frame-rate
+  PCSX2's that PS2Native did not implement (ADR 0025, "The frame-rate
   patch"): it is applied without it, as stock PCSX2 applies it by default.
+  (Since G17 the host applies the overclock with it: "G17".)
 - **What it changes.** At every frame, one byte of an instruction of the
   game's code (at `00152014`, an addition of 1 made an addition of 2) and a
   value of its data (1.0 made 0.5), and it writes both back as they were
@@ -3985,6 +3994,131 @@ million, with 418 blocks formed in pages that are not write-protected,
 where there were 113 (a block there is checked against memory each time
 it starts). How the time divides between these was not profiled.
 
+## G17: the EE overclock a patch asks for (Windows, 2026-11-15)
+
+Step G17 ([ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md),
+"The EE overclock a frame-rate patch asks for"), at the maintainer's word
+("Sure apply recommended PCSX2 patches"): where a patch the host applies
+asks in its note for PCSX2's EE overclock, the host applies it, and the
+compiled game counts time as PCSX2's recompiler counts it with it.
+
+Measured first, before anything was built: what stock PCSX2 shows with
+both patches at 130% (its EE cycle rate setting 1), in G16's run (the
+software renderer, every frame saved and compared with the one before over
+the first 53 seconds of play, frames 6,600 to 9,250). 2,448 of the 2,650
+frames show a new picture, 46.2 a second, where without the overclock
+2,174, 41.0 a second. Second by second, 50 in 21 of the 53 seconds (7
+without), 45 or more in 42 (29 without), and the fewest, 29 to 36, in the
+first seconds in the level, where without it about 25. The step went on.
+
+- **Which note asks for it.** A patch file has no setting for the
+  overclock: PCSX2 reads only the picture's aspect ratio and its
+  interlacing from one, and a group asks for the overclock in words. 866
+  of the 4,709 patch files in the installed archive do, in words that vary;
+  Killzone's frame-rate group says it "might need EE Overclock (130%)". So
+  the host reads the lines of the groups it applies: one that speaks of an
+  overclock or of the cycle rate asks for the figure it names, 130%, 180%
+  or 300% (the setting itself where it gives one, "to 2"), and for 130%
+  where it names none. The host sets PCSX2's setting when it applies the
+  patch, and its report says so ("with the EE overclock asked for, 130% (EE
+  cycle rate 1)").
+- **`ps2n-host -ee-cycle-rate`** (`game.ps1 -EeCycleRate`), -3 to 3, sets
+  PCSX2's setting for any run, stock PCSX2's included; given, a note does
+  not change it, and the report says what the note asked for and that it
+  was left out. `-EeCycleRate 0` runs the frame-rate patch as G16 did. The
+  EE provider's warning that it counted the setting as its default is
+  gone.
+- **Time counted as PCSX2's recompiler counts it at that setting.** A block
+  of more than five cycles costs less at 130%, 180% and 300% and more at
+  75%, 60% and 50%, by PCSX2's formula (`scaleblockcycles` in
+  `iR5900.cpp`), and at 180% and 300% a flush in the middle of a block
+  keeps more of the count (`scaleblockcycles_clear`). The runtime reads the
+  setting whenever it throws its record of blocks away, as PCSX2 throws its
+  blocks away whenever the setting changes: the patch's setting arrives when
+  the game's executable starts, before any of its blocks is formed. PCSX2's
+  VU recompiler scales VU0's block cycles by the same setting; PS2Native's
+  VU provider followed that already, and it changes no plan (a block's
+  cycles are kept beside its plan, not in it).
+- **Held to stock PCSX2 at every rate.** Every test program of the
+  `programs` and `sdk` suites is compared with stock PCSX2 at every sync
+  point at 130%, 180%, 300%, 75% and 50% on both sides
+  (`same-as-stock-ee130` and the like: 50 tests, 519 in all). The count
+  does change with the rate: `bench` ends after 61 frames at 300%, 97 at
+  180%, 132 at 130%, 223 at 75% and 353 at 50%, the same under both.
+- **The micro code and the IOP's code it brings.** At 130% the game does
+  more in a frame: over the level run VU1 ran 2.82 billion blocks of micro
+  code, where it ran 1.395 billion with both patches at the default rate,
+  and VU0 189 million, where 98 million; and the compiled game let 11.9
+  billion of the run's EE cycles pass in loops that had reached a fixed
+  point, where 1.8 billion. Its first run interpreted 23 blocks of VU1's
+  micro code that no build had compiled (184,756 runs) and 3 blocks of the
+  IOP's (1,203 runs), and none of the game's EE code; the session in the
+  window below, 20 blocks of micro code more and one of the IOP's, with a
+  memory card in the slot. All of them are in the captures and compiled
+  into the build.
+
+Measured. **A block's cost at the end of the block.** PCSX2's recompiler
+works a block's cost out once, when it forms the block. The compiled game
+first called PCSX2's formula at the end of every block: correct, but over
+the level run with both patches at 130% it took 1.22 times stock PCSX2's
+time with the same setting (145.9 to 146.6 s against 119.4 to 119.9 s, its
+startup 1.58 and its play 1.16), and the profile had that one function at
+12.4% of the run. So compiled code now reads the cost from a table the
+runtime makes when it reads the setting (`ps2n::ee::cycleTable`, blocks of
+fewer than 4,096 eighths; a longer one calls the formula). With it, both
+patches and the overclock on both sides, nothing drawn, the level script,
+three pairs timed in turn: the compiled game takes 1.00 times stock
+PCSX2's time (119.2 to 120.0 s against 119.1 to 120.3 s; 0.99 to 1.01 in
+the three pairs), its startup 1.10 and its play 0.98 (98.9 to 99.8 s
+against 100.8 to 102.0 s; 0.970 to 0.990). Both patches at the default
+rate (`-EeCycleRate 0` on both sides), on the same build: 1.02 (77.5 to
+78.2 s against 76.4 to 77.1 s; 1.01 to 1.02), play 1.00 (0.99 to 1.01),
+where G16's build took 1.00 and 0.98: the compiled game's play 59.8 s
+against 59.3 s then, stock PCSX2's 59.9 s against 60.3 s, within the
+second by which two builds of this run can differ. The table costs a load
+from memory at the end of each block where G16's code added a constant.
+
+**Against stock PCSX2**, with both patches and the overclock on both
+sides, on the build with all of it compiled (over the level script nothing
+of the game's EE code, micro code or IOP code interpreted: VU1's 505
+blocks, VU0's 47 and the IOP's 8,012 all compiled ahead of time): the
+compiled game is at the same place at the same time as the stock run at
+every one of 103,579,794 sync points, with the same picture at each of the
+1,750 frames compared. Of the registers only the FPU's differ, at 309 sync
+points, from sync point 57,822,235 on; written out there (`-sync-detail`),
+the one value that differs is the sign of a zero (`$f21`: +0 under stock
+PCSX2, -0 compiled), the difference PS2Native makes on purpose since G4
+(`max.s` and `min.s` follow the console), which the compiled run made
+2,090 times here; the other sync points were not looked at one by one.
+Over the first 4,200 frames with both patches and the overclock the
+compiled game is the interpreted run at every one of 49,186,311 event tests
+(`D10AD3810E069D8A`). The build that called the formula gave the same.
+Every test passes (519).
+
+**In the window**, on Vulkan at three times the resolution (muted, a
+window of 1280 by 720), the level script driving the controller into play,
+the time noted at frame 6,600, each session in a play folder of its own:
+the compiled game with both patches and the overclock kept 49.93 frames a
+second over the session where the console shows 50, stock PCSX2 with the
+same 49.89, and in play each 2,700 frames in 54.0 s, 50.0 a second. Both
+reports say "with the EE overclock asked for, 130%". On the build with the
+first such session's 21 blocks compiled, the compiled game interpreted
+nothing there: no EE code, no micro code, no IOP code.
+
+**A session run again.** The compiled session above, run again without a
+window with the patches it was played with, was at first the session only
+as far as frame 1,500, and not from frame 1,550 on. The session had begun
+in a play folder of its own, without memory cards, and the core made a new
+card in each slot when the machine started; run again it got none, since
+`-memcards` filled only the slots the session had a card for, and the game
+tells an unformatted card from an empty slot. A run again now has a card in
+both slots, as a window always has: the session's, or a new one the core
+makes as it made one then (8 MB, unformatted). So run again, compiled and
+as a comparison with stock PCSX2 on the software renderer, both runs are
+the session at every one of its 186 fingerprints, and the compiled run is
+the stock run at every one of 70,451,268 sync points, every register
+included, with the same picture and sound state at the end.
+
 ## Open
 
 - **What is left of VU0 in the game's EE code.** Since G7 its instructions
@@ -4059,14 +4193,19 @@ it starts). How the time divides between these was not profiled.
   like microVU it keeps, for each block that ends in an indirect jump, a
   table with an entry for every pair of micro memory (2,048 for VU1), and
   how much memory a long session takes has not been measured.
-- **PCSX2's EE overclock.** Killzone's frame-rate patch says it might need
-  it (130%). PS2Native does not implement PCSX2's setting (`EECycleRate`):
-  without it the game falls back to a picture every other frame wherever
-  its work for one takes longer than a frame, and shows 41 new pictures a
-  second in the first level, from 23 to 50 second by second ("G16"). It
-  would change how time is counted, which is the maintainer's to decide
-  ([ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md), "The
-  frame-rate patch").
+- **The EE overclock a note asks for is read from its words.** A patch
+  file has no setting for PCSX2's EE overclock, so since G17 the host reads
+  it from the lines of the groups it applies, which in PCSX2's archive say
+  it in many ways ("G17"; ADR 0025). A note worded otherwise than the host
+  looks for goes unread, and so does one written before a file's first
+  group (11 files of the archive have one): the patch is then applied at
+  the default rate, and the report says nothing of an overclock. Killzone's
+  is read; the archive's 866 such files were not checked one by one.
+- **A session does not write down its patches.** In the window both
+  patches and the overclock their note asks for are the default; a session
+  run again without a window is given them (`-Patches widescreen,fps`; for
+  a session from before G17, `-EeCycleRate 0` too), or it is not the
+  session.
 - **Speed.** 4,200 frames of logos, a prompt and a film took 25.7 s
   compiled against 22.9 s under stock PCSX2 with the software renderer, and
   15.1 s against 11.2 s with nothing drawn, at G3; on 2026-11-13 they take

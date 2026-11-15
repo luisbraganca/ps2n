@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <ctime>
 #include <condition_variable>
@@ -37,9 +38,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -165,6 +168,8 @@ namespace
 		bool patch_widescreen = false; // apply the game's widescreen patch (-patches; the default with -window)
 		bool patch_fps = false; // and its frame-rate patch (the same)
 		std::string patch_archive; // the PCSX2 archive of patches the game's patch file is taken from (-patch-archive)
+		int ee_cycle_rate = 0; // PCSX2's EE cycle rate setting (-ee-cycle-rate): 0 its default, 1 to 3 an overclock
+		bool ee_cycle_rate_given = false; // then a patch's note does not change it
 		bool clock_given = false;
 		bool iop_jit = true;
 		bool iop_ps2n = false; // PS2Native's IOP provider in the place of the core's
@@ -337,14 +342,19 @@ namespace
 			"  -patches none|widescreen,fps  Apply the game's widescreen patch and its\n"
 			"                     frame-rate patch (the group of its patch file whose name\n"
 			"                     says FPS; none where several do), where PCSX2's archive\n"
-			"                     has them (-patch-archive). Default none; both with\n"
-			"                     -window.\n"
+			"                     has them (-patch-archive), with the EE overclock a\n"
+			"                     group applied asks for in its note (130% where it names\n"
+			"                     no figure), unless -ee-cycle-rate is given. Default\n"
+			"                     none; both with -window.\n"
 			"  -patch-archive <zip>  PCSX2's archive of patches (patches.zip of an installed\n"
 			"                     PCSX2), from which the game's own patch file is taken\n"
 			"                     into the run's data folder when the game has booted.\n"
+			"  -ee-cycle-rate <n> PCSX2's EE cycle rate setting, -3 to 3: 0 its default, 1,\n"
+			"                     2 and 3 its overclock of 130%, 180% and 300%, -1 to -3\n"
+			"                     75%, 60% and 50%; given, a patch does not change it.\n"
 			"  -memcards <dir>    Without -window: put Mcd001.ps2 and Mcd002.ps2 from <dir>\n"
-			"                     in the two slots, those that are there. The run writes to\n"
-			"                     them: give it copies.\n"
+			"                     in the two slots, and where <dir> lacks one, a new card,\n"
+			"                     as a window makes. The run writes to them: give it copies.\n"
 			"  -iop-ps2n          Run the IOP's code on PS2Native's IOP provider, which\n"
 			"                     follows PCSX2's IOP recompiler (runtime/iop_provider.h):\n"
 			"                     by the blocks compiled ahead of time that this host has,\n"
@@ -596,6 +606,17 @@ namespace
 			}
 			else if (is("-patch-archive") && has_value)
 				o.patch_archive = argv[++i];
+			else if (is("-ee-cycle-rate") && has_value)
+			{
+				const std::optional<s32> rate = StringUtil::FromChars<s32>(argv[++i]);
+				if (!rate || *rate < -3 || *rate > 3)
+				{
+					std::fprintf(stderr, "ps2n-host: -ee-cycle-rate takes -3 to 3, not '%s'\n", argv[i]);
+					return false;
+				}
+				o.ee_cycle_rate = *rate;
+				o.ee_cycle_rate_given = true;
+			}
 			else if (is("-profile") && has_value)
 				o.profile_path = argv[++i];
 			else if (is("-code-size") && has_value)
@@ -1345,6 +1366,9 @@ namespace
 		if (o.patch_widescreen)
 			si.SetStringValue("EmuCore/GS", "FMVAspectRatioSwitch", "4:3");
 
+		// PCSX2's EE cycle rate: its overclock, which a game's patch may ask for.
+		si.SetIntValue("EmuCore/Speedhacks", "EECycleRate", o.ee_cycle_rate);
+
 		si.SetIntValue("EmuCore/GS", "Renderer", static_cast<int>(o.renderer));
 		si.SetFloatValue("EmuCore/GS", "upscale_multiplier", static_cast<float>(o.upscale));
 
@@ -1385,19 +1409,22 @@ namespace
 
 			// No sound device, no input devices, and no memory cards unless a
 			// folder of them is given (-memcards: a session run again has the
-			// cards it began with).
+			// cards it began with). Then both slots hold one, as they always do
+			// in a window: where the session began without a card, the core
+			// made a new one when the machine started, and it makes one here
+			// the same way (8 MB, unformatted).
 			si.SetStringValue("SPU2/Output", "Backend", "Null");
 			si.SetBoolValue("InputSources", "SDL", false);
 			si.SetBoolValue("InputSources", "XInput", false);
 			Pad::ClearPortBindings(si, 0);
-			if (!o.memcards_dir.empty())
+			const bool cards = !o.memcards_dir.empty();
+			if (cards)
 				si.SetStringValue("Folders", "MemoryCards", o.memcards_dir.c_str());
 			for (u32 i = 0; i < 2; i++)
 			{
 				const std::string name = fmt::format("Mcd{:03}.ps2", i + 1);
-				const bool present = !o.memcards_dir.empty() && FileSystem::FileExists(Path::Combine(o.memcards_dir, name).c_str());
-				si.SetBoolValue("MemoryCards", fmt::format("Slot{}_Enable", i + 1).c_str(), present);
-				si.SetStringValue("MemoryCards", fmt::format("Slot{}_Filename", i + 1).c_str(), present ? name.c_str() : "");
+				si.SetBoolValue("MemoryCards", fmt::format("Slot{}_Enable", i + 1).c_str(), cards);
+				si.SetStringValue("MemoryCards", fmt::format("Slot{}_Filename", i + 1).c_str(), cards ? name.c_str() : "");
 			}
 		}
 
@@ -2623,6 +2650,48 @@ namespace
 
 namespace
 {
+	// The EE overclock a group of a patch file asks for in its note, as
+	// PCSX2's archive words it ("Might need EE Overclock (130%).", "Might need
+	// EE overclock at 180%.", "set \"EE Cyclerate\" to 2"; ADR 0025): PCSX2's
+	// EE cycle rate setting, 1 to 3 for 130%, 180% and 300%, or 0 where the
+	// note asks for none. A note that names no figure asks for the mildest,
+	// 130%; one that names two ("130-180%"), for the first.
+	int OverclockAsked(std::string_view lines)
+	{
+		int asked = 0;
+		for (const std::string_view line : StringUtil::SplitString(lines, '\n', true))
+		{
+			const std::string lower = StringUtil::toLower(line);
+			const bool cycle_rate = lower.find("cycle rate") != std::string::npos || lower.find("cyclerate") != std::string::npos;
+			if (!cycle_rate && lower.find("overclock") == std::string::npos)
+				continue;
+			int rate = 1;
+			size_t first = std::string::npos;
+			static constexpr std::pair<std::string_view, int> kFigures[] = {{"130", 1}, {"180", 2}, {"300", 3}};
+			for (const auto& [figure, value] : kFigures)
+			{
+				const size_t at = lower.find(figure);
+				if (at < first)
+				{
+					first = at;
+					rate = value;
+				}
+			}
+			if (first == std::string::npos && cycle_rate)
+			{
+				// The setting itself: "to 2".
+				const size_t to = lower.find(" to ");
+				if (to != std::string::npos && to + 4 < lower.size() && lower[to + 4] >= '1' && lower[to + 4] <= '3' &&
+					(to + 5 == lower.size() || !std::isdigit(static_cast<unsigned char>(lower[to + 5]))))
+				{
+					rate = lower[to + 4] - '0';
+				}
+			}
+			asked = std::max(asked, rate);
+		}
+		return asked;
+	}
+
 	// Takes the booted game's patch file out of PCSX2's archive into the folder
 	// where the core looks for patch files (ADR 0025): the core loads it just
 	// after this, and applies the groups asked for. Only that one file is
@@ -2660,6 +2729,8 @@ namespace
 			// choices, not one patch ("60 FPS" beside "50 FPS", "Onscreen FPS
 			// Display", "Slow Motion (60 fps)"), and none of them is applied.
 			std::vector<std::string> groups;
+			std::map<std::string, std::string> group_lines; // each group's lines, its note among them
+			std::string* current = nullptr;
 			for (std::string_view line : StringUtil::SplitString(*text, '\n', true))
 			{
 				line = StringUtil::StripWhitespace(line);
@@ -2667,7 +2738,13 @@ namespace
 				{
 					std::string group(line.substr(1, line.size() - 2));
 					if (std::find(groups.begin(), groups.end(), group) == groups.end())
-						groups.push_back(std::move(group));
+						groups.push_back(group);
+					current = &group_lines[std::move(group)];
+				}
+				else if (current)
+				{
+					current->append(line);
+					current->push_back('\n');
 				}
 			}
 			std::vector<std::string> applied;
@@ -2697,9 +2774,37 @@ namespace
 						StringUtil::JoinString(fps.begin(), fps.end(), ", "));
 				}
 			}
-			s_patch_line = fmt::format("ps2n-host: patches: {} taken from {} for this run; groups applied: {}{}", name,
+
+			// What a group applied asks for in its note is applied with it (the
+			// maintainer's answer, ADR 0025): the EE overclock. The core reads
+			// it with the game's other settings just after this
+			// (VMManager::HandleELFChange), and throws every block away for it,
+			// as its recompiler and PS2Native's EE provider both do then.
+			std::string overclock;
+			int asked = 0;
+			for (const std::string& group : applied)
+				asked = std::max(asked, OverclockAsked(group_lines[group]));
+			if (asked != 0)
+			{
+				static constexpr int kPercent[] = {100, 130, 180, 300};
+				if (s_options.ee_cycle_rate_given)
+				{
+					overclock = fmt::format("; the EE overclock asked for ({}%) left out: -ee-cycle-rate {} given", kPercent[asked],
+						s_options.ee_cycle_rate);
+				}
+				else
+				{
+					{
+						std::unique_lock<std::mutex> lock = Host::GetSettingsLock();
+						s_settings.SetIntValue("EmuCore/Speedhacks", "EECycleRate", asked);
+					}
+					overclock = fmt::format("; with the EE overclock asked for, {}% (EE cycle rate {})", kPercent[asked], asked);
+				}
+			}
+
+			s_patch_line = fmt::format("ps2n-host: patches: {} taken from {} for this run; groups applied: {}{}{}", name,
 				s_options.patch_archive, applied.empty() ? std::string("none") : StringUtil::JoinString(applied.begin(), applied.end(), ", "),
-				left_out);
+				left_out, overclock);
 			return;
 		}
 		s_patch_line = fmt::format("ps2n-host: patches: {} has none for {} {:08X}", s_options.patch_archive, serial, crc);

@@ -104,10 +104,23 @@ unless another file is named):
 3. **What it costs.** The sum of its instructions' counts (PCSX2's opcode
    table, in eighths of a cycle; a `nop` counts 9), doubled if bit 18 of
    COP0's `Config` was clear when the block was formed, divided by eight and
-   rounded down, never less than one.
+   rounded down, never less than one. PCSX2's EE cycle rate setting (its
+   overclock, `EECycleRate`) changes that for a block of more than five
+   cycles (40 eighths): 130% divides the cycles by 1.3 in single precision
+   and rounds down, 180% and 300% divide the eighths by 16 and 32, 75%
+   multiplies them by 5 or 7 32nds, 60% and 50% by 7 and 9 32nds
+   (`scaleblockcycles` in `iR5900.cpp`; `ps2n::ee::blockCycles`). The
+   recompiler reads the setting when it forms a block, and a change of it
+   throws every block away first, so the runtime reads it whenever it throws
+   its record away (step G17, ADR 0025). The recompiler works a block's cost
+   out once, when it forms it; compiled code reads it at the end of every
+   block from a table the runtime makes when it reads the setting
+   (`ps2n::ee::cycleTable`, blocks of fewer than 4,096 eighths).
 4. **Cycles added in the middle of a block.** Before some instructions the
    count so far, the instruction's own included, is added to the cycle count
-   (rounded the same way, the remainder kept): `MFC0` from the count
+   (rounded the same way, the remainder kept: the eighths below a cycle, and
+   at 180% and 300%, in a block of more than five cycles so far, the eighths
+   below 2 and 4 cycles; `ps2n::ee::blockRemainder`): `MFC0` from the count
    register; `MTC0` to the status or the count register; the performance
    counter instructions, except the read of their control register
    (`ps2n::r5900::flushesCycles`); and the COP2 instructions before which
@@ -396,7 +409,6 @@ record keeps such a block usable until the next event test
 
 ### What is not reproduced
 
-- PCSX2's EE cycle rate setting (counted as 0, with a warning).
 - The recompiler throws every block away when its code cache is full.
   PS2Native has no code cache, so it cannot know when that would be. After
   such a reset the blocks are formed anew and may be cut differently.
@@ -659,7 +671,10 @@ someone playing at this computer's time of day (`-clock host`, the default
 with `-window`), which the session writes down. The memory cards and the
 console's NVRAM are part of the machine too: a run without a window has no
 memory card unless it is given copies (`-memcards`), and a fresh NVRAM
-unless the test driver is given one to copy (`NVRAM_FROM`).
+unless the test driver is given one to copy (`NVRAM_FROM`). Given copies,
+it has a card in both slots, as a window always has: where a session began
+without one, the core made a new one when the machine started, and a run of
+it again gets a new one the same way.
 
 **With stock PCSX2: sync points.** The core lets the IOP catch up with the
 EE from its event test, and that moment exists whatever runs the EE.
