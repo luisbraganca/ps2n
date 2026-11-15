@@ -14,7 +14,10 @@ holds bin, include and lib (docs\poc-log.md says where it comes from).
 With -Game, a game's boot executable is compiled into the host as well. The
 executable is read where it is; what is generated from it stays in the build
 tree. The choice is remembered by the build tree until -Game is given again
-(-Game none takes the game out).
+(-Game none takes the game out). -GameMore names the executables the boot
+executable loads itself, without the BIOS's loader, where a game is made of
+several (docs\adr\0026): each is compiled as an image the host uses while
+memory holds its code. Remembered like -Game; "none" forgets them.
 
 With -Bios, the EE code of a BIOS dump is compiled into the host as well
 (docs\adr\0017): the user's own dump, read where it is, and what is
@@ -67,6 +70,9 @@ param(
     [switch]$ToolsOnly,
     # A game's boot executable to compile into the host, or "none".
     [string]$Game = '',
+    # The executables it loads itself (docs\adr\0026), or "none": an array, or one string with the paths separated
+    # by "|" (a character no Windows path has), as through powershell -File.
+    [string[]]$GameMore = @(),
     # What earlier runs of the game reported for the recompiler (ps2n-host -capture), or "none".
     [string]$GameCapture = '',
     # A BIOS dump whose EE code to compile into the host, or "none".
@@ -151,6 +157,14 @@ if ($Game) {
 if ($GameCapture) {
     $capturePath = if ($GameCapture -eq 'none') { '' } else { ForCMake (Resolve-Path -LiteralPath $GameCapture).Path }
     $gameSettings += "-DPS2N_GAME_CAPTURE=$capturePath"
+}
+$more = @($GameMore | ForEach-Object { $_ -split '\|' } | Where-Object { $_ -ne '' })
+if ($more.Count -gt 0) {
+    $morePaths = if ($more.Count -eq 1 -and $more[0] -eq 'none') { @() } else {
+        @($more | ForEach-Object { ForCMake (Resolve-Path -LiteralPath $_).Path })
+    }
+    # A CMake list: the paths separated by ";".
+    $gameSettings += "-DPS2N_GAME_MORE=$($morePaths -join ';')"
 }
 if ($Bios) {
     $biosPath = if ($Bios -eq 'none') { '' } else { ForCMake (Resolve-Path -LiteralPath $Bios).Path }

@@ -1876,6 +1876,7 @@ std::vector<GeneratedFile> generateFiles(const Program& prog, const GenerateOpti
     tables += "\t" + cstring(kGeneratorName) + ",\n";
     if (options.kind == 1) tables += "\tkImageBios,\n";
     if (options.kind == 2) tables += "\tkImageOutside,\n";
+    if (options.kind == 3) tables += "\tkImageLoaded,\n\t" + hex(options.programCrc) + ",\n";
     tables += "};\n\n";
 
     // What the runtime knows of the block that begins at each leader

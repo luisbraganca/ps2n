@@ -47,6 +47,10 @@ void usage() {
         "                         captures hold outside the executable's code (code it\n"
         "                         copied into kernel memory, for one), followed from\n"
         "                         where it ran. It may hold nothing\n"
+        "      --loaded-by <elf>  the executable is one that program loads itself (a\n"
+        "                         game made of several executables): the image is\n"
+        "                         used while memory holds its code, and takes from\n"
+        "                         the captures what they hold for it, by its CRC\n"
         "\n"
         "  ps2n-recomp info <elf> [--capture <file>] [--no-symbols]\n"
         "      Prints what the analysis finds, without writing anything.\n"
@@ -103,9 +107,10 @@ void usage() {
         "      Writes the list of images a host is linked with; --vu names an image\n"
         "      of compiled micro code, --iop one of compiled IOP code.\n"
         "\n"
-        "  ps2n-recomp assemble <file.s> --out <file.elf>\n"
+        "  ps2n-recomp assemble <file.s> --out <file.elf> [--base <address>]\n"
         "      Assembles a test program written for PS2Native's own small R5900\n"
-        "      assembler (core/include/ps2n/assembler.h) into an EE executable.\n"
+        "      assembler (core/include/ps2n/assembler.h) into an EE executable,\n"
+        "      its code at <address> (default 0x00100000).\n"
         "\n"
         "  ps2n-recomp disasm <file> --at <address> [--count <n>] [--base <address>]\n"
         "      Prints the instructions at an address: the address, the word, what\n"
@@ -120,6 +125,7 @@ struct Args {
     std::filesystem::path out;
     std::filesystem::path outDir;
     std::filesystem::path outside;
+    std::filesystem::path loadedBy;
     std::string id;
     std::vector<std::filesystem::path> captures;
     std::vector<std::string> vuIds;
@@ -144,6 +150,7 @@ Args parse(int argc, char** argv) {
         if (arg == "--out") a.out = value();
         else if (arg == "--out-dir") a.outDir = value();
         else if (arg == "--outside") a.outside = value();
+        else if (arg == "--loaded-by") a.loadedBy = value();
         else if (arg == "--id") a.id = value();
         else if (arg == "--capture") a.captures.emplace_back(value());
         else if (arg == "--vu") a.vuIds.push_back(value());
@@ -171,12 +178,22 @@ Args parse(int argc, char** argv) {
 }
 
 // What the captures say for the executable's own code. The code they hold
-// outside it is for the image of its own (--outside).
+// outside it is for the image of its own (--outside). For an executable
+// another loads itself (--loaded-by), what they hold for it by its CRC.
 Options analysisOptions(const Args& a, const ElfFile& elf) {
     Options o;
     o.useSymbols = a.symbols;
-    for (const auto& file : a.captures) o.capture.add(loadCaptureFile(file));
-    std::erase_if(o.capture.code, [&](const Capture::Code& c) { return !inCodeRanges(elf, c.start); });
+    Capture all;
+    for (const auto& file : a.captures) all.add(loadCaptureFile(file));
+    const uint32_t program = a.loadedBy.empty() ? 0 : pcsx2Crc(elf);
+    if (program == 0) {
+        o.capture.entries = all.entries;
+    } else if (const auto it = all.programEntries.find(program); it != all.programEntries.end()) {
+        o.capture.entries = it->second;
+    }
+    for (const Capture::Code& c : all.code) {
+        if (c.program == program && inCodeRanges(elf, c.start)) o.capture.code.push_back(c);
+    }
     return o;
 }
 
@@ -201,6 +218,14 @@ int compile(const Args& a) {
     go.comments = a.comments;
     go.parts = a.parts;
     if (go.parts > 1) go.headerName = a.out.stem().string() + ".h";
+    if (!a.loadedBy.empty()) {
+        // Tied to the executable that loads it, which the runtime knows by
+        // its CRC; its own CRC names it in the captures.
+        if (!a.outside.empty()) throw Error("--outside is for the executable that loads others, not with --loaded-by");
+        go.kind = 3;
+        go.crc = pcsx2Crc(ElfFile::load(a.loadedBy));
+        go.programCrc = pcsx2Crc(elf);
+    }
     GenerateStats stats;
     const std::vector<GeneratedFile> files = generateFiles(prog, go, &stats);
 
@@ -536,7 +561,9 @@ int assemble(const Args& a) {
     if (a.positional.size() != 1) throw Error("assemble takes one source file");
     if (a.out.empty()) throw Error("assemble needs --out <file.elf>");
     const std::filesystem::path path = a.positional[0];
-    Assembler as;
+    AsmOptions options;
+    if (a.base) options.textBase = *a.base;
+    Assembler as(options);
     as.assemble(readTextFile(path), path.string());
     const std::vector<uint8_t> elf = as.buildElf();
     if (a.out.has_parent_path()) std::filesystem::create_directories(a.out.parent_path());

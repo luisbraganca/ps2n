@@ -29,15 +29,19 @@ struct GenerateOptions {
     // With more than one part: the name the part files include the header by.
     std::string headerName;
     // What the image holds (ImageInfo::kind in recomp.h): an executable's
-    // code (0), a piece of the BIOS (1), or the code an executable ran
-    // outside its own (2). An image of either of the last two may hold no
-    // code at all.
+    // code (0), a piece of the BIOS (1), the code an executable ran outside
+    // its own (2), or an executable another loads itself (3). An image of
+    // the second or third kind may hold no code at all.
     uint32_t kind = 0;
     // In place of the executable's file name and CRC: for the BIOS, the
     // dump's name and the CRC of the whole ROM (Bios in bios.h); for code
-    // run outside an executable, the executable's.
+    // run outside an executable, and for an executable another loads itself,
+    // that other's CRC.
     std::string name;
     std::optional<uint32_t> crc;
+    // For an executable another loads itself (kind 3): its own CRC
+    // (ImageInfo::program_crc).
+    uint32_t programCrc = 0;
 };
 
 // One generated file. `suffix` tells which, and names it once put after the

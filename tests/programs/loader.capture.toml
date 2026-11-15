@@ -1,0 +1,20 @@
+# What PS2Native had to interpret of loader.elf (CRC CD7A18EA).
+# Give this file to the recompiler (ps2n-recomp compile --capture) to have it compiled.
+#
+# In program A's second run, where B's blocks are still in the record of blocks
+# (the page went over to blocks that check themselves), as in PCSX2's recompiler:
+# A's blocks are cut where B's begin, at addresses A's analysis has no label for.
+
+# Addresses at which a block was interpreted.
+entries = [
+]
+
+# The same in loader_a.elf, which it loaded itself.
+[[program]]
+crc = 0x5420d14e
+entries = [
+  0x0020001c,
+  0x00200024,
+  0x0020003c,
+  0x00200044,
+]

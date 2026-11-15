@@ -54,15 +54,24 @@ struct Capture {
     // the analysis could not see.
     std::vector<uint32_t> entries;
 
-    // Code it found in memory in the place of a function.
+    // The same for each executable the program loaded itself (a game made of
+    // several; compile --loaded-by), by that executable's CRC.
+    std::map<uint32_t, std::vector<uint32_t>> programEntries;
+
+    // Code it found in memory in the place of a function, or that ran where
+    // no image had code.
     struct Code {
         uint32_t start = 0;
         std::vector<uint32_t> words;
+        // Zero: in the place of the executable's function, or outside it.
+        // Otherwise the CRC of the executable the program loaded itself in
+        // whose function's place it was found.
+        uint32_t program = 0;
     };
     std::vector<Code> code;
 
     void add(const Capture& other);
-    // Sorts both lists and drops what is there twice.
+    // Sorts the lists and drops what is there twice.
     void normalize();
 };
 
@@ -128,7 +137,12 @@ ElfFile codeOutside(const ElfFile& elf, const Capture& capture, std::vector<Note
 //
 //   entries = [ 0x00100040, ... ]
 //
+//   [[program]]                   an executable the program loaded itself
+//   crc = 0x7F9AA984
+//   entries = [ 0x00120400, ... ]
+//
 //   [[code]]
+//   program = 0x7F9AA984          only for that executable's code
 //   start = 0x00100098
 //   words = [ 0x03e00008, 0x24020002, ... ]
 //

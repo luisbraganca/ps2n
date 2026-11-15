@@ -124,17 +124,27 @@ namespace
 	bool s_static_enabled = true;
 
 	// The images in use: the BIOS's (ImageInfo::kind), from the first
-	// instruction on, while the ROM is the one they were made from; and the
-	// executable's, from its entry point on. Their code ranges do not
-	// overlap. With each, one bit per instruction of its code range: a block
-	// had to be interpreted from there.
+	// instruction on, while the ROM is the one they were made from; the
+	// executable's, from its entry point on; and of the executables it loads
+	// itself, the one whose code memory holds, at most one over any address.
+	// Their code ranges do not overlap.
 	struct InUse
 	{
 		const ImageInfo* image;
-		std::vector<u64> missing;
 	};
 	std::vector<InUse> s_in_use;
 	bool s_bios_looked_for = false;
+
+	// For each image that has been in use, one bit per instruction of its
+	// code range: a block had to be interpreted from there. Kept when the
+	// image goes out of use, for the capture.
+	std::map<const ImageInfo*, std::vector<u64>> s_missing;
+
+	// The executables the running one loads itself (ps2n::ee::kImageLoaded,
+	// tied to it by its CRC), any of which is put in use when memory holds its
+	// code (AdoptLoaded); and how many times each was.
+	std::vector<const ImageInfo*> s_loaded;
+	std::map<const ImageInfo*, u64> s_loaded_uses;
 
 	// The executable's image among them, when there is one; and whether
 	// compiled code is dispatched to at all.
@@ -342,7 +352,8 @@ namespace
 	void Use(const ImageInfo& image)
 	{
 		std::memset(image.blocks, 0, image.leader_count * sizeof(u32));
-		s_in_use.push_back({&image, std::vector<u64>(((image.text_end - image.text_start) / 4 + 63) / 64, 0)});
+		s_in_use.push_back({&image});
+		s_missing[&image].resize(((image.text_end - image.text_start) / 4 + 63) / 64, 0);
 		s_dispatching = s_static_enabled;
 		FlushCache();
 	}
@@ -355,6 +366,7 @@ namespace
 
 		std::erase_if(s_in_use, [](const InUse& u) { return u.image->kind != ps2n::ee::kImageBios; });
 		s_image = nullptr;
+		s_loaded.clear();
 		const ImageInfo* outside = nullptr; // the code it ran outside its own, as runs captured it
 		for (size_t i = 0; i < s_image_count; i++)
 		{
@@ -364,6 +376,8 @@ namespace
 				s_image = s_images[i];
 			else if (s_images[i]->kind == ps2n::ee::kImageOutside)
 				outside = s_images[i];
+			else if (s_images[i]->kind == ps2n::ee::kImageLoaded)
+				s_loaded.push_back(s_images[i]);
 		}
 		s_dispatching = s_static_enabled && !s_in_use.empty();
 		s_stats.image = s_image;
@@ -387,6 +401,11 @@ namespace
 			Use(*outside);
 			Console.WriteLn(Color_StrongGreen, "ps2n: and of the code it ran outside its executable: %u functions at %08X-%08X",
 				outside->function_count, outside->text_start, outside->text_end);
+		}
+		for (const ImageInfo* loaded : s_loaded)
+		{
+			Console.WriteLn(Color_StrongGreen, "ps2n: and of %s, which it may load itself (CRC %08X): %u functions at %08X-%08X, used while in memory",
+				loaded->name, loaded->program_crc, loaded->function_count, loaded->text_start, loaded->text_end);
 		}
 	}
 
@@ -531,13 +550,13 @@ namespace
 	{
 		if (!s_dispatching)
 			return;
-		for (InUse& u : s_in_use)
+		for (const InUse& u : s_in_use)
 		{
 			const u32 offset = pc - u.image->text_start;
 			if (offset < u.image->text_end - u.image->text_start)
 			{
 				const u32 bit = offset / 4;
-				u.missing[bit / 64] |= 1ull << (bit % 64);
+				s_missing[u.image][bit / 64] |= 1ull << (bit % 64);
 				return;
 			}
 		}
@@ -566,12 +585,14 @@ namespace
 		return hash.value;
 	}
 
-	// Keeps the words in memory in the place of function `f`, for the host to
-	// hand to the recompiler.
-	void CaptureCode(const FunctionInfo& f)
+	// Keeps the words in memory in the place of function `f` of `image`, for
+	// the host to hand to the recompiler: for an executable the program loads
+	// itself, named by that executable's CRC.
+	void CaptureCode(const ImageInfo& image, const FunctionInfo& f)
 	{
 		ps2n::ee::CapturedCode code;
 		code.start = f.start;
+		code.program = image.kind == ps2n::ee::kImageLoaded ? image.program_crc : 0;
 		for (u32 addr = f.start; addr < f.end; addr += 4)
 		{
 			const auto entry = vtlb_private::vtlbdata.vmap[addr >> vtlb_private::VTLB_PAGE_BITS];
@@ -585,10 +606,70 @@ namespace
 
 		for (const ps2n::ee::CapturedCode& have : s_captured)
 		{
-			if (have.start == code.start && have.words == code.words)
+			if (have.program == code.program && have.start == code.start && have.words == code.words)
 				return;
 		}
 		s_captured.push_back(std::move(code));
+	}
+
+	// Whether memory holds `image`'s code at `pc`: the words of the segment
+	// of its function that `pc` is in, from the leader at or before it to the
+	// next, are those the function or one of its variants was compiled from.
+	bool CodeInMemory(const ImageInfo& image, u32 pc)
+	{
+		const FunctionInfo* f = FunctionOf(image, pc);
+		if (!f)
+			return false;
+		const u32* first = image.leaders + f->first_leader;
+		const u32* last = first + f->leader_count;
+		const u32* next = std::upper_bound(first, last, pc);
+		if (next == first)
+			return false;
+		const u32 index = static_cast<u32>(next - 1 - image.leaders);
+		const u64 hash = HashOfMemory(image.leaders[index], next != last ? *next : f->end);
+		if (hash == 0)
+			return false;
+		if (hash == image.segment_hashes[index])
+			return true;
+		for (u32 v = 0; v < f->variant_count; v++)
+		{
+			if (hash == image.variants[f->first_variant + v].segment_hashes[index - f->first_leader])
+				return true;
+		}
+		return false;
+	}
+
+	// A block was just formed at `pc`. Where the executable loads others
+	// itself (ps2n::ee::kImageLoaded) and the one of them whose code memory
+	// holds there is not in use, it is put in use, and any other of them over
+	// the same addresses taken out of use; compiled code of one taken out
+	// that is running is left. Nothing else tells which of them is in memory:
+	// the core does not see the executable change. Each block is still
+	// compared with memory before compiled code runs it (IdentifyBody).
+	void AdoptLoaded(u32 pc)
+	{
+		if (s_loaded.empty() || !s_static_enabled)
+			return;
+		for (const InUse& u : s_in_use)
+		{
+			if (u.image->kind == ps2n::ee::kImageLoaded && CodeInMemory(*u.image, pc))
+				return;
+		}
+		for (const ImageInfo* image : s_loaded)
+		{
+			if (InUseImage(image) || !CodeInMemory(*image, pc))
+				continue;
+			const size_t replaced = std::erase_if(s_in_use, [image](const InUse& u) {
+				return u.image->kind == ps2n::ee::kImageLoaded && u.image->text_start < image->text_end && image->text_start < u.image->text_end;
+			});
+			Use(*image);
+			s_loaded_uses[image]++;
+			if (replaced)
+				s_unwind_requested = true;
+			Console.WriteLn(Color_StrongGreen, "ps2n: using compiled code of %s, which the executable loaded itself (CRC %08X), from %08X",
+				image->name, image->program_crc, pc);
+			return;
+		}
 	}
 
 	// ---- time and events -----------------------------------------------------
@@ -870,6 +951,9 @@ namespace
 			Console.Error("ps2n: execution reached %08X, which is neither RAM nor ROM", pc);
 			pxFailRel("ps2n: execution left RAM and ROM");
 		}
+
+		// Perhaps an executable the program loaded itself.
+		AdoptLoaded(pc);
 		return block;
 	}
 
@@ -1455,6 +1539,7 @@ namespace
 		// A machine started after this one may have another ROM.
 		s_in_use.clear();
 		s_image = nullptr;
+		s_loaded.clear();
 		s_dispatching = false;
 		s_bios_looked_for = false;
 		FlushCache();
@@ -1711,25 +1796,44 @@ std::vector<ps2n::ee::BiosFileCheck> ps2n::ee::CompareBiosFiles()
 	return CompareBiosFilesNow();
 }
 
-std::vector<uint32_t> ps2n::ee::GetMissingEntries()
+namespace
 {
-	std::vector<uint32_t> entries;
-	for (const InUse& u : s_in_use)
+	// The addresses in `image`'s code at which a block had to be interpreted,
+	// sorted.
+	std::vector<uint32_t> MissingIn(const ImageInfo* image)
 	{
-		if (u.image != s_image)
-			continue;
-		for (size_t i = 0; i < u.missing.size(); i++)
+		std::vector<uint32_t> entries;
+		const auto it = image ? s_missing.find(image) : s_missing.end();
+		if (it == s_missing.end())
+			return entries;
+		for (size_t i = 0; i < it->second.size(); i++)
 		{
-			for (u64 bits = u.missing[i]; bits; bits &= bits - 1)
+			for (u64 bits = it->second[i]; bits; bits &= bits - 1)
 			{
 				u32 bit = 0;
 				for (u64 b = bits; !(b & 1); b >>= 1)
 					bit++;
-				entries.push_back(s_image->text_start + static_cast<u32>(i * 64 + bit) * 4);
+				entries.push_back(image->text_start + static_cast<u32>(i * 64 + bit) * 4);
 			}
 		}
+		return entries;
 	}
-	return entries;
+} // namespace
+
+std::vector<uint32_t> ps2n::ee::GetMissingEntries()
+{
+	return MissingIn(s_image);
+}
+
+std::vector<ps2n::ee::LoadedProgram> ps2n::ee::GetLoadedPrograms()
+{
+	std::vector<LoadedProgram> programs;
+	for (const ImageInfo* image : s_loaded)
+	{
+		const auto uses = s_loaded_uses.find(image);
+		programs.push_back({image, uses == s_loaded_uses.end() ? 0 : uses->second, MissingIn(image)});
+	}
+	return programs;
 }
 
 const std::vector<ps2n::ee::CapturedCode>& ps2n::ee::GetCapturedCode()
@@ -1805,7 +1909,7 @@ uint32_t ps2n::ee::blockStart(const ImageInfo& image, uint32_t index, uint32_t b
 				// Memory holds code nothing was compiled from: kept for the recompiler.
 				s_stats.blocks_unknown++;
 				if (const FunctionInfo* f = FunctionOf(image, addr))
-					CaptureCode(*f);
+					CaptureCode(image, *f);
 				RecordMissing(addr);
 			}
 		}
@@ -2176,6 +2280,19 @@ ps2n::ee::CallSite ps2n::ee::callSites[ps2n::ee::kCallSites];
 
 uint32_t ps2n::ee::dispatch(uint32_t pc)
 {
+	// Where the program loads executables itself, forming the block here may
+	// put the one in memory in use (AdoptLoaded) before its first block runs,
+	// and take another out, whose compiled frames are then left.
+	if (!s_loaded.empty() && !blocks::Find(pc))
+	{
+		FormRecBlock(pc);
+		if (MustUnwind())
+		{
+			cpuRegs.pc = pc;
+			return kUnwind;
+		}
+	}
+
 	if (const StaticFn fn = Lookup(pc))
 	{
 		// The next call there goes to the function from compiled code itself

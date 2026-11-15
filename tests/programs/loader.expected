@@ -1,0 +1,5 @@
+-- TEST BEGIN
+program a: 5
+program b: 7
+program a: 5
+-- TEST END

@@ -938,6 +938,61 @@ words = [ 0x00000000 ]
     CHECK_THROWS(parseCapture("something = 1\n", "x"));
 }
 
+// What a run reports of an executable the program loaded itself goes under
+// that executable's CRC, kept apart from the program's own, through merging
+// and writing.
+TEST_CASE(capture_files_name_the_executables_a_program_loads) {
+    const Capture capture = parseCapture(R"(
+entries = [ 0x01F00010 ]
+
+[[program]]
+crc = 0x7F9AA984
+entries = [ 0x00120400, 0x00120200 ]
+
+[[program]]
+crc = 0x6A4B8FCC
+entries = []
+
+[[code]]
+program = 0x7F9AA984
+start = 0x00120100
+words = [ 0x03e00008, 0x00000000 ]
+
+[[code]]
+start = 0x00200000
+words = [ 0x03e00008 ]
+)", "capture.toml");
+    CHECK(capture.entries == (std::vector<uint32_t>{0x01F00010u}));
+    CHECK_EQ(capture.programEntries.size(), size_t{2});
+    CHECK(capture.programEntries.at(0x7F9AA984u) == (std::vector<uint32_t>{0x00120400u, 0x00120200u}));
+    CHECK(capture.programEntries.at(0x6A4B8FCCu).empty());
+    CHECK_EQ(capture.code.size(), size_t{2});
+    CHECK_EQ(capture.code[0].program, 0x7F9AA984u);
+    CHECK_EQ(capture.code[1].program, 0u);
+
+    Capture all = capture;
+    all.add(parseCapture("[[program]]\ncrc = 0x7F9AA984\nentries = [ 0x00120400, 0x00120000 ]\n"
+                         "[[code]]\nprogram = 0x6A4B8FCC\nstart = 0x00120100\nwords = [ 0x03e00008, 0x00000000 ]\n",
+        "second.toml"));
+    all.normalize();
+    CHECK(all.programEntries.at(0x7F9AA984u) == (std::vector<uint32_t>{0x00120000u, 0x00120200u, 0x00120400u}));
+    CHECK_EQ(all.code.size(), size_t{3});   // the same words in another executable's place are that executable's
+    const Capture again = parseCapture(writeCapture(all, "a comment"), "written.toml");
+    CHECK(again.entries == all.entries);
+    CHECK(again.programEntries == all.programEntries);
+    CHECK_EQ(again.code.size(), size_t{3});
+    for (size_t i = 0; i < again.code.size(); i++) {
+        CHECK_EQ(again.code[i].program, all.code[i].program);
+        CHECK_EQ(again.code[i].start, all.code[i].start);
+    }
+
+    CHECK_THROWS(parseCapture("[[program]]\nentries = [ 0x10 ]\n", "x"));              // no crc before them
+    CHECK_THROWS(parseCapture("[[program]]\n", "x"));                                  // no crc at all
+    CHECK_THROWS(parseCapture("crc = 0x10\n", "x"));                                   // outside a block
+    CHECK_THROWS(parseCapture("program = 0x10\n", "x"));                               // outside a [[code]] block
+    CHECK_THROWS(parseCapture("[[code]]\nstart = 0x10\nentries = [ 0x10 ]\nwords = [ 1 ]\n", "x"));   // entries in code
+}
+
 TEST_CASE(captured_code_becomes_a_variant) {
     const ElfFile elf = assemble(R"(
         .text

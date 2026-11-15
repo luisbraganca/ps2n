@@ -30,6 +30,7 @@ The run files, pictures included, are under the git-ignored build tree.
 | G15 PCSX2's patches; widescreen | **Done** (2026-11-15, [ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)): the game's widescreen patch applied by default in the window, taken from the archive of the PCSX2 installed on this computer (the maintainer's choice; one file copied per run into the run's data folder, since Windows will not let the build link to it). Killzone in 16:9, drawn wide by the game itself. The patch writes data, not code: nothing of the game's code interpreted. Every test passes; a run with the patch is the stock run with it, the FPU's sign of a zero aside, and the interpreted run. Where it stands is in "G15" below. |
 | G16 The frame-rate patch | **Done** (2026-11-15, [ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)): the game's frame-rate patch applied by default in the window with the widescreen patch: the group of its patch file whose name says FPS, none where several do. Without PCSX2's EE overclock, which PS2Native does not implement: put to the maintainer. In its first level Killzone shows 41.0 new pictures a second where it showed 24.9. The code the patch changes is compiled after one rebuild, as a second version of its function: nothing interpreted. A run with both patches is the stock run with them, the FPU's sign of a zero aside, and the interpreted run, and takes 1.00 times stock PCSX2's time with the same patches, its play 0.98. In the window at the console's pace (50.0 frames a second in play), as stock PCSX2 is. Every test passes. Where it stands is in "G16" below. |
 | G17 The EE overclock a patch asks for | **Done** (2026-11-15, [ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)): at the maintainer's word, where a patch the host applies asks in its note for PCSX2's EE overclock, the host applies it: Killzone's frame-rate patch with 130%. Measured first: with it stock PCSX2 shows 46.2 new pictures a second in the first level, where 41.0 without, 50 in 21 of 53 seconds where 7. Time is counted as PCSX2's recompiler counts it at that setting, at every rate it has; every test program is the stock run at every sync point at five of them (519 tests, all passing). The level run with both patches and the overclock is the stock run with them, the FPU's sign of a zero aside, and the interpreted run; after one rebuild nothing of it is interpreted. Calling PCSX2's formula at the end of every block took 1.22 times stock PCSX2's time; a table made when the setting is read takes 1.00, play 0.98, and 1.02 at the default rate. In the window at the console's pace, as stock PCSX2 is. A session run again now gets a new memory card where the session began without one, and is the session. Where it stands is in "G17" below. |
+| G18 A second game; games of several executables | **Done** (2026-11-15, [ADR 0026](adr/0026-a-second-game-and-games-of-several-executables.md)): at the maintainer's word, Agent Under Fire (`SLES-50539`) prepared for the maintainer to play: a controller script from power-on into its first mission. As it was it ran correctly but at half the console's speed, everything of it interpreted: the game is four executables, three of which its boot executable loads itself over the same addresses, which PCSX2 never sees. At the maintainer's second word, games of several executables: each is compiled ahead of time, and the runtime tells from memory which is loaded; a test program does the same with two programs of its own (533 tests, all passing). Over the script's 9,000 frames nothing of the game's EE code, micro code or IOP code is interpreted, and the run is the stock run at every one of 49,981,658 sync points, every register included (with the widescreen patch on both sides, at every one of 50,091,671), and the interpreted run. 1.19 times stock PCSX2's time without profile-guided optimization, its play 1.12; in the window at the console's pace, as stock PCSX2 is. Where it stands is in "G18" below. |
 
 ## The steps and their pass criteria
 
@@ -53,6 +54,7 @@ The run files, pictures included, are under the git-ignored build tree.
 | G15 PCSX2's patches; widescreen ([ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)) | PCSX2's patches made available to the host, from where the maintainer chooses. A game's widescreen patch applied by default when PCSX2 has one: in the window, and in a scripted run that asks for it, on both sides of a comparison alike. A patch that changes the game's code is met as code nothing was compiled from: interpreted, reported, captured, and compiled by the next build. | Killzone in 16:9 in the window. After one rebuild nothing of the patched code is interpreted. A scripted run with the patch is the stock run with the patch, and the interpreted run. Every test passes. |
 | G16 The frame-rate patch ([ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)) | The same for a game's frame-rate patch, when PCSX2 has one, applied by default. | As for G15, and the speed measured against stock PCSX2 with the same patch; in the window at the console's pace, or what it falls short by reported. |
 | G17 The EE overclock a patch asks for ([ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)) | Measured first: the pictures stock PCSX2 shows in play at 130% with both patches; no more than without, and it goes back to the maintainer. Then, where a patch the host applies asks in its note for PCSX2's EE overclock, the host applies it, in the window and in a scripted run alike, on both sides of a comparison, and time is counted as PCSX2's recompiler counts it at that setting, at every rate it has. | Every test program is the stock run at every sync point at 130%, 180%, 300%, 75% and 50%. After one rebuild nothing of the level run with both patches and the overclock is interpreted, and it is the stock run with them, what differs listed, and the interpreted run. Every test passes. The speed measured against stock PCSX2 with the same setting; in the window at the console's pace, or what it falls short by reported. (The criterion is the session's proposal.) |
+| G18 A second game; games of several executables ([ADR 0026](adr/0026-a-second-game-and-games-of-several-executables.md)) | Agent Under Fire (`SLES-50539`), the maintainer's copy used where it is, prepared for the maintainer to play: a controller script from power-on into the first mission, its runs held to stock PCSX2, what they interpret compiled into the build. The game is four executables, three of which its boot executable loads itself over the same addresses: each compiled ahead of time, the runtime telling from memory which is loaded. A test program of PS2Native's own does the same with two programs of its own. | The test program's two programs run compiled, nothing of them interpreted. Every test passes. After one rebuild nothing of the scripted run's EE code, micro code or IOP code is interpreted, and the run is the stock run at every sync point, what differs listed, and the interpreted run. Its speed measured against stock PCSX2; in the window at the console's pace, or what it falls short by reported. (The criterion is the session's proposal.) |
 
 The brief's rules for this phase: reusable solutions, no game-specific
 hardcoding unless unavoidable, and no wizard or packaging yet.
@@ -129,6 +131,18 @@ scripts\windows\window-check.ps1 -Image $iso -Name killzone -Steps '41 shot film
 # The pace in play (step G16): a muted session the level script drives into the level, in a play
 # folder of its own, the time noted at frame 6,600; the host reports both.
 scripts\windows\game.ps1 -Image $iso -Play -Mute -Name pace -WindowSize 1280x720 -Pad tests\games\killzone\level1.pad -Frames 9300 -Marks 6600
+
+# Agent Under Fire (step G18): its boot executable and the three it loads itself compiled into the
+# host (a build holds one game's executables; its micro code and IOP code captures hold Killzone's too).
+$aut = "C:\ps2\agent-under-fire\007 - Agent Under Fire (Europe) (En,Fr,De,Es,Nl,Sv)"
+scripts\windows\build.ps1 -Game "$aut\SLES_505.39" -GameMore "$aut\MOVIE.ELF|$aut\ACTION.UK|$aut\DRIVING.ELF" -GameCapture build\game\aut\capture.toml -VuCapture build\game\aut\vu-capture.toml -IopCapture build\game\aut\iop-capture.toml -Pgo off
+# Played (English at the language selection: the other languages' missions are not compiled), what
+# the session interprets added to the captures for the next build:
+scripts\windows\game.ps1 -Image "$aut.iso" -Play -Name aut -Capture build\game\aut\capture.toml -VuCapture build\game\aut\vu-capture.toml -IopCapture build\game\aut\iop-capture.toml
+# Into the first mission by script, held to stock PCSX2 at every sync point:
+scripts\windows\game.ps1 -Image "$aut.iso" -Config same-as-stock -Frames 9000 -FrameEvery 50 -Pad tests\games\agent-under-fire\start.pad -Name aut
+# And Killzone back in the host:
+scripts\windows\build.ps1 -Game $elf -GameMore none -GameCapture build\game\killzone\capture.toml -VuCapture build\game\aut\vu-capture.toml -IopCapture build\game\aut\iop-capture.toml -Pgo use -PgoData build\pgo\game.profdata
 ```
 
 The capture files are derived from the game and live in the build tree,
@@ -4139,6 +4153,116 @@ out: -ee-cycle-rate 0 given"), and each is the session at every one of its
 40 fingerprints; the first, as a comparison, is the stock run at every one
 of 10,412,734 sync points. Every test passes (519).
 
+## G18: a second game, and games of several executables (Windows, 2026-11-15)
+
+Step G18 ([ADR 0026](adr/0026-a-second-game-and-games-of-several-executables.md)),
+at the maintainer's word: "let me test using agent under fire [...] Prepare
+it and do some initial testing to make sure it works before it's my turn to
+properly test it"; and, with what is below, "Build multi-program support".
+
+**The game**: *007 - Agent Under Fire*, the European release
+(`SLES-50539`), the maintainer's copy in `C:\ps2\agent-under-fire` (the disc
+image and the files extracted from it), read where it is. PCSX2's database
+of games sets its VU clamp mode to 2, which PS2Native's VU provider follows.
+PCSX2's archive has a widescreen patch for it, under the boot executable's
+CRC though its writes are into the missions' code, and no frame-rate patch.
+
+**A controller script** (`tests/games/agent-under-fire/start.pad`), found
+by looking at stock PCSX2's pictures: English at the language selection;
+the EA and MGM logos; the intro film skipped (from frame 1,700: it takes no
+button earlier); "memory card (8MB) (for PlayStation 2) is not inserted
+[...] Do you want to start?", Yes; the title screen; Select Mission, the
+first ("Trouble in Paradise"); its briefing passed, and the controller
+set-up. The mission loads and plays its opening scene, and from frame 6,750
+the player stands in it. In a window, with a memory card made new in each
+slot, the same script reaches the same place.
+
+**As it was**, nothing of it compiled, PS2Native runs the game correctly:
+over the script's 9,000 frames the stock run at every one of 49,981,658 sync
+points, every register included, with the same picture and the same sound
+state at each of the 180 frames compared. But at half the console's speed:
+everything of its EE code interpreted (41 billion instructions), with 211
+blocks of VU1's micro code and 3,090 of the IOP's, play takes 88 s against
+stock PCSX2's 8.3 s, 25 frames a second where the console shows 50.
+
+**Four executables.** The disc's boot executable, `SLES_505.39`, is a loader
+of 18,641 instructions at `01F00000`. It loads the others itself, through
+the IOP (`SifLoadElf`) and not the BIOS's `LoadExecPS2`: the films,
+`MOVIE.ELF` (69,000 instructions at `00104000`); the missions, `ACTION.UK`
+for English, one such file for each of the six languages (579,000 at
+`00120000`); the driving missions, `DRIVING.ELF` (444,000 at `00104000`);
+all three over the same addresses, one after another, and the boot
+executable again between them. PCSX2 sees only the first: its CRC stays the
+boot executable's. So the runtime, which chooses an executable's compiled
+code by that CRC, had none of the others', and the image PS2Native made of
+code an executable runs outside its own keeps one word for each address.
+
+**Games of several executables** (the execution model's "Executables a
+program loads itself"):
+
+- **Compiled, each as an image of its own** (`ps2n-recomp compile
+  --loaded-by <boot executable>`, `ImageInfo::kImageLoaded`, tied to the
+  boot executable by its CRC; `build.ps1 -GameMore`), spread over files of
+  about 64 KB of executable each.
+- **Told from memory.** When the boot executable reaches its entry point
+  the runtime takes note of them; whenever a block is formed where none of
+  them in use has its code in memory and another has, that one is put in
+  use and any other over the same addresses taken out (`AdoptLoaded`). The
+  fingerprints are those compiled code is checked by, and every block is
+  still compared with memory before compiled code runs it.
+- **Captured under its CRC.** What a run interprets in such an executable,
+  and code found in place of one of its functions, goes into the capture
+  file under that executable's CRC (`[[program]]`, `program =`), and the
+  next build compiles it into that executable's image. `ps2n-host -image
+  <id>` takes the images `<id>_loads_<name>` with it.
+- **A test program** (`tests/programs/loader.s`) loads two programs of its
+  own (`tests/programs/loader/`, assembled at `00200000`: `ps2n-recomp
+  assemble --base`) over the same addresses, as the game does: A, then B,
+  then A. Under every configuration it prints what a console prints, is the
+  stock run at every sync point at all six rates, and the interpreted run.
+  Its first build interprets four block starts of A, where B's blocks are
+  still in the record of blocks when A comes back (the page has gone over
+  to blocks that check themselves, as in PCSX2's recompiler) and cut A's,
+  and reports exactly what its capture file holds; built with it, nothing
+  of A or B is interpreted (`programs/loaded/loader`). 533 tests, all
+  passing.
+
+**Compiled**: the four executables, 1.11 million instructions, with Killzone's
+micro code and IOP code and this game's. The first run put `MOVIE.ELF` and
+`ACTION.UK` in use at their entry points, and interpreted no block start of
+theirs, nor of the boot executable; what it interpreted was the BIOS's
+kernel code this game uses and Killzone does not (18,086 instructions at 39
+block starts), captured and compiled with the BIOS since. The script does
+not reach the driving missions: `DRIVING.ELF` is compiled from its
+executable, and what a run of it needs beyond that is interpreted once and
+captured, as everything is.
+
+Measured. **Over the script's 9,000 frames**, on the build with all of it,
+nothing of the game's EE code, micro code or IOP code is interpreted: of
+the EE's, 63 instructions, 51 of the BIOS's at boot, as for Killzone, and 12
+where the recompiler hands the rest of a block over on purpose. The run is
+the stock run at every one of 49,981,658 sync points, every register
+included, with the same picture at each of the 180 frames compared; with
+the widescreen patch on both sides, at every one of 50,091,671; and the
+interpreted run at every one of 56,856,341 event tests (`7D1BCBFF4361A3CD`).
+
+**The time**, nothing drawn, three pairs timed in turn: 1.19 times stock
+PCSX2's time (31.5 to 31.9 s against 26.4 to 26.7 s), its startup 1.23 and
+its play, the first 45 seconds in the mission, 1.12 (9.08 to 9.18 s against
+8.15 to 8.17 s). Without profile-guided optimization, which has been trained
+on Killzone's code only.
+
+**In the window**, as the maintainer will play it (Vulkan at three times the
+resolution, the widescreen patch; muted, a window of 1280 by 720), the
+script driving it into the mission: 49.95 frames a second where the console
+shows 50, stock PCSX2 49.96. That first session met code no run had: 237
+blocks of the IOP's (1,268 runs; the memory card's modules, with a card
+made new in each slot), one block start of `ACTION.UK`, and the function the
+widescreen patch rewrites in it (at `00320468`), all captured under
+`ACTION.UK`'s CRC where they were its own. Built in, the next session
+interpreted nothing: 49.96 frames a second, and in the mission 2,250 frames
+in 45.0 s, the console's pace.
+
 ## Open
 
 - **What is left of VU0 in the game's EE code.** Since G7 its instructions
@@ -4213,6 +4337,17 @@ of 10,412,734 sync points. Every test passes (519).
   like microVU it keeps, for each block that ends in an indirect jump, a
   table with an entry for every pair of micro memory (2,048 for VU1), and
   how much memory a long session takes has not been measured.
+- **Agent Under Fire's other languages.** Its missions are one executable
+  for each of its six languages; only the English one (`ACTION.UK`) is
+  compiled, the one the script chooses. Another language's runs
+  interpreted, at about half the console's speed, until it is given to the
+  build as well (`-GameMore`; each is 579,000 instructions more).
+- **Agent Under Fire has no profile-guided optimization**: the profile is
+  trained on Killzone's code (G18 took 1.19 times stock PCSX2's time
+  without one).
+- **A build holds one game's executables.** The build tree holds Agent
+  Under Fire's now; Killzone comes back with one rebuild ("How to run
+  it").
 - **The EE overclock a note asks for is read from its words.** A patch
   file has no setting for PCSX2's EE overclock, so since G17 the host reads
   it from the lines of the groups it applies, which in PCSX2's archive say

@@ -152,8 +152,20 @@ interpreted after one rebuild, and takes 1.00 times stock PCSX2's time
 with the same setting, its play 0.98, a block's cost read from a table
 made when the setting is read (calling PCSX2's formula at every block's
 end took 1.22); in the window the console's pace. A session run again now
-gets a new memory card where it began without one, as the window did. G13
-goes on as the maintainer plays further. Phase 4 needs its own approval.
+gets a new memory card where it began without one, as the window did. G18
+the same evening, at the maintainer's word ("let me test using agent under
+fire"; then "Build multi-program support", ADR 0026): a second game,
+*Agent Under Fire*, prepared for the maintainer to play, and games made of
+several executables. Its boot executable loads three others itself, over
+the same addresses, which PCSX2 never sees: each is now compiled ahead of
+time, and the runtime tells from memory which is loaded (a test program
+does the same; 533 tests, all passing). Over a script into its first
+mission nothing of it is interpreted; the run is the stock run at every
+sync point, every register included, and the interpreted run, and takes
+1.19 times stock PCSX2's time without profile-guided optimization; in the
+window the console's pace. The build tree holds its EE code in place of
+Killzone's. G13 goes on as the maintainer plays further. Phase 4 needs its
+own approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -405,6 +417,20 @@ Decisions:
   note names, 130% where it names none; `-ee-cycle-rate` given keeps its
   own), and PS2Native counts time as PCSX2's recompiler counts it with that
   setting; a comparison gives stock PCSX2 the same setting.
+- [ADR 0026](docs/adr/0026-a-second-game-and-games-of-several-executables.md):
+  step G18, at the maintainer's word on 2026-11-15 ("let me test using
+  agent under fire ... Prepare it and do some initial testing"; then
+  "Build multi-program support"): a second game, *007 - Agent Under Fire*
+  (`SLES-50539`), the maintainer's copy in `C:\ps2\agent-under-fire`, used
+  as Killzone's is (read where it is, never copied, everything generated
+  in the build tree), prepared for the maintainer to play; and games made
+  of several executables. Its boot executable loads three others itself
+  (`SifLoadElf`, not the BIOS's loader), over the same addresses, which
+  PCSX2 never sees: each is compiled as an image of its own (`ps2n-recomp
+  compile --loaded-by`, `build.ps1 -GameMore`), which the runtime puts in
+  use when memory holds its code, and what a run interprets in it is
+  captured under its CRC. `ACTION.UK` is the English missions'; another
+  language's is interpreted.
 
 ## Layout, build and test
 
@@ -440,7 +466,8 @@ tests/                    CTest registration for programs booted on the core, th
                           baselines; recompiles the test programs into the build tree and links them into the host
 tests/programs/           our own test programs, in assembly for core's assembler: selfmod (rewrites its code), bench,
                           timeout (a delay loop that PCSX2 does not run), countcarry (a defect of PCSX2's
-                          recompiler that PS2Native reproduces)
+                          recompiler that PS2Native reproduces), loader (loads the two programs in loader/ itself,
+                          over the same addresses, as a game of several executables does)
 tests/sdk/                C test programs built with ps2sdk (prebuilt in bin/), their sources, what stock PCSX2 prints
 tests/games/              controller scripts for runs of a game (button presses we wrote; nothing from a game)
 scripts/windows, linux    build and test entry points
@@ -507,7 +534,15 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   build with calls through a register sent to the runtime's dispatcher.
 - The game: `scripts\windows\build.ps1 -Game <its boot executable>` compiles
   it into the host (the build tree remembers it; `-GameCapture <file>` adds
-  what runs reported). `scripts\windows\game.ps1 -Image <disc image> -Config
+  what runs reported). A game made of several executables, whose boot
+  executable loads the others itself without the BIOS's loader (Agent Under
+  Fire's), gets them with `-GameMore '<path>|<path>'`: each is compiled as an
+  image the runtime puts in use while memory holds its code (ADR 0026; the
+  execution model's "Executables a program loads itself"). A build holds
+  one game's EE code: the build tree now holds Agent Under Fire's, with the
+  micro code and IOP code of both games; Killzone comes back with `-Game
+  <its executable> -GameMore none -GameCapture build\game\killzone\capture.toml`
+  and its profile (`-Pgo use -PgoData build\pgo\game.profdata`). `scripts\windows\game.ps1 -Image <disc image> -Config
   <configuration> -Frames <n>` runs it, with `-Pad` for a controller script
   (`tests/games/<game>/*.pad`), `-FrameEvery` for pictures along the way and
   `-Capture` to collect what had to be interpreted. `docs/game-log.md`, "How

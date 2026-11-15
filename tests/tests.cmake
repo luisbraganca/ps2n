@@ -43,18 +43,28 @@ set(PS2N_GENERATED "${CMAKE_BINARY_DIR}/ps2n/generated")
 set(ps2n_image_sources "")
 set(ps2n_image_ids "")
 
-# ps2n_add_image(<id> <elf> [CAPTURE <file>] [COMMENT <text>] [PARTS <n>])
+# ps2n_add_image(<id> <elf> [CAPTURE <file>] [COMMENT <text>] [PARTS <n>] [LOADED_BY <elf>])
 # CAPTURE: what an earlier run of the program reported (ps2n-host -capture).
 # With it, the code the program ran outside its executable (code it copied
 # into kernel memory, for one) becomes an image of its own, <id>_outside
 # (ps2n-recomp compile --outside), perhaps empty.
 # PARTS: for a program too large to compile as one file, how many files its
 # functions are spread over (ps2n-recomp compile --parts).
+# LOADED_BY: the executable is one that program loads itself (a game made of
+# several executables, ADR 0026): its image is used while memory holds its
+# code, and takes from CAPTURE what that holds for it, by its CRC
+# (ps2n-recomp compile --loaded-by). It has no outside image of its own.
 macro(ps2n_add_image id elf)
-	cmake_parse_arguments(image "" "CAPTURE;COMMENT;PARTS" "" ${ARGN})
+	cmake_parse_arguments(image "" "CAPTURE;COMMENT;PARTS;LOADED_BY" "" ${ARGN})
 	set(image_capture "")
 	set(image_outside "")
-	if(image_CAPTURE)
+	set(image_loaded "")
+	if(image_LOADED_BY)
+		set(image_loaded --loaded-by "${image_LOADED_BY}")
+		if(image_CAPTURE)
+			set(image_capture --capture "${image_CAPTURE}")
+		endif()
+	elseif(image_CAPTURE)
 		set(image_capture --capture "${image_CAPTURE}" --outside "${PS2N_GENERATED}/${id}_outside.cpp")
 		set(image_outside "${PS2N_GENERATED}/${id}_outside.cpp")
 	endif()
@@ -77,14 +87,14 @@ macro(ps2n_add_image id elf)
 
 	add_custom_command(
 		OUTPUT ${image_outputs}
-		COMMAND "${PS2N_RECOMP}" compile "${elf}" --id "${id}" --out "${PS2N_GENERATED}/${id}.cpp" ${image_capture} ${image_parts}
-		DEPENDS "${elf}" "${PS2N_RECOMP}" ${image_CAPTURE}
+		COMMAND "${PS2N_RECOMP}" compile "${elf}" --id "${id}" --out "${PS2N_GENERATED}/${id}.cpp" ${image_capture} ${image_parts} ${image_loaded}
+		DEPENDS "${elf}" "${PS2N_RECOMP}" ${image_CAPTURE} ${image_LOADED_BY}
 		COMMENT "Recompiling ${image_COMMENT}"
 		VERBATIM
 	)
 	list(APPEND ps2n_image_sources ${image_outputs})
 	list(APPEND ps2n_image_ids "${id}")
-	if(image_CAPTURE)
+	if(image_CAPTURE AND NOT image_LOADED_BY)
 		list(APPEND ps2n_image_ids "${id}_outside")
 	endif()
 endmacro()
@@ -323,44 +333,107 @@ include("${PS2N_ROOT}/tests/programs-known-differences.cmake")
 
 file(GLOB program_sources RELATIVE "${PS2N_PROGRAMS_ROOT}" "${PS2N_PROGRAMS_ROOT}/*.s")
 list(SORT program_sources)
+file(MAKE_DIRECTORY "${PS2N_PROGRAMS_BUILT}")
 foreach(source IN LISTS program_sources)
 	string(REGEX REPLACE "\\.s$" "" name "${source}")
 	set(elf "${PS2N_PROGRAMS_BUILT}/${name}.elf")
+
+	# A program with a directory of its name beside it loads the programs in
+	# it itself, as a game made of several executables does (ADR 0026): each
+	# is assembled at 0x00200000 as <name>_<program>.elf, which the program
+	# takes into its own executable (.incbin, found where it is assembled),
+	# and is compiled as an executable the program loads itself, the image
+	# <image>_loads_<program> beside each image of the program (which -image
+	# takes with it), with the program's capture where that image has it.
+	set(loaded_elfs "")
+	set(loaded_names "")
+	if(IS_DIRECTORY "${PS2N_PROGRAMS_ROOT}/${name}")
+		file(GLOB loaded_sources RELATIVE "${PS2N_PROGRAMS_ROOT}/${name}" "${PS2N_PROGRAMS_ROOT}/${name}/*.s")
+		list(SORT loaded_sources)
+		foreach(loaded_source IN LISTS loaded_sources)
+			string(REGEX REPLACE "\\.s$" "" loaded_name "${loaded_source}")
+			set(loaded_elf "${PS2N_PROGRAMS_BUILT}/${name}_${loaded_name}.elf")
+			add_custom_command(
+				OUTPUT "${loaded_elf}"
+				COMMAND "${PS2N_RECOMP}" assemble "${PS2N_PROGRAMS_ROOT}/${name}/${loaded_source}" --out "${loaded_elf}" --base 0x00200000
+				DEPENDS "${PS2N_PROGRAMS_ROOT}/${name}/${loaded_source}" "${PS2N_RECOMP}"
+				COMMENT "Assembling tests/programs/${name}/${loaded_source}"
+				VERBATIM
+			)
+			list(APPEND loaded_elfs "${loaded_elf}")
+			list(APPEND loaded_names "${loaded_name}")
+		endforeach()
+	endif()
+
 	add_custom_command(
 		OUTPUT "${elf}"
 		COMMAND "${PS2N_RECOMP}" assemble "${PS2N_PROGRAMS_ROOT}/${source}" --out "${elf}"
-		DEPENDS "${PS2N_PROGRAMS_ROOT}/${source}" "${PS2N_RECOMP}"
+		DEPENDS "${PS2N_PROGRAMS_ROOT}/${source}" "${PS2N_RECOMP}" ${loaded_elfs}
+		WORKING_DIRECTORY "${PS2N_PROGRAMS_BUILT}"
 		COMMENT "Assembling tests/programs/${source}"
 		VERBATIM
 	)
-
 	# A program with a capture file beside it is one whose code changes while
-	# it runs. It is compiled twice: from the executable alone, as a first
-	# build of it would be, and with what a run of that build reported.
+	# it runs, or that runs code its first build could not know of. It is
+	# compiled twice: from the executable alone, as a first build of it would
+	# be, and with what a run of that build reported.
 	set(capture "${PS2N_PROGRAMS_ROOT}/${name}.capture.toml")
 	if(EXISTS "${capture}")
 		ps2n_add_image("${name}" "${elf}" CAPTURE "${capture}" COMMENT "tests/programs/${name} with its capture")
 		ps2n_add_image("${name}_first_build" "${elf}" COMMENT "tests/programs/${name}")
+		foreach(loaded_name IN LISTS loaded_names)
+			ps2n_add_image("${name}_loads_${loaded_name}" "${PS2N_PROGRAMS_BUILT}/${name}_${loaded_name}.elf" LOADED_BY "${elf}"
+				CAPTURE "${capture}" COMMENT "tests/programs/${name}/${loaded_name}, which ${name} loads itself, with its capture")
+			ps2n_add_image("${name}_first_build_loads_${loaded_name}" "${PS2N_PROGRAMS_BUILT}/${name}_${loaded_name}.elf" LOADED_BY "${elf}"
+				COMMENT "tests/programs/${name}/${loaded_name}, which ${name} loads itself")
+		endforeach()
 	else()
 		ps2n_add_image("${name}" "${elf}" COMMENT "tests/programs/${name}")
+		foreach(loaded_name IN LISTS loaded_names)
+			ps2n_add_image("${name}_loads_${loaded_name}" "${PS2N_PROGRAMS_BUILT}/${name}_${loaded_name}.elf" LOADED_BY "${elf}"
+				COMMENT "tests/programs/${name}/${loaded_name}, which ${name} loads itself")
+		endforeach()
 	endif()
 
 	ps2n_add_program_tests(programs "${name}" "${elf}" "${PS2N_PROGRAMS_ROOT}/${name}.expected" "${name}")
 
 	if(EXISTS "${capture}")
 		# The first build: correct output, with the changed code interpreted and
-		# reported exactly as the capture file in the repository has it.
+		# reported exactly as the capture file in the repository has it (for a
+		# program that loads others, in their code).
+		if(loaded_names)
+			set(first_build_report "the executables it loads itself: .* [1-9][0-9]* block starts in its code interpreted")
+		else()
+			set(first_build_report "in the place of [1-9][0-9]* functions memory held code that nothing was compiled from")
+		endif()
 		ps2n_add_guest_test("programs/first-build/${name}" 120 "programs;capture"
 			"-DELF=${elf}" "-DEXPECTED=${PS2N_PROGRAMS_ROOT}/${name}.expected"
 			-DEE=ps2n -DIOP=jit -DVU=jit -DSTATIC=on "-DIMAGE=${name}_first_build"
 			"-DCAPTURE_EXPECTED=${capture}"
-			"-DREQUIRE_REPORT=in the place of [1-9][0-9]* functions memory held code that nothing was compiled from")
+			"-DREQUIRE_REPORT=${first_build_report}")
 
 		# The build with the capture: nothing of the program is interpreted.
 		ps2n_add_guest_test("programs/rebuilt/${name}" 120 "programs;capture"
 			"-DELF=${elf}" "-DEXPECTED=${PS2N_PROGRAMS_ROOT}/${name}.expected"
 			-DEE=ps2n -DIOP=jit -DVU=jit -DSTATIC=on "-DIMAGE=${name}"
 			"-DREQUIRE_REPORT=instructions \\(0 inside the executable's code\\)"
+			"-DREQUIRE_REPORT_2=ps2n-host: 0 block starts inside the executable's code had to be interpreted. in the place of 0 functions")
+	endif()
+
+	if(loaded_names)
+		# The programs it loads run compiled, each while memory holds it:
+		# nothing of them is interpreted, and none of the program's own.
+		set(loaded_report "")
+		foreach(loaded_name IN LISTS loaded_names)
+			if(loaded_report)
+				string(APPEND loaded_report "; ")
+			endif()
+			string(APPEND loaded_report "${name}_${loaded_name}\\.elf \\(CRC [0-9A-F]+\\) put in use [1-9][0-9]* times, 0 block starts in its code interpreted")
+		endforeach()
+		ps2n_add_guest_test("programs/loaded/${name}" 120 "programs"
+			"-DELF=${elf}" "-DEXPECTED=${PS2N_PROGRAMS_ROOT}/${name}.expected"
+			-DEE=ps2n -DIOP=jit -DVU=jit -DSTATIC=on "-DIMAGE=${name}"
+			"-DREQUIRE_REPORT=ps2n-host: the executables it loads itself: ${loaded_report}"
 			"-DREQUIRE_REPORT_2=ps2n-host: 0 block starts inside the executable's code had to be interpreted. in the place of 0 functions")
 	endif()
 endforeach()
@@ -449,6 +522,7 @@ endif()
 set(PS2N_GAME_ELF "" CACHE FILEPATH "A game's boot executable to compile into ps2n-host")
 set(PS2N_GAME_CAPTURE "" CACHE FILEPATH "What earlier runs of the game reported for the recompiler (ps2n-host -capture)")
 set(PS2N_GAME_PARTS "64" CACHE STRING "How many files the game's generated code is spread over")
+set(PS2N_GAME_MORE "" CACHE STRING "The executables the game's boot executable loads itself, a list (ADR 0026)")
 if(PS2N_GAME_ELF)
 	if(NOT EXISTS "${PS2N_GAME_ELF}")
 		message(FATAL_ERROR "PS2N_GAME_ELF does not name a file: ${PS2N_GAME_ELF}")
@@ -462,6 +536,31 @@ if(PS2N_GAME_ELF)
 	endif()
 	ps2n_add_image(game "${PS2N_GAME_ELF}" ${game_arguments})
 	message(STATUS "PS2Native: the host will hold the compiled code of ${PS2N_GAME_ELF}")
+
+	# The executables it loads itself (a game made of several, ADR 0026): an
+	# image each, used while memory holds its code, spread over files of
+	# about 64 KB of executable each.
+	foreach(more IN LISTS PS2N_GAME_MORE)
+		if(NOT EXISTS "${more}")
+			message(FATAL_ERROR "PS2N_GAME_MORE names a file that is not there: ${more}")
+		endif()
+		get_filename_component(more_name "${more}" NAME)
+		string(MAKE_C_IDENTIFIER "${more_name}" more_id)
+		string(TOLOWER "game_loads_${more_id}" more_id)
+		file(SIZE "${more}" more_size)
+		math(EXPR more_parts "${more_size} / 65536 + 1")
+		if(more_parts GREATER 64)
+			set(more_parts 64)
+		endif()
+		set(more_arguments PARTS ${more_parts} LOADED_BY "${PS2N_GAME_ELF}" COMMENT "an executable the game loads itself, ${more}")
+		if(PS2N_GAME_CAPTURE)
+			list(APPEND more_arguments CAPTURE "${PS2N_GAME_CAPTURE}")
+		endif()
+		ps2n_add_image("${more_id}" "${more}" ${more_arguments})
+		message(STATUS "PS2Native: the host will hold the compiled code of ${more}, which the game loads itself")
+	endforeach()
+elseif(PS2N_GAME_MORE)
+	message(FATAL_ERROR "PS2N_GAME_MORE is for a game whose boot executable is PS2N_GAME_ELF")
 endif()
 
 # ---- the BIOS's EE code (step G8) ------------------------------------------------------

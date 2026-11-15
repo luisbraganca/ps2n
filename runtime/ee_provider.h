@@ -227,12 +227,27 @@ namespace ps2n::ee
 	/// Code found in memory in the place of a compiled function, when it was
 	/// neither the function nor one of its variants: the words over the
 	/// function's own range, as they were when it was about to be entered.
+	/// `program`: zero for the executable's own function, or the CRC of the
+	/// executable the program loaded itself whose function it was.
 	struct CapturedCode
 	{
 		uint32_t start;
 		std::vector<uint32_t> words;
+		uint32_t program = 0;
 	};
 	const std::vector<CapturedCode>& GetCapturedCode();
+
+	/// The executables the running one may load itself, compiled as images of
+	/// their own (ImageInfo::kImageLoaded): how many times each was put in use
+	/// because memory held its code, and the addresses in its code at which a
+	/// block had to be interpreted, sorted.
+	struct LoadedProgram
+	{
+		const ImageInfo* image;
+		uint64_t uses;
+		std::vector<uint32_t> missing;
+	};
+	std::vector<LoadedProgram> GetLoadedPrograms();
 
 	/// The addresses in the BIOS's places (BiosPlace) at which the interpreter
 	/// carried out a whole block, sorted: entries for the recompiler, in the

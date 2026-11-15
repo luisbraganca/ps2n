@@ -1948,6 +1948,17 @@ namespace
 				missing.size(), captured.size(), outside.size(),
 				(anything && s_options.capture_path.empty()) ? " (pass -capture <file> to record them for the recompiler)" : "");
 		}
+		const std::vector<ps2n::ee::LoadedProgram> loaded = ps2n::ee::GetLoadedPrograms();
+		if (!loaded.empty() && s_options.static_code)
+		{
+			std::string line;
+			for (const ps2n::ee::LoadedProgram& p : loaded)
+			{
+				line += fmt::format("{}{} (CRC {:08X}) put in use {} times, {} block starts in its code interpreted", line.empty() ? "" : "; ",
+					p.image->name, p.image->program_crc, p.uses, p.missing.size());
+			}
+			std::fprintf(stderr, "ps2n-host: the executables it loads itself: %s\n", line.c_str());
+		}
 		if (!s_options.capture_path.empty() && stats.image)
 		{
 			if (std::FILE* fp = FileSystem::OpenCFile(s_options.capture_path.c_str(), "wb"))
@@ -1963,14 +1974,35 @@ namespace
 					std::fprintf(fp, "  0x%08x,\n", pc);
 				std::fputs("]\n", fp);
 
+				// The same in each executable it loaded itself (ps2n-recomp
+				// compile --loaded-by), by that executable's CRC.
+				for (const ps2n::ee::LoadedProgram& p : loaded)
+				{
+					if (p.missing.empty())
+						continue;
+					std::fprintf(fp,
+						"\n# The same in %s, which it loaded itself.\n"
+						"[[program]]\n"
+						"crc = 0x%08x\n"
+						"entries = [\n",
+						p.image->name, p.image->program_crc);
+					for (const uint32_t pc : p.missing)
+						std::fprintf(fp, "  0x%08x,\n", pc);
+					std::fputs("]\n", fp);
+				}
+
 				for (const ps2n::ee::CapturedCode& code : captured)
 				{
 					std::fprintf(fp,
 						"\n# Code found in memory in the place of the function at 0x%08x.\n"
-						"[[code]]\n"
+						"[[code]]\n",
+						code.start);
+					if (code.program)
+						std::fprintf(fp, "program = 0x%08x\n", code.program);
+					std::fprintf(fp,
 						"start = 0x%08x\n"
 						"words = [",
-						code.start, code.start);
+						code.start);
 					for (size_t i = 0; i < code.words.size(); i++)
 						std::fprintf(fp, "%s0x%08x,", (i % 8) ? " " : "\n  ", code.words[i]);
 					std::fputs("\n]\n", fp);
@@ -2134,8 +2166,9 @@ namespace
 				if (s_options.ee == EEProvider::Ps2n)
 				{
 					// Of the executables' images, all of them or the one -image
-					// names, with the image of the code it ran outside its own;
-					// the BIOS's, unless -bios-static off.
+					// names, with the image of the code it ran outside its own
+					// and those of the executables it loads itself
+					// (<id>_loads_<name>); the BIOS's, unless -bios-static off.
 					static std::vector<const ps2n::ee::ImageInfo*> chosen;
 					bool found = s_options.image_id.empty();
 					for (size_t i = 0; i < ps2n_image_count; i++)
@@ -2152,6 +2185,10 @@ namespace
 							found = true;
 						}
 						else if (image->kind == ps2n::ee::kImageOutside && image->id == s_options.image_id + "_outside")
+						{
+							chosen.push_back(image);
+						}
+						else if (image->kind == ps2n::ee::kImageLoaded && std::string_view(image->id).starts_with(s_options.image_id + "_loads_"))
 						{
 							chosen.push_back(image);
 						}

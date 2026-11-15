@@ -52,6 +52,10 @@ uint32_t Program::word(const Function& f, int variant, uint32_t addr) const {
 
 void Capture::add(const Capture& other) {
     entries.insert(entries.end(), other.entries.begin(), other.entries.end());
+    for (const auto& [crc, list] : other.programEntries) {
+        std::vector<uint32_t>& mine = programEntries[crc];
+        mine.insert(mine.end(), list.begin(), list.end());
+    }
     code.insert(code.end(), other.code.begin(), other.code.end());
 }
 
@@ -574,7 +578,8 @@ bool inCodeRanges(const ElfFile& elf, uint32_t addr) {
 ElfFile codeOutside(const ElfFile& elf, const Capture& capture, std::vector<Note>& notes, std::vector<uint32_t>& starts) {
     std::map<uint32_t, uint32_t> words;
     for (const Capture::Code& c : capture.code) {
-        if (inCodeRanges(elf, c.start)) continue;
+        // An executable the program loaded itself has its own image.
+        if (c.program != 0 || inCodeRanges(elf, c.start)) continue;
         starts.push_back(c.start);
         for (size_t i = 0; i < c.words.size(); ++i) {
             const uint32_t at = c.start + 4 * static_cast<uint32_t>(i);
@@ -594,7 +599,11 @@ ElfFile codeOutside(const ElfFile& elf, const Capture& capture, std::vector<Note
 Capture parseCapture(const std::string& text, const std::string& fileName) {
     Capture capture;
     enum class List { None, Entries, Words } list = List::None;
-    bool inBlock = false, haveStart = false;
+    // What the lines belong to: the file itself, a [[code]] block, or a
+    // [[program]] block (an executable the program loaded itself).
+    enum class Section { Top, Code, Program } section = Section::Top;
+    bool haveStart = false;
+    std::vector<uint32_t>* entries = &capture.entries; // where an entries list goes; none in a [[program]] before its crc
 
     std::istringstream in(text);
     std::string line;
@@ -605,10 +614,12 @@ Capture parseCapture(const std::string& text, const std::string& fileName) {
         if (!v || *v < 0 || *v > 0xFFFFFFFFLL) throw fail("'" + std::string(token) + "' is not a 32-bit number");
         return static_cast<uint32_t>(*v);
     };
-    const auto endBlock = [&]() {
-        if (!inBlock) return;
-        if (!haveStart || capture.code.back().words.empty()) throw fail("a [[code]] block needs a start and words");
-        if (capture.code.back().start & 3) throw fail("a [[code]] block starts at an address that is not a multiple of 4");
+    const auto endSection = [&]() {
+        if (section == Section::Code) {
+            if (!haveStart || capture.code.back().words.empty()) throw fail("a [[code]] block needs a start and words");
+            if (capture.code.back().start & 3) throw fail("a [[code]] block starts at an address that is not a multiple of 4");
+        }
+        if (section == Section::Program && !entries) throw fail("a [[program]] block needs a crc");
     };
 
     while (std::getline(in, line)) {
@@ -619,24 +630,43 @@ Capture parseCapture(const std::string& text, const std::string& fileName) {
 
         if (list == List::None) {
             if (rest == "[[code]]") {
-                endBlock();
+                endSection();
                 capture.code.emplace_back();
-                inBlock = true;
+                section = Section::Code;
                 haveStart = false;
                 continue;
             }
+            if (rest == "[[program]]") {
+                endSection();
+                section = Section::Program;
+                entries = nullptr;
+                continue;
+            }
             const size_t eq = rest.find('=');
-            if (eq == std::string_view::npos) throw fail("expected 'name = value' or [[code]]");
+            if (eq == std::string_view::npos) throw fail("expected 'name = value', [[code]] or [[program]]");
             const std::string_view key = trim(rest.substr(0, eq));
             rest = trim(rest.substr(eq + 1));
             if (key == "start") {
-                if (!inBlock) throw fail("'start' outside a [[code]] block");
+                if (section != Section::Code) throw fail("'start' outside a [[code]] block");
                 capture.code.back().start = number(rest);
                 haveStart = true;
                 continue;
             }
-            if (key == "entries") list = List::Entries;
-            else if (key == "words" && inBlock) list = List::Words;
+            if (key == "program") {
+                if (section != Section::Code) throw fail("'program' outside a [[code]] block");
+                capture.code.back().program = number(rest);
+                continue;
+            }
+            if (key == "crc") {
+                if (section != Section::Program) throw fail("'crc' outside a [[program]] block");
+                entries = &capture.programEntries[number(rest)];
+                continue;
+            }
+            if (key == "entries" && section != Section::Code) {
+                if (!entries) throw fail("a [[program]] block's crc comes before its entries");
+                list = List::Entries;
+            }
+            else if (key == "words" && section == Section::Code) list = List::Words;
             else throw fail("unexpected '" + std::string(key) + "'");
             if (rest.empty() || rest[0] != '[') throw fail("expected '[' after '" + std::string(key) + " ='");
             rest.remove_prefix(1);
@@ -648,7 +678,7 @@ Capture parseCapture(const std::string& text, const std::string& fileName) {
             const std::string_view token = rest.substr(0, cut);
             if (!token.empty()) {
                 const uint32_t v = number(token);
-                if (list == List::Entries) capture.entries.push_back(v);
+                if (list == List::Entries) entries->push_back(v);
                 else capture.code.back().words.push_back(v);
             }
             if (cut == std::string_view::npos) break;
@@ -661,31 +691,48 @@ Capture parseCapture(const std::string& text, const std::string& fileName) {
         }
     }
     if (list != List::None) throw fail("a list is not closed");
-    endBlock();
+    endSection();
     return capture;
 }
 
 Capture loadCaptureFile(const std::filesystem::path& file) { return parseCapture(readTextFile(file), file.string()); }
 
 void Capture::normalize() {
-    std::sort(entries.begin(), entries.end());
-    entries.erase(std::unique(entries.begin(), entries.end()), entries.end());
+    const auto sortUnique = [](std::vector<uint32_t>& list) {
+        std::sort(list.begin(), list.end());
+        list.erase(std::unique(list.begin(), list.end()), list.end());
+    };
+    sortUnique(entries);
+    for (auto& [crc, list] : programEntries) sortUnique(list);
 
-    const auto before = [](const Code& a, const Code& b) { return a.start != b.start ? a.start < b.start : a.words < b.words; };
-    const auto same = [](const Code& a, const Code& b) { return a.start == b.start && a.words == b.words; };
+    const auto before = [](const Code& a, const Code& b) {
+        if (a.program != b.program) return a.program < b.program;
+        return a.start != b.start ? a.start < b.start : a.words < b.words;
+    };
+    const auto same = [](const Code& a, const Code& b) { return a.program == b.program && a.start == b.start && a.words == b.words; };
     std::sort(code.begin(), code.end(), before);
     code.erase(std::unique(code.begin(), code.end(), same), code.end());
 }
 
 std::string writeCapture(const Capture& capture, const std::string& comment) {
+    const auto list = [](std::string& out, const std::vector<uint32_t>& values) {
+        out += "entries = [\n";
+        for (uint32_t a : values) out += strprintf("  0x%08x,\n", a);
+        out += "]\n";
+    };
     std::string out;
     if (!comment.empty()) out += "# " + comment + "\n";
     out += "# Give this file to the recompiler (ps2n-recomp compile --capture) to have it compiled.\n\n";
-    out += "# Addresses at which a block was interpreted.\nentries = [\n";
-    for (uint32_t a : capture.entries) out += strprintf("  0x%08x,\n", a);
-    out += "]\n";
+    out += "# Addresses at which a block was interpreted.\n";
+    list(out, capture.entries);
+    for (const auto& [crc, values] : capture.programEntries) {
+        out += strprintf("\n# The same in an executable the program loaded itself (CRC %08X).\n[[program]]\ncrc = 0x%08x\n", crc, crc);
+        list(out, values);
+    }
     for (const Capture::Code& c : capture.code) {
-        out += strprintf("\n# Code found in memory in the place of the function at 0x%08x.\n[[code]]\nstart = 0x%08x\nwords = [", c.start, c.start);
+        out += strprintf("\n# Code found in memory in the place of the function at 0x%08x.\n[[code]]\n", c.start);
+        if (c.program) out += strprintf("program = 0x%08x\n", c.program);
+        out += strprintf("start = 0x%08x\nwords = [", c.start);
         for (size_t i = 0; i < c.words.size(); ++i) out += strprintf("%s0x%08x,", (i % 8) ? " " : "\n  ", c.words[i]);
         out += "\n]\n";
     }

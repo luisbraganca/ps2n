@@ -584,6 +584,34 @@ and captured again. The build does this for a program built with a capture
 (the game; `ps2n_add_image ... CAPTURE`); the test programs are built from
 their executables alone and interpret such code.
 
+### Executables a program loads itself
+
+A game can be several executables: the one the console boots, and others it
+loads and starts itself, without the BIOS's loader (Agent Under Fire loads
+its films, its missions and its driving missions so, through the IOP's
+`SifLoadElf`, over the same addresses; ADR 0026). The core sees only the
+first: its CRC stays the boot executable's, so the runtime cannot choose the
+others' code by it, and an image of captured words keeps one word for each
+address, so it cannot hold two of them.
+
+Each is compiled as an image of its own instead (`ps2n-recomp compile
+--loaded-by <boot executable>`, `ImageInfo::kImageLoaded`, tied to the boot
+executable by its CRC; `build.ps1 -GameMore`), and the runtime tells from
+memory which of them is loaded. When the executable reaches its entry point
+it takes note of them; whenever a block is formed (`AdoptLoaded`, from
+`FormRecBlock`, and from `dispatch()` before a block it has not formed yet),
+if none of them in use has its code in memory there and one of the others
+has (the words of the segment the address is in, by the fingerprints
+compiled code is checked by), that one is put in use and any other over the
+same addresses taken out, its compiled frames left. A block is still
+compared with memory before compiled code runs it; choosing the image only
+decides whose code is compared. What a run interprets in such an executable,
+and code found in place of one of its functions, goes into the capture file
+under that executable's CRC (`[[program]]`, `program =`), and the next build
+compiles it into that executable's image. `tests/programs/loader.s` loads two
+programs of its own over the same addresses, as the game does
+(`programs/loaded/loader`).
+
 ## What is not compiled, and how it shows
 
 Nothing is interpreted or delegated silently. `ps2n-host` prints after a run:
