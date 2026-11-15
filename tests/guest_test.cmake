@@ -87,7 +87,8 @@
 #   UPSCALE    internal resolution multiplier for a hardware renderer
 #   SETTLE     frames to run on after the program's last line
 #   PAD        a script of controller input for port 1 (ps2n-host -pad)
-#   PATCHES    the game's patches to apply (ps2n-host -patches: widescreen)
+#   PATCHES    the game's patches to apply (ps2n-host -patches: widescreen,
+#              fps, or both)
 #   PATCH_ARCHIVE  PCSX2's archive of patches to take the game's file from
 #              (ps2n-host -patch-archive)
 #   INPUT      a session played in the window and written down, to run again

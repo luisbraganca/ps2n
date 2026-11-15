@@ -127,9 +127,10 @@ param(
     # NVRAM, and as many frames as it had unless -Frames says otherwise; any configuration, a comparison
     # included.
     [string]$Replay = '',
-    # The game's patches to apply (ADR 0025): none, or widescreen. Left out: widescreen with -Play, none
-    # otherwise; a comparison applies them to both of its runs. The game's own patch file is taken from the
-    # archive of the PCSX2 installed on this computer, into the run's data folder.
+    # The game's patches to apply (ADR 0025): none, or widescreen and fps (the frame-rate patch), separated
+    # by a comma. Left out: widescreen,fps with -Play, none otherwise; a comparison applies them to both of
+    # its runs. The game's own patch file is taken from the archive of the PCSX2 installed on this
+    # computer, into the run's data folder.
     [string]$Patches = '',
     # Wall-clock limit of each run.
     [int]$Seconds = 1800,
@@ -229,6 +230,7 @@ if ($Play) {
     if ($PSBoundParameters.ContainsKey('Frames')) { $hostArgs += @('-frames', "$Frames") }
     if ($PSBoundParameters.ContainsKey('Seconds')) { $hostArgs += @('-seconds', "$Seconds") }
     if ($FrameEvery -gt 0) { $hostArgs += @('-frame-every', "$FrameEvery") }
+    foreach ($mark in @($Marks -split '[,;\s]+' | Where-Object { $_ -ne '' })) { $hostArgs += @('-mark', "$([int]$mark)") }
     $hostArgs += @('-record', $record)
     if ($Patches) { $hostArgs += @('-patches', $Patches) }
     if ($patchArchive) { $hostArgs += @('-patch-archive', $patchArchive) }

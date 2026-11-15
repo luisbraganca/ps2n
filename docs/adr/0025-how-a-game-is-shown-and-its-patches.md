@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Accepted; G14 done on 2026-11-14, G15 on 2026-11-15 |
+| Status | Accepted; G14 done on 2026-11-14, G15 and G16 on 2026-11-15 |
 | Date | 2026-11-14 |
 | Decided by | Maintainer, on the session's recommendations |
 
@@ -143,6 +143,50 @@ answer: "Copy one file per run (Recommended)". So when the game has booted
 the host copies the game's own patch file (774 bytes for Killzone) out of
 the installed archive into the run's data folder, in the build tree, where
 PCSX2 looks for patch files; nothing goes into the repository.
+
+## Films at 4:3 (2026-11-15)
+
+With the widescreen patch on, Killzone's films, made for 4:3, were stretched
+across the 16:9 picture, which is how PCSX2 shows films by default when a
+widescreen patch is on. As it was put: "With the widescreen patch on, the
+game's films (made for 4:3) are stretched across the 16:9 picture. Show
+them at 4:3 in the middle instead?", with 4:3 recommended. The maintainer's
+answer: "Films at 4:3 (Recommended)". So with the widescreen patch the host
+sets PCSX2's aspect ratio for films to 4:3 (`FMVAspectRatioSwitch`; PCSX2
+tells a film by the IPU decoding video), which changes only how the picture
+is shown.
+
+## The frame-rate patch (2026-11-15)
+
+What the session decided within G16, for the maintainer to decide
+otherwise:
+
+- **Which group is a frame-rate patch.** PCSX2 knows a game's widescreen
+  patch by a name of its own ("Widescreen 16:9", its widescreen setting),
+  but has no such name for a frame-rate patch: the files call theirs "50/60
+  FPS", "60 FPS" and the like. Of the 4,709 patch files in the installed
+  archive, 948 have a group whose name has "FPS" in it; 940 have one such
+  group, mostly "60 FPS" (338), "50 FPS" (325) or "50/60 FPS" (264), and 8
+  have several, which are choices rather than one patch: "60 FPS" beside
+  "50 FPS" or "30 FPS", beside "Onscreen FPS Display", "Slow Motion (60
+  fps)" or "NTSC Mode/60 FPS". So the host applies the group whose name has
+  "FPS" in it where a file has one, by PCSX2's list of enabled patches,
+  once it has copied the file; where it has several, none, and its report
+  names them.
+- **Without PCSX2's EE overclock.** Killzone's frame-rate patch says it
+  "might need EE Overclock (130%)": a setting of PCSX2's
+  (`EECycleRate`) by which its recompiler counts every block of more than
+  five cycles as 1.3 times shorter (`scaleblockcycles` in `iR5900.cpp`), so
+  that the EE does more work in a frame. PS2Native does not implement it:
+  time is counted as PCSX2's recompiler counts it at its default
+  ([ADR 0011](0011-time-is-counted-as-pcsx2s-recompiler-counts-it.md)), and
+  the host warns when the setting is given. Implementing it changes how
+  time is counted, which is the maintainer's to decide
+  ([ADR 0015](0015-a-speed-step-before-phase-3-ends.md)). So the patch is
+  applied without it, as stock PCSX2 applies it with its default settings:
+  in the first level the game shows 41 new pictures a second, where it
+  showed 25 (the game log, "G16"). Put to the maintainer with that
+  measurement.
 
 ## Consequences
 

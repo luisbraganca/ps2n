@@ -163,6 +163,7 @@ namespace
 		std::string input_path; // a session written down, to run again (-input)
 		std::string memcards_dir; // without -window: the memory cards to put in the slots (Mcd001.ps2, Mcd002.ps2)
 		bool patch_widescreen = false; // apply the game's widescreen patch (-patches; the default with -window)
+		bool patch_fps = false; // and its frame-rate patch (the same)
 		std::string patch_archive; // the PCSX2 archive of patches the game's patch file is taken from (-patch-archive)
 		bool clock_given = false;
 		bool iop_jit = true;
@@ -333,9 +334,11 @@ namespace
 			"                     window: its controller, its clock and its number of\n"
 			"                     frames, unless -clock or -frames say otherwise. Reports\n"
 			"                     whether the run is the session at every fingerprint.\n"
-			"  -patches none|widescreen  Apply the game's widescreen patch, where PCSX2's\n"
-			"                     archive has one for it (-patch-archive). Default none;\n"
-			"                     widescreen with -window.\n"
+			"  -patches none|widescreen,fps  Apply the game's widescreen patch and its\n"
+			"                     frame-rate patch (the group of its patch file whose name\n"
+			"                     says FPS; none where several do), where PCSX2's archive\n"
+			"                     has them (-patch-archive). Default none; both with\n"
+			"                     -window.\n"
 			"  -patch-archive <zip>  PCSX2's archive of patches (patches.zip of an installed\n"
 			"                     PCSX2), from which the game's own patch file is taken\n"
 			"                     into the run's data folder when the game has booted.\n"
@@ -573,15 +576,18 @@ namespace
 			{
 				const std::string_view value = argv[++i];
 				o.patch_widescreen = false;
+				o.patch_fps = false;
 				if (value != "none")
 				{
 					for (const std::string_view kind : StringUtil::SplitString(value, ',', true))
 					{
 						if (kind == "widescreen")
 							o.patch_widescreen = true;
+						else if (kind == "fps")
+							o.patch_fps = true;
 						else
 						{
-							std::fprintf(stderr, "ps2n-host: -patches takes none or widescreen, not '%s'\n", argv[i]);
+							std::fprintf(stderr, "ps2n-host: -patches takes none, or widescreen and fps, not '%s'\n", argv[i]);
 							return false;
 						}
 					}
@@ -981,9 +987,13 @@ namespace
 				o.renderer = GSRendererType::VK;
 			if (!upscale_given)
 				o.upscale = 3;
-			// And with the game's widescreen patch, where PCSX2 has one.
+			// And with the game's widescreen and frame-rate patches, where PCSX2
+			// has them.
 			if (!patches_given)
+			{
 				o.patch_widescreen = true;
+				o.patch_fps = true;
+			}
 			// And the console has the day it is.
 			if (!o.clock_given)
 				o.clock_fixed = false;
@@ -1326,7 +1336,14 @@ namespace
 
 		// The game's patches (ADR 0025): the widescreen group of its patch file,
 		// which the host takes from PCSX2's archive when the game has booted.
+		// With it, the game's films, made for the console's own picture, keep
+		// their proportions in the middle of the wide one (the maintainer's
+		// choice), as PCSX2 can show them; it changes only how the picture is
+		// shown. 4:3 and not "Auto 4:3/3:2", which the renderer turns back into
+		// the patch's own 16:9 (CalculateDrawDstRect in GSRenderer.cpp).
 		si.SetBoolValue("EmuCore", "EnableWideScreenPatches", o.patch_widescreen);
+		if (o.patch_widescreen)
+			si.SetStringValue("EmuCore/GS", "FMVAspectRatioSwitch", "4:3");
 
 		si.SetIntValue("EmuCore/GS", "Renderer", static_cast<int>(o.renderer));
 		si.SetFloatValue("EmuCore/GS", "upscale_multiplier", static_cast<float>(o.upscale));
@@ -2634,8 +2651,55 @@ namespace
 				s_patch_line = fmt::format("ps2n-host: patches: cannot write {}", path);
 				return;
 			}
-			s_patch_line = fmt::format("ps2n-host: patches: {} taken from {} for this run; asked for: {}", name,
-				s_options.patch_archive, s_options.patch_widescreen ? "the widescreen patch" : "none");
+
+			// The widescreen group is PCSX2's own setting: the group named
+			// "Widescreen 16:9", read when the machine started. A frame-rate
+			// group has no name PCSX2 knows ("50/60 FPS", "60 FPS"): the one
+			// group whose name says FPS is put in the list of enabled patches,
+			// which the core reads again here. Where several say FPS they are
+			// choices, not one patch ("60 FPS" beside "50 FPS", "Onscreen FPS
+			// Display", "Slow Motion (60 fps)"), and none of them is applied.
+			std::vector<std::string> groups;
+			for (std::string_view line : StringUtil::SplitString(*text, '\n', true))
+			{
+				line = StringUtil::StripWhitespace(line);
+				if (line.size() > 2 && line.front() == '[' && line.back() == ']')
+				{
+					std::string group(line.substr(1, line.size() - 2));
+					if (std::find(groups.begin(), groups.end(), group) == groups.end())
+						groups.push_back(std::move(group));
+				}
+			}
+			std::vector<std::string> applied;
+			std::string left_out;
+			if (s_options.patch_widescreen && std::find(groups.begin(), groups.end(), "Widescreen 16:9") != groups.end())
+				applied.emplace_back("Widescreen 16:9");
+			if (s_options.patch_fps)
+			{
+				std::vector<std::string> fps;
+				for (const std::string& group : groups)
+				{
+					if (StringUtil::toLower(group).find("fps") != std::string::npos)
+						fps.push_back(group);
+				}
+				if (fps.size() == 1)
+				{
+					{
+						std::unique_lock<std::mutex> lock = Host::GetSettingsLock();
+						s_settings.AddToStringList("Patches", "Enable", fps.front().c_str());
+					}
+					VMManager::ReloadPatches(true, true, false, false);
+					applied.push_back(fps.front());
+				}
+				else if (fps.size() > 1)
+				{
+					left_out = fmt::format("; {} groups say FPS, so none of them is applied: {}", fps.size(),
+						StringUtil::JoinString(fps.begin(), fps.end(), ", "));
+				}
+			}
+			s_patch_line = fmt::format("ps2n-host: patches: {} taken from {} for this run; groups applied: {}{}", name,
+				s_options.patch_archive, applied.empty() ? std::string("none") : StringUtil::JoinString(applied.begin(), applied.end(), ", "),
+				left_out);
 			return;
 		}
 		s_patch_line = fmt::format("ps2n-host: patches: {} has none for {} {:08X}", s_options.patch_archive, serial, crc);
@@ -2646,7 +2710,7 @@ void ps2n::host::OnGameChanged(std::string_view title, std::string_view serial, 
 {
 	if (s_options.window)
 		window::SetTitle(title.empty() ? std::string(kWindowTitle) : fmt::format("{} - {}", title, kWindowTitle));
-	if (crc != 0 && s_options.patch_widescreen && !s_options.patch_archive.empty())
+	if (crc != 0 && (s_options.patch_widescreen || s_options.patch_fps) && !s_options.patch_archive.empty())
 		TakePatchFile(serial, crc);
 }
 

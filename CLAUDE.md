@@ -131,8 +131,18 @@ size does not fit, the maintainer's choice. G15 the next day: the game's
 widescreen patch applied by default, taken from the installed PCSX2's
 archive; Killzone in 16:9, nothing of its code interpreted, and a run with
 the patch is the stock run with it, the FPU's sign of a zero aside, and
-the interpreted run. Next is G16, the frame-rate patch. Phase 4 needs its
-own approval.
+the interpreted run. G16 the same day: the game's frame-rate patch applied
+by default with it (the group of its patch file whose name says FPS, none
+where several do), without PCSX2's EE overclock, which PS2Native does not
+implement (put to the maintainer). In the first level Killzone shows 41
+new pictures a second where it showed 25; the code the patch changes is
+compiled as a second version of its function, nothing interpreted after
+one rebuild; a run with both patches is the stock run with them, the
+FPU's sign of a zero aside, and the interpreted run, and takes 1.00 times
+stock PCSX2's time with the same patches, its play 0.98 (without them
+0.975 and 0.95, as before); in the window the console's pace, as stock
+PCSX2 keeps it. G13
+goes on as the maintainer plays further. Phase 4 needs its own approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -374,7 +384,11 @@ Decisions:
   where it is (`C:\Program Files\PCSX2\resources\patches.zip`, 2.8.2; the
   maintainer's answer on 2026-11-15, "The installed PCSX2"): the
   repository it is made from declares no license, and where a packaged
-  game gets its patches is Phase 4's.
+  game gets its patches is Phase 4's. A frame-rate patch is the group of
+  the game's patch file whose name says FPS (none where several do),
+  applied without PCSX2's EE overclock (`EECycleRate`), which PS2Native
+  does not implement and which would change how time is counted: put to
+  the maintainer with G16's measurement.
 
 ## Layout, build and test
 
@@ -553,13 +567,18 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   console's resolution, with a picture of 1920 by 1080: full screen on a
   screen that size, in a window on a larger one (Alt+Enter or F11
   switches; ADR 0025, step G14; `-Renderer`, `-Upscale` and `-WindowSize`
-  change them), with the game's widescreen patch where the installed
-  PCSX2's archive has one (step G15; `-Patches none` leaves it out; the
-  game's patch file is copied into the run's data folder), at the
+  change them), with the game's widescreen and frame-rate patches where
+  the installed PCSX2's archive has them, its films kept at 4:3 (steps G15
+  and G16; `-Patches none` leaves both out, `-Patches widescreen` the
+  frame-rate one; the game's patch file is copied into the run's data
+  folder), at the
   console's speed, with sound, the keyboard and the first controller
   (`ps2n-host -help` has the keys), until the window is closed; `-Config
   stock-jit` puts stock PCSX2 in the same window. `game.ps1 -Patches
-  widescreen` gives a comparison's two runs the patch. What a game keeps between sessions (memory card, the
+  widescreen,fps` gives a comparison's two runs the patches. A session
+  in the window takes `-Pad`, `-Frames` and `-Marks` as a scripted run
+  does: the game log's "How to run it" has the session that measures the
+  pace in play. What a game keeps between sessions (memory card, the
   console's settings) is in `build\game\<name>\play`, and so is what the
   last session had to interpret of the game (`capture.toml`; `-Capture
   <file>` adds it to the file `build.ps1 -GameCapture` takes), of its
