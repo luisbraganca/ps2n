@@ -4263,6 +4263,106 @@ widescreen patch rewrites in it (at `00320468`), all captured under
 interpreted nothing: 49.96 frames a second, and in the mission 2,250 frames
 in 45.0 s, the console's pace.
 
+### The maintainer's first session (2026-11-16)
+
+The maintainer played the game in the window, as above, with the three
+captures (`game.ps1 -Play -Name aut -Capture ... -VuCapture ...
+-IopCapture ...`): 42,322 frames, 14 minutes, the first two missions, the
+second a driving mission, with the progress saved on the memory card.
+"Overall the game looks good"; a part of the second mission where the game
+"really slows down", as it did in the old project; and HUD artifacts,
+"specially on the second mission", which the maintainer saw in stock PCSX2
+as well, with no patch for them. Those are left to PCSX2
+([ADR 0026](adr/0026-a-second-game-and-games-of-several-executables.md),
+"After the maintainer's first session").
+
+The window kept 49.58 frames a second on average where the console shows
+50: about 7 seconds behind over the session. What it had to interpret, all
+of it beyond where the script stops:
+
+- **Of the game's EE code**, 28 block starts in `DRIVING.ELF`, and three of
+  its functions with code nothing was compiled from: those the widescreen
+  patch's lines for the driving missions write into (four words, at
+  `0011B3B0`, `0012B7D0`, `0012B7D4` and `0022E248`, while the halfword at
+  `0022E248` says `DRIVING.ELF` is in memory). Compiled code handed the
+  blocks those words are in over to the interpreter 154,934 times; 3.8
+  million instructions of `DRIVING.ELF` interpreted in all, nothing to
+  speak of in time. Nothing of the boot executable, `MOVIE.ELF` or
+  `ACTION.UK`; the runtime put `MOVIE.ELF` in use once, `ACTION.UK` twice
+  and `DRIVING.ELF` once.
+- **Of the BIOS's**, 41,661 instructions after boot, at 8 block starts in
+  the kernel. A session in the window does not capture the BIOS's code; a
+  run of the session again does.
+- **Of the micro code**, 21 blocks of VU0's (11 million runs) and 587 of
+  VU1's, which ran 1.75 billion times, more than the 226 compiled ones (1.12
+  billion).
+- **Of the IOP's code**, 893 blocks (8.7 million of a billion runs).
+
+**Built in** (the micro code's capture now 69 blocks of VU0's and 1,519 of
+VU1's, Killzone's among them; the IOP's 13,049 blocks; `DRIVING.ELF` with
+the three functions as variants of theirs), the session run again without a
+window (`game.ps1 -Replay`, on the software renderer) interprets nothing of
+the game's EE code, micro code or IOP code: of the EE's, 41,736
+instructions, 41,712 of them the BIOS's kernel code above, which that run
+captured and the BIOS's build has compiled since. The patched functions ran
+as their variants (231,579 calls).
+
+That run is the session at its first 720 fingerprints (one every 50
+frames) and parts from it at frame 36,050. It ends where the session
+ended, at the same EE cycle and with the sound hardware in the same state,
+its counts within a few blocks of the session's.
+
+**Against stock PCSX2** (`-Config same-as-stock`, the session run again on
+both sides, 17 minutes), the stock run parts from the session at the same
+frame with the same fingerprint: the parting is not PS2Native's. The
+compiled run is the stock run in place and time at every one of
+223,104,024 sync points, with the same picture at each of the 170 frames
+compared and the sound hardware in the same state at each of the 170
+moments; and in every register but one, from sync point 218,525,949 (about
+frame 40,690) to the end: VU0's FBRST. Written out on both sides from there
+to frame 40,700, it is the only register that differs, `00000404` in the
+stock run and `00000000` in the compiled one, every other register the same
+at each of those 71,583 sync points.
+
+The cause is one of the instructions where PS2Native follows the console
+on purpose ([ADR 0005](adr/0005-never-further-from-the-console-than-pcsx2.md)).
+Back in `ACTION.UK` after the driving mission, the game's start-up resets
+VU0 and then VU1 the way Sony's library does (`cfc2 $v0, $vi28; ori $v0,
+$v0, 0x2; ctc2 $v0, $vi28` at `00341038`, with `0x200` at `003414E8` and
+`0033FD00`), while FBRST's two D-bit enables are set (`0x404`). PCSX2's
+recompiler carries the resets out and then stores what was written, so
+FBRST stays `0x404`; the console, as `cpu/vu0_macro/transfer` records it,
+and PCSX2's interpreter store it first, and each reset clears its VU's half
+of the register again: `0`. PS2Native follows the console
+(`runtime/include/ps2n/ops_cop2.h`; the test program is in
+`tests/same-as-stock-known-differences.cmake` for it). What the D-bit
+enables decide, an interrupt where a micro program reaches a D bit, did not
+come up: place and time are the stock run's to the end.
+
+**The time**, the session run again as it was played, on Vulkan at three
+times the resolution with nothing shown, the time noted every 500 frames
+(ten seconds of the console's), PS2Native and stock PCSX2 in turn, twice.
+Each of the four runs is the session at every one of its 846 fingerprints,
+so the parting above comes from the software renderer, not from the
+machine. How the renderer reaches the game's registers there is not
+established (the old project found the driving missions reading an 8 by 8
+block of depth back from the GS). PS2Native takes
+194.9 and 191.7 s, stock PCSX2 170.3 and 172.4 s: 1.13 times, without
+profile-guided optimization. The heaviest stretch is an explosion in the
+second mission (frames 35,000 to 35,500): 4.6 s of the console's 10 on
+PS2Native both times, 4.0 and 4.1 s on stock PCSX2. No stretch of the
+session takes either of them more.
+
+**The slowdown the maintainer saw** fits the micro code the session had to
+interpret: 587 of the 813 blocks of VU1's micro code it ran were new to the
+build, and ran 61% of the times a block of VU1's ran. With every block of
+micro code interpreted (`-VuStatic off`), the run takes 374.9 s, and the
+explosion is slower than the console for 11 seconds even with nothing shown
+(frames 35,050 to 35,600, noted every 50: 1.01 to 1.13 s for each second of
+the console's). The old project's notes put its own slowdown in the same
+race, "when the limo came" and "at the explosion". Whether the window keeps
+the console's pace there now is the next session's to show.
+
 ## Open
 
 - **What is left of VU0 in the game's EE code.** Since G7 its instructions

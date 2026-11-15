@@ -164,8 +164,14 @@ mission nothing of it is interpreted; the run is the stock run at every
 sync point, every register included, and the interpreted run, and takes
 1.19 times stock PCSX2's time without profile-guided optimization; in the
 window the console's pace. The build tree holds its EE code in place of
-Killzone's. G13 goes on as the maintainer plays further. Phase 4 needs its
-own approval.
+Killzone's. On 2026-11-16 the maintainer played its first two missions:
+HUD artifacts that stock PCSX2 shows too are left to PCSX2 (ADR 0026);
+what the session had to interpret is compiled in since, and the session
+run again is the stock run in place and time at every sync point (VU0's
+FBRST aside, where PS2Native follows the console) and takes 1.13 times its
+time; the explosion that slowed the session down, its micro code
+interpreted then, takes 0.46 of the console's time now. G13 goes on as the
+maintainer plays further. Phase 4 needs its own approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -430,7 +436,10 @@ Decisions:
   compile --loaded-by`, `build.ps1 -GameMore`), which the runtime puts in
   use when memory holds its code, and what a run interprets in it is
   captured under its CRC. `ACTION.UK` is the English missions'; another
-  language's is interpreted.
+  language's is interpreted. After the maintainer's first session
+  (2026-11-16, "Ok let's leave them"): artifacts of PCSX2's renderer that
+  stock PCSX2 shows too are left to PCSX2; a setting of PCSX2's own that
+  removes them is put to the maintainer when one is found.
 
 ## Layout, build and test
 

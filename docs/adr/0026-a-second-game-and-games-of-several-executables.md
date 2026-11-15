@@ -123,3 +123,65 @@ every one of 50,091,671; the interpreted run at every one of 56,856,341
 event tests; 1.19 times stock PCSX2's time, its play 1.12, without
 profile-guided optimization; in the window at the console's pace. Every
 test passes (533).
+
+## After the maintainer's first session
+
+On 2026-11-16 the maintainer played the game in the window (`game.ps1
+-Play -Name aut`, with the three captures): 42,322 frames, about 14
+minutes, the first two missions, the second a driving mission
+(`DRIVING.ELF`'s), with the progress saved on the memory card. The window
+kept 49.58 frames a second on average where the console shows 50. Beyond
+where the script stops, the session had to interpret 587 blocks of VU1's
+micro code (which ran 1.75 billion times, the 226 compiled ones 1.12
+billion), 21 of VU0's, 893 blocks of the IOP's code, 28 places in
+`DRIVING.ELF`'s code and the three of its functions that the widescreen
+patch's lines for the driving missions rewrite; nothing of the boot
+executable, `MOVIE.ELF` or `ACTION.UK` (the game log, "G18").
+
+The maintainer: "Overall the game looks good. There's a part where the game
+really slows down (I played the second level as well), this was a problem
+on ../ps2-uncompiler as well. There's HUD artifacts specially on the second
+mission, I will see through PCSX2 if it also appears there or if there's a
+patch." Then: "I confirm the artifacts are also present on PCSX2 and there's
+no patch. I remember we fixed most of the artifacts on ps2-uncompiler but
+since they're present on PCSX2 I'm wondering if we should waste time on
+fixing them for this project."
+
+The session's answer: PS2Native does not draw the picture, PCSX2's renderer
+does, and an artifact PCSX2 shows too is the renderer's; the old project
+drew with a renderer of its own, so its fixes do not carry over; fixing them
+here would mean keeping changes of PS2Native's own to PCSX2's renderer. Put
+as "HUD artifacts: leave them to PCSX2, and fix them through a setting only
+if one of its upscaling fixes removes them" (recommended), against keeping
+"our own changes to PCSX2's renderer"; and, for the session, "The rebuild
+and replay ...: should I start now?", yes recommended (the build and the
+check against stock PCSX2 first, the timing of the slow part after, once
+the computer is otherwise idle). The maintainer's answer: "1. Ok let's
+leave them. 2. Yes". And: "Also fyi, I saved progress to memory card, so
+you can start easily on second and third missions."
+
+How it was read:
+
+- **What PCSX2's renderer gets wrong too is left to PCSX2.** PS2Native
+  neither changes PCSX2's renderer for it nor keeps changes of its own to
+  PCSX2's code. Nothing is done about this game's HUD now; should one of
+  PCSX2's own settings (its upscaling fixes) be found to remove the
+  artifacts, applying that setting for the game is a small step of its own,
+  put to the maintainer then.
+- **The session is compiled in and checked now**: the build made again
+  with what it had to interpret, the session run again without a window
+  against stock PCSX2 at every sync point, then timed in stretches on both
+  sides with the window's renderer, to find where it slows down and whether
+  stock PCSX2 slows down there too.
+- **Scripted runs may start from the maintainer's save**, on a copy of the
+  memory card, never on the maintainer's own.
+
+With the session compiled in and checked (the game log, "G18", "The
+maintainer's first session"), the session asked whether to prepare the
+third mission first, a scripted run from a copy of the save into it,
+compiled and checked before the maintainer plays it (recommended), or to
+let the maintainer play on at once, what is new interpreted the first time.
+The maintainer: "run the compiled game so I can test it (load the same
+memory card please)". Read as: the maintainer plays on now, in the window,
+on the same memory card, the save on it; what the session meets is compiled
+after it, as in G13.
