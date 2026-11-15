@@ -124,7 +124,15 @@ scripted runs are (ADR 0024), and the steps after G13 are G14 to G16
 (ADR 0025): the window's defaults (Vulkan, a picture of 1920 by 1080, the
 game drawn at three times the console's resolution), then PCSX2's
 patches, with a game's widescreen and frame-rate patches applied by
-default when there are any. Phase 4 needs its own approval.
+default when there are any. G14 was done that night: the window's
+defaults are PCSX2's Vulkan renderer, three times the console's
+resolution and a picture of 1920 by 1080, full screen where a window that
+size does not fit, the maintainer's choice. G15 the next day: the game's
+widescreen patch applied by default, taken from the installed PCSX2's
+archive; Killzone in 16:9, nothing of its code interpreted, and a run with
+the patch is the stock run with it, the FPU's sign of a zero aside, and
+the interpreted run. Next is G16, the frame-rate patch. Phase 4 needs its
+own approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -362,7 +370,11 @@ Decisions:
   patches come from put to the maintainer first (a new dependency); G16,
   a game's frame-rate patch likewise, its speed measured. The comparisons
   keep the software renderer. Phase 4's wizard starts from these
-  defaults.
+  defaults. The patches come from the installed PCSX2's archive, read
+  where it is (`C:\Program Files\PCSX2\resources\patches.zip`, 2.8.2; the
+  maintainer's answer on 2026-11-15, "The installed PCSX2"): the
+  repository it is made from declares no license, and where a packaged
+  game gets its patches is Phase 4's.
 
 ## Layout, build and test
 
@@ -537,24 +549,41 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   (`r3000a::shape`, `Refuse` in `runtime/iop_provider.cpp`). The execution
   model's "The I/O processor's code" says how it works.
 - Playing the game: `scripts\windows\game.ps1 -Image <disc image> -Play
-  -Name <name>` opens it in a window, at the console's speed, with sound,
-  the keyboard and the first controller (`ps2n-host -help` has the keys),
-  until the window is closed; `-Config stock-jit` puts stock PCSX2 in the
-  same window. What a game keeps between sessions (memory card, the
+  -Name <name>` opens it on PCSX2's Vulkan renderer at three times the
+  console's resolution, with a picture of 1920 by 1080: full screen on a
+  screen that size, in a window on a larger one (Alt+Enter or F11
+  switches; ADR 0025, step G14; `-Renderer`, `-Upscale` and `-WindowSize`
+  change them), with the game's widescreen patch where the installed
+  PCSX2's archive has one (step G15; `-Patches none` leaves it out; the
+  game's patch file is copied into the run's data folder), at the
+  console's speed, with sound, the keyboard and the first controller
+  (`ps2n-host -help` has the keys), until the window is closed; `-Config
+  stock-jit` puts stock PCSX2 in the same window. `game.ps1 -Patches
+  widescreen` gives a comparison's two runs the patch. What a game keeps between sessions (memory card, the
   console's settings) is in `build\game\<name>\play`, and so is what the
   last session had to interpret of the game (`capture.toml`; `-Capture
   <file>` adds it to the file `build.ps1 -GameCapture` takes), of its
   micro code (`vu-capture.toml`; `-VuCapture <file>` likewise) and of the
-  IOP's code (`iop-capture.toml`; `-IopCapture <file>`). In a window the
-  console's clock is the host's time of day; every other run starts it at
-  one fixed time (`ps2n-host -clock fixed`), so that two runs are the same
-  machine. Windows only so far.
+  IOP's code (`iop-capture.toml`; `-IopCapture <file>`). Every session is
+  written down to be run again, in `build\game\<name>\play\sessions\<time>`
+  (its controller frame by frame, the clock it started at, its memory
+  cards and NVRAM as they were; `ps2n-host -record`), and `game.ps1
+  -Replay <that folder>` runs it again without a window, in any
+  configuration, `same-as-stock` included; each run says whether it is the
+  session at every fingerprint of its registers (ADR 0024, step G13). In a
+  window the console's clock starts at this computer's time of day; every
+  other run starts it at one fixed time (`ps2n-host -clock fixed`), or at
+  the replayed session's, so that two runs are the same machine. Windows
+  only so far.
   A session that checks the window does it with the sound off, because the
   sound comes out of the maintainer's speakers:
   `scripts\windows\window-check.ps1 -Image <disc image> -Name <name> -Steps
-  '5 shot a.png', '8 key K', '14 close'` starts a muted session, photographs
-  the window, presses keys in it and closes it (look at the photographs
-  with the Read tool).
+  '5 shot a.png', '8 key K', '14 close'` starts a muted session in a window
+  of 1280 by 720 (`-WindowSize ''` for the game's own default), has the
+  host write the picture on display at each `shot` and photographs the
+  window beside it (`a-window.png`: a picture Vulkan presents comes out
+  white in a photograph on this computer), presses keys in it and closes
+  it (look at the pictures with the Read tool).
 - Tests are named `<suite>/<configuration>/<program>`. Suites: `ps2autotests`
   (console recordings), `programs` (our own, `tests/programs/*.s`, built with
   `ps2n-recomp assemble`) and `sdk` (C programs built with ps2sdk, binaries in

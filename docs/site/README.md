@@ -76,7 +76,9 @@ page.
 | "What is static": the vector units' micro programs static | game-log.md, "G11", "Where G11 stands"; [ADR 0003](../adr/0003-no-jit-in-generated-games.md) |
 | "What is static": the IOP's modules static, no stand-in in use; the machine's socket for both processors | game-log.md, "G12", "Where G12 stands", and "Open", "No stand-in is left"; ADR 0003 |
 | G12: 8,023 blocks; 4,000 random programs; nothing interpreted in the run into the first level, none on PCSX2's recompiler; still the stock run, the second processor's registers included; the times against stock PCSX2's | game-log.md, "G12": "The IOP's code compiled ahead of time", "The self-test", "Where G12 stands" |
-| G13: the first session's 26 blocks of micro code and 791 of the second processor's code, most of them in the memory card's modules | game-log.md, "G13", "The first session" |
+| G13: the first session's 26 blocks of micro code and 791 of the second processor's code, most of them in the memory card's modules; sessions written down and run again against stock PCSX2 | game-log.md, "G13", "The first session" and "Sessions written down, and run again" |
+| G14: Vulkan, three times the console's resolution, a picture of 1920 by 1080, full screen where a window that size does not fit | game-log.md, "G14" |
+| G15: the widescreen patch from the installed PCSX2, applied by default; Killzone in 16:9, drawn wide by the game itself | game-log.md, "G15" |
 | The longer run: "the second processor's place and registers compared too since 2026-11-14" | game-log.md, "G12", "The IOP's place and registers held to the stock run" and "Where G12 stands" |
 | 40 of 55, 39, 38, and "on no line" | [ADR 0005](../adr/0005-never-further-from-the-console-than-pcsx2.md) |
 | 204 instructions, 4,077,475 and 36,976,118 cases | [poc-log.md](../poc-log.md), "Increment 5" |

@@ -63,13 +63,23 @@ namespace ps2n::host::window
 		void (*resized)(uint32_t width, uint32_t height, float scale); // the area the picture goes into, in pixels
 		void (*focus_lost)(); // the keys that were down will not be seen coming up
 		void (*close_requested)();
+		void (*shot_requested)(uint32_t number); // a check asks for the picture on display (window-check.ps1)
 	};
+
+	/// The message by which another program asks for the picture on display,
+	/// numbered by wParam (Windows: PostMessage to the window of class
+	/// PS2NativeGame). The runner writes it beside the session's last frame,
+	/// as shot-<number>.png.
+	constexpr uint32_t kShotMessage = 0x8000 + 0x50; // WM_APP + 0x50
 
 	/// Whether this build has window code for the platform it was built for.
 	bool Available();
 
 	/// Makes the window and shows it. `width` and `height` are the size of the
-	/// area the picture goes into, at a display scaling of 100%. Main thread.
+	/// area the picture goes into, at a display scaling of 100%. A window that
+	/// would not fit on its screen covers the screen instead; the window it
+	/// goes back to is the largest that fits, at the same proportions. Main
+	/// thread.
 	bool Create(const std::string& title, uint32_t width, uint32_t height, const Listener& listener);
 
 	/// Main thread, after the machine has stopped.

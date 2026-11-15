@@ -14,6 +14,7 @@
 #include "host_state.h"
 #include "profile.h"
 #include "selftest.h"
+#include "session_record.h"
 #include "sync_trace.h"
 #include "iop_report.h"
 #include "vu_report.h"
@@ -30,6 +31,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <ctime>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
@@ -48,6 +50,7 @@
 #include "common/CrashHandler.h"
 #include "common/FileSystem.h"
 #include "common/Image.h"
+#include "common/ZipHelpers.h"
 #include "common/MemorySettingsInterface.h"
 #include "common/Path.h"
 #include "common/StringUtil.h"
@@ -155,6 +158,12 @@ namespace
 		std::string marker = "-- TEST END";
 		EEProvider ee = EEProvider::Jit;
 		bool clock_fixed = true; // the console's clock starts at a fixed time, not at the host's time of day
+		std::optional<ps2n::host::session::Clock> clock_at; // -clock <date and time>, or a replay's
+		std::string record_dir; // with -window: where the session is written down to be run again
+		std::string input_path; // a session written down, to run again (-input)
+		std::string memcards_dir; // without -window: the memory cards to put in the slots (Mcd001.ps2, Mcd002.ps2)
+		bool patch_widescreen = false; // apply the game's widescreen patch (-patches; the default with -window)
+		std::string patch_archive; // the PCSX2 archive of patches the game's patch file is taken from (-patch-archive)
 		bool clock_given = false;
 		bool iop_jit = true;
 		bool iop_ps2n = false; // PS2Native's IOP provider in the place of the core's
@@ -186,7 +195,9 @@ namespace
 		std::optional<u64> stack_budget; // host stack compiled code may use, when not the default
 		std::string image_id; // the one compiled image to use, when not all of them
 		bool host_fs = false; // let the guest open files beside its executable ("host:")
-		u32 upscale = 1; // internal resolution, for the hardware renderers
+		u32 upscale = 1; // internal resolution, for the hardware renderers (3 with -window unless given)
+		u32 window_width = 1920; // with -window: the area the picture goes into, at a display scaling of 100%;
+		u32 window_height = 1080; // a window that would not fit on its screen covers the screen instead
 		u32 settle_frames = 0; // frames to run on after the marker before stopping
 		std::string frame_path; // where the last displayed frame is written, as an image
 		u32 frame_every = 0; // when not zero: the frame on display is also fingerprinted every so many frames
@@ -208,12 +219,10 @@ namespace
 	// once it does (docs/adr/0012-ps2native-branding-not-pcsx2s.md).
 	constexpr const char* kWindowTitle = "PS2Native";
 
-	// The area the picture goes into when the window comes up, at a display
-	// scaling of 100%: 4:3, as the console's picture is shown.
-	constexpr u32 kWindowWidth = 960;
-	constexpr u32 kWindowHeight = 720;
 
 	Options s_options;
+	ps2n::host::session::Clock s_clock_used{}; // what the console's clock was set to when the machine started
+	std::string s_patch_line; // what was done about the game's patches, for the report
 	MemorySettingsInterface s_settings;
 
 	// The guest's console output, one line per entry, in the order the core
@@ -234,6 +243,7 @@ namespace
 	std::atomic<bool> s_marker_seen{false};
 	std::atomic<bool> s_time_limit_passed{false};
 	std::atomic<bool> s_close_requested{false}; // the window's close button
+	std::atomic<u32> s_shot_requested{0}; // a check asked for the picture on display, by this number (0: none)
 	std::atomic<bool> s_cpu_thread_done{false};
 	std::atomic<int> s_exit_code{EXIT_ERROR};
 
@@ -307,10 +317,31 @@ namespace
 			"  -ee jit|interp|ps2n  PCSX2's EE recompiler, its interpreter, or PS2Native's\n"
 			"                     own EE provider (default jit).\n"
 			"  -iop jit|interp    PCSX2's IOP recompiler or interpreter (default jit).\n"
-			"  -clock fixed|host  What the console's clock is set to when the machine\n"
-			"                     starts: one fixed time (2020-03-04, midnight), so that\n"
-			"                     two runs are the same machine, or the host's time of\n"
-			"                     day. Default fixed; host with -window.\n"
+			"  -clock fixed|host|<date and time>  What the console's clock is set to\n"
+			"                     when the machine starts: one fixed time (2020-03-04,\n"
+			"                     midnight), so that two runs are the same machine; this\n"
+			"                     computer's time of day; or a time given as\n"
+			"                     2026-11-14T23:45:07. Default fixed; host with -window;\n"
+			"                     with -input, the session's.\n"
+			"  -record <dir>      With -window: write the session down in <dir>/input.txt,\n"
+			"                     to be run again (host/session_record.h): the controller\n"
+			"                     in port 1 frame by frame, the clock it started at, and a\n"
+			"                     fingerprint of the registers every 50 frames. The memory\n"
+			"                     cards and the NVRAM it began with go beside it\n"
+			"                     (game.ps1 -Play copies them there).\n"
+			"  -input <file>      Run a session written down with -record again, without a\n"
+			"                     window: its controller, its clock and its number of\n"
+			"                     frames, unless -clock or -frames say otherwise. Reports\n"
+			"                     whether the run is the session at every fingerprint.\n"
+			"  -patches none|widescreen  Apply the game's widescreen patch, where PCSX2's\n"
+			"                     archive has one for it (-patch-archive). Default none;\n"
+			"                     widescreen with -window.\n"
+			"  -patch-archive <zip>  PCSX2's archive of patches (patches.zip of an installed\n"
+			"                     PCSX2), from which the game's own patch file is taken\n"
+			"                     into the run's data folder when the game has booted.\n"
+			"  -memcards <dir>    Without -window: put Mcd001.ps2 and Mcd002.ps2 from <dir>\n"
+			"                     in the two slots, those that are there. The run writes to\n"
+			"                     them: give it copies.\n"
 			"  -iop-ps2n          Run the IOP's code on PS2Native's IOP provider, which\n"
 			"                     follows PCSX2's IOP recompiler (runtime/iop_provider.h):\n"
 			"                     by the blocks compiled ahead of time that this host has,\n"
@@ -386,18 +417,26 @@ namespace
 			"                     (left stick), T F G H (right stick), I J K L (triangle,\n"
 			"                     square, cross, circle), Q E (L1 R1), 1 3 (L2 R2), 2 4 (L3\n"
 			"                     R3), Return (start), Backspace (select). Alt+Enter or F11\n"
-			"                     covers the screen. The run ends when the window is closed;\n"
-			"                     -frames and -seconds only apply when given. Windows only.\n"
+			"                     covers the screen. The picture is drawn on Vulkan at three\n"
+			"                     times the console's resolution, into an area of 1920 by\n"
+			"                     1080, which covers the screen where a window that size\n"
+			"                     would not fit (-renderer, -upscale, -window-size). The\n"
+			"                     run ends when the window is closed; -frames and -seconds\n"
+			"                     only apply when given. Windows only.\n"
+			"  -window-size <w>x<h>  With -window: the area the picture goes into, at a\n"
+			"                     display scaling of 100% (default 1920x1080).\n"
 			"  -mute              With -window: no sound.\n"
 			"  -osd               With -window: let the core draw its messages and performance\n"
 			"                     figures over the picture, as PCSX2 shows them. Off unless\n"
 			"                     given: a game shows none of it.\n"
 			"  -renderer <name>   GS renderer: null (nothing is drawn; the default without a\n"
 			"                     window), sw (PCSX2's software renderer), vulkan, opengl,\n"
-			"                     dx11, dx12, auto (the one PCSX2 chooses for this computer;\n"
-			"                     the default with -window). Without a window nothing is\n"
-			"                     shown; the last displayed frame is fingerprinted.\n"
-			"  -upscale <n>       Internal resolution multiplier for a hardware renderer.\n"
+			"                     dx11, dx12, auto (the one PCSX2 chooses for this computer).\n"
+			"                     With -window the default is vulkan. Without a window\n"
+			"                     nothing is shown; the last displayed frame is\n"
+			"                     fingerprinted.\n"
+			"  -upscale <n>       Internal resolution multiplier for a hardware renderer\n"
+			"                     (default 1, and 3 with -window: about 1080p).\n"
 			"  -frame <file>      Write the last displayed frame to this image file (.png).\n"
 			"  -frame-every <n>   Fingerprint the frame on display every n frames as well,\n"
 			"                     to see where two runs show different pictures. With\n"
@@ -495,7 +534,7 @@ namespace
 	bool ParseCommandLine(int argc, char* argv[])
 	{
 		Options& o = s_options;
-		bool renderer_given = false, frames_given = false, seconds_given = false;
+		bool renderer_given = false, frames_given = false, seconds_given = false, upscale_given = false, patches_given = false;
 		for (int i = 1; i < argc; i++)
 		{
 			const char* arg = argv[i];
@@ -524,6 +563,33 @@ namespace
 				o.times_path = argv[++i];
 			else if (is("-pad") && has_value)
 				o.pad_path = argv[++i];
+			else if (is("-record") && has_value)
+				o.record_dir = argv[++i];
+			else if (is("-input") && has_value)
+				o.input_path = argv[++i];
+			else if (is("-memcards") && has_value)
+				o.memcards_dir = argv[++i];
+			else if (is("-patches") && has_value)
+			{
+				const std::string_view value = argv[++i];
+				o.patch_widescreen = false;
+				if (value != "none")
+				{
+					for (const std::string_view kind : StringUtil::SplitString(value, ',', true))
+					{
+						if (kind == "widescreen")
+							o.patch_widescreen = true;
+						else
+						{
+							std::fprintf(stderr, "ps2n-host: -patches takes none or widescreen, not '%s'\n", argv[i]);
+							return false;
+						}
+					}
+				}
+				patches_given = true;
+			}
+			else if (is("-patch-archive") && has_value)
+				o.patch_archive = argv[++i];
 			else if (is("-profile") && has_value)
 				o.profile_path = argv[++i];
 			else if (is("-code-size") && has_value)
@@ -720,9 +786,11 @@ namespace
 					o.clock_fixed = true;
 				else if (!std::strcmp(value, "host"))
 					o.clock_fixed = false;
+				else if (const std::optional<ps2n::host::session::Clock> at = ps2n::host::session::ParseClock(value))
+					o.clock_at = at;
 				else
 				{
-					std::fprintf(stderr, "ps2n-host: -clock takes fixed or host, not '%s'\n", value);
+					std::fprintf(stderr, "ps2n-host: -clock takes fixed, host or a date and time (2026-11-14T23:45:07), not '%s'\n", value);
 					return false;
 				}
 				o.clock_given = true;
@@ -794,6 +862,21 @@ namespace
 					return false;
 				}
 				o.upscale = *n;
+				upscale_given = true;
+			}
+			else if (is("-window-size") && has_value)
+			{
+				const std::string_view value = argv[++i];
+				const size_t x = value.find('x');
+				const std::optional<u32> w = x == std::string_view::npos ? std::nullopt : StringUtil::FromChars<u32>(value.substr(0, x));
+				const std::optional<u32> h = x == std::string_view::npos ? std::nullopt : StringUtil::FromChars<u32>(value.substr(x + 1));
+				if (!w || !h || *w < 64 || *h < 64 || *w > 16384 || *h > 16384)
+				{
+					std::fprintf(stderr, "ps2n-host: -window-size takes a width and a height, as 1920x1080, not '%s'\n", argv[i]);
+					return false;
+				}
+				o.window_width = *w;
+				o.window_height = *h;
 			}
 			else if (is("-settle") && has_value)
 			{
@@ -888,21 +971,31 @@ namespace
 			}
 
 			// Someone is playing: the run ends when they close the window, and
-			// the picture is drawn the way PCSX2 would draw it on this computer.
-			// (0 frames or seconds: no limit.)
+			// the picture is drawn on Vulkan at three times the console's
+			// resolution, about 1080p (ADR 0025). (0 frames or seconds: no limit.)
 			if (!frames_given)
 				o.max_frames = 0;
 			if (!seconds_given)
 				o.max_seconds = 0;
 			if (!renderer_given)
-				o.renderer = GSRendererType::Auto;
+				o.renderer = GSRendererType::VK;
+			if (!upscale_given)
+				o.upscale = 3;
+			// And with the game's widescreen patch, where PCSX2 has one.
+			if (!patches_given)
+				o.patch_widescreen = true;
 			// And the console has the day it is.
 			if (!o.clock_given)
 				o.clock_fixed = false;
 		}
-		else if (o.mute || o.osd)
+		else if (o.mute || o.osd || !o.record_dir.empty())
 		{
-			std::fputs("ps2n-host: -mute and -osd are for -window\n", stderr);
+			std::fputs("ps2n-host: -mute, -osd and -record are for -window\n", stderr);
+			return false;
+		}
+		if (o.window && (!o.input_path.empty() || !o.memcards_dir.empty()))
+		{
+			std::fputs("ps2n-host: -input and -memcards are for a run without a window\n", stderr);
 			return false;
 		}
 		if (!o.profile_path.empty() && (o.selftest || !ps2n::host::profile::Available()))
@@ -922,8 +1015,22 @@ namespace
 		// forward slashes, so every path is put in the platform's form here.
 		for (std::string* path : {&o.boot_path, &o.bios_path, &o.data_dir, &o.out_path, &o.times_path, &o.log_path, &o.capture_path,
 				 &o.bios_capture_path, &o.trace_path, &o.trace_against_path, &o.sync_path, &o.sync_against_path, &o.frame_path, &o.pad_path,
-				 &o.profile_path, &o.vu_report_path, &o.iop_report_path, &o.vu_programs_path, &o.vu_capture_path, &o.iop_capture_path})
+				 &o.profile_path, &o.vu_report_path, &o.iop_report_path, &o.vu_programs_path, &o.vu_capture_path, &o.iop_capture_path,
+				 &o.record_dir, &o.input_path, &o.memcards_dir, &o.patch_archive})
 			Path::ToNativePath(path);
+
+		if (!o.input_path.empty())
+		{
+			// A session run again: its clock, and as many frames as it had,
+			// unless told otherwise.
+			ps2n::host::session::ReplayInfo info;
+			if (!ps2n::host::session::LoadReplay(o.input_path, &info))
+				return false;
+			if (!o.clock_given && info.clock)
+				o.clock_at = info.clock;
+			if (!frames_given && info.frames)
+				o.max_frames = *info.frames;
+		}
 		return true;
 	}
 
@@ -1182,26 +1289,44 @@ namespace
 
 		si.SetBoolValue("EmuCore", "HostFs", o.host_fs);
 
-		// The console's clock. The core sets it from the host's time of day
-		// when the machine starts, and the IOP's modules read it: two runs
-		// started a minute apart are then not the same machine. So a run that
-		// is not played in a window starts at one fixed time (the one PCSX2
-		// gives its input recordings: 2020-03-04, midnight), unless -clock host.
-		// Someone playing gets the day it is.
-		if (o.clock_fixed)
+		// The console's clock, which the IOP's modules read: two runs started a
+		// minute apart are not the same machine unless it starts at the same
+		// time in both. So a run that is not played in a window starts at one
+		// fixed time (the one PCSX2 gives its input recordings: 2020-03-04,
+		// midnight), unless -clock says otherwise; someone playing gets this
+		// computer's time of day. The host sets it in every case, rather than
+		// leave the time of day to the core, so that a session can write down
+		// the time it started at, and a replay start at it again.
+		if (o.clock_at)
 		{
-			si.SetBoolValue("EmuCore", "ManuallySetRealTimeClock", true);
-			si.SetIntValue("EmuCore", "RtcYear", 20);
-			si.SetIntValue("EmuCore", "RtcMonth", 3);
-			si.SetIntValue("EmuCore", "RtcDay", 4);
-			si.SetIntValue("EmuCore", "RtcHour", 0);
-			si.SetIntValue("EmuCore", "RtcMinute", 0);
-			si.SetIntValue("EmuCore", "RtcSecond", 0);
+			s_clock_used = *o.clock_at;
+		}
+		else if (o.clock_fixed)
+		{
+			s_clock_used = {2020, 3, 4, 0, 0, 0};
 		}
 		else
 		{
-			si.SetBoolValue("EmuCore", "ManuallySetRealTimeClock", false);
+			const std::time_t now = std::time(nullptr);
+			std::tm local = {};
+#ifdef _WIN32
+			localtime_s(&local, &now);
+#else
+			localtime_r(&now, &local);
+#endif
+			s_clock_used = {local.tm_year + 1900, local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min, local.tm_sec};
 		}
+		si.SetBoolValue("EmuCore", "ManuallySetRealTimeClock", true);
+		si.SetIntValue("EmuCore", "RtcYear", s_clock_used[0] - 2000);
+		si.SetIntValue("EmuCore", "RtcMonth", s_clock_used[1]);
+		si.SetIntValue("EmuCore", "RtcDay", s_clock_used[2]);
+		si.SetIntValue("EmuCore", "RtcHour", s_clock_used[3]);
+		si.SetIntValue("EmuCore", "RtcMinute", s_clock_used[4]);
+		si.SetIntValue("EmuCore", "RtcSecond", s_clock_used[5]);
+
+		// The game's patches (ADR 0025): the widescreen group of its patch file,
+		// which the host takes from PCSX2's archive when the game has booted.
+		si.SetBoolValue("EmuCore", "EnableWideScreenPatches", o.patch_widescreen);
 
 		si.SetIntValue("EmuCore/GS", "Renderer", static_cast<int>(o.renderer));
 		si.SetFloatValue("EmuCore/GS", "upscale_multiplier", static_cast<float>(o.upscale));
@@ -1241,15 +1366,21 @@ namespace
 			si.SetBoolValue("EmuCore/GS", "FrameLimitEnable", false);
 			si.SetIntValue("EmuCore/GS", "VsyncEnable", 0);
 
-			// No sound device, no input devices, no memory cards.
+			// No sound device, no input devices, and no memory cards unless a
+			// folder of them is given (-memcards: a session run again has the
+			// cards it began with).
 			si.SetStringValue("SPU2/Output", "Backend", "Null");
 			si.SetBoolValue("InputSources", "SDL", false);
 			si.SetBoolValue("InputSources", "XInput", false);
 			Pad::ClearPortBindings(si, 0);
+			if (!o.memcards_dir.empty())
+				si.SetStringValue("Folders", "MemoryCards", o.memcards_dir.c_str());
 			for (u32 i = 0; i < 2; i++)
 			{
-				si.SetBoolValue("MemoryCards", fmt::format("Slot{}_Enable", i + 1).c_str(), false);
-				si.SetStringValue("MemoryCards", fmt::format("Slot{}_Filename", i + 1).c_str(), "");
+				const std::string name = fmt::format("Mcd{:03}.ps2", i + 1);
+				const bool present = !o.memcards_dir.empty() && FileSystem::FileExists(Path::Combine(o.memcards_dir, name).c_str());
+				si.SetBoolValue("MemoryCards", fmt::format("Slot{}_Enable", i + 1).c_str(), present);
+				si.SetStringValue("MemoryCards", fmt::format("Slot{}_Filename", i + 1).c_str(), present ? name.c_str() : "");
 			}
 		}
 
@@ -1310,6 +1441,12 @@ namespace
 		ps2n::host::RunOnCPUThread([]() { InputManager::ClearBindStateFromSource(InputManager::MakeHostKeyboardKey(0)); }, false);
 	}
 
+	void OnWindowShotRequested(uint32_t number)
+	{
+		if (number != 0)
+			s_shot_requested.store(number);
+	}
+
 	void OnWindowCloseRequested()
 	{
 		s_close_requested.store(true);
@@ -1365,6 +1502,36 @@ namespace
 		s_controller_mapped = true;
 		VMManager::ReloadInputBindings(true);
 		std::fprintf(stderr, "ps2n-host: the first controller has the pad in port 1 (%u inputs), beside the keyboard\n", mapped);
+	}
+
+	// Writes the picture the GS has on display, at the internal resolution,
+	// for a check that asked for it through the window (window::kShotMessage):
+	// shot-<number>.png beside the session's last frame. Any renderer: a
+	// picture Vulkan presents cannot be photographed from the screen here.
+	void WriteShot(u32 number)
+	{
+		if (s_options.renderer == GSRendererType::Null || s_options.frame_path.empty())
+			return;
+		u32 width = 0, height = 0;
+		std::vector<u32> pixels;
+		const std::string path = Path::Combine(Path::GetDirectory(s_options.frame_path), fmt::format("shot-{}.png", number));
+		if (!MTGS::SaveMemorySnapshot(0, 0, false, false, &width, &height, &pixels) || pixels.empty())
+		{
+			std::fprintf(stderr, "ps2n-host: shot %u: nothing on display\n", number);
+			return;
+		}
+		for (u32& pixel : pixels)
+			pixel |= 0xFF000000u;
+		// Written under another name first: the check waits for this one. (The
+		// name given to SaveToFile only chooses the format.)
+		const std::string part = path + ".part";
+		const RGBA8Image image(width, height, pixels.data());
+		std::FILE* file = FileSystem::OpenCFile(part.c_str(), "wb");
+		const bool written = file && image.SaveToFile(path.c_str(), file);
+		if (file)
+			std::fclose(file);
+		if (!written || !FileSystem::RenamePath(part.c_str(), path.c_str()))
+			std::fprintf(stderr, "ps2n-host: cannot write %s\n", path.c_str());
 	}
 
 	// Reads back the frame the GS has on display and fingerprints it, so that
@@ -2188,6 +2355,10 @@ namespace
 				}
 				for (const std::string& line : s_bench_lines)
 					std::fprintf(stderr, "%s\n", line.c_str());
+				for (const std::string& line : ps2n::host::session::Finish(s_frames))
+					std::fprintf(stderr, "%s\n", line.c_str());
+				if (!s_patch_line.empty())
+					std::fprintf(stderr, "%s\n", s_patch_line.c_str());
 				for (const std::string& line : s_frame_lines)
 					std::fprintf(stderr, "%s\n", line.c_str());
 				if (!s_frame_line.empty())
@@ -2354,6 +2525,8 @@ namespace
 
 		if (!InitializeConfig())
 			return EXIT_ERROR;
+		if (!s_options.record_dir.empty() && !ps2n::host::session::StartRecording(s_options.record_dir, s_clock_used))
+			return EXIT_ERROR;
 		if (!s_options.pad_path.empty() && !LoadPadScript(s_options.pad_path))
 			return EXIT_ERROR;
 
@@ -2361,8 +2534,9 @@ namespace
 		// while the machine runs on its own.
 		if (s_options.window)
 		{
-			const ps2n::host::window::Listener listener = {&OnWindowKey, &OnWindowResized, &OnWindowFocusLost, &OnWindowCloseRequested};
-			if (!ps2n::host::window::Create(kWindowTitle, kWindowWidth, kWindowHeight, listener))
+			const ps2n::host::window::Listener listener = {
+				&OnWindowKey, &OnWindowResized, &OnWindowFocusLost, &OnWindowCloseRequested, &OnWindowShotRequested};
+			if (!ps2n::host::window::Create(kWindowTitle, s_options.window_width, s_options.window_height, listener))
 			{
 				std::fputs("ps2n-host: cannot make the window\n", stderr);
 				return EXIT_ERROR;
@@ -2430,10 +2604,50 @@ namespace
 	}
 } // namespace
 
-void ps2n::host::OnGameChanged(std::string_view title)
+namespace
+{
+	// Takes the booted game's patch file out of PCSX2's archive into the folder
+	// where the core looks for patch files (ADR 0025): the core loads it just
+	// after this, and applies the groups asked for. Only that one file is
+	// copied, for this run; the archive stays where it is.
+	void TakePatchFile(std::string_view serial, u32 crc)
+	{
+		const std::string names[2] = {fmt::format("{}_{:08X}.pnach", serial, crc), fmt::format("{:08X}.pnach", crc)};
+		zip_error_t error = {};
+		const auto archive = zip_open_managed(s_options.patch_archive.c_str(), ZIP_RDONLY, &error);
+		if (!archive)
+		{
+			s_patch_line = fmt::format("ps2n-host: patches: cannot open {}", s_options.patch_archive);
+			return;
+		}
+		for (const std::string& name : names)
+		{
+			if (serial.empty() && &name == &names[0])
+				continue;
+			const std::optional<std::string> text = ReadFileInZipToString(archive.get(), name.c_str());
+			if (!text)
+				continue;
+			const std::string path = Path::Combine(EmuFolders::Patches, name);
+			if (!FileSystem::EnsureDirectoryExists(EmuFolders::Patches.c_str(), false) ||
+				!FileSystem::WriteStringToFile(path.c_str(), *text))
+			{
+				s_patch_line = fmt::format("ps2n-host: patches: cannot write {}", path);
+				return;
+			}
+			s_patch_line = fmt::format("ps2n-host: patches: {} taken from {} for this run; asked for: {}", name,
+				s_options.patch_archive, s_options.patch_widescreen ? "the widescreen patch" : "none");
+			return;
+		}
+		s_patch_line = fmt::format("ps2n-host: patches: {} has none for {} {:08X}", s_options.patch_archive, serial, crc);
+	}
+} // namespace
+
+void ps2n::host::OnGameChanged(std::string_view title, std::string_view serial, uint32_t crc)
 {
 	if (s_options.window)
 		window::SetTitle(title.empty() ? std::string(kWindowTitle) : fmt::format("{} - {}", title, kWindowTitle));
+	if (crc != 0 && s_options.patch_widescreen && !s_options.patch_archive.empty())
+		TakePatchFile(serial, crc);
 }
 
 void ps2n::host::OnInputDeviceConnected(std::string_view identifier)
@@ -2467,6 +2681,9 @@ void ps2n::host::OnGuestFrame()
 	{
 		s_frame_marks.emplace_back(s_frames, std::chrono::duration<double>(s_latest_frame_time - s_host_start).count());
 	}
+	// A session being written down, or run again (-record, -input): before
+	// this frame's input is taken in.
+	ps2n::host::session::FrameStart(s_frames);
 	DrainQueue();
 
 	if (s_stop_requested || s_options.selftest)
@@ -2479,6 +2696,9 @@ void ps2n::host::OnGuestFrame()
 		const PadEvent& event = s_pad_events[s_pad_next++];
 		Pad::SetControllerState(0, event.input, event.value);
 	}
+
+	// A session run again: the controller as the session had it from this frame on.
+	ps2n::host::session::ApplyInput(s_frames);
 
 	// What the vector units did during the frame (-vu-report), and the IOP
 	// (-iop-report).
@@ -2517,6 +2737,10 @@ void ps2n::host::OnGuestFrame()
 		s_frames_since_marker++;
 		marker = false;
 	}
+
+	// A check asked for the picture on display (window-check.ps1).
+	if (const u32 shot = s_shot_requested.exchange(0))
+		WriteShot(shot);
 
 	// 0 frames: no limit (someone is playing in a window).
 	const bool frames_done = s_options.max_frames != 0 && s_frames >= s_options.max_frames;

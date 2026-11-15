@@ -109,3 +109,8 @@ How it was read:
   renderer's picture against the software renderer's, input that came
   between two frames), it is still one run, which both sides of a
   comparison get alike.
+
+Built on 2026-11-14 (game log, "G13", "Sessions written down, and run
+again"). To be written down, the console's clock in a window is now set by
+the host, to this computer's time of day, where it had been left to the
+core, which takes the time of day itself.

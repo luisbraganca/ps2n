@@ -11,6 +11,7 @@
 
 #include "window.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <iterator>
@@ -252,6 +253,11 @@ namespace ps2n::host::window
 					ApplyFullscreen(hwnd, wParam != 0);
 					return 0;
 
+				case kShotMessage:
+					if (s_listener.shot_requested)
+						s_listener.shot_requested(static_cast<uint32_t>(wParam));
+					return 0;
+
 				default:
 					break;
 			}
@@ -304,12 +310,42 @@ namespace ps2n::host::window
 		// The size asked for is that of the picture's area on a display at 100%:
 		// scale it for the display the window came up on, and add the frame.
 		const UINT dpi = GetDpiForWindow(hwnd);
-		RECT rect = {0, 0, MulDiv(static_cast<int>(width), static_cast<int>(dpi), 96),
-			MulDiv(static_cast<int>(height), static_cast<int>(dpi), 96)};
+		const int client_width = MulDiv(static_cast<int>(width), static_cast<int>(dpi), 96);
+		const int client_height = MulDiv(static_cast<int>(height), static_cast<int>(dpi), 96);
+		RECT rect = {0, 0, client_width, client_height};
 		AdjustWindowRectExForDpi(&rect, style, FALSE, 0, dpi);
-		SetWindowPos(hwnd, nullptr, 0, 0, rect.right - rect.left, rect.bottom - rect.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+		UINT flags = SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE;
+		int x = 0, y = 0;
+
+		// A window that would not fit on its screen covers the screen instead
+		// (ADR 0025: a picture of 1920 by 1080 on a screen of that size). The
+		// window Alt+Enter goes back to is the largest that fits, at the same
+		// proportions, in the middle of the screen.
+		bool cover = false;
+		MONITORINFO monitor = {sizeof(MONITORINFO)};
+		if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor))
+		{
+			const int work_width = monitor.rcWork.right - monitor.rcWork.left;
+			const int work_height = monitor.rcWork.bottom - monitor.rcWork.top;
+			if (rect.right - rect.left > work_width || rect.bottom - rect.top > work_height)
+			{
+				cover = true;
+				RECT frame = {0, 0, 0, 0};
+				AdjustWindowRectExForDpi(&frame, style, FALSE, 0, dpi);
+				const double scale = std::min(static_cast<double>(work_width - (frame.right - frame.left)) / client_width,
+					static_cast<double>(work_height - (frame.bottom - frame.top)) / client_height);
+				rect = {0, 0, std::max(1, static_cast<int>(client_width * scale)), std::max(1, static_cast<int>(client_height * scale))};
+				AdjustWindowRectExForDpi(&rect, style, FALSE, 0, dpi);
+				x = monitor.rcWork.left + (work_width - (rect.right - rect.left)) / 2;
+				y = monitor.rcWork.top + (work_height - (rect.bottom - rect.top)) / 2;
+				flags &= ~SWP_NOMOVE;
+			}
+		}
+		SetWindowPos(hwnd, nullptr, x, y, rect.right - rect.left, rect.bottom - rect.top, flags);
 
 		s_window.store(hwnd);
+		if (cover)
+			ApplyFullscreen(hwnd, true);
 		ShowWindow(hwnd, SW_SHOWNORMAL);
 		SetForegroundWindow(hwnd);
 		UpdateWindow(hwnd);

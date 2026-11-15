@@ -166,7 +166,7 @@ void Host::OnVMResumed()
 void Host::OnGameChanged(const std::string& title, const std::string& elf_override, const std::string& disc_path,
 	const std::string& disc_serial, u32 disc_crc, u32 current_crc)
 {
-	ps2n::host::OnGameChanged(title);
+	ps2n::host::OnGameChanged(title, disc_serial, current_crc);
 }
 
 void Host::OnPerformanceMetricsUpdated()

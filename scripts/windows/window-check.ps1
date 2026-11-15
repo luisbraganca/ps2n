@@ -8,8 +8,15 @@ game.ps1 -Play with the sound off and drives its window from outside.
 Finds the game's window (its class is PS2NativeGame), then carries out the
 steps it was given, each at a number of seconds after the window appeared:
 
-  "6 shot name.png"    photograph the window into -OutDir (as Windows draws
-                       it, whether or not it is in front)
+  "6 shot name.png"    the picture on display into -OutDir, as the game's
+                       renderer has it (at its internal resolution: the
+                       host writes it when asked, whatever the renderer),
+                       and beside it name-window.png, a photograph of the
+                       window: from the screen when it is in front,
+                       otherwise as Windows draws it. A picture Vulkan
+                       presents comes out white in such a photograph on
+                       this computer; the window's size and title still
+                       show. The output says which way it was taken.
   "8 key K 0.2"        press a key in the window for 0.2 s: a letter, a
                        digit, or Return Backspace Up Down Left Right F11
   "20 close"           close the window, as its close button would
@@ -34,6 +41,15 @@ param(
     [ValidateSet('stock-jit', 'stock-interp', 'ps2n-ee', 'ps2n-static')][string]$Config = 'ps2n-static',
     [string]$Name = 'game',
     [string]$OutDir = '',
+    # The area the picture goes into. A window of this size by default, so that a check does not cover the
+    # screen of whoever is at the computer; '' for the game's own default (1920x1080, full screen where a
+    # window that size does not fit).
+    [string]$WindowSize = '1280x720',
+    # A renderer other than the game's own default (game.ps1 -Renderer): dx12, for example, whose picture
+    # a photograph of the window shows.
+    [string]$Renderer = '',
+    # The game's patches, when not its default (game.ps1 -Patches).
+    [string]$Patches = '',
     # How long the session may take to end after the last step.
     [int]$ExitWait = 60
 )
@@ -59,6 +75,7 @@ public static class Ps2nGameWindow
     [DllImport("user32.dll")] static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr hwnd, System.Text.StringBuilder text, int max);
     [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 
     // Sizes in the display's own pixels, as the game's window counts them.
@@ -70,6 +87,7 @@ public static class Ps2nGameWindow
         RECT c, w; GetClientRect(hwnd, out c); GetWindowRect(hwnd, out w);
         return "the picture's area " + (c.Right - c.Left) + "x" + (c.Bottom - c.Top) + ", the window " + (w.Right - w.Left) + "x" + (w.Bottom - w.Top);
     }
+    public static string LastWay = "";
     public static bool Capture(IntPtr hwnd, string path)
     {
         RECT r; if (!GetWindowRect(hwnd, out r)) return false;
@@ -78,10 +96,21 @@ public static class Ps2nGameWindow
         {
             using (Graphics g = Graphics.FromImage(bmp))
             {
-                IntPtr hdc = g.GetHdc();
-                bool ok = PrintWindow(hwnd, hdc, 2); // what the window shows, a renderer's picture included
-                g.ReleaseHdc(hdc);
-                if (!ok) return false;
+                if (GetForegroundWindow() == hwnd)
+                {
+                    // What is on the screen where the window is: PrintWindow does not see
+                    // a picture Vulkan presents (it comes out white).
+                    g.CopyFromScreen(r.Left, r.Top, 0, 0, new Size(w, h));
+                    LastWay = "from the screen";
+                }
+                else
+                {
+                    IntPtr hdc = g.GetHdc();
+                    bool ok = PrintWindow(hwnd, hdc, 2); // what the window shows, a Direct3D picture included
+                    g.ReleaseHdc(hdc);
+                    if (!ok) return false;
+                    LastWay = "as Windows draws it, the window not being in front";
+                }
             }
             bmp.Save(path, ImageFormat.Png);
         }
@@ -93,6 +122,8 @@ public static class Ps2nGameWindow
         PostMessageW(hwnd, down ? 0x0100u : 0x0101u, new IntPtr(vk), new IntPtr(lp));
     }
     public static void Close(IntPtr hwnd) { PostMessageW(hwnd, 0x0010, IntPtr.Zero, IntPtr.Zero); }
+    // ps2n::host::window::kShotMessage: the host writes shot-<number>.png beside its last frame.
+    public static void AskShot(IntPtr hwnd, int number) { PostMessageW(hwnd, 0x8050, new IntPtr(number), IntPtr.Zero); }
 }
 '@
 [Ps2nGameWindow]::Init()
@@ -109,6 +140,9 @@ $log = Join-Path $OutDir 'session.log'
 $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $root 'scripts\windows\game.ps1'),
     '-Image', (Resolve-Path -LiteralPath $Image).Path, '-Bios', (Resolve-Path -LiteralPath $Bios).Path,
     '-Play', '-Mute', '-Name', $Name, '-Config', $Config)
+if ($WindowSize) { $arguments += @('-WindowSize', $WindowSize) }
+if ($Renderer) { $arguments += @('-Renderer', $Renderer) }
+if ($Patches) { $arguments += @('-Patches', $Patches) }
 $commandLine = ($arguments | ForEach-Object { if ($_ -match '[\s()]') { '"' + $_ + '"' } else { $_ } }) -join ' '
 $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $commandLine -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput $log -RedirectStandardError (Join-Path $OutDir 'session.err')
@@ -129,6 +163,8 @@ if ($hwnd -eq [IntPtr]::Zero) {
 Write-Host ("The window appeared after {0:N1} s: called [{1}], {2}" -f $watch.Elapsed.TotalSeconds, [Ps2nGameWindow]::Title($hwnd), [Ps2nGameWindow]::Size($hwnd))
 
 $failed = $false
+$shots = 0
+$session = Join-Path $root "build\game\$Name\play"
 $watch.Restart()
 foreach ($step in $Steps) {
     $words = $step.Trim() -split '\s+'
@@ -137,10 +173,20 @@ foreach ($step in $Steps) {
     if ($process.HasExited) { Write-Host "The session ended before the step [$step]."; $failed = $true; break }
     switch ($words[1]) {
         'shot' {
-            $ok = [Ps2nGameWindow]::Capture($hwnd, (Join-Path $OutDir $words[2]))
-            if (-not $ok) { $failed = $true }
-            Write-Host ("{0,6:N1} s: photograph {1} {2}; called [{3}], {4}" -f $watch.Elapsed.TotalSeconds, $words[2],
-                $(if ($ok) { 'taken' } else { 'FAILED' }), [Ps2nGameWindow]::Title($hwnd), [Ps2nGameWindow]::Size($hwnd))
+            $shots++
+            $fromHost = Join-Path $session ("shot-{0}.png" -f $shots)
+            Remove-Item -LiteralPath $fromHost -ErrorAction SilentlyContinue
+            [Ps2nGameWindow]::AskShot($hwnd, $shots)
+            $photo = [IO.Path]::GetFileNameWithoutExtension($words[2]) + '-window.png'
+            $ok = [Ps2nGameWindow]::Capture($hwnd, (Join-Path $OutDir $photo))
+            $waited = [Diagnostics.Stopwatch]::StartNew()
+            while (-not (Test-Path -LiteralPath $fromHost) -and $waited.Elapsed.TotalSeconds -lt 10) { Start-Sleep -Milliseconds 100 }
+            $pictureOk = Test-Path -LiteralPath $fromHost
+            if ($pictureOk) { Move-Item -LiteralPath $fromHost -Destination (Join-Path $OutDir $words[2]) -Force }
+            if (-not $ok -or -not $pictureOk) { $failed = $true }
+            Write-Host ("{0,6:N1} s: the picture {1} {2}, the window's photograph {3} {4}; called [{5}], {6}" -f $watch.Elapsed.TotalSeconds,
+                $words[2], $(if ($pictureOk) { 'written by the host' } else { 'NOT WRITTEN' }), $photo,
+                $(if ($ok) { 'taken ' + [Ps2nGameWindow]::LastWay } else { 'FAILED' }), [Ps2nGameWindow]::Title($hwnd), [Ps2nGameWindow]::Size($hwnd))
         }
         'key' {
             $vk = VirtualKey $words[2]

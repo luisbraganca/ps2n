@@ -71,9 +71,14 @@ param(
     [ValidateSet('stock-jit', 'stock-interp', 'ps2n-ee', 'ps2n-static', 'lockstep', 'same-as-stock')][string]$Config = 'ps2n-static',
     [int]$Frames = 900,
     # null (nothing drawn, fastest), sw (PCSX2's software renderer: the picture to compare), vulkan, opengl, dx11, dx12,
-    # auto (the one PCSX2 chooses for this computer). With -Play the default is auto.
+    # auto (the one PCSX2 chooses for this computer). With -Play the default is vulkan.
     [string]$Renderer = 'sw',
+    # The internal resolution of a hardware renderer, a multiple of the console's. With -Play the default is 3
+    # (about 1080p).
     [int]$Upscale = 1,
+    # With -Play: the area the picture goes into, as 1280x720. Left out: 1920x1080, which covers the screen
+    # where a window that size does not fit (ADR 0025).
+    [string]$WindowSize = '',
     # Play the game in a window instead of running it for a number of frames (Windows only).
     [switch]$Play,
     # With -Play: no sound.
@@ -117,6 +122,15 @@ param(
     [int]$FrameEvery = 0,
     # A script of controller input for port 1 (ps2n-host -help has the format; tests\games has some).
     [string]$Pad = '',
+    # A session played in the window, run again without one (step G13): its folder under
+    # build\game\<name>\play\sessions. The run gets the session's controller, clock, memory cards and
+    # NVRAM, and as many frames as it had unless -Frames says otherwise; any configuration, a comparison
+    # included.
+    [string]$Replay = '',
+    # The game's patches to apply (ADR 0025): none, or widescreen. Left out: widescreen with -Play, none
+    # otherwise; a comparison applies them to both of its runs. The game's own patch file is taken from the
+    # archive of the PCSX2 installed on this computer, into the run's data folder.
+    [string]$Patches = '',
     # Wall-clock limit of each run.
     [int]$Seconds = 1800,
     # Names the run's folder.
@@ -150,6 +164,10 @@ $providers = @{
     'same-as-stock' = @('ps2n', 'jit', 'jit', 'on')
 }
 $p = $providers[$Config]
+
+# PCSX2's archive of patches, read where the installed PCSX2 keeps it (ADR 0025).
+$patchArchive = Join-Path ${env:ProgramFiles} 'PCSX2\resources\patches.zip'
+if (-not (Test-Path -LiteralPath $patchArchive)) { $patchArchive = '' }
 
 # The VUs on PS2Native's VU provider: both of them wherever PS2Native's EE
 # provider runs, unless -VuPs2n says otherwise.
@@ -185,17 +203,35 @@ if ($Play) {
         }
     }
 
+    # The session is written down to be run again (-Replay): the host writes the
+    # controller frame by frame into its folder, which first gets the memory
+    # cards and the console's NVRAM as they are now.
+    $record = Join-Path $session ("sessions\" + (Get-Date).ToString('yyyyMMdd-HHmmss'))
+    New-Item -ItemType Directory -Force $record | Out-Null
+    foreach ($card in 'Mcd001.ps2', 'Mcd002.ps2') {
+        $cardPath = Join-Path $session "data\PCSX2\memcards\$card"
+        if (Test-Path -LiteralPath $cardPath) { Copy-Item -LiteralPath $cardPath -Destination $record }
+    }
+    foreach ($extension in '.nvm', '.mec') {
+        $nvram = Join-Path $biosDir ($biosFile.BaseName + $extension)
+        if (Test-Path -LiteralPath $nvram) { Copy-Item -LiteralPath $nvram -Destination $record }
+    }
+
     $hostArgs = @('-bios', (Join-Path $biosDir $biosFile.Name), '-data', (Join-Path $session 'data'),
         '-log', (Join-Path $session 'core.log'), '-out', (Join-Path $session 'guest.txt'), '-frame', (Join-Path $session 'frame.png'),
         '-ee', $p[0], '-iop', $p[1], '-vu', $p[2], '-static', $p[3], '-bios-static', $BiosStatic, '-call-sites', $CallSites, '-image', 'game', '-until', '@@ no such line @@', '-window')
     if ($PSBoundParameters.ContainsKey('Renderer')) { $hostArgs += @('-renderer', $Renderer) }
-    if ($Upscale -ne 1) { $hostArgs += @('-upscale', "$Upscale") }
+    if ($PSBoundParameters.ContainsKey('Upscale')) { $hostArgs += @('-upscale', "$Upscale") }
+    if ($WindowSize) { $hostArgs += @('-window-size', $WindowSize) }
     if ($Mute) { $hostArgs += '-mute' }
     if ($Osd) { $hostArgs += '-osd' }
     if ($Pad) { $hostArgs += @('-pad', (Resolve-Path -LiteralPath $Pad).Path) }
     if ($PSBoundParameters.ContainsKey('Frames')) { $hostArgs += @('-frames', "$Frames") }
     if ($PSBoundParameters.ContainsKey('Seconds')) { $hostArgs += @('-seconds', "$Seconds") }
     if ($FrameEvery -gt 0) { $hostArgs += @('-frame-every', "$FrameEvery") }
+    $hostArgs += @('-record', $record)
+    if ($Patches) { $hostArgs += @('-patches', $Patches) }
+    if ($patchArchive) { $hostArgs += @('-patch-archive', $patchArchive) }
 
     # Someone playing goes where no script has been. What the session had to
     # interpret of the game is written down for the recompiler, as after any
@@ -231,6 +267,7 @@ if ($Play) {
         Where-Object { $_ -match '^ps2n-host:' -and $_ -notmatch '^ps2n-host: frame \d+:' } | ForEach-Object { Write-Host $_ }
     $code = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
+    Write-Host "The session is written down in $record (game.ps1 -Replay runs it again)"
 
     # With -Capture, that goes into the file scripts\windows\build.ps1
     # -GameCapture takes, beside what earlier runs reported.
@@ -276,6 +313,23 @@ $arguments = @(
     "-DFRAMES=$Frames", "-DSECONDS=$Seconds", '-DUNTIL=@@ no such line @@', '-DEXPECT_EXIT=2', '-DWHOLE=1', '-DTIMES=1')
 if ($Renderer -ne 'null') { $arguments += @("-DRENDERER=$Renderer", "-DUPSCALE=$Upscale", "-DFRAME_EVERY=$FrameEvery") }
 if ($Pad) { $arguments += "-DPAD=$(ForCMake (Resolve-Path -LiteralPath $Pad).Path)" }
+if ($Patches) {
+    $arguments += "-DPATCHES=$Patches"
+    if ($patchArchive) { $arguments += "-DPATCH_ARCHIVE=$(ForCMake $patchArchive)" }
+}
+if ($Replay) {
+    if ($Pad) { throw "-Replay has the session's own controller: leave -Pad out." }
+    $replayDir = (Resolve-Path -LiteralPath $Replay).Path
+    $sessionInput = Join-Path $replayDir 'input.txt'
+    if (-not (Test-Path -LiteralPath $sessionInput)) { throw "No session written down in $replayDir (input.txt)." }
+    $arguments += @("-DINPUT=$(ForCMake $sessionInput)", "-DMEMCARDS_FROM=$(ForCMake $replayDir)", "-DNVRAM_FROM=$(ForCMake $replayDir)")
+    if (-not $PSBoundParameters.ContainsKey('Frames')) {
+        $end = Select-String -LiteralPath $sessionInput -Pattern '^end (\d+)' | Select-Object -Last 1
+        if (-not $end) { throw "The session in $replayDir did not end (no 'end' line in input.txt)." }
+        $Frames = [int]$end.Matches[0].Groups[1].Value
+        $arguments = $arguments | ForEach-Object { if ($_ -like '-DFRAMES=*') { "-DFRAMES=$Frames" } else { $_ } }
+    }
+}
 if ($TimeProfile) { $arguments += '-DPROFILE=1' }
 if ($TimeProfile -and $ProfileFrom -gt 0) { $arguments += "-DPROFILE_FROM=$ProfileFrom" }
 if ($VuReport) { $arguments += '-DVU_REPORT=1' }

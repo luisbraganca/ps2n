@@ -17,8 +17,10 @@ namespace ps2n::host
 	void RunOnCPUThread(std::function<void()> function, bool block);
 
 	/// The core has found out which game is running, or that none is (`title`
-	/// is then empty). CPU thread.
-	void OnGameChanged(std::string_view title);
+	/// is then empty): its disc's serial, and the CRC of the executable it has
+	/// booted (0 before it has). CPU thread, just before the core loads the
+	/// game's patches for that executable.
+	void OnGameChanged(std::string_view title, std::string_view serial, uint32_t crc);
 
 	/// The core has opened an input device ("SDL-0" is the first controller).
 	/// CPU thread, possibly while the core holds its settings.

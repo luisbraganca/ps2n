@@ -651,12 +651,15 @@ runs no compiled code, and delegates the FPU.
 ## Comparing two runs
 
 **The same machine.** Two runs can only be the same run if they start from
-the same machine. The core sets the console's clock from the host's time of
-day when the machine starts, and the IOP's modules read it. So the host
-starts every run that is not played in a window at one fixed time
-(`ps2n-host -clock fixed`, the default: 2020-03-04, midnight, the time PCSX2
-gives its input recordings); someone playing gets the day it is (`-clock
-host`, the default with `-window`).
+the same machine. The console's clock is read by the IOP's modules, so the
+host sets it itself when the machine starts: every run that is not played
+in a window at one fixed time (`ps2n-host -clock fixed`, the default:
+2020-03-04, midnight, the time PCSX2 gives its input recordings), and
+someone playing at this computer's time of day (`-clock host`, the default
+with `-window`), which the session writes down. The memory cards and the
+console's NVRAM are part of the machine too: a run without a window has no
+memory card unless it is given copies (`-memcards`), and a fresh NVRAM
+unless the test driver is given one to copy (`NVRAM_FROM`).
 
 **With stock PCSX2: sync points.** The core lets the IOP catch up with the
 EE from its event test, and that moment exists whatever runs the EE.
@@ -728,6 +731,25 @@ two runs that are at the same place at the same time and made the same
 sound print the same fingerprints. The `*/same-as-stock/*` tests and
 `game.ps1 -Config same-as-stock` hold the compiled run to the stock run in
 this too.
+
+**A session played in a window, run again.** What someone plays cannot be
+compared as it is played: its input and its time are live. So a session
+writes down what it takes to run it again (`ps2n-host -record`,
+`host/session_record.h`): the controller in port 1 frame by frame, as
+PCSX2's input recording keeps it (eighteen bytes: the buttons, both sticks,
+the pressure of each button that has one), the clock it started at, and
+every 50 frames a fingerprint of the EE's and the IOP's registers;
+`game.ps1 -Play` puts the memory cards and the NVRAM it began with beside
+that. The core takes input in at a frame boundary and the game reads it
+during the frame that follows, so a run given the same bytes at the same
+boundaries (`ps2n-host -input`, by PCSX2's own `PadData`) is the same
+machine with the same input: `game.ps1 -Replay <session>` runs it in any
+configuration, a comparison with the stock run included, and each run says
+whether it is the session at every fingerprint. It need not be the session
+as it was seen, where a renderer's picture can reach the program (a game
+that reads the GS's memory back): the replay draws with the software
+renderer, the session with a hardware one. Its two sides are the same run
+all the same.
 
 ## A program too large for one file, and more code than its executable shows
 

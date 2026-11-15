@@ -87,6 +87,15 @@
 #   UPSCALE    internal resolution multiplier for a hardware renderer
 #   SETTLE     frames to run on after the program's last line
 #   PAD        a script of controller input for port 1 (ps2n-host -pad)
+#   PATCHES    the game's patches to apply (ps2n-host -patches: widescreen)
+#   PATCH_ARCHIVE  PCSX2's archive of patches to take the game's file from
+#              (ps2n-host -patch-archive)
+#   INPUT      a session played in the window and written down, to run again
+#              (ps2n-host -input): its controller, its clock, its frames
+#   MEMCARDS_FROM  a folder whose Mcd001.ps2 and Mcd002.ps2 every run gets a
+#              copy of, in the slots (ps2n-host -memcards)
+#   NVRAM_FROM a folder whose NVRAM files for the BIOS (<bios>.nvm, .mec)
+#              every run gets a copy of, in place of a fresh NVRAM
 #   FRAME_EVERY  with a renderer that draws: also fingerprint the frame on
 #              display every so many frames, and write each as
 #              frame-<number>.png in the scratch directory
@@ -221,6 +230,15 @@ function(ps2n_fresh_bios result_var)
 	if(linked)
 		set(${result_var} "${WORK_DIR}/bios/${bios_name}" PARENT_SCOPE)
 
+		# A session run again starts from the console's NVRAM as it was then.
+		if(DEFINED NVRAM_FROM AND NOT "${NVRAM_FROM}" STREQUAL "")
+			foreach(extension IN ITEMS nvm mec)
+				if(EXISTS "${NVRAM_FROM}/${bios_stem}.${extension}")
+					file(COPY "${NVRAM_FROM}/${bios_stem}.${extension}" DESTINATION "${WORK_DIR}/bios")
+				endif()
+			endforeach()
+		endif()
+
 		# The optional ROM1, ROM2 and EROM images the core loads from beside the
 		# BIOS image, under either naming the core accepts.
 		file(GLOB siblings LIST_DIRECTORIES false "${bios_dir}/${bios_stem}.*" "${bios_dir}/${bios_name}.*")
@@ -252,11 +270,23 @@ endif()
 # exit_code in the caller's scope and prints what the host reported.
 function(ps2n_run tag)
 	ps2n_fresh_bios(bios_for_run)
+	# Copies of the memory cards a session began with, for this run alone.
+	set(memcards "")
+	if(DEFINED MEMCARDS_FROM AND NOT "${MEMCARDS_FROM}" STREQUAL "")
+		file(REMOVE_RECURSE "${WORK_DIR}/memcards${tag}")
+		file(MAKE_DIRECTORY "${WORK_DIR}/memcards${tag}")
+		file(GLOB cards LIST_DIRECTORIES false "${MEMCARDS_FROM}/Mcd00?.ps2")
+		if(cards)
+			file(COPY ${cards} DESTINATION "${WORK_DIR}/memcards${tag}")
+		endif()
+		set(memcards -memcards "${WORK_DIR}/memcards${tag}")
+	endif()
 	execute_process(
 		COMMAND "${HOST}"
 			-bios "${bios_for_run}"
 			-data "${WORK_DIR}/data${tag}"
 			-log "${WORK_DIR}/core${tag}.log"
+			${memcards}
 			${ARGN}
 		RESULT_VARIABLE result
 		OUTPUT_VARIABLE host_stdout
@@ -365,6 +395,15 @@ if(DEFINED FRAME_EVERY AND NOT "${FRAME_EVERY}" STREQUAL "0")
 endif()
 if(DEFINED PAD AND NOT "${PAD}" STREQUAL "")
 	list(APPEND limits -pad "${PAD}")
+endif()
+if(DEFINED INPUT AND NOT "${INPUT}" STREQUAL "")
+	list(APPEND limits -input "${INPUT}")
+endif()
+if(DEFINED PATCHES AND NOT "${PATCHES}" STREQUAL "")
+	list(APPEND limits -patches ${PATCHES})
+endif()
+if(DEFINED PATCH_ARCHIVE AND NOT "${PATCH_ARCHIVE}" STREQUAL "")
+	list(APPEND limits -patch-archive "${PATCH_ARCHIVE}")
 endif()
 if(DEFINED TIMES AND TIMES)
 	list(APPEND limits -times "${WORK_DIR}/times.txt")

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Accepted; not begun |
+| Status | Accepted; G14 done on 2026-11-14, G15 on 2026-11-15 |
 | Date | 2026-11-14 |
 | Decided by | Maintainer, on the session's recommendations |
 
@@ -86,6 +86,63 @@ The session proposes them; the maintainer may order or cut them otherwise.
 - **G16, the frame-rate patch:** the same for a game's frame-rate patch,
   when there is one, with its speed measured: the game then does more work
   every second.
+
+## Full screen (2026-11-14)
+
+A picture of 1920 by 1080 does not fit in a window on a screen of that
+size, which is the maintainer's: the taskbar and the window's frame take
+some of it. Asked, as it was put: "Your main screen is 1920x1080, so a
+1920x1080 picture only fits full screen. When you start the game, should
+it open full screen (Alt+Enter switches to a window), or in the largest
+window that fits (about 1780x1000)?", with full screen recommended ("On a
+larger screen it opens in a 1920x1080 window. My muted machine checks keep
+using a small window so they don't cover your screen."). The maintainer's
+answer: "Full screen (Recommended)". So a window that would not fit on its
+screen covers the screen instead, and Alt+Enter or F11 gives the largest
+window that fits.
+
+## Where the patches come from (2026-11-15)
+
+Before G15, the session looked by reading only. The PCSX2 installed on the
+maintainer's computer (2.8.2) has an archive of patches with Killzone's
+file in it (`SCES-52004_6624A78C.pnach`): its widescreen patch writes one
+byte of the game's data, a widescreen mode the game has, and asks for a
+16:9 picture; its frame-rate patch ("50/60 FPS", whose note says it "might
+need EE Overclock (130%)") changes an instruction of the game's code and a
+value of its data, conditionally, every frame. The repository PCSX2 makes
+the archive from (`pcsx2_patches`) declares no license.
+
+As it was put: "For the widescreen and frame-rate patches (G15, G16):
+where should PS2Native take PCSX2's patches from? Killzone's are in the
+archive of the PCSX2 2.8.2 installed on this PC. The repository PCSX2
+makes that archive from declares no license.", with reading the installed
+PCSX2's archive in place recommended ("nothing downloaded, nothing copied
+into the project. Where a packaged game gets its patches stays a Phase 4
+question."), against downloading a pinned release of it into the build's
+dependencies. The maintainer's answer: "The installed PCSX2
+(Recommended)".
+
+So the host reads the patches from the installed PCSX2's archive where it
+is, as it reads the BIOS. Where a packaged game gets its patches is left to
+Phase 4.
+
+That could not be done without a copy, and the maintainer was asked again.
+PCSX2 reads patches only from an archive in its own resources folder or
+from loose files in its data folder; a hard link to a file under Program
+Files is refused to a user ("Access is denied"), and a symbolic link needs
+administrator rights or Windows' Developer Mode. As it was put: "PCSX2
+only reads patches from its own resources folder or from loose patch files
+in its data folder, and Windows won't let me link to the installed archive
+without admin rights or Developer Mode. How should the host get Killzone's
+patches from the installed PCSX2?", with copying the game's one file per
+run recommended, against turning on Developer Mode or copying the whole
+archive at build time. The maintainer asked first: "Only devs will need
+developer mode, correct?"; told that only a machine that builds PS2Native
+that way would, never a player's, and that the copy needs it nowhere, the
+answer: "Copy one file per run (Recommended)". So when the game has booted
+the host copies the game's own patch file (774 bytes for Killzone) out of
+the installed archive into the run's data folder, in the build tree, where
+PCSX2 looks for patch files; nothing goes into the repository.
 
 ## Consequences
 

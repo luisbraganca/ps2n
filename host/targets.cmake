@@ -18,6 +18,8 @@ add_executable(ps2n-host
 	"${CMAKE_CURRENT_LIST_DIR}/selftest.h"
 	"${CMAKE_CURRENT_LIST_DIR}/selftest_iop.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/selftest_vu.cpp"
+	"${CMAKE_CURRENT_LIST_DIR}/session_record.cpp"
+	"${CMAKE_CURRENT_LIST_DIR}/session_record.h"
 	"${CMAKE_CURRENT_LIST_DIR}/sync_trace.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/sync_trace.h"
 	"${CMAKE_CURRENT_LIST_DIR}/vu_report.cpp"

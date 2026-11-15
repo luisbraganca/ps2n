@@ -26,8 +26,8 @@ The run files, pictures included, are under the git-ignored build tree.
 | G11 The vector units' micro programs | **Done** (2026-11-14, [ADR 0022](adr/0022-vu-micro-programs-compiled-as-step-g11.md), begun 2026-11-13): measured first, the host watching the core's two VU providers (`ps2n-host -vu-report`). In play VU1's micro memory is rewritten about 40 times a frame, yet all it is given over the level run is 208 distinct pieces of code, 1,750 distinct instruction pairs, written at 5,405 places; PCSX2's VU recompiler makes 6,088 programs of them, and spends about a tenth of play's CPU-thread time starting programs, finding which one memory holds and making new ones. VU0 runs one set of code, written once at boot, started 51.5 million times. The vector units took about a third of play's CPU-thread time. The maintainer's choices with the measurement: VU1's registers held to the stock run at every sync point too, and PS2Native's own VU interpreter before the translator. The interpreter (2026-11-13) follows microVU's analysis of a block, its record of programs and blocks, its instructions and, where results show it, its allocation of host registers. The translator (2026-11-14): what microVU's second pass decides for a block is made once, as a list of steps (the block's plan), the same for the same code wherever the game writes it, and each plan is compiled ahead of time as one C++ function, found at run time by a fingerprint of the plan. Over the level run VU1's 42,173 blocks in 6,088 programs have 589 plans. Blocks go on to each other as microVU's do, and the program at a start or a jump is not looked for where it cannot have changed. After one run and one rebuild every one of the level run's 1.19 billion block runs is compiled code's: none is interpreted, and none runs on PCSX2's VU recompiler. The self-test finds the semantics to be microVU's on every case tried: 20,000 random micro programs, in five settings, give its results, cycle counts and TPC, 1,500 of them with every block compiled. Every test passes (468), PS2Native's configurations now on PS2Native's VU provider. The level run is the stock run at every one of its 93,221,937 sync points, VU0's and VU1's registers included, with the same picture at each of the 1,750 frames compared, and over the first 4,200 frames it is the interpreted run at every one of 47,705,744 event tests, the micro code interpreted there too. Play takes 0.95 times stock PCSX2's time (53.4 s against 56.2 s, three rounds in turn), the whole level run 0.97, from 1.00 and 1.01. Where it stands is in "G11" below. |
 | G12 The IOP's code | **Done** (2026-11-14, [ADR 0023](adr/0023-the-iops-code-compiled-as-step-g12.md)): measured first, the host watching the core's IOP provider (`ps2n-host -iop-report`). Over the level run the IOP runs about 10,600 different blocks of code, 58,000 instructions, nearly all of them formed in the first 250 frames and 17 after the level has loaded; 85% of its cycles pass in stretches that end where its kernel's idle loop is; the host spends 16% of the run inside its provider, most of that not in the IOP's code but around it. The same address holds different code at different times: the IOP is started three times, the last with the game's own modules. The IOP's place and registers are now held to the stock run at every sync point. PS2Native's IOP provider keeps the record of blocks PCSX2's IOP recompiler keeps, and carries a block out by its interpreter or by a function compiled ahead of time: one C++ function for each block as that recompiler formed it, found by a fingerprint of its instructions wherever the IOP's kernel loaded them. After one run and one rebuild every one of the level run's 911 million block runs of IOP code is compiled code's (8,023 blocks): none is interpreted, and none runs on PCSX2's IOP recompiler, whose own table holds no block after the run. The self-test finds the provider to be PCSX2's IOP recompiler on 4,000 random programs, in registers, memory, time and the blocks each holds, 1,500 of them with every block compiled; it found a form on which that recompiler loses a jump's target, which the provider stops at. Every test passes (469). The level run is the stock run at every one of its 93,221,937 sync points, the IOP's place and registers included, once both runs start with the console's clock at the same time (the first comparison found the two reading different times of day), and over the first 4,200 frames it is the interpreted run at every one of 47,705,744 event tests, the IOP's code interpreted there too. Play takes 0.95 times stock PCSX2's time (53.7 s against 56.6 s, three rounds in turn), the whole level run 0.97: what they took with PCSX2's IOP recompiler under the compiled game. No recompiler of PCSX2's for PS2 code now carries out anything in the run into the first level. Where it stands is in "G12" below. |
 | G13 Playing on | **In progress** (2026-11-14, [ADR 0024](adr/0024-further-into-the-game-before-phase-3-ends.md)): the next step, chosen by the maintainer when G12 was done. The maintainer plays on in the window, beyond what the scripts reach; what each session had to interpret, of the game's code, of the micro code and of the IOP's, goes into the captures and is compiled into the next build, which is checked again and reported on. The first session, 2 minutes 48 seconds into the first level on PCSX2's hardware renderer, interpreted none of the game's EE code, 26 blocks of VU1's micro code and 791 blocks of the IOP's, 772 of them in the memory card's modules, which the scripted runs never meet (they have no memory card); all of them are compiled into the build since; every test passes, and the scripted runs are still the stock run and the interpreted run. Where it stands is in "G13" below. |
-| G14 How a game is shown | **Not begun** (2026-11-14, [ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)): at the maintainer's word, the window's defaults: PCSX2's Vulkan renderer, a picture of 1920 by 1080, the game drawn at three times the console's resolution. |
-| G15 PCSX2's patches; widescreen | **Not begun** (2026-11-14, [ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)): PCSX2's patches available to the host, and a game's widescreen patch applied by default when there is one. Where the patches come from is put to the maintainer first. |
+| G14 How a game is shown | **Done** (2026-11-14, [ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)): at the maintainer's word, the window's defaults: PCSX2's Vulkan renderer, the game drawn at three times the console's resolution, a picture of 1920 by 1080, full screen where a window that size does not fit (the maintainer's choice), each still changeable. A check asks the host for the picture on display, which on this computer is the only way to see what Vulkan presents. In the window at the console's pace (49.7 to 49.9 frames a second of 50); every test passes. Where it stands is in "G14" below. |
+| G15 PCSX2's patches; widescreen | **Done** (2026-11-15, [ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)): the game's widescreen patch applied by default in the window, taken from the archive of the PCSX2 installed on this computer (the maintainer's choice; one file copied per run into the run's data folder, since Windows will not let the build link to it). Killzone in 16:9, drawn wide by the game itself. The patch writes data, not code: nothing of the game's code interpreted. Every test passes; a run with the patch is the stock run with it, the FPU's sign of a zero aside, and the interpreted run. Where it stands is in "G15" below. |
 | G16 The frame-rate patch | **Not begun** (2026-11-14, [ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)): a game's frame-rate patch applied by default when there is one, its speed measured. |
 
 ## The steps and their pass criteria
@@ -106,6 +106,9 @@ scripts\windows\game.ps1 -Image $iso -Config stock-jit -Frames 17500 -Renderer n
 scripts\windows\game.ps1 -Image $iso -Play -Name killzone
 # The same under stock PCSX2, to compare by eye and ear (the memory card is shared):
 scripts\windows\game.ps1 -Image $iso -Play -Name killzone -Config stock-jit
+# Every session is written down (build\game\<name>\play\sessions\<time>); run one again, here
+# held to stock PCSX2 at every sync point:
+scripts\windows\game.ps1 -Image $iso -Config same-as-stock -Replay build\game\killzone\play\sessions\<time> -Name replay
 # Playing on (step G13): what the session had to interpret, of the game's code, of the micro
 # code and of the IOP's, is added to the three capture files, and the next build compiles it.
 scripts\windows\game.ps1 -Image $iso -Play -Name killzone -Capture build\game\killzone\capture.toml -VuCapture build\game\killzone\vu-capture.toml -IopCapture build\game\killzone\iop-capture.toml
@@ -3716,6 +3719,138 @@ fraction of what it is now: by itself it takes 38 s, beside the rest of the
 suite it took 48 s at the end of G12, and that time more than 60. It has a
 limit of its own now, 300 s (`tests/tests.cmake`), and every test passes
 (469; the self-test 51 s beside the suite).
+
+### Sessions written down, and run again (2026-11-14)
+
+At the maintainer's word (ADR 0024, "Sessions recorded, to be run again"),
+a session in the window writes down what it takes to run it again, and
+`game.ps1 -Replay <folder>` runs it again without a window, in any
+configuration, a comparison included (`host/session_record.h`; the
+execution model, "A session played in a window, run again"):
+
+- **The controller**, frame by frame, as PCSX2's own input recording takes
+  it (`pcsx2/Recording/PadData.cpp`): eighteen bytes, the buttons, both
+  sticks and the pressure of each button that has one, written down when
+  they change. The core takes input in at a frame boundary and the game
+  reads it during the frame that follows; a replay gives the same bytes
+  back at the same boundary, by the function PCSX2's replays use
+  (`PadData::OverrideActualController`), whatever the keyboard or the
+  controller made of them on the way.
+- **The console's clock.** The host now sets it itself when the machine
+  starts, in a window to this computer's time of day, where it had left
+  that to the core; so the session writes down the second it started at,
+  and a replay starts there (`ps2n-host -clock 2026-11-14T23:47:20`).
+- **The memory cards and the console's NVRAM**, which keeps the console's
+  settings, its language among them, as they were when the session began:
+  `game.ps1 -Play` copies them into the session's folder
+  (`build\game\<name>\play\sessions\<time>`) before the machine starts, and
+  every run of a replay gets copies of its own (`ps2n-host -memcards`; the
+  test driver's `MEMCARDS_FROM` and `NVRAM_FROM`).
+- **A fingerprint of the EE's and the IOP's registers every 50 frames**, so
+  that a replay says whether it is the session, and from which frame it is
+  not.
+
+The first one tried: a check session of 46 seconds in the window, on
+Vulkan at three times the resolution, with the cross button down for 8
+frames to leave the film. Run again as a comparison, on the software
+renderer: both runs, stock PCSX2's and the compiled game's, are the
+session at every one of its 45 fingerprints, and the compiled run is the
+stock run at every one of 12,663,803 sync points, with the same picture at
+the end. Every test passes (469), and the scripted runs are what they
+were: the level run is the stock run at every one of its 93,221,937 sync
+points, the FPU's 964 aside, with the same pictures and the same sound,
+and over the first 4,200 frames the interpreted run at every one of
+47,705,744 event tests (`DBCD0205447FBA7C`).
+
+## G14: how a game is shown (Windows, 2026-11-14)
+
+Step G14 ([ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)):
+the defaults a game is shown with in the window, at the maintainer's word.
+
+- **Vulkan, at three times the console's resolution.** `ps2n-host -window`
+  draws on PCSX2's Vulkan renderer, the game at three times the console's
+  resolution (PCSX2's "about 1080p"), unless `-renderer` and `-upscale` say
+  otherwise (`game.ps1 -Renderer`, `-Upscale`; `game.ps1` now passes
+  `-Upscale` whenever it is given, 1 included).
+- **A picture of 1920 by 1080.** The window's picture area is 1920 by 1080
+  (`ps2n-host -window-size`, `game.ps1 -WindowSize`). A window that would
+  not fit on its screen covers the screen instead, the maintainer's choice
+  when asked ("Full screen"): on the maintainer's screen, which is 1920 by
+  1080, the game opens full screen, and Alt+Enter or F11 gives the largest
+  window that fits at the same proportions. Until a widescreen patch, the
+  console's 4:3 picture is shown in the middle.
+- **Checks on Vulkan.** On this computer a picture Vulkan presents cannot be
+  photographed: `PrintWindow` and a copy of the screen both give white,
+  though the maintainer saw the game in the window ("The game", asked after
+  a session of 20 seconds). So a check's `shot` now asks the host for the
+  picture it has on display (a message to the window,
+  `window::kShotMessage`): the host writes it from the renderer at its
+  internal resolution, 1536 by 1536 at three times, and the check
+  photographs the window beside it for its size and title.
+  `window-check.ps1` opens a window of 1280 by 720 by default, so that a
+  check does not cover the screen of whoever is at the computer;
+  `-WindowSize ''` checks the game's own default.
+
+Measured, in the window on Vulkan at three times the resolution: the film
+and the title screen as the host wrote them; 49.67 to 49.93 frames a second
+over sessions of 46 s where the console shows 50, and 49.36 over one of
+12.5 s that went from full screen to a window; none of the IOP's
+code and none of the micro code interpreted. Full screen, the picture's
+area is 1920 by 1080; after F11, 1765 by 993, in a window of 1781 by 1032
+above the taskbar. Every test passes (469). The scripted runs open no
+window, and are what they were.
+
+## G15: PCSX2's patches, and widescreen (Windows, 2026-11-15)
+
+Step G15 ([ADR 0025](adr/0025-how-a-game-is-shown-and-its-patches.md)):
+a game's widescreen patch applied by default, where PCSX2 has one.
+
+- **Where the patches come from.** The maintainer's choice: the archive of
+  the PCSX2 installed on this computer (2.8.2,
+  `C:\Program Files\PCSX2\resources\patches.zip`). PCSX2 reads patches only
+  from an archive in its own resources folder or from loose files in its
+  data folder, and on this computer a user may link to a file under
+  Program Files neither by a hard link nor, without Developer Mode, by a
+  symbolic one. So, at the maintainer's second answer ("Copy one file per
+  run"), the host takes the game's own patch file out of the archive into
+  the run's data folder when the game has booted (`ps2n-host
+  -patch-archive`), and PCSX2 loads it from there at once. Only that file is
+  copied (774 bytes for Killzone), for that run, into the build tree.
+- **Applied by default in the window**: `ps2n-host -patches widescreen`,
+  the default with `-window` (`-patches none` leaves it out), which is
+  PCSX2's own widescreen setting: the group of the game's patch file named
+  "Widescreen 16:9". Killzone's turns on, by one byte of its data, a
+  widescreen mode the game has, and asks PCSX2 for a picture of 16:9.
+- **In a comparison, on both sides alike**: `game.ps1 -Patches widescreen`
+  gives the patch to both runs (the test driver's `PATCHES` and
+  `PATCH_ARCHIVE`), so that a patched run is held to a patched stock run.
+
+Measured. In the window (muted, a window of 1280 by 720), PCSX2's log has
+"Enabled patch: Widescreen 16:9" and "Setting aspect ratio to 1.7777777 by
+patch request", and the picture fills the 16:9 window: photographed once on
+Direct3D 12, the title drawn wide by the game itself, its letters in their
+proportions, and the intro film, made for 4:3, stretched across, which is
+how PCSX2 shows films when a widescreen patch is on. Nothing of the game's
+code was interpreted: the patch writes data, not code. Every test passes
+(469).
+
+With the patch on both sides, over the level script, the compiled game is
+at the same place at the same time as the stock run at every one of
+94,525,705 sync points, with the same picture at each of the 1,750 frames
+compared and the same sound. Of the registers only the FPU's differ, at
+1,149 sync points, from sync point 57,117,652 on. Written out there
+(`-sync-detail`), the one value that differs is the sign of a zero
+(`$f20`: +0 under stock PCSX2, -0 compiled), the difference PS2Native makes
+on purpose since G4 (`max.s` and `min.s` follow the console), which the
+compiled run made 1,682 times here and 1,523 times without the patch; the
+other sync points were not looked at one by one. Over the first 4,200
+frames with the patch, the compiled game is the interpreted run at every
+one of 47,710,116 event tests (`05586022860BD126`).
+
+Still open here: the intro film is stretched across the 16:9 picture.
+PCSX2 can show a game's films at 4:3 while a widescreen patch is on (its
+setting for the films' aspect ratio); whether a game should is put to the
+maintainer.
 
 ## Open
 
