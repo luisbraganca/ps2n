@@ -968,16 +968,39 @@ void ps2n::ee::blocks::Clear(u32 addr, u32 words)
 	ClearBlocks(addr, words);
 }
 
+u16* ps2n::ee::blocks::ManualCount(const Block& block)
+{
+	// A block that runs a lot puts its page back under write protection, in
+	// the hope that whatever wrote to it will not again.
+	return (block.flags & kCounted) ? &s_manual_page[block.hw_start >> 12] : nullptr;
+}
+
+void ps2n::ee::blocks::DiscardManual(Block& block)
+{
+	// dyna_block_discard
+	s_stats.discarded++;
+	ClearBlocks(block.hw_start, static_cast<u32>(block.words.size()));
+}
+
+void ps2n::ee::blocks::ResetManualPage(Block& block)
+{
+	// dyna_page_reset
+	const u32 inpage_ptr = block.hw_start;
+	s_stats.page_resets++;
+	ClearBlocks(inpage_ptr & ~0xfffu, 0x400);
+	s_manual_counter[inpage_ptr >> 12]++;
+	mmap_MarkCountedRamPage(inpage_ptr);
+}
+
 bool ps2n::ee::blocks::EnterManual(Block& block)
 {
-	const u32 inpage_ptr = block.hw_start;
 	const u32 nominal_size = static_cast<u32>(block.words.size());
 
 	// The words, against what the block was formed from: where they are in
 	// memory was found when it was formed. A block is a few words, so they
 	// are compared here rather than through a call (this runs at every
 	// execution of the block, as the recompiler's own comparison does).
-	const u8* memory = block.host ? block.host : static_cast<const u8*>(PSM(inpage_ptr));
+	const u8* memory = block.host ? block.host : static_cast<const u8*>(PSM(block.hw_start));
 	u32 same = 0;
 	for (; same < nominal_size; same++)
 	{
@@ -988,26 +1011,17 @@ bool ps2n::ee::blocks::EnterManual(Block& block)
 	}
 	if (same != nominal_size)
 	{
-		// dyna_block_discard
-		s_stats.discarded++;
-		ClearBlocks(inpage_ptr, nominal_size);
+		DiscardManual(block);
 		return false;
 	}
 
-	if (block.flags & kCounted)
+	if (u16* count = ManualCount(block))
 	{
-		// A block that runs a lot puts its page back under write protection,
-		// in the hope that whatever wrote to it will not again.
-		u16& count = s_manual_page[inpage_ptr >> 12];
-		const u32 sum = static_cast<u32>(count) + (nominal_size & 0xFFFFu);
-		count = static_cast<u16>(sum);
+		const u32 sum = static_cast<u32>(*count) + (nominal_size & 0xFFFFu);
+		*count = static_cast<u16>(sum);
 		if (sum > 0xFFFFu)
 		{
-			// dyna_page_reset
-			s_stats.page_resets++;
-			ClearBlocks(inpage_ptr & ~0xfffu, 0x400);
-			s_manual_counter[inpage_ptr >> 12]++;
-			mmap_MarkCountedRamPage(inpage_ptr);
+			ResetManualPage(block);
 			return false;
 		}
 	}

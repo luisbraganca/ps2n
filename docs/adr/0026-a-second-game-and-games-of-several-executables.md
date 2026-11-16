@@ -217,8 +217,8 @@ way. Which block is formed, where, and what it counts stay as they were;
 the change is measured on the session, and held to stock PCSX2 and to the
 test suite, in a build with what the session had to interpret.
 
-With that done (the fourth mission 0.42 to 0.53 of the console's time,
-still three times stock PCSX2's), the session recommended trying the
+With that done (the fourth mission 0.48 of the console's time at the
+median, still three times stock PCSX2's), the session recommended trying the
 mission in the window first, and having compiled code compare such a
 block's words itself, as PCSX2's code does, only if it still slowed down.
 The maintainer: "Yes we really need to fix this, how come our compiled
@@ -229,3 +229,13 @@ execution, so that the mission comes near stock PCSX2's time; the rules,
 and so the time counted, stay as they are. (Stock PCSX2 runs the game on
 its recompiler, which compiles a block to machine code when the game first
 runs it, with that comparison inside: compiled code too, made at run time.)
+
+Done the same day (the game log, "G18", "Compiled code checks such a block
+itself"): the image's table names such a block by a record of the
+runtime's, and the label's one call compares the words, counts the
+execution and answers, with no lookup and no frame (`checkedAnswer`). The
+fourth mission takes 0.27 of the console's time at the median, 1.8 times
+stock PCSX2's (from 7.6 at first and 3.2 with the answers kept), still the
+stock run in place and time at every sync point. The comparison inside
+every label's code, which would take the call away, was not made: it
+would cost megabytes of code.

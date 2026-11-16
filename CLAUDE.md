@@ -173,12 +173,15 @@ time; the explosion that slowed the session down, its micro code
 interpreted then, takes 0.46 of the console's time now. In the second
 session, the fourth mission slowed down: it waits in a small loop whose
 page is not write-protected, and compiled code asked the runtime about its
-blocks at every execution. At the maintainer's word ("Fix it") the runtime
-keeps those answers (`Known`): the mission takes 0.42 to 0.53 of the
-console's time, from 1.06 to 1.21, still three times stock PCSX2's, and the
-session run again is the stock run in place and time at every sync point.
-G13 goes on as the maintainer plays further. Phase 4 needs its own
-approval.
+blocks at every execution, 7.6 times stock PCSX2's time. At the
+maintainer's word ("Fix it"; "we really need to fix this") the image's
+table names such a block by a record of the runtime's, and compiled code
+has its words compared at every execution as PCSX2's code does
+(`checkedAnswer`): the mission takes 0.27 of the console's time at the
+median, from 1.13, 1.8 times stock PCSX2's, and the session run again is
+the stock run in place and time at every sync point. The third session
+(the fifth mission) kept the console's pace in the window. G13 goes on as
+the maintainer plays further. Phase 4 needs its own approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the

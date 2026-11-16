@@ -185,6 +185,13 @@ namespace ps2n::ee
 	inline constexpr uint32_t kBlockIdleLoop = 2; // its branch back to its own start skips to the next event
 	inline constexpr uint32_t kBlockEndMask = ~3u;
 
+	// Below this the table holds no such word (no block ends that low). Zero:
+	// nothing is known. Any other number: a block of a page that is not
+	// write-protected, whose words have to be compared with memory at every
+	// execution, as PCSX2's code for the block compares them; the number names
+	// the runtime's record of what to compare (checkedAnswer()).
+	inline constexpr uint32_t kCheckedLimit = 4096;
+
 	// Whether the core has an event to handle; the second form for a caller
 	// that has the cycle count at hand.
 	inline bool eventDue()
@@ -209,14 +216,28 @@ namespace ps2n::ee
 
 	// The same for the function's own code, with the answer returned: what
 	// PS2N_BLOCK_START needs, or zero, and then blockExit holds the value to
-	// return. askAbout() is it for one image in one argument, so that each of
-	// the many places compiled code asks from, a way it seldom takes, hands
-	// over only the leader's index (game log, "G10").
+	// return.
 	uint32_t blockAsk(const ImageInfo& image, uint32_t index);
 	extern uint32_t blockExit;
+
+	// A block of a page that is not write-protected, which the image's table
+	// names by `id` (kCheckedLimit): compares its words with memory and counts
+	// the execution towards protecting the page again, as PCSX2's code for the
+	// block does at every execution, and answers as blockAsk() does. Where
+	// the words have changed, or the page is protected again, the block is
+	// thrown away and what is formed there now answers.
+	uint32_t checkedAnswer(uint32_t id);
+
+	// What PS2N_BLOCK_START calls when the image's table holds no answer:
+	// `entry` is what it holds, zero or the number of a record. One function
+	// for one image, called in two arguments from one place at each label, so
+	// that each of the many places compiled code asks from, a way it seldom
+	// takes, is small (game log, "G10" and "G18").
 	template <const ImageInfo& Image>
-	[[gnu::noinline, gnu::cold]] uint32_t askAbout(uint32_t index)
+	[[gnu::noinline, gnu::cold]] uint32_t askAbout(uint32_t index, uint32_t entry)
 	{
+		if (entry != 0)
+			return checkedAnswer(entry);
 		return blockAsk(Image, index);
 	}
 
@@ -416,17 +437,19 @@ namespace ps2n::ee
 #endif
 
 // At a label, where a block begins: leader `index_` of the image, address
-// `addr_`. `blocks` is the image's table. (What the runtime answers goes
-// through a variable of its own: were `ps2n_end` handed over, it would have
-// to live in memory, and every block would begin by writing it there.)
+// `addr_`. `blocks` is the image's table: the answer, or a number below
+// kCheckedLimit, zero when nothing is known, else that of a block whose words
+// are compared with memory first. (What the runtime answers goes through a
+// variable of its own: were `ps2n_end` handed over, it would have to live in
+// memory, and every block would begin by writing it there.)
 #define PS2N_BLOCK_START(index_, addr_) \
 	do \
 	{ \
 		ps2n_start = (addr_); \
 		ps2n_end = blocks[index_]; \
-		if (ps2n_end == 0) [[unlikely]] \
+		if (ps2n_end < ::ps2n::ee::kCheckedLimit) [[unlikely]] \
 		{ \
-			ps2n_end = ::ps2n::ee::askAbout<image>(index_); \
+			ps2n_end = ::ps2n::ee::askAbout<image>(index_, ps2n_end); \
 			if (ps2n_end == 0) \
 				return ::ps2n::ee::blockExit; \
 			PS2N_TIME(); \

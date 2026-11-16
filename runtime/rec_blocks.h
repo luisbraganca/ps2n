@@ -147,6 +147,16 @@ namespace ps2n::ee::blocks
 	// there next.
 	bool EnterManual(Block& block);
 
+	// Its parts, for compiled code that compares a block's words itself
+	// (ps2n::ee::checkedAnswer): the count the block's page keeps towards
+	// being protected again, when the block counts towards it (else null);
+	// what follows when the words differ (dyna_block_discard); and what
+	// follows when the count runs over (dyna_page_reset). Both of those throw
+	// the block away.
+	uint16_t* ManualCount(const Block& block);
+	void DiscardManual(Block& block);
+	void ResetManualPage(Block& block);
+
 	// A block that is thrown away may be the one being carried out (it may
 	// write to its own page). The recompiler's code for it would run on to the
 	// block's end all the same. So a block thrown away is only no longer found

@@ -4377,10 +4377,12 @@ the IOP's (7,229 runs); compiled in since.
 **Where the time went.** Run again on Vulkan at three times the resolution,
 on the processor's fast cores, both sides are the session at every one of
 its 2,115 fingerprints. Stock PCSX2 takes 408.3 s, PS2Native 939.5 s: up to
-frame 80,000 PS2Native takes 1.0 to 1.2 times stock PCSX2's time, well
-within the console's, but in the fourth mission, from there to the end,
-10.6 to 12.1 s for each 500 frames, 1.06 to 1.21 times the console's own
-time, where stock PCSX2 takes 1.1 to 1.8 s. Profiled from frame 80,500 to
+frame 80,000 PS2Native takes 375.1 s against 325.9, well within the
+console's time throughout, but the fourth mission, from there to the end,
+561.9 s against 79.9. Of each 500 frames there (ten seconds of the
+console's), 11.3 s at the median and up to 12.6, 1.13 and 1.26 times the
+console's own time, 7.6 times stock PCSX2's at the median (here and below
+over the 51 stretches of 500 frames from frame 80,000 to 105,500). Profiled from frame 80,500 to
 84,000: 60% of the CPU thread's time in the runtime (`blockStart` 46.8%,
 `blocks::Find` 6.1%, `EnterManual` 5.4%), 7.1% in the C runtime's `memcmp`
 (filed under `memchr`) and 4.7% in PCSX2's `vtlb_GetPhyPtr`, against 19% in
@@ -4422,9 +4424,9 @@ report says how many answers were kept ones.
 
 Measured on the session run again, as above: 33,221,860,885 of the
 33,234,863,436 answers were kept ones. The whole session takes 611.0 s
-(939.5 before), stock PCSX2 413.4 s beside it; the fourth mission 4.25 to
-5.27 s for each 500 frames, 0.42 to 0.53 of the console's time, stock PCSX2
-1.06 to 1.85 s. No stretch of the session takes PS2Native more than 0.8 of
+(939.5 before), stock PCSX2 413.4 s beside it; the fourth mission 243.7 s
+against stock PCSX2's 80.0, 0.48 of the console's time at the median and at
+most 0.53, 3.2 times stock PCSX2's at the median. No stretch of the session takes PS2Native more than 0.8 of
 the console's time. Both runs are the session at every fingerprint, and
 nothing of the game's EE code, micro code or IOP code is interpreted. Every
 test passes (533). In the fourth mission PS2Native still takes three times
@@ -4441,6 +4443,58 @@ stock run's in VU0's alone, from sync point 247,873,421 on, first at
 `00340444`: where the first session's difference in FBRST began, after
 `ACTION.UK`'s start-up has reset the VUs (not written out register by
 register this time).
+
+### Compiled code checks such a block itself (2026-11-16)
+
+At the maintainer's word ("Yes we really need to fix this, how come our
+compiled code is running slower than interpreted code?", ADR 0026): for a
+block of a page that is not write-protected in a function's own code, the
+image's table holds, in place of the answer, the number of a record of the
+runtime's, below `kCheckedLimit` (no block ends that low). The label's one
+call, `askAbout<image>(index, entry)`, passes it on to `checkedAnswer()`,
+which does what PCSX2's code for the block does and nothing else: compares
+the words with what the block was formed from, counts the execution, and
+gives the answer the record holds, without a frame of its own. Where the
+words have changed or the page is protected again, the block is thrown away
+as before (`DiscardManual()`, `ResetManualPage()`) and the label asks
+again. One place in the tables at a time knows a block, the one zeroed when
+it is thrown away. A block of a variant still asks every time, its answer
+kept (`Known`). A first version made two calls at each label, one for each
+case: the host 15 MB larger. Passing what the table holds as a second
+argument of the one call makes it 2.5 MB larger than before, as fast.
+
+The second session run again on that build (Vulkan, three times the
+resolution, the fast cores), PS2Native beside stock PCSX2: the whole session
+512.2 s against 407.9; up to frame 80,000 365.0 s against 325.6, as
+before; the fourth mission 144.6 s against 79.9 (243.7 with the answers
+kept in the runtime, 561.9 at first), 0.27 of the console's time at the
+median and at most 0.47 (where the mission begins), 1.8 times stock PCSX2's
+time at the median. Both runs are the session at every fingerprint;
+33,231,645,030 of the 33,234,863,436 answers were kept ones, and nothing of
+the game's EE code, micro code or IOP code is interpreted. Every test
+passes (533). Held to stock PCSX2 as above (47 minutes), the compiled run
+is again the stock run in place and time at every one of 507,570,237 sync
+points, with the same picture and sound at each of the 106 frames and
+moments compared, its registers different in VU0's alone, from the same
+sync point at `00340444` on.
+
+What is left in the fourth mission is the call and its return, twice each
+time round the loop, against PCSX2's few comparisons inside its code for
+the block. Putting the comparison into every label's code would take them
+away, at a cost of megabytes. Elsewhere the session takes PS2Native 1.12
+times stock PCSX2's time, without profile-guided optimization, which has
+been trained on Killzone's code only.
+
+### The maintainer's third session (2026-11-16)
+
+On the build with the records and two calls at each label, from the save:
+68,497 frames, 23 minutes, in `ACTION.UK`'s missions. "Mission 5 plays
+well. A couple hiccups but sure". The window kept 49.99 frames a second
+where the console shows 50. The session had to interpret 4 blocks of VU1's
+micro code (218,907 runs) and 2 of the IOP's (3 runs), compiled in since.
+`ACTION.UK` was loaded once; compiled code asked about blocks 11.8 million
+times, against 33.2 billion in the second session, in which it was loaded
+three times.
 
 ## Open
 

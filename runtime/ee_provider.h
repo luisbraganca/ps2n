@@ -163,10 +163,10 @@ namespace ps2n::ee
 		/// was compiled from); times it asked about a timeout loop, which nothing
 		/// runs: its time passes.
 		uint64_t blocks_compiled = 0;
-		/// Of the first, times the answer was one the runtime had kept: about a
-		/// block compiled code cannot keep in its table, and so asks about at
-		/// every execution (one of a page that is not write-protected, whose
-		/// words were still compared then, or one of a variant).
+		/// Of the first, times the answer was one kept from the time before: for
+		/// a block of a page that is not write-protected, whose words were
+		/// compared with memory first (checkedAnswer(), or blockStart() where
+		/// no record was free), and for a block of a variant.
 		uint64_t blocks_compiled_known = 0;
 		uint64_t blocks_interpreted_at_labels = 0;
 		uint64_t timeout_loop_entries = 0;

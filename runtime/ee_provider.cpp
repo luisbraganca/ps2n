@@ -330,6 +330,48 @@ namespace
 		return s_known[(index + body * 0x9E37u) & (kKnownSize - 1)];
 	}
 
+	// A block of a page that is not write-protected, in a function's own code:
+	// the image's table names it by the number of its record here
+	// (ps2n::ee::kCheckedLimit), and compiled code compares the block's words
+	// with memory at every execution itself (ps2n::ee::checkedAnswer), as
+	// PCSX2's code for the block does, without the runtime looking the block up
+	// or deciding about it again. A record is in use for as long as the place
+	// in the table it was given to still holds its number: the place is zeroed
+	// when the block is thrown away (Block::cache), and when its image is put
+	// in use again (Use()).
+	struct Checked
+	{
+		const u8* memory; // where the block's words are in the host's memory
+		const u32* words; // what they were when it was formed (Block::words)
+		u32 count; // how many
+		u32 size; // what an execution adds to its page's count
+		u16* page; // that count, when the block counts towards protecting its page again; else null
+		u32 answer; // what PS2N_BLOCK_START needs
+		u32 index; // the leader of `image` it was asked about at
+		const ImageInfo* image;
+		u32* place; // the place in the table that holds its number
+		Block* block;
+	};
+	Checked s_checked[ps2n::ee::kCheckedLimit];
+	u32 s_checked_next = 1;
+
+	// The number of a record that is not in use, or zero when all are.
+	u32 NewChecked()
+	{
+		for (int round = 0; round < 2; round++)
+		{
+			while (s_checked_next < ps2n::ee::kCheckedLimit)
+			{
+				const u32 id = s_checked_next++;
+				const Checked& c = s_checked[id];
+				if (!c.place || *c.place != id)
+					return id;
+			}
+			s_checked_next = 1;
+		}
+		return 0;
+	}
+
 	// Whether dispatch() fills ps2n::ee::callSites (SetCallSitesEnabled).
 	bool s_call_sites_enabled = true;
 
@@ -1906,6 +1948,49 @@ uint32_t ps2n::ee::blockAsk(const ImageInfo& image, uint32_t index)
 	return block;
 }
 
+namespace
+{
+	// What follows when a record no longer holds, out of checkedAnswer()'s
+	// way so that it needs no frame of its own: the block thrown away, as
+	// PCSX2's code for it throws it away, and what is formed there now asked
+	// about.
+	[[gnu::noinline]] u32 CheckedChanged(Checked& c)
+	{
+		blocks::DiscardManual(*c.block);
+		return ps2n::ee::blockAsk(*c.image, c.index);
+	}
+	[[gnu::noinline]] u32 CheckedPageProtected(Checked& c)
+	{
+		blocks::ResetManualPage(*c.block);
+		return ps2n::ee::blockAsk(*c.image, c.index);
+	}
+} // namespace
+
+uint32_t ps2n::ee::checkedAnswer(uint32_t id)
+{
+	Checked& c = s_checked[id];
+
+	// As blocks::EnterManual() does: the words, against what the block was
+	// formed from; then the execution counted.
+	for (u32 i = 0; i < c.count; i++)
+	{
+		u32 word;
+		std::memcpy(&word, c.memory + i * 4, 4);
+		if (word != c.words[i]) [[unlikely]]
+			return CheckedChanged(c);
+	}
+	if (c.page)
+	{
+		const u32 sum = static_cast<u32>(*c.page) + c.size;
+		*c.page = static_cast<u16>(sum);
+		if (sum > 0xFFFFu) [[unlikely]]
+			return CheckedPageProtected(c);
+	}
+	s_stats.blocks_compiled++;
+	s_stats.blocks_compiled_known++;
+	return c.answer;
+}
+
 uint32_t ps2n::ee::blockStart(const ImageInfo& image, uint32_t index, uint32_t body, uint32_t* out)
 {
 	*out = 0;
@@ -1993,14 +2078,33 @@ uint32_t ps2n::ee::blockStart(const ImageInfo& image, uint32_t index, uint32_t b
 				continue;
 
 			*out = PackBlock(*block);
-			if (body == kBodyFunction && !(block->flags & (blocks::kManual | blocks::kHookMain | blocks::kHookExec)))
+			const bool hooked = (block->flags & (blocks::kHookMain | blocks::kHookExec)) != 0;
+			const bool manual = (block->flags & blocks::kManual) != 0;
+			const bool in_table = body == kBodyFunction && !hooked && *out >= ps2n::ee::kCheckedLimit;
+			u32 checked = 0;
+			u32* const place = &image.blocks[index];
+			// One place at a time knows a block: the one zeroed when it is
+			// thrown away. Another that knew it (of an image over the same
+			// addresses, used before) asks again.
+			if (in_table && block->cache && block->cache != place)
+				*block->cache = 0;
+			if (in_table && !manual)
 			{
 				// From now on the function's label need not ask, until the
 				// block is thrown away.
-				image.blocks[index] = *out;
-				block->cache = &image.blocks[index];
+				*place = *out;
+				block->cache = place;
 			}
-			else if (!(block->flags & (blocks::kHookMain | blocks::kHookExec)))
+			else if (in_table && block->host && (checked = NewChecked()) != 0)
+			{
+				// From now on the function's label compares the block's words
+				// itself, until the block is thrown away.
+				s_checked[checked] = {block->host, block->words.data(), static_cast<u32>(block->words.size()),
+					static_cast<u32>(block->words.size()) & 0xFFFFu, blocks::ManualCount(*block), *out, index, &image, place, block};
+				*place = checked;
+				block->cache = place;
+			}
+			else if (!hooked)
 			{
 				// Its label asks every time: the answer is kept, for as long as
 				// it holds.
