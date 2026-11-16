@@ -22,14 +22,22 @@ ahead-of-time static recompilation. This repository is a reboot of
 - [docs/phase3-report.md](docs/phase3-report.md): what Phase 3 did, how it
   compares with stock PCSX2, what it leaves, and what Phase 4 has to decide
   first.
+- [docs/phase4-proposal.md](docs/phase4-proposal.md): Phase 4's design as
+  the maintainer decided it (ADR 0028), and its steps, P4.1 to P4.7, with
+  their pass criteria.
 
 ## Status
 
 **Phase 3 (the first real game: Killzone, then a second) ran from
 2026-11-11 to 2026-11-16; its report is
 [docs/phase3-report.md](docs/phase3-report.md). Phase 4 (the user
-application) was approved on 2026-11-16 (ADR 0027) and begins with a design
-proposal, which the maintainer decides on before any code is written.**
+application) was approved on 2026-11-16 (ADR 0027), and the maintainer
+decided its design the same day ([docs/phase4-proposal.md](docs/phase4-proposal.md),
+ADR 0028): the wizard brings its own `clang` and `lld`, a game's code is
+compiled on the user's computer into a module that a prebuilt runtime
+loads, a packaged game is a folder, the wizard is Qt 6, Windows first. Its
+steps are P4.1 to P4.7, each with its pass criterion; the first, P4.1,
+measures what game code loaded as a module costs.**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -469,6 +477,23 @@ Decisions:
   Phase 4, the user application, is approved, and begins with a design
   proposal the maintainer decides on before any code is written, first of
   all how a user's computer compiles a game.
+- [ADR 0028](docs/adr/0028-phase-4s-design-a-shipped-compiler-and-game-modules.md):
+  Phase 4's design, at the maintainer's word on 2026-11-16, every
+  recommendation of [docs/phase4-proposal.md](docs/phase4-proposal.md)
+  accepted. A game is compiled on the user's own computer by a `clang` and
+  `lld` the wizard brings; its generated code is freestanding (no PCSX2
+  header, no standard library, the machine state in PS2Native's own
+  structures checked against PCSX2's) and compiled into a module that a
+  prebuilt runtime (PS2Native's runtime and PCSX2's core) loads, the BIOS's
+  code a module of its own. A packaged game is a folder, the disc and BIOS
+  images read in place. New code a player meets is compiled by the game in
+  the background, outside its process, for its next start, the wizard's
+  recompile first. The wizard is Qt 6. Patches come from an installed
+  PCSX2's archive or its release fetched at the user's word, never shipped.
+  No profile is trained for the first version (1.1 to 1.2 times stock
+  PCSX2's time), speed later. Windows first, the design portable. The
+  steps P4.1 to P4.7 in the proposal's order, beginning with what the
+  module costs.
 
 ## Layout, build and test
 
@@ -511,7 +536,8 @@ tests/games/              controller scripts for runs of a game (button presses 
 scripts/windows, linux    build and test entry points
 assets/                   branding/ (the logo, the icons, the colours; its README says which to use where) and
                           ps2n.rc (the icon of the Windows executables)
-docs/                     brief, assessment, decisions (adr/), proof-of-concept log, game log, Phase 3 report; and the website,
+docs/                     brief, assessment, decisions (adr/), proof-of-concept log, game log, Phase 3 report, Phase 4
+                          proposal; and the website,
                           which GitHub Pages serves from this folder: index.html, 404.html, .nojekyll, site/
                           (site/README.md says what belongs to it and where each of its numbers comes from)
 build/, deps/             build trees and downloaded dependency packages; git-ignored
