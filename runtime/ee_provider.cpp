@@ -303,6 +303,33 @@ namespace
 	constexpr u8 kBodyNone = blocks::kBodyNone;
 	constexpr u8 kBodyUnknown = blocks::kBodyUnknown;
 
+	// What blockStart() last told compiled code it could run, about a block it
+	// cannot keep in its image's table and so asks about at every execution:
+	// one of a page that is not write-protected, whose words are compared at
+	// every execution, and one of a variant of a function. The answer holds for
+	// as long as no block has been formed or thrown away (blocks::epoch, which
+	// starts at one, so that an empty place never matches) and the images in use
+	// and whether compiled code runs are what they were (FlushCache() empties
+	// these). What it saves is looking the block up and deciding about it again,
+	// which, at every execution of a small block, took several times the
+	// block's own time.
+	struct Known
+	{
+		const ImageInfo* image;
+		u64 epoch;
+		Block* block;
+		u32 index;
+		u32 body;
+		u32 answer;
+	};
+	constexpr u32 kKnownSize = 1u << 10;
+	Known s_known[kKnownSize];
+
+	__fi Known& KnownPlace(u32 index, u32 body)
+	{
+		return s_known[(index + body * 0x9E37u) & (kKnownSize - 1)];
+	}
+
 	// Whether dispatch() fills ps2n::ee::callSites (SetCallSitesEnabled).
 	bool s_call_sites_enabled = true;
 
@@ -329,6 +356,8 @@ namespace
 	{
 		for (CacheEntry& e : s_cache)
 			e = {0xFFFFFFFFu, -1, nullptr};
+		for (Known& k : s_known)
+			k = {};
 		FlushCallSites();
 	}
 
@@ -1882,6 +1911,25 @@ uint32_t ps2n::ee::blockStart(const ImageInfo& image, uint32_t index, uint32_t b
 	*out = 0;
 	const u32 addr = image.leaders[index];
 
+	// Asked about before, with nothing changed since: the same block, the same
+	// body, compiled code still able to run it. What is left to do is what the
+	// recompiler's code for it does at every execution, for a block of a page
+	// that is not write-protected (Known).
+	Known& known = KnownPlace(index, body);
+	if (known.epoch == blocks::epoch && known.image == &image && known.index == index && known.body == body && s_dispatching) [[likely]]
+	{
+		cpuRegs.pc = addr;
+		if (!(known.block->flags & blocks::kManual) || blocks::EnterManual(*known.block))
+		{
+			*out = known.answer;
+			s_stats.blocks_compiled++;
+			s_stats.blocks_compiled_known++;
+			return addr;
+		}
+		// Thrown away: its words changed, or its page is protected again. As
+		// below, what is formed there now is what runs.
+	}
+
 	for (;;)
 	{
 		cpuRegs.pc = addr;
@@ -1951,6 +1999,12 @@ uint32_t ps2n::ee::blockStart(const ImageInfo& image, uint32_t index, uint32_t b
 				// block is thrown away.
 				image.blocks[index] = *out;
 				block->cache = &image.blocks[index];
+			}
+			else if (!(block->flags & (blocks::kHookMain | blocks::kHookExec)))
+			{
+				// Its label asks every time: the answer is kept, for as long as
+				// it holds.
+				known = {&image, blocks::epoch, block, index, body, *out};
 			}
 			s_stats.blocks_compiled++;
 			return addr;

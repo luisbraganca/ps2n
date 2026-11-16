@@ -551,6 +551,7 @@ namespace
 				block.words.resize(nominal_size);
 				for (u32 i = 0; i < nominal_size; i++)
 					ReadCode(inpage_ptr + i * 4, &block.words[i]);
+				block.host = static_cast<const u8*>(PSM(inpage_ptr));
 				if (!contains_thread_stack && s_manual_counter[inpage_ptr >> 12] <= 3)
 					block.flags |= kCounted;
 				s_stats.manual++;
@@ -972,8 +973,20 @@ bool ps2n::ee::blocks::EnterManual(Block& block)
 	const u32 inpage_ptr = block.hw_start;
 	const u32 nominal_size = static_cast<u32>(block.words.size());
 
-	// The words, against what the block was formed from.
-	if (std::memcmp(block.words.data(), PSM(inpage_ptr), nominal_size * 4) != 0)
+	// The words, against what the block was formed from: where they are in
+	// memory was found when it was formed. A block is a few words, so they
+	// are compared here rather than through a call (this runs at every
+	// execution of the block, as the recompiler's own comparison does).
+	const u8* memory = block.host ? block.host : static_cast<const u8*>(PSM(inpage_ptr));
+	u32 same = 0;
+	for (; same < nominal_size; same++)
+	{
+		u32 word;
+		std::memcpy(&word, memory + same * 4, 4);
+		if (word != block.words[same])
+			break;
+	}
+	if (same != nominal_size)
 	{
 		// dyna_block_discard
 		s_stats.discarded++;

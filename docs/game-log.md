@@ -4363,6 +4363,85 @@ the console's). The old project's notes put its own slowdown in the same
 race, "when the limo came" and "at the explosion". Whether the window keeps
 the console's pace there now is the next session's to show.
 
+### The maintainer's second session (2026-11-16)
+
+The maintainer played on from the save, on that build: 105,784 frames, 37
+minutes, the second mission to the fourth. "The explosion is now acceptable
+yes"; and "The 4th mission had a general slowdown". The window kept 48.05
+frames a second on average, 85 seconds behind the console over the session.
+The session had almost nothing to interpret: 30 block starts of
+`ACTION.UK`'s and 192 of `DRIVING.ELF`'s (1.2 million instructions in all),
+100 blocks of VU1's micro code (17.5 million of 6 billion block runs), 41 of
+the IOP's (7,229 runs); compiled in since.
+
+**Where the time went.** Run again on Vulkan at three times the resolution,
+on the processor's fast cores, both sides are the session at every one of
+its 2,115 fingerprints. Stock PCSX2 takes 408.3 s, PS2Native 939.5 s: up to
+frame 80,000 PS2Native takes 1.0 to 1.2 times stock PCSX2's time, well
+within the console's, but in the fourth mission, from there to the end,
+10.6 to 12.1 s for each 500 frames, 1.06 to 1.21 times the console's own
+time, where stock PCSX2 takes 1.1 to 1.8 s. Profiled from frame 80,500 to
+84,000: 60% of the CPU thread's time in the runtime (`blockStart` 46.8%,
+`blocks::Find` 6.1%, `EnterManual` 5.4%), 7.1% in the C runtime's `memcmp`
+(filed under `memchr`) and 4.7% in PCSX2's `vtlb_GetPhyPtr`, against 19% in
+the game's code, half of that in one function of `ACTION.UK`'s. At
+`0012A030` it waits for a word of the scratchpad to clear, with a count of
+five million to give up at:
+
+```
+0012A030  beqz $v1, 0x0012a04c
+0012A034  nop
+0012A038  lw $v0, 0($a0)          ; 70003F00
+0012A03C  bnezl $v0, 0x0012a030
+0012A040  addiu $v1, $v1, -1
+```
+
+Its page is not write-protected. A page of code the EE has written to is
+left so by PCSX2's recompiler, for good once it has been given another
+chance under protection more than three times, and a block formed in it
+compares its words with memory every time it runs (rule 12 of the execution
+model). PCSX2's code for the block makes that comparison itself, a few
+instructions. PS2Native's compiled code cannot keep the runtime's answer
+about such a block in its table, so its label asked the runtime every time,
+and the runtime looked the block up and decided about it again before
+comparing: 33.2 billion times in the session, against 36 million in the
+first.
+
+**The answer kept** ([ADR 0026](adr/0026-a-second-game-and-games-of-several-executables.md),
+"After the maintainer's second session", the maintainer's "Fix it"). The
+runtime keeps what it last told compiled code about a block it asks about at
+every execution, a block of a page that is not write-protected or one of a
+function's variant, for as long as no block has been formed or thrown away
+since (`blocks::epoch`) and the images in use are the same (`Known` in
+`runtime/ee_provider.cpp`). What is left at each execution is what PCSX2's
+code for the block does: its words compared with memory, now from where
+they are in the host's memory, found when the block was formed, without
+PCSX2's lookup or a call to `memcmp`, and the execution counted. Which
+blocks are formed, where, and what they count are as before. The host's
+report says how many answers were kept ones.
+
+Measured on the session run again, as above: 33,221,860,885 of the
+33,234,863,436 answers were kept ones. The whole session takes 611.0 s
+(939.5 before), stock PCSX2 413.4 s beside it; the fourth mission 4.25 to
+5.27 s for each 500 frames, 0.42 to 0.53 of the console's time, stock PCSX2
+1.06 to 1.85 s. No stretch of the session takes PS2Native more than 0.8 of
+the console's time. Both runs are the session at every fingerprint, and
+nothing of the game's EE code, micro code or IOP code is interpreted. Every
+test passes (533). In the fourth mission PS2Native still takes three times
+stock PCSX2's time: each time round the loop still calls the runtime twice,
+where PCSX2's code compares the words in the block itself.
+
+Held to stock PCSX2 (`-Config same-as-stock`, the session run again on both
+sides on Vulkan at three times the resolution, which follows the session
+where the software renderer does not; 48 minutes), the compiled run is the
+stock run in place and time at every one of 507,570,237 sync points, with
+the same picture at each of the 106 frames compared and the sound hardware
+in the same state at each of the 106 moments. Its registers differ from the
+stock run's in VU0's alone, from sync point 247,873,421 on, first at
+`00340444`: where the first session's difference in FBRST began, after
+`ACTION.UK`'s start-up has reset the VUs (not written out register by
+register this time).
+
 ## Open
 
 - **What is left of VU0 in the game's EE code.** Since G7 its instructions

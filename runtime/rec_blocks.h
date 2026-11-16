@@ -102,6 +102,8 @@ namespace ps2n::ee::blocks
 		uint32_t* cache = nullptr; // where compiled code keeps what it knows of the block; zeroed when the block goes
 		std::vector<Step> steps;
 		std::vector<uint32_t> words; // of a manual block: [start, nominal_end) as it was when formed
+		const uint8_t* host = nullptr; // of a manual block: where those words are in the host's memory, which does
+		                               // not move while the machine runs (PSM() of its physical address)
 	};
 
 	// What became of the blocks, for the host's report.

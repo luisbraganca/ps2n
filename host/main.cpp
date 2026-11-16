@@ -1744,12 +1744,13 @@ namespace
 		{
 			std::fprintf(stderr,
 				"ps2n-host: compiled code of %s: %s; %llu dispatcher entries; blocks compared with what was compiled %llu, found to be"
-				" code nothing was compiled from %llu; times compiled code was told to run a block %llu, times the interpreter"
-				" carried one out at a label instead %llu, times it was a timeout loop's turn %llu; calls passed on to a variant"
-				" %llu; frames abandoned: %llu for another executable, %llu for stack depth; blocks finished by the interpreter"
-				" %llu\n",
+				" code nothing was compiled from %llu; times compiled code was told to run a block %llu (%llu of them with an answer"
+				" kept from the time before), times the interpreter carried one out at a label instead %llu, times it was a timeout"
+				" loop's turn %llu; calls passed on to a variant %llu; frames abandoned: %llu for another executable, %llu for stack"
+				" depth; blocks finished by the interpreter %llu\n",
 				stats.image->name, s_options.static_code ? "in use" : "switched off", static_cast<ull>(stats.static_entries),
 				static_cast<ull>(stats.blocks_checked), static_cast<ull>(stats.blocks_unknown), static_cast<ull>(stats.blocks_compiled),
+				static_cast<ull>(stats.blocks_compiled_known),
 				static_cast<ull>(stats.blocks_interpreted_at_labels), static_cast<ull>(stats.timeout_loop_entries),
 				static_cast<ull>(stats.redirected), static_cast<ull>(stats.forced_unwinds), static_cast<ull>(stats.stack_unwinds),
 				static_cast<ull>(stats.left));

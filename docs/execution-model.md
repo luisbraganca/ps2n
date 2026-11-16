@@ -233,7 +233,18 @@ What the generated code does with them:
   the answer, until the block is thrown away. That way is taken seldom and
   written at every label, so it is one call with the leader's index alone
   (`askAbout<image>()`, `blockAsk()`), whose answer comes back in a
-  register (game log, "G10").
+  register (game log, "G10"). The table cannot hold the answer about a block
+  of a page that is not write-protected, which compares its words with
+  memory at every execution (rule 12), nor about one of a function's
+  variant: their labels ask every time. The runtime keeps its last answer
+  about such a block (`Known`) for as long as no block has been formed or
+  thrown away since (`blocks::epoch`) and the images in use are the same,
+  so that what it does at each execution is what PCSX2's code for the block
+  does: compare the words, from where they are in the host's memory, and
+  count the execution (`EnterManual()`). Before, it looked the block up and
+  decided about it again every time, which, at a small wait loop, made
+  Agent Under Fire's fourth mission take six to ten times stock PCSX2's
+  time (game log, "G18", "The maintainer's second session").
 - **Reaching a label from the instruction before it**, the function compares
   the label's address with `ps2n_end`. If they differ, the block goes on
   through the label. If they are equal the block was cut short there

@@ -185,3 +185,47 @@ The maintainer: "run the compiled game so I can test it (load the same
 memory card please)". Read as: the maintainer plays on now, in the window,
 on the same memory card, the save on it; what the session meets is compiled
 after it, as in G13.
+
+## After the maintainer's second session
+
+On 2026-11-16 the maintainer played on from the save: 105,784 frames, 37
+minutes, the second mission to the fourth. "The explosion is now acceptable
+yes"; and "The 4th mission had a general slowdown". The session had almost
+nothing to interpret, and the window kept 48.05 frames a second on average.
+Run again on the processor's fast cores, the fourth mission takes PS2Native
+1.06 to 1.21 times the console's time and stock PCSX2 0.11 to 0.18: it waits
+in a small loop of `ACTION.UK`'s (at `0012A030`, a word of the scratchpad
+polled with a count to give up at) whose page is not write-protected, where
+PCSX2's recompiler, and PS2Native after it, compares a block's words with
+memory at every execution. PCSX2's code for the block does that with a few
+comparisons of its own; PS2Native's compiled code asked the runtime, which
+looked the block up and decided about it again every time: three quarters of
+the mission's time (the game log, "G18").
+
+Put as: "Fix it now (recommended). I'd make the check as cheap as stock's
+while keeping exactly the same rules", the time counted as before so that
+runs stay the stock run, measured on the fourth mission and held to stock
+PCSX2, against playing on as it is. The maintainer: "Fix it".
+
+How it was read: what the runtime tells compiled code about a block that
+compiled code cannot keep in its table, and so asks about at every
+execution, is kept for as long as it holds, so that what is left at each
+execution is what PCSX2's code for the block does: for a block of a page
+that is not write-protected, its words compared and the execution counted.
+The same goes for the blocks of a function's variant, which ask the same
+way. Which block is formed, where, and what it counts stay as they were;
+the change is measured on the session, and held to stock PCSX2 and to the
+test suite, in a build with what the session had to interpret.
+
+With that done (the fourth mission 0.42 to 0.53 of the console's time,
+still three times stock PCSX2's), the session recommended trying the
+mission in the window first, and having compiled code compare such a
+block's words itself, as PCSX2's code does, only if it still slowed down.
+The maintainer: "Yes we really need to fix this, how come our compiled
+code is running slower than interpreted code? That doesn't make sense in
+any world." How it was read: the comparison is to be made where PCSX2 makes
+it, in the block's own code, without a call into the runtime at every
+execution, so that the mission comes near stock PCSX2's time; the rules,
+and so the time counted, stay as they are. (Stock PCSX2 runs the game on
+its recompiler, which compiles a block to machine code when the game first
+runs it, with that comparison inside: compiled code too, made at run time.)

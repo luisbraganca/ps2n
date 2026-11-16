@@ -170,8 +170,15 @@ what the session had to interpret is compiled in since, and the session
 run again is the stock run in place and time at every sync point (VU0's
 FBRST aside, where PS2Native follows the console) and takes 1.13 times its
 time; the explosion that slowed the session down, its micro code
-interpreted then, takes 0.46 of the console's time now. G13 goes on as the
-maintainer plays further. Phase 4 needs its own approval.
+interpreted then, takes 0.46 of the console's time now. In the second
+session, the fourth mission slowed down: it waits in a small loop whose
+page is not write-protected, and compiled code asked the runtime about its
+blocks at every execution. At the maintainer's word ("Fix it") the runtime
+keeps those answers (`Known`): the mission takes 0.42 to 0.53 of the
+console's time, from 1.06 to 1.21, still three times stock PCSX2's, and the
+session run again is the stock run in place and time at every sync point.
+G13 goes on as the maintainer plays further. Phase 4 needs its own
+approval.
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
