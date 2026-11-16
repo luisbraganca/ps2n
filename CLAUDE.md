@@ -19,11 +19,18 @@ ahead-of-time static recompilation. This repository is a reboot of
   as PCSX2's EE recompiler counts it, by the blocks it would have formed) is
   a contract between the two. Its last two sections are the same for the
   vector units' micro programs and for the I/O processor's code.
+- [docs/phase3-report.md](docs/phase3-report.md): what Phase 3 did, how it
+  compares with stock PCSX2, what it leaves, and what Phase 4 has to decide
+  first.
 
 ## Status
 
-**Phase 3 (the first real game: Killzone) was approved on 2026-11-11 and is
-in progress.** [docs/game-log.md](docs/game-log.md) has its steps, their pass
+**Phase 3 (the first real game: Killzone, then a second) ran from
+2026-11-11 to 2026-11-16; its report is
+[docs/phase3-report.md](docs/phase3-report.md). Phase 4 (the user
+application) was approved on 2026-11-16 (ADR 0027) and begins with a design
+proposal, which the maintainer decides on before any code is written.**
+What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
 level, the maintainer had played it, and the compiled game took 1.35 times
@@ -181,7 +188,13 @@ has its words compared at every execution as PCSX2's code does
 median, from 1.13, 1.8 times stock PCSX2's, and the session run again is
 the stock run in place and time at every sync point. The third session
 (the fifth mission) kept the console's pace in the window. G13 goes on as
-the maintainer plays further. Phase 4 needs its own approval.
+the maintainer plays further. Asked what next, the session recommended
+closing Phase 3 and going on to Phase 4; at the maintainer's "Yes" it wrote
+the Phase 3 report ([docs/phase3-report.md](docs/phase3-report.md)):
+compatibility, the comparisons with stock PCSX2, visual issues,
+performance, regressions, limitations, and what Phase 4 has to decide
+first. At the maintainer's word ("1. Yes"), Phase 3 ended there and
+Phase 4 began (ADR 0027).
 
 Phase 2 (proof of concept) is done on Windows; its Linux step (P5) is
 deferred by the maintainer. Its steps and criteria are in section 14 of the
@@ -450,6 +463,12 @@ Decisions:
   (2026-11-16, "Ok let's leave them"): artifacts of PCSX2's renderer that
   stock PCSX2 shows too are left to PCSX2; a setting of PCSX2's own that
   removes them is put to the maintainer when one is found.
+- [ADR 0027](docs/adr/0027-phase-3-ends-phase-4-begins-with-a-design-proposal.md):
+  Phase 3 ends on 2026-11-16 with its report
+  ([docs/phase3-report.md](docs/phase3-report.md)), and G13 with it.
+  Phase 4, the user application, is approved, and begins with a design
+  proposal the maintainer decides on before any code is written, first of
+  all how a user's computer compiles a game.
 
 ## Layout, build and test
 
@@ -492,7 +511,7 @@ tests/games/              controller scripts for runs of a game (button presses 
 scripts/windows, linux    build and test entry points
 assets/                   branding/ (the logo, the icons, the colours; its README says which to use where) and
                           ps2n.rc (the icon of the Windows executables)
-docs/                     brief, assessment, decisions (adr/), proof-of-concept log, game log; and the website,
+docs/                     brief, assessment, decisions (adr/), proof-of-concept log, game log, Phase 3 report; and the website,
                           which GitHub Pages serves from this folder: index.html, 404.html, .nojekyll, site/
                           (site/README.md says what belongs to it and where each of its numbers comes from)
 build/, deps/             build trees and downloaded dependency packages; git-ignored

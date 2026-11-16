@@ -54,7 +54,7 @@ page.
 
 | On the page | From |
 |---|---|
-| The phases and their states | `CLAUDE.md`, "Status" |
+| The phases and their states | `CLAUDE.md`, "Status"; Phase 3's end and Phase 4's start, [ADR 0027](../adr/0027-phase-3-ends-phase-4-begins-with-a-design-proposal.md) |
 | Steps G0 to G18 and their states | [game-log.md](../game-log.md), the table at the top |
 | 1,003,452 instructions, 22,668 functions | game-log.md, "What is on the disc" |
 | 1.8 s, 152.4 MB, 119 s | game-log.md, "G2" |
@@ -82,6 +82,8 @@ page.
 | G16: the frame-rate patch applied by default; 41 new pictures a second in the first level where 25; the console's pace in the window; the code the patch changes compiled ahead of time; 1.00 times stock PCSX2's time with the same patch | game-log.md, "G16" |
 | G17: the EE overclock a patch asks for applied with it, time counted as PCSX2 counts it at that setting; 46 new pictures a second in the first level where 41; still the stock run; 1.00 times stock PCSX2's time with the same setting | game-log.md, "G17" |
 | G18: Agent Under Fire, four programs that load one another, all compiled, the one in memory told by its code; nothing interpreted into its first mission; still the stock run; the console's pace in the window | game-log.md, "G18" |
+| G18: the maintainer's first five missions; the fourth mission's wait loop, 7.6 and then 1.8 times stock PCSX2's time, 0.27 of the console's | game-log.md, "G18", "The maintainer's second session" and "Compiled code checks such a block itself" |
+| G13: ended with the phase, Killzone into its first level and Agent Under Fire's first five missions, the sessions run again still the stock run | game-log.md, the table at the top (G13) and "G18" |
 | The longer run: "the second processor's place and registers compared too since 2026-11-14" | game-log.md, "G12", "The IOP's place and registers held to the stock run" and "Where G12 stands" |
 | 40 of 55, 39, 38, and "on no line" | [ADR 0005](../adr/0005-never-further-from-the-console-than-pcsx2.md) |
 | 204 instructions, 4,077,475 and 36,976,118 cases | [poc-log.md](../poc-log.md), "Increment 5" |
