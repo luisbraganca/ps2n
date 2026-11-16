@@ -101,7 +101,7 @@ namespace ps2n::vu
 
 	// The GIF transfer of an XGKICK: PCSX2's own function for it, as microVU
 	// calls it (runtime/vu_interp.cpp).
-	void Xgkick(uint32_t address);
+	PS2N_API void Xgkick(uint32_t address);
 
 	// What the analysis and the settings decided for an instruction, in a
 	// step's "mode" operand.

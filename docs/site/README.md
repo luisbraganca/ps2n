@@ -55,6 +55,7 @@ page.
 | On the page | From |
 |---|---|
 | The phases and their states | `CLAUDE.md`, "Status"; Phase 3's end and Phase 4's start, [ADR 0027](../adr/0027-phase-3-ends-phase-4-begins-with-a-design-proposal.md); Phase 4's design, [ADR 0028](../adr/0028-phase-4s-design-a-shipped-compiler-and-game-modules.md) |
+| Phase 4's first step: a game's code as a module costs no time that shows, Agent Under Fire as long as built in, every test passing | [app-log.md](../app-log.md), "P4.1" |
 | Steps G0 to G18 and their states | [game-log.md](../game-log.md), the table at the top |
 | 1,003,452 instructions, 22,668 functions | game-log.md, "What is on the disc" |
 | 1.8 s, 152.4 MB, 119 s | game-log.md, "G2" |

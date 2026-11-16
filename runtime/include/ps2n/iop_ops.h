@@ -16,6 +16,7 @@
 // (`iopMem`, and the core's functions for everything that is not RAM).
 #pragma once
 
+#include "ps2n/module.h"
 #include "ps2n/r3000a.h"
 
 #include "IopBios.h"
@@ -90,14 +91,14 @@ namespace ps2n::iop
 		uint64_t importsDone = 0; // of them, those the function did itself
 		uint64_t waits = 0; // branches of wait loops taken: time passed to the next event
 	};
-	extern Counters g_counters;
+	extern PS2N_API Counters g_counters;
 
 	// The provider's record, as far as a block's code needs it.
-	extern uint32_t g_generation; // goes up whenever a block is thrown away
-	extern uint32_t g_clearLimit; // PCSX2's g_psxMaxRecMem: no block ends above it
-	extern uint32_t g_ramMask; // the size of the IOP's RAM, less one
-	extern Block** g_lut; // for every address a block can begin at, the block that does
-	extern int32_t g_page[0x10000]; // for every 64 KB of the address space, where its part of that table begins; -1: none
+	extern PS2N_API uint32_t g_generation; // goes up whenever a block is thrown away
+	extern PS2N_API uint32_t g_clearLimit; // PCSX2's g_psxMaxRecMem: no block ends above it
+	extern PS2N_API uint32_t g_ramMask; // the size of the IOP's RAM, less one
+	extern PS2N_API Block** g_lut; // for every address a block can begin at, the block that does
+	extern PS2N_API int32_t g_page[0x10000]; // for every 64 KB of the address space, where its part of that table begins; -1: none
 
 	// The block that begins at `pc`, if the record has one.
 	PS2N_IOP_OP Block* Find(uint32_t pc)
@@ -125,7 +126,7 @@ namespace ps2n::iop
 	// A word of RAM was written at `address` (a physical address, a multiple
 	// of four) where a block begins: the blocks over it are thrown away
 	// (PCSX2's psxRecClearMem).
-	void ClearBlocksAt(uint32_t address);
+	PS2N_API void ClearBlocksAt(uint32_t address);
 
 	// What PCSX2's recClearIOP does for a store of the IOP's own.
 	PS2N_IOP_OP void Written(uint32_t physical)
@@ -137,12 +138,12 @@ namespace ps2n::iop
 
 	// An instruction of the GTE's: the core's function for it, as PCSX2's
 	// recompiler calls it.
-	void Gte(uint32_t code);
+	PS2N_API void Gte(uint32_t code);
 
 	// A jump through a register to an address that is not a multiple of four:
 	// PCSX2's recompiler stops the machine there, and so does the provider.
 	// Returns false, for a block to return.
-	bool Unaligned(uint32_t target);
+	PS2N_API bool Unaligned(uint32_t target);
 
 	// ---------------------------------------------------------------------
 	// Memory.

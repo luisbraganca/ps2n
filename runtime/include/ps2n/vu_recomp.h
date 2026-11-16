@@ -87,7 +87,7 @@ namespace ps2n::vu
 	// The block an indirect jump of block `from` to `target` goes on at: the
 	// start of a program of its own, found as microVU finds it
 	// (runtime/vu_interp.cpp).
-	const Link* JumpTo(Ctx& c, const Link* from, uint32_t target);
+	PS2N_API const Link* JumpTo(Ctx& c, const Link* from, uint32_t target);
 
 	PS2N_VU_OP const Link* Stop(Ctx& c, const Link* b, uint32_t why)
 	{

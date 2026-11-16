@@ -24,6 +24,7 @@
 // lists them.
 #pragma once
 
+#include "ps2n/module.h"
 #include "ps2n/r5900.h"
 
 #include <cstdint>
@@ -170,7 +171,7 @@ namespace ps2n::ee::blocks
 	// Counts up whenever a block is formed, thrown away or gone for good. For
 	// as long as it stays what it was, what FindRunning() answered still
 	// holds, and the block and its steps are where they were.
-	extern uint64_t epoch;
+	extern PS2N_API uint64_t epoch;
 
 	// A load or store at `pc`, in a block that did not know its address, hit
 	// memory that is not plain: the recompiler's code would have faulted there

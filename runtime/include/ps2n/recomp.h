@@ -7,6 +7,8 @@
 // its definition.
 #pragma once
 
+#include "ps2n/module.h"
+
 #include "ps2n/ee_memory.h"
 #include "ps2n/ee_state.h"
 #include "ps2n/ops_cop0.h"
@@ -145,11 +147,11 @@ namespace ps2n::ee
 	// to it throws every block away before the next is formed
 	// (VMManager::CheckForCPUConfigChanges), so the runtime reads it whenever
 	// it throws its record of blocks away, and counts by it from then on.
-	extern int32_t cycleRate;
+	extern PS2N_API int32_t cycleRate;
 
 	// scaleblockcycles_calculation() in PCSX2's iR5900.cpp, at the rate the
 	// runtime last read (ee_provider.cpp).
-	uint32_t scaledBlockCycles(uint32_t eighths);
+	PS2N_API uint32_t scaledBlockCycles(uint32_t eighths);
 
 	// What it gives for a block of fewer than kCycleTable eighths, made
 	// whenever the runtime reads the rate. The recompiler works a block's cost
@@ -157,7 +159,7 @@ namespace ps2n::ee
 	// of every block (at 130%, calling scaledBlockCycles() there took an eighth
 	// of the level run).
 	inline constexpr uint32_t kCycleTable = 4096;
-	extern uint32_t cycleTable[kCycleTable];
+	extern PS2N_API uint32_t cycleTable[kCycleTable];
 
 	inline uint32_t blockCycles(uint32_t eighths)
 	{
@@ -170,7 +172,7 @@ namespace ps2n::ee
 	// are added before the block ends: the eighths below a cycle, and at a
 	// rate above 1, in a block of more than five cycles so far, more of them
 	// (remainderMask, made with cycleTable).
-	extern uint32_t remainderMask;
+	extern PS2N_API uint32_t remainderMask;
 
 	inline uint32_t blockRemainder(uint32_t eighths)
 	{
@@ -212,13 +214,13 @@ namespace ps2n::ee
 	// needs. If not, *block is zero and the runtime has dealt with it some
 	// other way (interpreted it, run the body that does match, let its time
 	// pass): the caller returns the value returned, a PC or kUnwind.
-	uint32_t blockStart(const ImageInfo& image, uint32_t index, uint32_t body, uint32_t* block);
+	PS2N_API uint32_t blockStart(const ImageInfo& image, uint32_t index, uint32_t body, uint32_t* block);
 
 	// The same for the function's own code, with the answer returned: what
 	// PS2N_BLOCK_START needs, or zero, and then blockExit holds the value to
 	// return.
-	uint32_t blockAsk(const ImageInfo& image, uint32_t index);
-	extern uint32_t blockExit;
+	PS2N_API uint32_t blockAsk(const ImageInfo& image, uint32_t index);
+	extern PS2N_API uint32_t blockExit;
 
 	// A block of a page that is not write-protected, which the image's table
 	// names by `id` (kCheckedLimit): compares its words with memory and counts
@@ -226,7 +228,7 @@ namespace ps2n::ee
 	// block does at every execution, and answers as blockAsk() does. Where
 	// the words have changed, or the page is protected again, the block is
 	// thrown away and what is formed there now answers.
-	uint32_t checkedAnswer(uint32_t id);
+	PS2N_API uint32_t checkedAnswer(uint32_t id);
 
 	// What PS2N_BLOCK_START calls when the image's table holds no answer:
 	// `entry` is what it holds, zero or the number of a record. One function
@@ -244,13 +246,13 @@ namespace ps2n::ee
 	// Lets the core handle its events: interrupts, timers, DMA, the IOP, the
 	// VUs. `next` is the instruction execution continues at. Returns the PC to
 	// continue at: `next`, unless an exception was taken; or kUnwind.
-	uint32_t eventTest(uint32_t next);
+	PS2N_API uint32_t eventTest(uint32_t next);
 
 	// BREAK, ERET, EI or a trap at `pc`, carried out by the core's own
 	// function for it. `eighths` is the cost of the block this instruction
 	// ends. Returns the PC to continue at (pc + 4 when nothing was raised), or
 	// kUnwind.
-	uint32_t systemInstruction(uint32_t pc, uint32_t code, uint32_t eighths);
+	PS2N_API uint32_t systemInstruction(uint32_t pc, uint32_t code, uint32_t eighths);
 
 	// SYSCALL at `pc`, in the block that began at `start` and that it ends.
 	// `eighths`: the cost of the block up to and including it. PCSX2's
@@ -259,19 +261,19 @@ namespace ps2n::ee
 	// which those are. Either way the block has ended when this returns, its
 	// cost counted. Returns the PC to continue at (pc + 4 when no exception was
 	// raised: a call not made, or one the core answers itself), or kUnwind.
-	uint32_t syscallInstruction(uint32_t pc, uint32_t code, uint32_t start, uint32_t eighths);
+	PS2N_API uint32_t syscallInstruction(uint32_t pc, uint32_t code, uint32_t start, uint32_t eighths);
 
 	// A COP2 instruction, LQC2 or SQC2 at `pc`, in the block that began at
 	// `start`, with `eighths` counted up to and including it. Whether VU0 has
 	// to be brought up to date first, and whether the cycles so far are added
 	// before that, PCSX2's recompiler decides from the whole block, so the
 	// runtime does it all. Returns the eighths that remain counted.
-	uint32_t cop2Instruction(uint32_t pc, uint32_t start, uint32_t eighths);
+	PS2N_API uint32_t cop2Instruction(uint32_t pc, uint32_t start, uint32_t eighths);
 
 	// VCALLMS or VCALLMSR at `pc`, whose word is `code`: PCSX2's function for
 	// it, which starts a micro program on VU0. The cycles of the block so far
 	// have been added (PS2N_VCALLMS).
-	void vcallms(uint32_t pc, uint32_t code);
+	PS2N_API void vcallms(uint32_t pc, uint32_t code);
 
 	// What PCSX2's recompiler decided about an instruction of its block, as
 	// the runtime records it (blocks::StepInfo in runtime/rec_blocks.h): the
@@ -302,17 +304,17 @@ namespace ps2n::ee
 		uint32_t info;
 	};
 	inline constexpr size_t kCop2Sites = 4096;
-	extern Cop2Site cop2Sites[kCop2Sites];
+	extern PS2N_API Cop2Site cop2Sites[kCop2Sites];
 	namespace blocks
 	{
-		extern uint64_t epoch;
+		extern PS2N_API uint64_t epoch;
 	}
 
 	// The StepInfo of the COP2 instruction at `pc` in the block that began at
 	// `start`, found in the runtime's record when it is not at hand. Inlined
 	// even into a generated function so large that the compiler would not
 	// inline it by itself: what is left of it then is a few compares.
-	uint32_t cop2InfoSlow(uint32_t pc, uint32_t start);
+	PS2N_API uint32_t cop2InfoSlow(uint32_t pc, uint32_t start);
 	PS2N_VU0_INLINE uint32_t cop2Info(uint32_t pc, uint32_t start)
 	{
 		const Cop2Site& site = cop2Sites[(pc >> 2) & (kCop2Sites - 1)];
@@ -327,7 +329,7 @@ namespace ps2n::ee
 	// block is compiled again; the runtime keeps count of that. Returns true
 	// when the block ends after this instruction: a read of an EE timer
 	// register through an address the recompiler knew.
-	bool memoryFault(uint32_t pc, uint32_t start);
+	PS2N_API bool memoryFault(uint32_t pc, uint32_t start);
 
 	// A load or store of a general or an FPU register (PS2N_LOAD, PS2N_STORE)
 	// whose address turned out not to be plain memory: memoryFault(), then the
@@ -338,33 +340,33 @@ namespace ps2n::ee
 	// slowReadEnds() also says, as memoryFault() does, whether the block ends
 	// after the load.
 	template <typename T>
-	T slowRead(uint32_t address, uint32_t pc, uint32_t start);
+	PS2N_API T slowRead(uint32_t address, uint32_t pc, uint32_t start);
 	template <typename T>
-	T slowReadEnds(uint32_t address, uint32_t pc, uint32_t start, bool* ends);
+	PS2N_API T slowReadEnds(uint32_t address, uint32_t pc, uint32_t start, bool* ends);
 	template <typename T>
-	void slowWrite(uint32_t address, T value, uint32_t pc, uint32_t start);
+	PS2N_API void slowWrite(uint32_t address, T value, uint32_t pc, uint32_t start);
 	// The same for LQ and SQ (PS2N_LQ, PS2N_SQ): sixteen bytes at `address`,
 	// whose low four bits are clear.
-	RETURNS_R128 slowRead128(uint32_t address, uint32_t pc, uint32_t start);
-	void TAKES_R128 slowWrite128(uint32_t address, r128 value, uint32_t pc, uint32_t start);
+	PS2N_API RETURNS_R128 slowRead128(uint32_t address, uint32_t pc, uint32_t start);
+	PS2N_API void TAKES_R128 slowWrite128(uint32_t address, r128 value, uint32_t pc, uint32_t start);
 
 	// An instruction PS2Native has no semantics of its own for yet, carried out
 	// by the core's interpreter function for it. The second form is for an
 	// instruction in a delay slot.
-	void delegate(uint32_t pc, uint32_t code);
-	void delegateInDelaySlot(uint32_t pc, uint32_t code);
+	PS2N_API void delegate(uint32_t pc, uint32_t code);
+	PS2N_API void delegateInDelaySlot(uint32_t pc, uint32_t code);
 
 	// A loop that has reached a fixed point is at the end of a time round, at
 	// `cycle`, short of the next event; each time round adds `cycles`. Lets
 	// the times round pass up to the first at whose end an event is due, and
 	// returns the cycle count there, which cpuRegs.cycle has then too
 	// (PS2N_BLOCK_END_FIXED).
-	uint64_t skipFixedLoop(uint64_t cycle, uint32_t cycles);
+	PS2N_API uint64_t skipFixedLoop(uint64_t cycle, uint32_t cycles);
 
 	// A call whose target is only known at run time. Runs what is at `pc`,
 	// compiled or not, as far as a compiled function goes or until interpreted
 	// code reaches compiled code. Returns the PC to continue at, or kUnwind.
-	uint32_t dispatch(uint32_t pc);
+	PS2N_API uint32_t dispatch(uint32_t pc);
 
 	// Where dispatch() last found compiled code for such a call, by its
 	// target: the function to enter there. Compiled code looks here first
@@ -382,12 +384,12 @@ namespace ps2n::ee
 		StaticFn fn;
 	};
 	inline constexpr size_t kCallSites = size_t{1} << 14;
-	extern CallSite callSites[kCallSites];
+	extern PS2N_API CallSite callSites[kCallSites];
 
 	// A jump whose target is only known at run time and is not one of the
 	// jumping function's own blocks. Returns the PC to continue at, or kUnwind.
 	// It has compiled functions' calling convention: they jump to it.
-	uint32_t PS2N_CC jump(uint32_t pc);
+	PS2N_API uint32_t PS2N_CC jump(uint32_t pc);
 
 	// Leaves compiled code in the middle of the block that began at `start`:
 	// the interpreter carries out the rest of it, from `pc`, with `eighths`
@@ -395,15 +397,15 @@ namespace ps2n::ee
 	// encoding; a branch whose delay slot holds what cannot be compiled there;
 	// DI before a branch or before an instruction at which a block can begin.
 	// Returns the PC to continue at, or kUnwind.
-	uint32_t leave(uint32_t pc, uint32_t eighths, uint32_t start);
+	PS2N_API uint32_t leave(uint32_t pc, uint32_t eighths, uint32_t start);
 
 	// A function was entered at an address it has no label for. This cannot
 	// happen unless the recompiler and the runtime disagree; it stops the run.
-	[[noreturn]] void badEntry(const ImageInfo& image, uint32_t function, uint32_t pc);
+	[[noreturn]] PS2N_API void badEntry(const ImageInfo& image, uint32_t function, uint32_t pc);
 
 	// The conditions of BC0x, BC1x and BC2x.
-	bool cop0Condition();
-	bool cop2Condition();
+	PS2N_API bool cop0Condition();
+	PS2N_API bool cop2Condition();
 	inline bool fpuCondition()
 	{
 		return (fpuRegs.fprc[31] & 0x00800000u) != 0; // the C flag of FCR31

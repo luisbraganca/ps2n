@@ -51,6 +51,15 @@ code is right and this file needs fixing.
   compiled ahead of time for the blocks of IOP code a build has seen, an
   interpreter for the rest, and a record that follows PCSX2's IOP
   recompiler ("The I/O processor's code" at the end).
+- **Where compiled code is.** All of it, the EE code's images, the micro
+  code's and the IOP code's, is built into `ps2n-host`, or, with
+  `build.ps1 -Module on`, into a module of its own, `ps2n-game.dll` beside
+  the host, which the host loads when it starts (`runtime/game_module.h`;
+  [phase4-proposal.md](phase4-proposal.md), step P4.1). The module reaches
+  the core's state and the runtime through what the host exports
+  (`runtime/include/ps2n/module.h`): the code is the same, but that each of
+  the core's variables is reached through its address in the module's
+  import table. A run is the same run either way.
 
 There is no guest state outside the core, but for the length of a stretch
 of straight-line compiled code. Registers are `cpuRegs` and `fpuRegs`,

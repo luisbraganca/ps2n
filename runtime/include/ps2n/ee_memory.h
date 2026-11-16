@@ -16,6 +16,8 @@
 // access is not checked for crossing into the next page.
 #pragma once
 
+#include "ps2n/module.h"
+
 #include "vtlb.h"
 
 #include <cstdint>

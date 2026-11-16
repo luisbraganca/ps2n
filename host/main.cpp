@@ -77,6 +77,22 @@
 #include "pcsx2/VMManager.h"
 #include "pcsx2/VUmicro.h"
 
+#if defined(PS2N_GAME_MODULE)
+
+#include "runtime/game_module.h"
+
+// The compiled code is in a module of its own beside the host
+// (runtime/game_module.h), which wmain() loads before anything else. These
+// are its lists, as below.
+static const ps2n::ee::ImageInfo* const* ps2n_images = nullptr;
+static size_t ps2n_image_count = 0;
+static const ps2n::vu::ImageInfo* const* ps2n_vu_images = nullptr;
+static size_t ps2n_vu_image_count = 0;
+static const ps2n::iop::ImageInfo* const* ps2n_iop_images = nullptr;
+static size_t ps2n_iop_image_count = 0;
+
+#else
+
 // The executables compiled ahead of time that this host is linked with: a list
 // the recompiler writes (tests/tests.cmake). The array ends with a null entry.
 extern const ps2n::ee::ImageInfo* const ps2n_images[];
@@ -90,6 +106,8 @@ extern const size_t ps2n_vu_image_count;
 // The blocks of IOP code compiled ahead of time, likewise.
 extern const ps2n::iop::ImageInfo* const ps2n_iop_images[];
 extern const size_t ps2n_iop_image_count;
+
+#endif
 
 namespace
 {
@@ -3040,9 +3058,71 @@ void ps2n::host::RunOnCPUThread(std::function<void()> function, bool block)
 
 #ifdef _WIN32
 
+#if defined(PS2N_GAME_MODULE)
+// Loads the module of compiled code beside the host's executable and takes
+// its lists. False, with what went wrong on stderr, when there is none or it
+// was not built for this host.
+static bool LoadGameModule()
+{
+	std::wstring path(MAX_PATH, L'\0');
+	for (;;)
+	{
+		const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+		if (length == 0)
+		{
+			std::fprintf(stderr, "ps2n-host: cannot find its own executable (error %lu)\n", GetLastError());
+			return false;
+		}
+		if (length < path.size())
+		{
+			path.resize(length);
+			break;
+		}
+		path.resize(path.size() * 2);
+	}
+	path.erase(path.find_last_of(L"\\/") + 1);
+	path += ps2n::kGameModuleFile;
+	const std::string shown = StringUtil::WideStringToUTF8String(path);
+
+	const HMODULE module = LoadLibraryExW(path.c_str(), nullptr,
+		LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+	if (!module)
+	{
+		std::fprintf(stderr, "ps2n-host: cannot load the game module %s (error %lu)\n", shown.c_str(), GetLastError());
+		return false;
+	}
+	const auto entry = reinterpret_cast<ps2n::GameModuleEntry>(GetProcAddress(module, ps2n::kGameModuleEntry));
+	if (!entry)
+	{
+		std::fprintf(stderr, "ps2n-host: %s is not a game module: it has no %s\n", shown.c_str(), ps2n::kGameModuleEntry);
+		return false;
+	}
+	ps2n::GameModuleImages images{};
+	entry(&images);
+	if (images.version != ps2n::kGameModuleVersion)
+	{
+		std::fprintf(stderr, "ps2n-host: %s was built for another host (version %u, this host's %u)\n", shown.c_str(),
+			images.version, ps2n::kGameModuleVersion);
+		return false;
+	}
+	ps2n_images = images.ee;
+	ps2n_image_count = images.ee_count;
+	ps2n_vu_images = images.vu;
+	ps2n_vu_image_count = images.vu_count;
+	ps2n_iop_images = images.iop;
+	ps2n_iop_image_count = images.iop_count;
+	return true;
+}
+#endif
+
 // File names are only handled correctly on Windows when they arrive as UTF-16.
 int wmain(int argc, wchar_t** argv)
 {
+#if defined(PS2N_GAME_MODULE)
+	if (!LoadGameModule())
+		return EXIT_ERROR;
+#endif
+
 	std::vector<std::string> u8_args;
 	u8_args.reserve(static_cast<size_t>(argc));
 	for (int i = 0; i < argc; i++)

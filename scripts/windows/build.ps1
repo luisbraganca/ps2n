@@ -96,7 +96,11 @@ param(
     [string]$PgoData = '',
     # Link-time optimization of PS2Native's own code, the generated code and the runtime (docs/adr/0019): "thin"
     # (ThinLTO), or "off". PCSX2's code is compiled as before either way. Remembered by the build tree, as -Game is.
-    [ValidateSet('', 'thin', 'off')][string]$Lto = ''
+    [ValidateSet('', 'thin', 'off')][string]$Lto = '',
+    # The compiled code built into a module of its own, ps2n-game.dll beside the host, which the host loads when it
+    # starts (docs\phase4-proposal.md, step P4.1): "on", or "off" to build it into the host, as by default.
+    # Remembered by the build tree, as -Game is.
+    [ValidateSet('', 'on', 'off')][string]$Module = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -200,6 +204,9 @@ if ($Pgo) {
 if ($Lto) {
     $gameSettings += "-DPS2N_LTO=$(if ($Lto -eq 'off') { '' } else { $Lto })"
 }
+if ($Module) {
+    $gameSettings += "-DPS2N_GAME_MODULE=$(if ($Module -eq 'on') { 'ON' } else { 'OFF' })"
+}
 
 if ($Reconfigure -or $gameSettings -or -not (Test-Path (Join-Path $build 'build.ninja'))) {
     # The flags PCSX2's own CI uses for its Windows CMake build with clang-cl,
@@ -215,6 +222,13 @@ if ($Reconfigure -or $gameSettings -or -not (Test-Path (Join-Path $build 'build.
         "-DPS2N_RECOMP=$(ForCMake (Join-Path $tools 'bin\ps2n-recomp.exe'))" `
         @gameSettings
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
+# With the compiled code in a module of its own, the host does not run without the module.
+$cache = Join-Path $build 'CMakeCache.txt'
+if (($Target -contains 'ps2n-host') -and (Test-Path $cache) -and
+    (Select-String -LiteralPath $cache -Pattern '^PS2N_GAME_MODULE:BOOL=ON$' -Quiet)) {
+    $Target = @($Target) + 'ps2n-game'
 }
 
 cmake --build $build --target $Target

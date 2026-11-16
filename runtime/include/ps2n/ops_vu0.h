@@ -67,6 +67,8 @@
 // function for them, and so does PS2Native (ADR 0016).
 #pragma once
 
+#include "ps2n/module.h"
+
 #include "Config.h"
 #include "VU.h"
 
@@ -307,7 +309,7 @@ namespace ps2n::ee::vu0
 
 		// The zero and sign flags of the components of `dest` in `result`, to the
 		// registers `flags` says (runtime/ops_vu0.cpp).
-		void Flags(__m128 result, uint32_t dest, uint32_t flags);
+		PS2N_API void Flags(__m128 result, uint32_t dest, uint32_t flags);
 
 		PS2N_VU0_INLINE void UpdateFlags(__m128 result, uint32_t dest, uint32_t flags)
 		{
@@ -836,12 +838,12 @@ namespace ps2n::ee::vu0
 
 	// The instructions that reach VU0's data memory, or from address 0x400 up
 	// VU1's registers, waiting for VU1's thread first (runtime/ops_vu0.cpp).
-	void VLQI(uint32_t dest, uint32_t ft, uint32_t is);
-	void VLQD(uint32_t dest, uint32_t ft, uint32_t is);
-	void VSQI(uint32_t dest, uint32_t fs, uint32_t it);
-	void VSQD(uint32_t dest, uint32_t fs, uint32_t it);
-	void VILWR(uint32_t dest, uint32_t it, uint32_t is);
-	void VISWR(uint32_t dest, uint32_t it, uint32_t is);
+	PS2N_API void VLQI(uint32_t dest, uint32_t ft, uint32_t is);
+	PS2N_API void VLQD(uint32_t dest, uint32_t ft, uint32_t is);
+	PS2N_API void VSQI(uint32_t dest, uint32_t fs, uint32_t it);
+	PS2N_API void VSQD(uint32_t dest, uint32_t fs, uint32_t it);
+	PS2N_API void VILWR(uint32_t dest, uint32_t it, uint32_t is);
+	PS2N_API void VISWR(uint32_t dest, uint32_t it, uint32_t is);
 
 	// ---- R ----
 	// mVU_RINIT: R takes fs.fsf's 23 low bits under the exponent of 1.0.

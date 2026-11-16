@@ -91,7 +91,7 @@ namespace ps2n::ee::ops
 		// above): bits it clamps, or for the last two a zero of each sign. For
 		// the report of a run: when a run is compared with a stock run and an
 		// FPU register differs, this is the first place to look.
-		extern uint64_t console_followed[2];
+		extern PS2N_API uint64_t console_followed[2];
 		inline bool clampedByPcsx2(uint32_t bits) { return (bits & 0x7F800000u) == 0x7F800000u; }
 
 		// PCSX2's clamp settings: CHECK_FPU_OVERFLOW and CHECK_FPU_EXTRA_OVERFLOW.

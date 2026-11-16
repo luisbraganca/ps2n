@@ -36,8 +36,14 @@ decided its design the same day ([docs/phase4-proposal.md](docs/phase4-proposal.
 ADR 0028): the wizard brings its own `clang` and `lld`, a game's code is
 compiled on the user's computer into a module that a prebuilt runtime
 loads, a packaged game is a folder, the wizard is Qt 6, Windows first. Its
-steps are P4.1 to P4.7, each with its pass criterion; the first, P4.1,
-measures what game code loaded as a module costs.**
+steps are P4.1 to P4.7, each with its pass criterion
+([docs/app-log.md](docs/app-log.md)). The first, P4.1, was measured the
+same day: with the compiled code in a module of its own that the host
+loads (`build.ps1 -Module on`), every test passes and Agent Under Fire
+takes the time it takes with the code built into the host. The maintainer
+chose a loader of PS2Native's own, which would let compiled code reach the
+core's variables without the import table, if it makes the game faster,
+and the import table otherwise: measured next.**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -519,7 +525,8 @@ runtime/                  what PS2Native adds to the core at run time: the EE pr
                           (ps2n/vu_ops.h) and the contract for compiled micro code (ps2n/vu_recomp.h); the
                           IOP provider (iop_provider), which follows PCSX2's IOP recompiler: its record of
                           blocks, the interpreter; the IOP's instructions carried out (ps2n/iop_ops.h) and the
-                          contract for compiled IOP code (ps2n/iop_recomp.h)
+                          contract for compiled IOP code (ps2n/iop_recomp.h); what a module of compiled code
+                          and the host share (game_module.h, module_entry.cpp, ps2n/module.h)
 host/                     ps2n-host: console frontend for the PCSX2 core, the test bench (the self-test of the
                           instruction semantics, of the VU provider and of the IOP provider; the watches on the
                           core's providers: sync_trace, vu_report, iop_report); with -window, where a game
@@ -537,7 +544,7 @@ scripts/windows, linux    build and test entry points
 assets/                   branding/ (the logo, the icons, the colours; its README says which to use where) and
                           ps2n.rc (the icon of the Windows executables)
 docs/                     brief, assessment, decisions (adr/), proof-of-concept log, game log, Phase 3 report, Phase 4
-                          proposal; and the website,
+                          proposal and log (app-log.md); and the website,
                           which GitHub Pages serves from this folder: index.html, 404.html, .nojekyll, site/
                           (site/README.md says what belongs to it and where each of its numbers comes from)
 build/, deps/             build trees and downloaded dependency packages; git-ignored
@@ -596,6 +603,14 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   `/Fp`) and an include directory searched first, into a scratch folder
   outside the build, and read `llvm-size -A` of the object. `game.ps1 -CallSites off` times one
   build with calls through a register sent to the runtime's dispatcher.
+- The compiled code in a module of its own (Phase 4, step P4.1):
+  `scripts\windows\build.ps1 -BuildDir build\windows-clang-module -Module on`
+  with the main tree's game settings builds everything the host would hold
+  compiled into `ps2n-game.dll` beside `ps2n-host.exe`, which the host
+  loads when it starts (`runtime/game_module.h`); what crosses between them
+  is `runtime/include/ps2n/module.h`. `test.ps1` and `game.ps1` take the
+  same `-BuildDir`. Without `-Module on` nothing changes. What it costs is
+  in [docs/app-log.md](docs/app-log.md), "P4.1".
 - The game: `scripts\windows\build.ps1 -Game <its boot executable>` compiles
   it into the host (the build tree remembers it; `-GameCapture <file>` adds
   what runs reported). A game made of several executables, whose boot

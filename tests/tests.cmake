@@ -711,20 +711,87 @@ add_custom_command(
 	VERBATIM
 )
 
-add_library(ps2n-test-images STATIC ${ps2n_image_sources} "${PS2N_GENERATED}/registry.cpp")
-target_include_directories(ps2n-test-images PRIVATE
-	"${CMAKE_BINARY_DIR}/common/include"
-	"${CMAKE_SOURCE_DIR}/pcsx2"
-)
-target_link_libraries(ps2n-test-images PRIVATE ps2n-runtime PCSX2_FLAGS)
-target_link_libraries(ps2n-host PRIVATE ps2n-test-images)
+set(PS2N_GAME_MODULE OFF CACHE BOOL "Build the compiled code into a module of its own, ps2n-game.dll, which ps2n-host loads (docs/phase4-proposal.md, step P4.1)")
+if(PS2N_GAME_MODULE)
+	# The compiled code in a module of its own (docs/phase4-proposal.md, step
+	# P4.1; runtime/include/ps2n/module.h, runtime/game_module.h): a DLL beside
+	# the host, linked with the host's import library and never with the core
+	# or the runtime, which it reaches through what the host exports. It takes
+	# only what compiling needs of the runtime and of PCSX2_FLAGS
+	# ($<COMPILE_ONLY:...>): linked with their libraries, it would hold copies
+	# of their code.
+	if(NOT WIN32)
+		message(FATAL_ERROR "PS2N_GAME_MODULE is set up for Windows only so far")
+	endif()
+	if(PS2N_PGO STREQUAL "generate" OR PS2N_LTO STREQUAL "thin")
+		message(FATAL_ERROR "PS2N_GAME_MODULE is not set up with PS2N_PGO=generate or PS2N_LTO=thin yet")
+	endif()
+	add_library(ps2n-game SHARED ${ps2n_image_sources} "${PS2N_GENERATED}/registry.cpp"
+		"${PS2N_ROOT}/runtime/module_entry.cpp")
+	set(ps2n_images_target ps2n-game)
+	target_include_directories(ps2n-game PRIVATE
+		"${CMAKE_BINARY_DIR}/common/include"
+		"${CMAKE_SOURCE_DIR}/pcsx2"
+	)
+	target_compile_definitions(ps2n-game PRIVATE PS2N_MODULE)
+	# The host exports the runtime's variables and functions that compiled
+	# code uses (PS2N_API), and these of PCSX2's: its variables under names of
+	# PS2Native's own, which runtime/include/ps2n/module.h puts in the place
+	# of PCSX2's, its functions under their own.
+	set_target_properties(ps2n-host PROPERTIES ENABLE_EXPORTS ON)
+	target_link_libraries(ps2n-game PRIVATE "$<COMPILE_ONLY:ps2n-runtime>" "$<COMPILE_ONLY:PCSX2_FLAGS>" ps2n-host)
+	set_target_properties(ps2n-game PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin")
+	target_compile_definitions(ps2n-runtime PRIVATE PS2N_EXPORTS)
+	target_compile_definitions(ps2n-host PRIVATE PS2N_EXPORTS PS2N_GAME_MODULE)
+	set(ps2n_core_exports
+		"ps2n_imp_cpuRegistersPack=?_cpuRegistersPack@@3UcpuRegistersPack@@A,DATA"
+		"ps2n_imp_vuRegs=?vuRegs@@3PAUVURegs@@A,DATA"
+		"ps2n_imp_eeHw=?eeHw@@3PAEA,DATA"
+		"ps2n_imp_iopMem=?iopMem@@3PEAUIopVM_MemoryAllocMess@@EA,DATA"
+		"ps2n_imp_psxRegs=?psxRegs@@3UpsxRegisters@@A,DATA"
+		"ps2n_imp_EmuConfig=?EmuConfig@@3UPcsx2Config@@A,DATA"
+		"ps2n_imp_vtlbdata=?vtlbdata@vtlb_private@@3UMapData@1@A,DATA"
+		"??$vtlb_memRead@I@@YAII@Z"
+		"??$vtlb_memRead@_K@@YA_KI@Z"
+		"??$vtlb_memWrite@I@@YAXII@Z"
+		"??$vtlb_memWrite@_K@@YAXI_K@Z"
+		"?vtlb_memRead128@@YQ?AT__m128i@@I@Z"
+		"?vtlb_memWrite128@@YQXIT__m128i@@@Z"
+		"?COP0_DiagnosticPCCR@@YAXXZ"
+		"?COP0_UpdatePCCR@@YAXXZ"
+		"?WriteCP0Config@@YAXI@Z"
+		"?WriteCP0Status@@YAXI@Z"
+		"?iopEventTest@@YAXXZ"
+		"?iopMemRead8@@YAEI@Z"
+		"?iopMemRead16@@YAGI@Z"
+		"?iopMemRead32@@YAII@Z"
+		"?iopMemWrite8@@YAXIE@Z"
+		"?iopMemWrite16@@YAXIG@Z"
+		"?iopMemWrite32@@YAXII@Z"
+		"?iopTestIntc@@YAXXZ"
+		"?psxException@@YAXII@Z"
+	)
+	foreach(ps2n_export IN LISTS ps2n_core_exports)
+		target_link_options(ps2n-host PRIVATE "/EXPORT:${ps2n_export}")
+	endforeach()
+	message(STATUS "PS2Native: the compiled code goes into a module of its own, ps2n-game.dll")
+else()
+	add_library(ps2n-test-images STATIC ${ps2n_image_sources} "${PS2N_GENERATED}/registry.cpp")
+	set(ps2n_images_target ps2n-test-images)
+	target_include_directories(ps2n-test-images PRIVATE
+		"${CMAKE_BINARY_DIR}/common/include"
+		"${CMAKE_SOURCE_DIR}/pcsx2"
+	)
+	target_link_libraries(ps2n-test-images PRIVATE ps2n-runtime PCSX2_FLAGS)
+	target_link_libraries(ps2n-host PRIVATE ps2n-test-images)
+endif()
 # Generated code needs no debugging information but the functions' names and
 # line tables, which is what the profiler reads (ps2n-host -profile). With all
 # of it, the game's code made the host's PDB too large for the system's
 # symbol handler to read (578 MB); it also takes longer to compile and link.
 # The machine code is the same either way.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-	target_compile_options(ps2n-test-images PRIVATE -gline-tables-only)
+	target_compile_options(${ps2n_images_target} PRIVATE -gline-tables-only)
 endif()
 
 # Profile-guided optimization of the generated code (docs/adr/0019). With
@@ -750,7 +817,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 		if(NOT EXISTS "${PS2N_PGO_DATA}")
 			message(FATAL_ERROR "PS2N_PGO=use needs PS2N_PGO_DATA, a merged profile: ${PS2N_PGO_DATA}")
 		endif()
-		target_compile_options(ps2n-test-images PRIVATE "-fprofile-instr-use=${PS2N_PGO_DATA}"
+		target_compile_options(${ps2n_images_target} PRIVATE "-fprofile-instr-use=${PS2N_PGO_DATA}"
 			-Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date)
 	elseif(NOT PS2N_PGO STREQUAL "")
 		message(FATAL_ERROR "PS2N_PGO is generate, use or empty, not ${PS2N_PGO}")

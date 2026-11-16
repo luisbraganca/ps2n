@@ -15,6 +15,8 @@
 // or a failing test here, never as a silent layout mismatch.
 #pragma once
 
+#include "ps2n/module.h"
+
 #include "R5900.h"
 
 #include <cstdint>
