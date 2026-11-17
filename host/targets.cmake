@@ -58,6 +58,19 @@ if(WIN32)
 		OBJECT_DEPENDS "${PS2N_ROOT}/assets/branding/icons/favicon.ico")
 endif()
 
+# A game's launcher (host/launcher.cpp; docs/phase4-proposal.md, step P4.4):
+# a Windows program without a console, copied into a game's folder under the
+# game's name, which starts the runtime beside it. Microsoft's C runtime is
+# built into it, so that it needs nothing but Windows to start and to say
+# what is missing.
+if(WIN32)
+	add_executable(ps2n-launcher WIN32 "${CMAKE_CURRENT_LIST_DIR}/launcher.cpp" "${PS2N_ROOT}/assets/ps2n.rc")
+	set_property(TARGET ps2n-launcher PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+	target_link_libraries(ps2n-launcher PRIVATE shell32 user32)
+	set_target_properties(ps2n-launcher PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin")
+	add_dependencies(ps2n-host ps2n-launcher)
+endif()
+
 # The core looks for its resources (shaders, fonts, the game database) in a
 # "resources" directory beside the executable.
 #

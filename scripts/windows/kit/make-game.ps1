@@ -1,53 +1,60 @@
 <#
 .SYNOPSIS
-Compiles a PS2 game into a folder of its own and plays it: PS2Native on a computer with nothing else
-installed (docs\phase4-proposal.md, step P4.3).
+Makes a PS2 game into a folder of its own that plays it: PS2Native on a computer with nothing else
+installed (docs\phase4-proposal.md, steps P4.3 and P4.4).
 
 .DESCRIPTION
 Part of the folder scripts\windows\kit.ps1 puts together; run it from there. From the disc image and the
 BIOS image, both the user's own and read where they are, it writes the game's compiled code with the
 toolchain beside it (LLVM's clang and lld, PS2Native's headers and recompiler): the game's executables
 taken from the disc image, translated to C++ (ps2n-recomp), compiled and linked into four modules (the
-game's EE code, the BIOS's, the micro code, the IOP's code), which go into games\<name> with a copy of the
-runtime. With -Play it then opens the game in a window: Vulkan, three times the console's resolution,
-the keyboard and the first controller (F11 or Alt+Enter covers the screen), until the window is closed.
+game's EE code, the BIOS's, the micro code, the IOP's code).
 
-Everything it writes is in games\<name>: the modules and the runtime, the game's memory cards and the
-console's settings (data), every session played written down to be run again (sessions), what sessions
-had to interpret (captures: what a session met that no compile had seen is added there when its window
-closes, and compiled the next time this runs), and the generated C++ and objects (work), which can be
-deleted. Nothing is installed and nothing is written elsewhere, but the console's settings beside a
-BIOS image that cannot be linked into the folder.
+They go into games\<name>, the game's folder, with the runtime and a launcher named after the game
+(<title>.exe): started, it plays the game as settings.txt beside it says (the disc image, the BIOS, the
+patches, the window's title; written by this), on Vulkan at three times the console's resolution, with the
+keyboard and the first controller (F11 or Alt+Enter covers the screen), until its window is closed. With
+-Play this opens it once it is made.
+
+Everything is in the game's folder: the modules and the runtime, the game's memory cards and the console's
+settings (data; the BIOS image is linked in where it can be, so that the console's settings are kept
+there), every session played, written down to be run again, with what it had to interpret (sessions; the
+next run of this compiles that too), and the generated C++ and objects (work), which can be deleted.
+Nothing is installed and nothing is written elsewhere, but the console's settings beside a BIOS image that
+cannot be linked into the folder.
 
 .EXAMPLE
-.\make-game.ps1 -Image 'D:\games\Agent Under Fire.iso' -Bios 'D:\bios\SCPH-70004.BIN' -More MOVIE.ELF,ACTION.UK,DRIVING.ELF -Captures .\captures -Play
+.\make-game.ps1 -Image 'D:\games\Agent Under Fire.iso' -Bios 'D:\bios\SCPH-70004.BIN' -Title 'Agent Under Fire' -More MOVIE.ELF,ACTION.UK,DRIVING.ELF -Captures .\captures -Play
 #>
 param(
     # The game's disc image (an .iso), read where it is.
     [Parameter(Mandatory = $true)][string]$Image,
     # The BIOS image, read where it is.
     [Parameter(Mandatory = $true)][string]$Bios,
+    # The game's name: the launcher's file name and the window's title. By default the folder's name.
+    [string]$Title = '',
     # The executables on the disc the game loads itself, not through the BIOS (a game made of several
     # executables, as Agent Under Fire is): their names on the disc, separated by commas.
     [string]$More = '',
     # A folder with what earlier runs had to interpret, from elsewhere (the development tree, another
     # computer): capture.toml (the game's EE code), vu-capture.toml (micro code), iop-capture.toml (the
     # IOP's code), bios-capture.toml (the BIOS's code). Each that is there is added to the game's own
-    # (games\<name>\captures), all of which is compiled.
+    # (games\<name>\captures), all of which is compiled, with what the sessions in the game's folder had to
+    # interpret.
     [string]$Captures = '',
-    # The game's folder under games: by default named after the executable the disc boots.
+    # The game's folder under games: by default named after -Title, or after the executable the disc boots.
     [string]$Name = '',
-    # Open the game in a window once it is compiled.
+    # Open the game in a window once it is made.
     [switch]$Play,
-    # Only open the game in a window, compiled as it was last time.
+    # Only open the game in a window, made as it was last time (its settings written again).
     [switch]$PlayOnly,
     # How many files to compile at once: by default as many as the computer has processors.
     [int]$Jobs = 0,
     # The renderer the game is played on: vulkan by default; dx11, dx12, opengl, sw (PCSX2's software
     # renderer) or auto (the one PCSX2 chooses for this computer) where Vulkan does not work.
     [ValidateSet('', 'vulkan', 'dx11', 'dx12', 'opengl', 'sw', 'auto')][string]$Renderer = '',
-    # More options for the runtime when it plays (ps2n-host -help has them): '-mute', '-window-size',
-    # '1280x720', '-frames', '3000' and the like.
+    # More options for the runtime when -Play or -PlayOnly opens the game (ps2n-host -help has them):
+    # '-mute', '-window-size', '1280x720', '-frames', '3000' and the like. Not written into the settings.
     [string[]]$HostOptions = @(),
     # PCSX2's archive of game patches (patches.zip, in an installed PCSX2's resources folder or in PCSX2's
     # own release), for the game's widescreen and frame-rate patches (ADR 0025): an installed PCSX2's is
@@ -63,7 +70,7 @@ $runtime = Join-Path $kit 'runtime'
 $recomp = Join-Path $toolchain 'bin\ps2n-recomp.exe'
 $clang = Join-Path $toolchain 'bin\clang-cl.exe'
 $lld = Join-Path $toolchain 'bin\lld-link.exe'
-foreach ($needed in $recomp, $clang, $lld, (Join-Path $runtime 'ps2n-host.exe')) {
+foreach ($needed in $recomp, $clang, $lld, (Join-Path $runtime 'ps2n-host.exe'), (Join-Path $runtime 'ps2n-launcher.exe')) {
     if (-not (Test-Path -LiteralPath $needed)) { throw "This folder is not whole: $needed is missing." }
 }
 $imagePath = (Resolve-Path -LiteralPath $Image).Path
@@ -88,18 +95,22 @@ function Run([string]$exe, [string[]]$arguments) {
     return $output
 }
 
-# ---- the game's executables, from the disc image ----------------------------------------------
+# ---- the game, and its folder -----------------------------------------------------------------------
 $probe = Join-Path ([IO.Path]::GetTempPath()) ("ps2n-" + [Guid]::NewGuid().ToString('N'))
 $bootLine = Run $recomp @('extract', $imagePath, '--out-dir', $probe) | Select-Object -First 1
 $boot = ($bootLine -split ' ', 2)[0]
 Remove-Item -LiteralPath $probe -Recurse -Force -ErrorAction SilentlyContinue
-if (-not $Name) { $Name = $boot -replace '[^A-Za-z0-9._-]', '_' }
+# A name Windows takes for a file or a folder.
+function Plain([string]$text) { ($text -replace '[\\/:*?"<>|]', ' ').Trim() }
+if (-not $Name) { $Name = if ($Title) { Plain $Title } else { $boot -replace '[^A-Za-z0-9._-]', '_' } }
+if (-not $Title) { $Title = $Name }
 $game = Join-Path $kit "games\$Name"
 $work = Join-Path $game 'work'
 $disc = Join-Path $work 'disc'
 $gen = Join-Path $work 'generated'
 $obj = Join-Path $work 'objects'
 $own = Join-Path $game 'captures'
+$sessions = Join-Path $game 'sessions'
 
 # What runs had to interpret, put into the game's own captures (ps2n-recomp merges each kind, every
 # block or address once).
@@ -125,6 +136,9 @@ if (-not $PlayOnly) {
 
     # ---- the C++ ---------------------------------------------------------------------------------
     if ($Captures) { Add-Captures (Resolve-Path -LiteralPath $Captures).Path }
+    if (Test-Path -LiteralPath $sessions) {
+        foreach ($session in (Get-ChildItem -LiteralPath $sessions -Directory)) { Add-Captures $session.FullName }
+    }
     $capture = @{}
     foreach ($kind in $captureKinds.Keys) {
         $file = Join-Path $own "$kind.toml"
@@ -231,29 +245,31 @@ if (-not $PlayOnly) {
         $objects = @($todo | Where-Object { $_.Kind -eq $kind } | ForEach-Object { $_.Object })
         $rsp = Join-Path $obj "$kind.rsp"
         [IO.File]::WriteAllLines($rsp, [string[]]($objects | ForEach-Object { '"' + $_ + '"' }))
+        # (The import library the linker writes for a DLL goes with the objects: nothing in the folder uses it.)
         Run $lld @('/nologo', '/DLL', '/NOENTRY', '/NODEFAULTLIB', '/MACHINE:X64', '/OPT:REF', '/OPT:ICF',
-            "/OUT:$(Join-Path $game "ps2n-$kind.dll")", "@$rsp", (Join-Path $toolchain 'lib\ps2n-host.lib')) | Out-Null
+            "/OUT:$(Join-Path $game "ps2n-$kind.dll")", "/IMPLIB:$(Join-Path $obj "ps2n-$kind.lib")", "@$rsp",
+            (Join-Path $toolchain 'lib\ps2n-host.lib')) | Out-Null
     }
     Say "linked: $((Get-ChildItem -LiteralPath $game -Filter 'ps2n-*.dll' | ForEach-Object { '{0} ({1:N0} bytes)' -f $_.Name, $_.Length }) -join ', ')"
 
-    # ---- the runtime beside them -------------------------------------------------------------------
+    # ---- the runtime beside them, and the launcher named after the game ------------------------------
     Copy-Item -Path (Join-Path $runtime '*') -Destination $game -Recurse -Force
-    Say "the runtime copied beside them; the game is ready in $game"
+    $launcher = Join-Path $game ((Plain $Title) + '.exe')
+    Move-Item -LiteralPath (Join-Path $game 'ps2n-launcher.exe') -Destination $launcher -Force
+    Say "the runtime beside them, and the launcher: $launcher"
 }
 
-if (-not ($Play -or $PlayOnly)) { exit 0 }
-
-# ---- played -----------------------------------------------------------------------------------------
-# As scripts\windows\game.ps1 -Play: the BIOS image linked into the game's folder, so that the console's
-# settings are kept there and not beside the image (or read where it is, when it cannot be linked); the
-# session written down to be run again; what it had to interpret written down to be compiled in.
+# ---- the game's settings ------------------------------------------------------------------------------
+# What its launcher starts the runtime with (settings.txt; ps2n-host -settings), written every time, so
+# that -PlayOnly with another -Renderer or -PatchArchive changes them. The BIOS image is linked into the
+# folder with the ROM1, ROM2 and EROM images beside it, so that the core keeps the console's settings
+# there and not beside the image; where it cannot be linked (another drive), it is read where it is.
 $hostExe = Join-Path $game 'ps2n-host.exe'
-if (-not (Test-Path -LiteralPath $hostExe)) { throw "The game has not been compiled yet: run this without -PlayOnly first." }
+if (-not (Test-Path -LiteralPath $hostExe)) { throw "The game has not been made yet: run this without -PlayOnly first." }
 $biosDir = Join-Path $game 'bios'
 New-Item -ItemType Directory -Force $biosDir | Out-Null
 $biosFile = Get-Item -LiteralPath $biosPath
-$biosUsed = Join-Path $biosDir $biosFile.Name
-# With the image, the ROM1, ROM2 and EROM images the core loads from beside it.
+$biosUsed = '%GAME%\bios\' + $biosFile.Name
 $biosFiles = @($biosFile) + @(Get-ChildItem -LiteralPath $biosFile.DirectoryName -File | Where-Object {
         $_.Extension -match '^\.(rom1|rom2|erom)$' -and ($_.BaseName -eq $biosFile.BaseName -or $_.BaseName -eq $biosFile.Name) })
 foreach ($file in $biosFiles) {
@@ -263,38 +279,33 @@ foreach ($file in $biosFiles) {
         catch { if ($file.FullName -eq $biosFile.FullName) { $biosUsed = $biosFile.FullName } }
     }
 }
-$record = Join-Path $game ("sessions\" + (Get-Date).ToString('yyyyMMdd-HHmmss'))
-New-Item -ItemType Directory -Force $record | Out-Null
-foreach ($card in 'Mcd001.ps2', 'Mcd002.ps2') {
-    $cardPath = Join-Path $game "data\PCSX2\memcards\$card"
-    if (Test-Path -LiteralPath $cardPath) { Copy-Item -LiteralPath $cardPath -Destination $record }
-}
-# And the console's NVRAM as it is now, which the core keeps beside the BIOS image it is given: the link
-# in the game's folder, or the image itself where it could not be linked.
-foreach ($extension in '.nvm', '.mec') {
-    $nvram = Join-Path (Split-Path $biosUsed) ($biosFile.BaseName + $extension)
-    if (Test-Path -LiteralPath $nvram) { Copy-Item -LiteralPath $nvram -Destination $record }
-}
-$hostArgs = @('-bios', $biosUsed, '-data', (Join-Path $game 'data'), '-log', (Join-Path $game 'core.log'),
-    '-out', (Join-Path $game 'guest.txt'), '-ee', 'ps2n', '-iop', 'jit', '-vu', 'jit', '-static', 'on', '-image', 'game',
-    '-until', '@@ no such line @@', '-window', '-record', $record,
-    '-capture', (Join-Path $record 'capture.toml'), '-vu-ps2n', 'both', '-vu-capture', (Join-Path $record 'vu-capture.toml'),
-    '-iop-ps2n', '-iop-capture', (Join-Path $record 'iop-capture.toml'))
 # PCSX2's archive of patches, the one given or where an installed PCSX2 keeps it (ADR 0025): the game's
 # widescreen and frame-rate patches by default, when it has them. ($archive: to PowerShell $patchArchive
 # would be the parameter -PatchArchive.)
 $archive = if ($PatchArchive) { (Resolve-Path -LiteralPath $PatchArchive).Path } else { Join-Path ${env:ProgramFiles} 'PCSX2\resources\patches.zip' }
-if (Test-Path -LiteralPath $archive) { $hostArgs += @('-patch-archive', $archive) }
+$settings = @(
+    "# $Title, made into this folder by PS2Native's make-game.ps1 on $((Get-Date).ToString('yyyy-MM-dd HH:mm')).",
+    "# What its launcher ($((Plain $Title)).exe) starts the runtime with: one option to a line (ps2n-host -help",
+    '# has them); %GAME% is this folder.',
+    '-bios', $biosUsed, '-data', '%GAME%\data', '-log', '%GAME%\core.log', '-out', '%GAME%\guest.txt',
+    '-ee', 'ps2n', '-iop', 'jit', '-vu', 'jit', '-static', 'on', '-vu-ps2n', 'both', '-iop-ps2n', '-image', 'game',
+    '-until', '@@ no such line @@', '-window', '-title', $Title, '-sessions', '%GAME%\sessions')
+if (Test-Path -LiteralPath $archive) { $settings += @('-patch-archive', $archive) }
 else { Say 'no archive of PCSX2''s patches here: the game plays as its disc has it, 4:3 (-PatchArchive gives one)' }
-if ($Renderer) { $hostArgs += @('-renderer', $Renderer) }
-$hostArgs += $HostOptions
-$hostArgs += $imagePath
-Say "playing; close the window to end the session, which is written down in $record"
+if ($Renderer) { $settings += @('-renderer', $Renderer) }
+$settings += $imagePath
+[IO.File]::WriteAllLines((Join-Path $game 'settings.txt'), [string[]]$settings, (New-Object System.Text.UTF8Encoding($false)))
+Say "its settings: $(Join-Path $game 'settings.txt')"
+
+if (-not ($Play -or $PlayOnly)) { exit 0 }
+
+# ---- played -----------------------------------------------------------------------------------------
+# As its launcher plays it, but here, with the runtime's report in this window and -HostOptions.
+Say 'playing; close the window to end the session'
 $ErrorActionPreference = 'Continue'
-& $hostExe @hostArgs 2>&1 | ForEach-Object { "$_" } |
+& $hostExe -settings (Join-Path $game 'settings.txt') @HostOptions 2>&1 | ForEach-Object { "$_" } |
     Where-Object { $_ -match '^ps2n-host:' -and $_ -notmatch '^ps2n-host: frame \d+:' } | ForEach-Object { Write-Host $_ }
 $code = $LASTEXITCODE
 $ErrorActionPreference = 'Stop'
-Add-Captures $record
-Say "what the session had to interpret is in $own, for the next compile"
+Say "the session is written down in $sessions; what it had to interpret is compiled the next time this runs"
 exit $code

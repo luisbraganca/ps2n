@@ -63,7 +63,17 @@ the same byte for byte as this computer's, and the game played there for 15
 minutes within 3% of the console's pace, a run this computer replays at
 every fingerprint. That run found what a session record lacked (the patches
 as applied, the BIOS's ROM1 and ROM2), put right. P4.4, the packaged game,
-is next.**
+was done the same day, with Microsoft's C++ runtime in the folder at the
+maintainer's choice (ADR 0031): a game is a folder that plays it
+(`make-game.ps1 -Title`), started from a launcher named after the game,
+which starts the runtime beside it with the folder's settings, without a
+console; Killzone and Agent Under Fire played from their folders at the
+console's pace, nothing of their code interpreted, and the development
+host's sessions run again from them (the maintainer's four of Agent Under
+Fire among them) are the sessions at every fingerprint, and the other way
+round. Killzone's code needed a module to
+have its own stack probe (`__chkstk`, `runtime/module_entry.cpp`), which a
+test of the module tree holds. P4.5, the wizard, is next.**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -539,6 +549,13 @@ Decisions:
   of the maintainer's, without Visual Studio, with a folder and one command
   the session prepares. The maintainer's choices on 2026-11-17, both the
   session's recommendations.
+- [ADR 0031](docs/adr/0031-microsofts-c-runtime-travels-in-the-folder.md):
+  Microsoft's C++ runtime (`msvcp140.dll`, `vcruntime140.dll`,
+  `vcruntime140_1.dll`), which the runtime and PCSX2's libraries need,
+  travels in the wizard's folder and in every game folder, from Visual
+  Studio's redistributable files; nothing is installed for it, and newer
+  copies come with PS2Native's updates. The maintainer's choice on
+  2026-11-17, the session's recommendation.
 
 ## Layout, build and test
 
@@ -574,8 +591,10 @@ runtime/                  what PS2Native adds to the core at run time: the EE pr
 host/                     ps2n-host: console frontend for the PCSX2 core, the test bench (the self-test of the
                           instruction semantics, of the VU provider and of the IOP provider; the watches on the
                           core's providers: sync_trace, vu_report, iop_report); with -window, where a game
-                          is played (window.cpp: Windows only so far)
+                          is played (window.cpp: Windows only so far); and a game's launcher (launcher.cpp:
+                          the program a game's folder is started from, which starts the runtime beside it)
 tests/unit/               unit tests of the build-time tools
+tests/module/             what a module defines for itself, tested (stack_probe.cpp: its __chkstk)
 tests/                    CTest registration for programs booted on the core, the driver script, the recorded
                           baselines; recompiles the test programs into the build tree and links them into the host
 tests/programs/           our own test programs, in assembly for core's assembler: selfmod (rewrites its code), bench,
@@ -657,7 +676,10 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   `runtime/include/ps2n/module.h`. A module is compiled with PS2Native's own
   headers and nothing else, no system header, no standard library, nothing
   of PCSX2's (`ps2n/pcsx2.h` gives it `ps2n/pcsx2_layout.h` in their place),
-  and linked with the host's import library and nothing else. So a header
+  and linked with the host's import library and nothing else; what the
+  compiler asks of a C runtime it defines itself (`_fltused`, and
+  `__chkstk`, which a function whose locals take more than a page calls:
+  `runtime/module_entry.cpp`). So a header
   the generated code includes takes PS2Native's own headers, `<stdint.h>`,
   `<stddef.h>` and the SSE intrinsics' headers, and nothing of PCSX2's but
   through `ps2n/pcsx2.h`; a field of PCSX2's that compiled code comes to use
@@ -669,16 +691,26 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   import table costs, alone. What it costs is in
   [docs/app-log.md](docs/app-log.md), "P4.1" and "P4.2".
 - What a computer with nothing else installed compiles and plays a game
-  from (Phase 4, step P4.3): `scripts\windows\kit.ps1` puts it together in
-  `build\kit` from the module tree, LLVM's own release (ADR 0030; fetched
-  into `deps\llvm-22.1.3` when not there, its SHA-256 checked) and Visual
-  Studio's redistributable C++ runtime; its one command,
-  `make-game.ps1 -Image <disc image> -Bios <BIOS image> [-More <names on the
-  disc>] [-Captures <folder>] [-Play]` (`scripts\windows\kit\`), compiles
-  the game into `games\<name>` there. It takes the game's executables from
-  the disc image (`ps2n-recomp extract`). Run it from the folder with
-  nothing but Windows on `PATH` to check that it needs nothing else; what
-  it makes stays in the build tree, as everything made from a game does.
+  from (Phase 4, steps P4.3 and P4.4): `scripts\windows\kit.ps1` puts it
+  together in `build\kit` from the module tree, LLVM's own release (ADR
+  0030; fetched into `deps\llvm-22.1.3` when not there, its SHA-256
+  checked) and Visual Studio's redistributable C++ runtime (ADR 0031); its
+  one command, `make-game.ps1 -Image <disc image> -Bios <BIOS image>
+  [-Title <name>] [-More <names on the disc>] [-Captures <folder>] [-Play]`
+  (`scripts\windows\kit\`), makes the game into a folder of its own there,
+  `games\<name>`, that plays it: `<name>.exe`, the launcher
+  (`host/launcher.cpp`), starts the runtime beside it with `settings.txt`
+  (`ps2n-host -settings`, one option to a line, `%GAME%` the folder; the
+  runtime started with no options reads it by itself), which writes each
+  session down in the folder's `sessions` (`-sessions`) and names the
+  window (`-title`); `last-run.log` has what the runtime said, and the
+  launcher says why in a message box when it could not play. It takes the
+  game's executables from the disc image (`ps2n-recomp extract`), and the
+  next time it runs compiles what the folder's sessions had to interpret
+  too. `game.ps1 -Runtime <folder>\ps2n-host.exe` runs a packaged game as
+  it is, a session again among them. Run it from the folder with nothing
+  but Windows on `PATH` to check that it needs nothing else; what it makes
+  stays in the build tree, as everything made from a game does.
 - The game: `scripts\windows\build.ps1 -Game <its boot executable>` compiles
   it into the host (the build tree remembers it; `-GameCapture <file>` adds
   what runs reported). A game made of several executables, whose boot
@@ -842,7 +874,11 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   stretch of time, and the addresses at which each holds a block; a
   program that differs is made as small as it still differs in and
   printed), and `selftest/iop-compiled` runs the first 1,500 of them with
-  every block compiled ahead of time (skipped and failed likewise).
+  every block compiled ahead of time (skipped and failed likewise). The
+  module tree has one test more, `selftest/module-stack-probe`: the stack
+  probe a module defines for itself (`__chkstk`, `runtime/module_entry.cpp`,
+  which no test program's code calls), on functions whose locals take up to
+  fifty pages, on a thread whose stack Windows commits a page at a time.
 - A failing test's files are in `build\windows-clang\ps2n\tests\<test name>`:
   `core.log` (PCSX2's log), `guest.txt`, `actual.txt`.
 - A `lockstep` failure names the event test where the runs part, a

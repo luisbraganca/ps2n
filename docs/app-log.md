@@ -11,7 +11,7 @@ its date. Nothing here comes from a game or a BIOS but counts and times.
 | P4.1 The module's cost | Every test passes; the game's time measured against today's build, and the cost put to the maintainer | **Measured** (2026-11-16): every test passes with the compiled code in a module of its own; Agent Under Fire takes the time it takes with the code built into the host (its script 1.17 times stock PCSX2's time against 1.18; the maintainer's second session replayed, 0.98 of the built-in code's time, its fourth mission 0.95); the generated code is 4 to 8% larger. **Done** (2026-11-17): put to the maintainer, who chose a loader of PS2Native's own if it made the game faster; the code it would give, which reaches the core directly, measured slower, so a module reaches the runtime through its import table ([ADR 0029](adr/0029-a-games-module-reaches-the-runtime-through-its-import-table.md)) |
 | P4.2 Freestanding generated code | A game module compiled with nothing but `clang`, `lld` and PS2Native's own headers; every test passes; a game is still the stock run | **Done** (2026-11-17): the generated code compiled against PS2Native's description of PCSX2's structures, which the runtime checks against PCSX2's own (636 assertions when it is built, the settings' bits when it starts), with no system header and no standard library, into four modules (the programs' EE code, the BIOS's, the micro code, the IOP's code) linked with the host's import library and nothing else; every test passes (533) in the three build trees; Agent Under Fire's script is the stock run at every sync point from the modules, and the maintainer's sessions replayed are the sessions at every fingerprint; the modules take what P4.1's module took (the script 1.17 times stock PCSX2's time, built in 1.19) |
 | P4.3 The shipped toolchain | A game compiled and run on a computer with nothing else installed (a fresh Windows user, without Visual Studio) | **Done** (2026-11-17): the toolchain is LLVM's own 22.1.3 ([ADR 0030](adr/0030-the-wizards-compiler-is-llvms-own-release.md)), whose code is the code the development builds make, byte for byte; a folder of 254 MB (`scripts\windows\kit.ps1`) and one command in it (`make-game.ps1`) compile Agent Under Fire from its disc image and the BIOS (101 seconds here); on the maintainer's Windows 10 laptop, without Visual Studio, in about 8 minutes into the same code, byte for byte, and the game played there for 15 minutes within 3% of the console's pace, a run this computer replays at every fingerprint. The run found the session record missing two things (the patches as applied, the BIOS's ROM images), put right |
-| P4.4 The packaged game | Killzone and Agent Under Fire run from their folders, at the console's pace, the same runs as from the development host | |
+| P4.4 The packaged game | Killzone and Agent Under Fire run from their folders, at the console's pace, the same runs as from the development host | **Done** (2026-11-17): a game is a folder that plays it (`make-game.ps1 -Title`), started from a launcher named after the game, which starts the runtime beside it with the folder's settings, without a console, and says why when it cannot play; the sessions written down in the folder. Killzone and Agent Under Fire, started from their launchers, played at the console's pace (50.00 frames a second in play), nothing of their code interpreted; the maintainer's four sessions of Agent Under Fire and three of Killzone's from the development host, run again from the folders, and the launchers' sessions run again by the development host, are the sessions at every fingerprint. Killzone's code needed a module to have its own stack probe (`__chkstk`), which a test of the module tree holds |
 | P4.5 The wizard | A game packaged from the disc image and the BIOS with every default accepted, without a command line | |
 | P4.6 New code in play | A session that meets new code finds it compiled at its next start | |
 | P4.7 Linux | On the maintainer's own Linux machine ([ADR 0004](adr/0004-proof-of-concept-environment.md)) | |
@@ -551,3 +551,185 @@ since (below):
   `make-game.ps1` also keeps the console's NVRAM beside a session, as
   `game.ps1 -Play` does, which the laptop's session, its first, did not
   need.
+
+## P4.4 The packaged game
+
+The question: can a game be played from a folder of its own, started as any
+program is started, and be there the game it is from the development host:
+Killzone and Agent Under Fire at the console's pace, the same runs. Microsoft's
+C++ runtime travels in the folder, the maintainer's choice at the step's start
+([ADR 0031](adr/0031-microsofts-c-runtime-travels-in-the-folder.md)).
+
+### What was built (2026-11-17)
+
+- **The game's folder** (`make-game.ps1 -Title <name>`, into
+  `games\<name>`): the four modules, the runtime as the kit has it, the
+  game's launcher, `<name>.exe`, and `settings.txt`, what the launcher
+  starts the runtime with, one option to a line: the disc image and the
+  BIOS image, read where they are (the BIOS image linked into the folder
+  with the ROM1, ROM2 and EROM images beside it, where it can be, so that
+  the console's settings are kept there), the folder's own places for the
+  rest, the archive of PCSX2's patches an installed PCSX2 has, the
+  window's title; `%GAME%` stands for the folder. In the folder too: the
+  game's memory cards and the console's settings (`data`), every session
+  played (`sessions`), and `last-run.log`, what the runtime said the last
+  time. `-PlayOnly` writes the settings again, with another `-Renderer` or
+  `-PatchArchive`.
+- **The launcher** (`host/launcher.cpp`; `ps2n-launcher.exe` in the kit's
+  runtime, copied under the game's name): a Windows program without a
+  console, with Microsoft's C runtime built in, so that it imports from
+  `KERNEL32`, `USER32` and `SHELL32` alone and can say what is missing when
+  the rest of the folder is not whole. It starts the runtime beside it,
+  `ps2n-host.exe -settings settings.txt` and whatever it was given itself,
+  without a console window, keeps what the runtime wrote in
+  `last-run.log`, and, when the runtime could not play the game (its exit
+  codes 1 and 4), says so in a message box with the runtime's own last
+  lines.
+- **What the runtime does for it** (`host/main.cpp`): `-settings <file>`
+  reads options from a file in its place, one to a line, `#` lines left
+  out, `%GAME%` the file's folder; started with no options at all, the
+  runtime reads `settings.txt` beside it. `-sessions <folder>` writes each
+  session down in a folder of its own there, named after the time it
+  began, with the memory cards and the console's NVRAM as they were and
+  what the session had to interpret: what `game.ps1 -Play` and
+  `make-game.ps1 -Play` did around the host, done by the host, which in a
+  game's folder nothing else starts. `-title` names the window. An archive
+  of patches named that is not there counts as none: the game then plays
+  as its disc has it, as on a computer without PCSX2 (P4.3).
+- **A packaged game run as it is**: `game.ps1 -Runtime
+  <folder>\ps2n-host.exe` puts a game folder's runtime, with its modules,
+  in the place of the build tree's, for any run, a session run again among
+  them.
+- **The stack probe.** Killzone's folder did not link at first:
+  `__chkstk` was missing, which one of its functions calls
+  (`fn_003E73F0`, whose locals take 4,256 bytes, more than a page). A
+  function whose locals take more than a page of the stack calls it before
+  it moves the stack pointer down, so that each page is touched in order:
+  Windows commits a thread's stack a page at a time, as the page below the
+  last is touched. Microsoft's C runtime has it, and a module has no C
+  runtime (P4.2, which found `_fltused` the one name a module's code asks
+  of one: Agent Under Fire's code has no function that large). A module
+  now defines its own beside `_fltused` (`runtime/module_entry.cpp`): it
+  touches a byte in each page from the caller's stack pointer down to the
+  size asked, and changes no register but R10, R11 and the flags. No test
+  program's code calls it, so the module tree has a test of its own,
+  `selftest/module-stack-probe` (`tests/module/stack_probe.cpp`): built as
+  a module is, it runs functions whose locals take one to fifty pages and a
+  bit on a thread whose stack Windows commits a page at a time. With the
+  module's `__chkstk` the thread's stack grows from 2 pages to 51 and every
+  sum is right; with a `__chkstk` that does nothing, the program stops at
+  an access violation.
+
+### The two games from their folders
+
+- **Made** from the kit with the captures the development tree is built
+  from (Agent Under Fire's in `build\game\aut`, Killzone's in
+  `build\game\killzone`, the BIOS's in `build\bios`): Agent Under Fire in
+  99 seconds (205 files compiled, 20 at a time), Killzone in 108 (112
+  files). A folder takes 172.4 MB (Agent Under Fire) and 147.3 MB
+  (Killzone) without its sessions, its data and the BIOS image's link: the
+  runtime, 55.7 MB with the launcher, and the four modules, 113.4 and
+  90.0 MB. The generated code and objects (`work`, which can be deleted)
+  take 382 and 325 MB more.
+
+| | Agent Under Fire | Killzone |
+|---|---:|---:|
+| `ps2n-game.dll`, the game's EE code | 104,018,432 bytes | 83,660,800 bytes |
+| `ps2n-bios.dll`, the BIOS's | 1,327,104 | 1,327,104 |
+| `ps2n-vu.dll`, the micro code | 1,139,200 | 394,240 |
+| `ps2n-iop.dll`, the IOP's code | 6,871,552 | 4,603,392 |
+
+- **Started from their launchers** as Explorer starts a program, in the
+  folder, given only what the check needed: no sound, a window of 1280 by
+  720, the controller script the window's pace was measured with in Phase
+  3, and a frame to stop at. Each time the launcher started the runtime
+  with the folder's settings; one window opened, the game's, titled with
+  the game's name, and no console window; the runtime played the game with
+  its patches from the installed PCSX2's archive (Agent Under Fire's
+  widescreen patch; Killzone's widescreen and frame-rate patches, with the
+  130% EE overclock the latter asks for), interpreted nothing of the game's
+  EE code, micro code or IOP code (of the EE's instructions, as on the
+  development host, the BIOS's 51 at boot, and in Agent Under Fire 12
+  where compiled code hands the rest of a block over on purpose, step
+  G18), and wrote the session down in the folder; the launcher gave back
+  the runtime's exit code.
+
+| | Agent Under Fire | Killzone |
+|---|---|---|
+| Controller script | into its first mission (`start.pad`, step G18) | into its first level (`level1.pad`, step G16) |
+| The whole session | 8,999 frames in 180.0 s: 49.96 a second | 9,299 frames in 186.2 s: 49.92 a second |
+| Its play | frames 6,750 to 9,000 in 45.000 s: 50.00 a second | frames 6,600 to 9,300 in 54.000 s: 50.00 a second |
+
+The console shows 50.00 frames a second; the whole session has its start
+in it, the runtime loading and the console booting.
+
+- **The same runs.** The sessions the development host wrote down, run
+  again from the folders (`game.ps1 -Replay -Runtime`, on Vulkan at three
+  times the console's resolution, as they were played), and the sessions
+  the launchers wrote down, run again by the development host:
+
+| Session | Written down by | Run again by | Frames | The session at every fingerprint |
+|---|---|---|---:|---:|
+| The maintainer's first (2026-11-16) | the development host | Agent Under Fire's folder | 42,322 | 846 of 846 |
+| The maintainer's second (2026-11-16) | the development host | Agent Under Fire's folder | 105,784 | 2,115 of 2,115 |
+| The maintainer's third (2026-11-16) | the development host | Agent Under Fire's folder | 68,497 | 1,369 of 1,369 |
+| The maintainer's of 2026-11-17 | the development host | Agent Under Fire's folder | 82,844 | 1,656 of 1,656 |
+| Killzone's start, with both patches, with the EE overclock and without (G17, two sessions) | the development host | Killzone's folder | 2,000 each | 40 of 40 each |
+| Killzone's level script in the window (G17; given the patches it was played with, which its record is older than) | the development host | Killzone's folder | 9,300 | 186 of 186 |
+| Agent Under Fire's, above | its launcher | the development host | 9,000 | 180 of 180 |
+| Killzone's, above | its launcher | the development host | 9,300 | 186 of 186 |
+
+The development host ran Killzone's with the game's EE code interpreted,
+its build holding Agent Under Fire's; the run ends on the same picture and
+the same sound as the development host's session of the same script two
+days before (`g17-win`), which Killzone's folder ran again too.
+- **One block of micro code** was interpreted in the folder's runs of the
+  maintainer's first two sessions, and in no run of the development
+  host's: VU1's block at `0x0D98`, two instruction pairs that end a
+  program, run 3,199 and 5,507 times, the run still the session at every
+  fingerprint. The development host holds it from the VU self-test's
+  capture, which has a random program with the same plan, so no run of the
+  game there ever had to interpret it, and none of the game's captures had
+  it; the folder is made from the game's captures alone. It is in Agent
+  Under Fire's capture now (`build\game\aut\vu-capture.toml`, 1,625 of
+  VU1's blocks), which the development trees compile too, and the first
+  session, run again from the folder made with it, interpreted none of its
+  micro code and is the session at every one of its 846 fingerprints. A
+  game's captures made on the development host can miss what the host
+  holds from elsewhere; a packaged game's own sessions write it down, for
+  the next compile (P4.6 does that compile by itself).
+- **Moved**: Killzone's folder copied elsewhere
+  (`build\p44\moved\Killzone`, without its generated code and its
+  sessions) and started from its launcher there: the runtime ran from the
+  copy, with the copy's settings, BIOS, data and sessions, 600 frames at
+  49.66 a second with its start, and wrote the session down in the copy's
+  `sessions`, with the memory cards and the console's NVRAM as they were.
+  The settings name the disc image and the archive of patches where they
+  are; the rest is the folder's.
+- **When it cannot play**, the launcher says so with what the runtime
+  said: given an option the runtime does not take, its message box read
+  "ps2n-host: unknown option '-no-such-option', or its value is missing"
+  (the runtime's exit code 4; the first version showed the end of the help
+  that follows that line, and now shows the runtime's own last lines);
+  given a BIOS image that is not there, "ps2n-host: BIOS image not found:
+  C:\no such folder\SCPH-70004.BIN" (exit code 1). That start left a
+  session's folder behind, with copies of the memory cards and no record:
+  the runtime made it while it read its options. It now makes it once the
+  machine can be set up (`MakeSessionFolder()`): the same start leaves
+  none, and a session played still gets its folder, with the memory cards,
+  the console's NVRAM and the record.
+- **Every test passes**: 533 in the usual tree and in the imports tree,
+  534 in the module tree (`selftest/module-stack-probe` the one more).
+
+P4.4's criterion is met: Killzone and Agent Under Fire run from their
+folders, at the console's pace, the same runs as from the development host.
+
+### What it leaves for the steps after
+
+- A folder names the disc image and PCSX2's archive of patches where they
+  were when it was made; taken to another computer, its `settings.txt`
+  needs them where they are there, or `make-game.ps1` run there. The
+  wizard (P4.5) writes the same folder and settings.
+- What a session in the folder had to interpret is written down in it,
+  and the next `make-game.ps1` compiles it; compiling it by itself in the
+  background, for the game's next start, is P4.6.

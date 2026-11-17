@@ -147,14 +147,18 @@ param(
     [ValidateSet('on', 'off')][string]$BiosStatic = 'on',
     # off: every call through a register goes through the runtime's dispatcher (ps2n-host -call-sites off), to time the two.
     [ValidateSet('on', 'off')][string]$CallSites = 'on',
-    [string]$BuildDir = 'build\windows-clang'
+    [string]$BuildDir = 'build\windows-clang',
+    # The runtime of a game's folder (scripts\windows\kit\make-game.ps1: games\<name>\ps2n-host.exe, the
+    # game's modules beside it) in the place of the build tree's, to run a packaged game as it is, a session
+    # run again among them (step P4.4). The run's files are in the build tree all the same.
+    [string]$Runtime = ''
 )
 
 $ErrorActionPreference = 'Stop'
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $build = Join-Path $root $BuildDir
-$hostExe = Join-Path $build 'ps2n\bin\ps2n-host.exe'
+$hostExe = if ($Runtime) { (Resolve-Path -LiteralPath $Runtime).Path } else { Join-Path $build 'ps2n\bin\ps2n-host.exe' }
 if (-not (Test-Path $hostExe)) { throw "Build first: scripts\windows\build.ps1" }
 if (-not $Bios) { throw "A BIOS image is needed: -Bios <file>, or set PS2N_BIOS." }
 $env:PS2N_BIOS = (Resolve-Path -LiteralPath $Bios).Path

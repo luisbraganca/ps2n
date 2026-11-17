@@ -1,14 +1,15 @@
 <#
 .SYNOPSIS
 Puts together the folder a computer with nothing else installed compiles and plays a game from
-(docs\phase4-proposal.md, step P4.3; docs\adr\0030).
+(docs\phase4-proposal.md, steps P4.3 and P4.4; docs\adr\0030, 0031).
 
 .DESCRIPTION
 The folder (build\kit unless -Out says otherwise) holds:
 
   runtime\     the runtime, built here once: ps2n-host.exe from a tree built with -Module on, the
                libraries it uses (PCSX2's, from deps; Microsoft's C++ runtime, from Visual Studio's
-               redistributable files) and PCSX2's resources
+               redistributable files, ADR 0031) and PCSX2's resources; and ps2n-launcher.exe, which a
+               game's folder holds under the game's name
   toolchain\   what compiles a game's modules: LLVM's own clang-cl and lld-link (22.1.3, the version
                the development builds use; fetched from LLVM's release into deps\llvm-22.1.3 when
                not there yet, its SHA-256 checked) with the compiler's headers; ps2n-recomp;
@@ -37,9 +38,10 @@ if (-not ((Test-Path $cache) -and (Select-String -LiteralPath $cache -Pattern '^
     throw "$BuildDir is not a tree built with -Module on (scripts\windows\build.ps1 -BuildDir $BuildDir -Module on)."
 }
 $hostExe = Join-Path $build 'ps2n\bin\ps2n-host.exe'
+$launcherExe = Join-Path $build 'ps2n\bin\ps2n-launcher.exe'
 $implib = Join-Path $build 'ps2n-host.lib'
 $recomp = Join-Path $root 'build\tools-windows\bin\ps2n-recomp.exe'
-foreach ($needed in $hostExe, $implib, $recomp) { if (-not (Test-Path $needed)) { throw "Build first: $needed is missing." } }
+foreach ($needed in $hostExe, $launcherExe, $implib, $recomp) { if (-not (Test-Path $needed)) { throw "Build first: $needed is missing." } }
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -84,7 +86,7 @@ $toolchain = Join-Path $kit 'toolchain'
 
 # The runtime: the host, the libraries it imports from PCSX2's dependencies (and theirs), the Vulkan
 # renderer's shader compiler, which PCSX2 loads while it runs, and PCSX2's resources.
-Copy-Item -LiteralPath $hostExe -Destination $runtime
+Copy-Item -LiteralPath $hostExe, $launcherExe -Destination $runtime
 Copy-Item -LiteralPath (Join-Path $build 'ps2n\bin\resources') -Destination $runtime -Recurse
 $deps = Join-Path $root 'deps\windows-x64\deps\bin'
 function Get-Imports([string]$file) {
@@ -109,7 +111,7 @@ while ($wanted.Count -gt 0) {
     }
 }
 # Microsoft's C++ runtime, which those libraries and the host use, from Visual Studio's redistributable
-# files (for the maintainer's own computers so far: whether a packaged game may carry it is step P4.4's).
+# files: it travels in the folder (docs\adr\0031).
 $crt = Get-ChildItem (Join-Path $vs 'VC\Redist\MSVC') -Directory | Where-Object { $_.Name -match '^\d' } |
     Sort-Object { [version]$_.Name } | Select-Object -Last 1
 $crt = Get-ChildItem (Join-Path $crt.FullName 'x64') -Directory -Filter 'Microsoft.VC*.CRT' | Select-Object -First 1

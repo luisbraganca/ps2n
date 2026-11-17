@@ -186,6 +186,9 @@ namespace
 		bool clock_fixed = true; // the console's clock starts at a fixed time, not at the host's time of day
 		std::optional<ps2n::host::session::Clock> clock_at; // -clock <date and time>, or a replay's
 		std::string record_dir; // with -window: where the session is written down to be run again
+		std::string sessions_dir; // with -window: each session written down in a folder of its own in this one (-sessions)
+		bool make_session_folder = false; // record_dir is that folder, to be made when the machine can be set up
+		std::string window_title; // with -window: the window's title, whatever the game is (-title)
 		std::string input_path; // a session written down, to run again (-input)
 		std::string memcards_dir; // without -window: the memory cards to put in the slots (Mcd001.ps2, Mcd002.ps2)
 		bool patch_widescreen = false; // apply the game's widescreen patch (-patches; the default with -window)
@@ -358,7 +361,19 @@ namespace
 			"                     patches and the EE cycle rate it was given, and a\n"
 			"                     fingerprint of the registers every 50 frames. The memory\n"
 			"                     cards and the NVRAM it began with go beside it\n"
-			"                     (game.ps1 -Play copies them there).\n"
+			"                     (game.ps1 -Play copies them there; -sessions does it).\n"
+			"  -sessions <dir>    With -window: write each session down in a folder of its\n"
+			"                     own in <dir>, named after the time it began (-record\n"
+			"                     there), with the memory cards and the NVRAM it began with\n"
+			"                     beside it, and what it had to interpret (-capture,\n"
+			"                     -vu-capture, -iop-capture there, for the providers that\n"
+			"                     are PS2Native's): what a game's folder does.\n"
+			"  -title <text>      With -window: the window's title, whatever the game is.\n"
+			"  -settings <file>   Read options from <file>, one to a line (a line beginning\n"
+			"                     with # is left out), in the place of this one; %GAME% in\n"
+			"                     them is the folder <file> is in. Started with no options\n"
+			"                     at all, the host reads settings.txt beside it, where there\n"
+			"                     is one: a game's folder (docs/app-log.md, P4.4).\n"
 			"  -input <file>      Run a session written down with -record again, without a\n"
 			"                     window: its controller, its clock, its number of frames,\n"
 			"                     its patches and its EE cycle rate, unless -clock,\n"
@@ -631,6 +646,10 @@ namespace
 				o.pad_path = argv[++i];
 			else if (is("-record") && has_value)
 				o.record_dir = argv[++i];
+			else if (is("-sessions") && has_value)
+				o.sessions_dir = argv[++i];
+			else if (is("-title") && has_value)
+				o.window_title = argv[++i];
 			else if (is("-input") && has_value)
 				o.input_path = argv[++i];
 			else if (is("-memcards") && has_value)
@@ -1059,9 +1078,9 @@ namespace
 			if (!o.clock_given)
 				o.clock_fixed = false;
 		}
-		else if (o.mute || o.osd || !o.record_dir.empty())
+		else if (o.mute || o.osd || !o.record_dir.empty() || !o.sessions_dir.empty() || !o.window_title.empty())
 		{
-			std::fputs("ps2n-host: -mute, -osd and -record are for -window\n", stderr);
+			std::fputs("ps2n-host: -mute, -osd, -record, -sessions and -title are for -window\n", stderr);
 			return false;
 		}
 		if (o.window && (!o.input_path.empty() || !o.memcards_dir.empty()))
@@ -1087,7 +1106,7 @@ namespace
 		for (std::string* path : {&o.boot_path, &o.bios_path, &o.data_dir, &o.out_path, &o.times_path, &o.log_path, &o.capture_path,
 				 &o.bios_capture_path, &o.trace_path, &o.trace_against_path, &o.sync_path, &o.sync_against_path, &o.frame_path, &o.pad_path,
 				 &o.profile_path, &o.vu_report_path, &o.iop_report_path, &o.vu_programs_path, &o.vu_capture_path, &o.iop_capture_path,
-				 &o.record_dir, &o.input_path, &o.memcards_dir, &o.patch_archive})
+				 &o.record_dir, &o.sessions_dir, &o.input_path, &o.memcards_dir, &o.patch_archive})
 			Path::ToNativePath(path);
 
 		if (!o.input_path.empty())
@@ -1135,6 +1154,14 @@ namespace
 			}
 		}
 
+		// An archive named that is not there (a game's folder made where PCSX2
+		// was installed, played where it no longer is) is none.
+		if (!o.patch_archive.empty() && !FileSystem::FileExists(o.patch_archive.c_str()))
+		{
+			std::fprintf(stderr, "ps2n-host: there is no archive of PCSX2's patches at %s\n", o.patch_archive.c_str());
+			o.patch_archive.clear();
+		}
+
 		// The game's patches come from PCSX2's archive of them (-patch-archive;
 		// PS2Native ships none, ADR 0028). Without one there is nothing to apply.
 		// A window, which asks for them by default, then plays without them, and
@@ -1151,6 +1178,106 @@ namespace
 			o.patch_widescreen = false;
 			o.patch_fps = false;
 			std::fputs("ps2n-host: no archive of PCSX2's patches (-patch-archive): the game is played without them\n", stderr);
+		}
+
+		// A session in a folder of its own (-sessions): what game.ps1 -Play does
+		// around the host, done by the host, which in a game's folder nothing
+		// else starts. The folder is named after the time the session began, and
+		// what the session has to interpret is written there too; it is made,
+		// with the memory cards and the console's NVRAM, once the machine can be
+		// set up (MakeSessionFolder).
+		if (!o.sessions_dir.empty() && o.record_dir.empty())
+		{
+			const std::time_t now = std::time(nullptr);
+			std::tm local = {};
+#ifdef _WIN32
+			localtime_s(&local, &now);
+#else
+			localtime_r(&now, &local);
+#endif
+			char name[32];
+			std::strftime(name, sizeof(name), "%Y%m%d-%H%M%S", &local);
+			o.record_dir = Path::Combine(o.sessions_dir, name);
+			o.make_session_folder = true;
+			if (o.capture_path.empty() && o.ee == EEProvider::Ps2n)
+				o.capture_path = Path::Combine(o.record_dir, "capture.toml");
+			if (o.vu_capture_path.empty() && o.vu_ps2n != 0)
+				o.vu_capture_path = Path::Combine(o.record_dir, "vu-capture.toml");
+			if (o.iop_capture_path.empty() && o.iop_ps2n)
+				o.iop_capture_path = Path::Combine(o.record_dir, "iop-capture.toml");
+		}
+		return true;
+	}
+
+	// The folder of a session under -sessions, made once the machine can be set
+	// up, so that a start that stops before (an option the host does not take,
+	// a BIOS or disc image that is not there) leaves none behind; and in it,
+	// before the machine opens them, the memory cards and the console's NVRAM
+	// as they are now (the core keeps the NVRAM beside the BIOS image:
+	// <image>.nvm and .mec), as game.ps1 -Play puts them beside a record.
+	bool MakeSessionFolder()
+	{
+		const Options& o = s_options;
+		if (!FileSystem::CreateDirectoryPath(o.record_dir.c_str(), true))
+		{
+			std::fprintf(stderr, "ps2n-host: cannot make %s\n", o.record_dir.c_str());
+			return false;
+		}
+		for (const char* card : {"Mcd001.ps2", "Mcd002.ps2"})
+		{
+			const std::string from = Path::Combine(Path::Combine(Path::Combine(o.data_dir, "PCSX2"), "memcards"), card);
+			if (FileSystem::FileExists(from.c_str()))
+				FileSystem::CopyFilePath(from.c_str(), Path::Combine(o.record_dir, card).c_str(), false);
+		}
+		for (const char* extension : {"nvm", "mec"})
+		{
+			const std::string from = Path::ReplaceExtension(o.bios_path, extension);
+			if (FileSystem::FileExists(from.c_str()))
+				FileSystem::CopyFilePath(from.c_str(), Path::Combine(o.record_dir, Path::GetFileName(from)).c_str(), false);
+		}
+		return true;
+	}
+
+	// The options, with the files -settings names read in the place of
+	// `-settings <file>`: one option to a line, a line beginning with # left
+	// out, %GAME% the file's folder. Started with no options at all, the host
+	// reads settings.txt beside it, where there is one: in a game's folder it
+	// then plays the game as the game's launcher has it play (host/launcher.cpp
+	// gives -settings itself; docs/phase4-proposal.md, step P4.4).
+	bool ExpandSettings(int argc, char* argv[], std::vector<std::string>* out)
+	{
+		out->emplace_back(argc > 0 ? argv[0] : "ps2n-host");
+		std::vector<std::string> given(argv + std::min(argc, 1), argv + argc);
+		if (given.empty())
+		{
+			const std::string beside = Path::Combine(Path::GetDirectory(FileSystem::GetProgramPath()), "settings.txt");
+			if (FileSystem::FileExists(beside.c_str()))
+				given = {"-settings", beside};
+		}
+		for (size_t i = 0; i < given.size(); i++)
+		{
+			if (given[i] != "-settings" || i + 1 >= given.size())
+			{
+				out->push_back(given[i]);
+				continue;
+			}
+			std::string file = given[++i];
+			if (!Path::IsAbsolute(file))
+				file = Path::Canonicalize(Path::Combine(FileSystem::GetWorkingDirectory(), file));
+			const std::optional<std::string> text = FileSystem::ReadFileToString(file.c_str());
+			if (!text)
+			{
+				std::fprintf(stderr, "ps2n-host: cannot read %s\n", file.c_str());
+				return false;
+			}
+			const std::string folder(Path::GetDirectory(file));
+			for (std::string_view line : StringUtil::SplitString(*text, '\n', false))
+			{
+				line = StringUtil::StripWhitespace(line);
+				if (line.empty() || line.front() == '#')
+					continue;
+				out->push_back(StringUtil::ReplaceAll(line, "%GAME%", folder));
+			}
 		}
 		return true;
 	}
@@ -2672,7 +2799,16 @@ namespace
 			return EXIT_ERROR;
 		}
 
-		if (!ParseCommandLine(argc, argv))
+		// The options as given, or as a game's folder has them (-settings,
+		// settings.txt).
+		std::vector<std::string> arguments;
+		if (!ExpandSettings(argc, argv, &arguments))
+			return EXIT_USAGE;
+		std::vector<char*> pointers;
+		for (std::string& argument : arguments)
+			pointers.push_back(argument.data());
+		pointers.push_back(nullptr);
+		if (!ParseCommandLine(static_cast<int>(arguments.size()), pointers.data()))
 		{
 			PrintUsage();
 			return EXIT_USAGE;
@@ -2707,6 +2843,8 @@ namespace
 
 		if (!InitializeConfig())
 			return EXIT_ERROR;
+		if (s_options.make_session_folder && !MakeSessionFolder())
+			return EXIT_ERROR;
 		if (!s_options.record_dir.empty() &&
 			!ps2n::host::session::StartRecording(s_options.record_dir, s_clock_used,
 				PatchesText(s_options.patch_widescreen, s_options.patch_fps),
@@ -2722,7 +2860,8 @@ namespace
 		{
 			const ps2n::host::window::Listener listener = {
 				&OnWindowKey, &OnWindowResized, &OnWindowFocusLost, &OnWindowCloseRequested, &OnWindowShotRequested};
-			if (!ps2n::host::window::Create(kWindowTitle, s_options.window_width, s_options.window_height, listener))
+			if (!ps2n::host::window::Create(s_options.window_title.empty() ? std::string(kWindowTitle) : s_options.window_title,
+					s_options.window_width, s_options.window_height, listener))
 			{
 				std::fputs("ps2n-host: cannot make the window\n", stderr);
 				return EXIT_ERROR;
@@ -2955,7 +3094,8 @@ namespace
 
 void ps2n::host::OnGameChanged(std::string_view title, std::string_view serial, uint32_t crc)
 {
-	if (s_options.window)
+	// A game's folder names its window itself (-title).
+	if (s_options.window && s_options.window_title.empty())
 		window::SetTitle(title.empty() ? std::string(kWindowTitle) : fmt::format("{} - {}", title, kWindowTitle));
 	if (crc != 0 && (s_options.patch_widescreen || s_options.patch_fps) && !s_options.patch_archive.empty())
 		TakePatchFile(serial, crc);

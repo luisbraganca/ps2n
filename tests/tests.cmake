@@ -798,6 +798,17 @@ if(PS2N_GAME_MODULE)
 	# The four at once, for a build of the host to name (build.ps1).
 	add_custom_target(ps2n-modules)
 	add_dependencies(ps2n-modules ${ps2n_images_targets})
+	# The stack probe a module defines for itself (runtime/module_entry.cpp),
+	# which no test program's code calls: a program built as a module is, whose
+	# functions' locals take up to fifty pages, on a thread whose stack Windows
+	# commits a page at a time (tests/module/stack_probe.cpp).
+	add_executable(ps2n-stack-probe "${PS2N_ROOT}/tests/module/stack_probe.cpp" "${PS2N_ROOT}/runtime/module_entry.cpp")
+	ps2n_compile_freestanding(ps2n-stack-probe)
+	target_link_options(ps2n-stack-probe PRIVATE /NODEFAULTLIB /ENTRY:Entry /SUBSYSTEM:CONSOLE)
+	target_link_libraries(ps2n-stack-probe PRIVATE kernel32)
+	set_target_properties(ps2n-stack-probe PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin")
+	add_dependencies(ps2n-modules ps2n-stack-probe)
+	add_test(NAME selftest/module-stack-probe COMMAND ps2n-stack-probe)
 	target_compile_definitions(ps2n-host PRIVATE PS2N_GAME_MODULE)
 	message(STATUS "PS2Native: the compiled code goes into modules of its own: ${ps2n_images_targets}")
 else()

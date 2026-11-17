@@ -15,15 +15,16 @@ command; about 1 GB of free disk; and, while it compiles, up to about 0.6 GB of
 memory for each file compiled at once, one per processor unless -Jobs says
 fewer (-Jobs 4 on a computer with 8 GB of memory, -Jobs 2 with 4 GB).
 
-Compile a game and play it, from a PowerShell window in this folder:
+Make a game into a folder of its own and play it, from a PowerShell window in
+this folder:
 
-    powershell -ExecutionPolicy Bypass -File .\make-game.ps1 -Image <disc image> -Bios <BIOS image> -Play
+    powershell -ExecutionPolicy Bypass -File .\make-game.ps1 -Image <disc image> -Bios <BIOS image> -Title Killzone -Play
 
 For a game made of several executables that it loads itself (Agent Under Fire),
 name them, and give what earlier sessions had to interpret, if you have it:
 
     powershell -ExecutionPolicy Bypass -File .\make-game.ps1 -Image <disc image> -Bios <BIOS image> `
-        -More MOVIE.ELF,ACTION.UK,DRIVING.ELF -Captures <folder> -Play
+        -Title 'Agent Under Fire' -More MOVIE.ELF,ACTION.UK,DRIVING.ELF -Captures <folder> -Play
 
 A game's widescreen and frame-rate patches come from PCSX2's own archive of
 them, patches.zip, which PS2Native does not ship: an installed PCSX2's is taken
@@ -31,10 +32,18 @@ by itself; where PCSX2 is not installed, give one with -PatchArchive <file>
 (it is in the resources folder of PCSX2's release). Without it the game plays
 as its disc has it, 4:3.
 
-The game goes into games\<name>: its modules beside a copy of the runtime, its
-memory cards, every session played (written down to be run again), and what a
-session had to interpret, which the next run of make-game.ps1 compiles too.
-Once compiled, -PlayOnly opens it again without compiling.
+The game goes into games\<title>, a folder that plays it: start <title>.exe
+there (double-click it, or make a shortcut to it). Beside it are its modules, a
+copy of the runtime, and settings.txt, what the runtime is started with: the
+disc image and the BIOS image, read where they were when the folder was made
+(move them, and make the folder again or change the file), the patches, the
+window's title, one option to a line. In the folder too are its memory cards
+and the console's settings (data), every session played, written down to be run
+again with what it had to interpret, which the next run of make-game.ps1
+compiles too (sessions), and last-run.log, what the runtime said the last time;
+when it could not play the game, <title>.exe says why. The folder can be moved
+or copied whole; work\, the generated code, can be deleted. -PlayOnly opens the
+game from this window again without compiling, and writes its settings again.
 
 In the window: the keyboard and the first controller play; F11 or Alt+Enter
 covers the screen; closing the window ends the session.
