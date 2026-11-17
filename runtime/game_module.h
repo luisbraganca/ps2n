@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// What a game module gives the host that loads it (docs/phase4-proposal.md,
-// step P4.1). With PS2N_GAME_MODULE the compiled code is not linked into
-// the host but built into a module of its own, a DLL beside the host's
-// executable, which the host loads when it starts. The module reaches the
-// machine and the runtime through what the host exports
-// (runtime/include/ps2n/module.h); the host reaches the module's compiled
-// code through the one function the module exports, which hands it the
-// lists the recompiler wrote (registry.cpp) that the host was linked with
-// before.
+// What a module of compiled code gives the host that loads it
+// (docs/phase4-proposal.md, steps P4.1 and P4.2). With PS2N_GAME_MODULE the
+// compiled code is not linked into the host but built into modules of its
+// own, DLLs beside the host's executable, one for each kind of code, which
+// the host loads when it starts. A module reaches the machine and the
+// runtime through what the host exports (runtime/include/ps2n/module.h); the
+// host reaches a module's compiled code through the one function each
+// exports, which hands it the lists the recompiler wrote for it (its
+// registry), which the host was linked with before.
+//
+// Compiled into the modules too, so it needs nothing but the compiler's own
+// headers.
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
+#include <stddef.h>
+#include <stdint.h>
 
 namespace ps2n::ee
 {
@@ -29,8 +32,9 @@ namespace ps2n::iop
 
 namespace ps2n
 {
-	// Changes whenever what a module and the host share changes.
-	inline constexpr uint32_t kGameModuleVersion = 1;
+	// Changes whenever what a module and the host share changes: 2, the
+	// machine's state as PS2Native describes it (ps2n/pcsx2_layout.h).
+	inline constexpr uint32_t kGameModuleVersion = 2;
 
 	// The lists of the compiled code a module holds, each ending with a null
 	// entry, as the recompiler writes them.
@@ -49,6 +53,8 @@ namespace ps2n
 	using GameModuleEntry = void (*)(GameModuleImages* images);
 	inline constexpr char kGameModuleEntry[] = "ps2n_game_module";
 
-	// The module's file, beside the host's executable.
-	inline constexpr wchar_t kGameModuleFile[] = L"ps2n-game.dll";
+	// The modules, beside the host's executable, in the order their lists are
+	// put together: the programs' EE code, the BIOS's, the micro code, the
+	// IOP's code.
+	inline constexpr const wchar_t* kGameModuleFiles[] = {L"ps2n-game.dll", L"ps2n-bios.dll", L"ps2n-vu.dll", L"ps2n-iop.dll"};
 } // namespace ps2n

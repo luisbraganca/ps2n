@@ -17,11 +17,9 @@
 #pragma once
 
 #include "ps2n/module.h"
+#include "ps2n/pcsx2.h"
 
-#include "vtlb.h"
-
-#include <cstdint>
-#include <cstring>
+#include <stdint.h>
 
 namespace ps2n::ee
 {
@@ -34,7 +32,7 @@ namespace ps2n::ee
 			if (!entry.isHandler(addr)) [[likely]]
 			{
 				T value;
-				std::memcpy(&value, reinterpret_cast<const void*>(entry.assumePtr(addr)), sizeof(T));
+				__builtin_memcpy(&value, reinterpret_cast<const void*>(entry.assumePtr(addr)), sizeof(T));
 				return value;
 			}
 			return vtlb_memRead<T>(addr);
@@ -46,7 +44,7 @@ namespace ps2n::ee
 			const auto entry = vtlb_private::vtlbdata.vmap[addr >> vtlb_private::VTLB_PAGE_BITS];
 			if (!entry.isHandler(addr)) [[likely]]
 			{
-				std::memcpy(reinterpret_cast<void*>(entry.assumePtr(addr)), &value, sizeof(T));
+				__builtin_memcpy(reinterpret_cast<void*>(entry.assumePtr(addr)), &value, sizeof(T));
 				return;
 			}
 			vtlb_memWrite<T>(addr, value);
@@ -71,7 +69,7 @@ namespace ps2n::ee
 		const auto entry = vtlb_private::vtlbdata.vmap[addr >> vtlb_private::VTLB_PAGE_BITS];
 		if (!entry.isHandler(addr)) [[likely]]
 		{
-			std::memcpy(out, reinterpret_cast<const void*>(entry.assumePtr(addr)), 16);
+			__builtin_memcpy(out, reinterpret_cast<const void*>(entry.assumePtr(addr)), 16);
 			return;
 		}
 		r128_store_unaligned(out, vtlb_memRead128(addr));
@@ -83,7 +81,7 @@ namespace ps2n::ee
 		const auto entry = vtlb_private::vtlbdata.vmap[addr >> vtlb_private::VTLB_PAGE_BITS];
 		if (!entry.isHandler(addr)) [[likely]]
 		{
-			std::memcpy(reinterpret_cast<void*>(entry.assumePtr(addr)), in, 16);
+			__builtin_memcpy(reinterpret_cast<void*>(entry.assumePtr(addr)), in, 16);
 			return;
 		}
 		alignas(16) const uint64_t aligned[2] = {in[0], in[1]};

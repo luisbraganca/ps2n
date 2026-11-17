@@ -52,10 +52,9 @@
 #pragma once
 
 #include "ps2n/ee_state.h"
+#include "ps2n/pcsx2.h"
 
-#include "COP0.h"
-
-#include <cstdint>
+#include <stdint.h>
 
 namespace ps2n::ee::ops
 {

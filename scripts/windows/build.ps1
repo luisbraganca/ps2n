@@ -97,8 +97,10 @@ param(
     # Link-time optimization of PS2Native's own code, the generated code and the runtime (docs/adr/0019): "thin"
     # (ThinLTO), or "off". PCSX2's code is compiled as before either way. Remembered by the build tree, as -Game is.
     [ValidateSet('', 'thin', 'off')][string]$Lto = '',
-    # The compiled code built into a module of its own, ps2n-game.dll beside the host, which the host loads when it
-    # starts (docs\phase4-proposal.md, step P4.1): "on", or "off" to build it into the host, as by default, or
+    # The compiled code built into modules of its own beside the host, one for each kind of code (ps2n-game.dll,
+    # ps2n-bios.dll, ps2n-vu.dll, ps2n-iop.dll), compiled with PS2Native's own headers and nothing else, which the
+    # host loads when it starts (docs\phase4-proposal.md, steps P4.1 and P4.2): "on", or "off" to build it into the
+    # host, as by default, or
     # "imports" to compile it as for a module and link it into the host all the same (what reaching the core
     # through the import table costs, alone; docs\app-log.md, P4.1). Remembered by the build tree, as -Game is.
     [ValidateSet('', 'on', 'off', 'imports')][string]$Module = ''
@@ -226,11 +228,11 @@ if ($Reconfigure -or $gameSettings -or -not (Test-Path (Join-Path $build 'build.
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-# With the compiled code in a module of its own, the host does not run without the module.
+# With the compiled code in modules of its own, the host does not run without the modules.
 $cache = Join-Path $build 'CMakeCache.txt'
 if (($Target -contains 'ps2n-host') -and (Test-Path $cache) -and
     (Select-String -LiteralPath $cache -Pattern '^PS2N_GAME_MODULE:BOOL=ON$' -Quiet)) {
-    $Target = @($Target) + 'ps2n-game'
+    $Target = @($Target) + 'ps2n-modules'
 }
 
 cmake --build $build --target $Target

@@ -54,7 +54,7 @@
 // except a switch.
 #pragma once
 
-#include <cstdint>
+#include <stdint.h>
 
 namespace ps2n::ee::ops
 {

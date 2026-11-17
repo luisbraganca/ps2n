@@ -17,9 +17,10 @@
 #include "ps2n/ops_int.h"
 #include "ps2n/ops_mmi.h"
 #include "ps2n/ops_vu0.h"
+#include "ps2n/pcsx2.h"
 
-#include <cstddef>
-#include <cstdint>
+#include <stddef.h>
+#include <stdint.h>
 
 // The calling convention of compiled functions. Under clang they keep no
 // registers for their caller (preserve_none). A compiled function holds
@@ -754,7 +755,7 @@ namespace ps2n::ee
 		} \
 		else if ((ft_) != 0) \
 		{ \
-			std::memcpy(&VU0.VF[ft_], reinterpret_cast<const void*>(ps2n_e.assumePtr(ps2n_a)), 16); \
+			__builtin_memcpy(&VU0.VF[ft_], reinterpret_cast<const void*>(ps2n_e.assumePtr(ps2n_a)), 16); \
 		} \
 	} while (0)
 #define PS2N_SQC2(ft_, addr_, pc_, put_) \
@@ -771,7 +772,7 @@ namespace ps2n::ee
 		} \
 		else \
 		{ \
-			std::memcpy(reinterpret_cast<void*>(ps2n_e.assumePtr(ps2n_a)), &VU0.VF[ft_], 16); \
+			__builtin_memcpy(reinterpret_cast<void*>(ps2n_e.assumePtr(ps2n_a)), &VU0.VF[ft_], 16); \
 		} \
 	} while (0)
 
@@ -877,13 +878,13 @@ namespace ps2n::ee
 	inline T plainRead(const vtlb_private::VTLBVirtual entry, uint32_t address)
 	{
 		T value;
-		std::memcpy(&value, reinterpret_cast<const void*>(entry.assumePtr(address)), sizeof(T));
+		__builtin_memcpy(&value, reinterpret_cast<const void*>(entry.assumePtr(address)), sizeof(T));
 		return value;
 	}
 	template <typename T>
 	inline void plainWrite(const vtlb_private::VTLBVirtual entry, uint32_t address, T value)
 	{
-		std::memcpy(reinterpret_cast<void*>(entry.assumePtr(address)), &value, sizeof(T));
+		__builtin_memcpy(reinterpret_cast<void*>(entry.assumePtr(address)), &value, sizeof(T));
 	}
 } // namespace ps2n::ee
 

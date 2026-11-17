@@ -49,11 +49,8 @@
 #include "ps2n/ee_memory.h"
 #include "ps2n/ee_state.h"
 #include "ps2n/ops_int.h"
+#include "ps2n/pcsx2.h"
 
-#include "Config.h"
-
-#include <array>
-#include <cstdint>
 #include <emmintrin.h>
 #include <smmintrin.h>
 #include <xmmintrin.h>
@@ -198,8 +195,15 @@ namespace ps2n::ee::ops
 		// PCSX2's recompiler branches to the same masks. Looked up, they cost
 		// no branch for the processor to mispredict, and come into SSE
 		// registers without passing through general ones.
-		alignas(64) inline constexpr std::array<uint64_t, 511> kGuardMasks = [] {
-			std::array<uint64_t, 511> masks{};
+		struct GuardMasks
+		{
+			uint64_t masks[511];
+
+			constexpr const uint64_t& operator[](size_t i) const { return masks[i]; }
+			constexpr uint64_t& operator[](size_t i) { return masks[i]; }
+		};
+		alignas(64) inline constexpr GuardMasks kGuardMasks = [] {
+			GuardMasks masks{};
 			for (int diff = -255; diff <= 255; diff++)
 			{
 				uint32_t d = 0xFFFFFFFFu, t = 0xFFFFFFFFu;
@@ -416,9 +420,9 @@ namespace ps2n::ee::val
 	inline Fpr SQRT_S(Fpr t)
 	{
 		namespace fpu = ops::fpu;
-		FPControlRegister nearest = EmuConfig.Cpu.FPUFPCR;
-		nearest.SetRoundMode(FPRoundMode::Nearest);
-		const fpu::ScopedControl control(nearest.bitmask);
+		// FPControlRegister::SetRoundMode(FPRoundMode::Nearest).
+		const uint32_t nearest = (EmuConfig.Cpu.FPUFPCR.bitmask & ~ps2n::pcsx2::kRoundingControlBits) | ps2n::pcsx2::kRoundNearest;
+		const fpu::ScopedControl control(nearest);
 
 		fpuRegs.fprc[31] &= ~(fpu::kFlagI | fpu::kFlagD);
 		uint32_t bits = fpu::toBits(t);

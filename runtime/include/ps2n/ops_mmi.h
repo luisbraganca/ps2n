@@ -22,10 +22,7 @@
 #include "ps2n/ee_state.h"
 #include "ps2n/ops_int.h"
 
-#include <bit>
-#include <cstdint>
-#include <cstring>
-#include <limits>
+#include <stdint.h>
 
 namespace ps2n::ee::ops
 {
@@ -38,24 +35,24 @@ namespace ps2n::ee::ops
 	template <typename T>
 	inline Lanes<T> gl(uint32_t r) {
 		Lanes<T> q;
-		std::memcpy(q.v, cpuRegs.GPR.r[r].UD, 16);
+		__builtin_memcpy(q.v, cpuRegs.GPR.r[r].UD, 16);
 		return q;
 	}
 	template <typename T>
 	inline Lanes<T> hiLanes() {
 		Lanes<T> q;
-		std::memcpy(q.v, cpuRegs.HI.UD, 16);
+		__builtin_memcpy(q.v, cpuRegs.HI.UD, 16);
 		return q;
 	}
 	template <typename T>
 	inline Lanes<T> loLanes() {
 		Lanes<T> q;
-		std::memcpy(q.v, cpuRegs.LO.UD, 16);
+		__builtin_memcpy(q.v, cpuRegs.LO.UD, 16);
 		return q;
 	}
 	template <typename T>
 	inline void sl(uint32_t rd, const Lanes<T>& q) {
-		if (rd) std::memcpy(cpuRegs.GPR.r[rd].UD, q.v, 16);
+		if (rd) __builtin_memcpy(cpuRegs.GPR.r[rd].UD, q.v, 16);
 	}
 
 	template <typename T, typename F>
@@ -73,10 +70,20 @@ namespace ps2n::ee::ops
 		sl(rd, r);
 	}
 
+	// The smallest and largest value of a lane's type.
+	template <typename T>
+	struct Limits;
+	template <> struct Limits<int8_t> { static constexpr int8_t min = -128, max = 127; };
+	template <> struct Limits<int16_t> { static constexpr int16_t min = -32768, max = 32767; };
+	template <> struct Limits<int32_t> { static constexpr int32_t min = -2147483647 - 1, max = 2147483647; };
+	template <> struct Limits<uint8_t> { static constexpr uint8_t min = 0, max = 0xFF; };
+	template <> struct Limits<uint16_t> { static constexpr uint16_t min = 0, max = 0xFFFF; };
+	template <> struct Limits<uint32_t> { static constexpr uint32_t min = 0, max = 0xFFFFFFFFu; };
+
 	template <typename T>
 	inline T saturate(int64_t v) {
-		if (v > static_cast<int64_t>(std::numeric_limits<T>::max())) return std::numeric_limits<T>::max();
-		if (v < static_cast<int64_t>(std::numeric_limits<T>::min())) return std::numeric_limits<T>::min();
+		if (v > static_cast<int64_t>(Limits<T>::max)) return Limits<T>::max;
+		if (v < static_cast<int64_t>(Limits<T>::min)) return Limits<T>::min;
 		return static_cast<T>(v);
 	}
 
@@ -161,10 +168,10 @@ namespace ps2n::ee::ops
 	inline void QFSRV(uint32_t rd, uint32_t rs, uint32_t rt) {
 		const uint32_t bytes = cpuRegs.sa & 15;
 		uint8_t cat[32];
-		std::memcpy(cat, cpuRegs.GPR.r[rt].UD, 16);
-		std::memcpy(cat + 16, cpuRegs.GPR.r[rs].UD, 16);
+		__builtin_memcpy(cat, cpuRegs.GPR.r[rt].UD, 16);
+		__builtin_memcpy(cat + 16, cpuRegs.GPR.r[rs].UD, 16);
 		Lanes<uint8_t> r;
-		std::memcpy(r.v, cat + bytes, 16);
+		__builtin_memcpy(r.v, cat + bytes, 16);
 		sl(rd, r);
 	}
 
@@ -290,7 +297,7 @@ namespace ps2n::ee::ops
 		if (!rd) return;
 		auto count = [](uint32_t x) {
 			const uint32_t y = x ^ static_cast<uint32_t>(static_cast<int32_t>(x) >> 31);
-			return static_cast<uint32_t>(std::countl_zero(y)) - 1;
+			return static_cast<uint32_t>(y == 0 ? 32 : __builtin_clz(y)) - 1; // std::countl_zero
 		};
 		const auto s = gl<uint32_t>(rs);
 		cpuRegs.GPR.r[rd].UD[0] = static_cast<uint64_t>(count(s.v[0])) | (static_cast<uint64_t>(count(s.v[1])) << 32);
@@ -341,8 +348,8 @@ namespace ps2n::ee::ops
 		h.v[0] = s.v[1];
 		l.v[2] = s.v[2];
 		h.v[2] = s.v[3];
-		std::memcpy(cpuRegs.HI.UD, h.v, 16);
-		std::memcpy(cpuRegs.LO.UD, l.v, 16);
+		__builtin_memcpy(cpuRegs.HI.UD, h.v, 16);
+		__builtin_memcpy(cpuRegs.LO.UD, l.v, 16);
 	}
 
 	// ---- parallel multiply / divide on words 0 and 2 ------------------------------
@@ -408,8 +415,8 @@ namespace ps2n::ee::ops
 				hi.v[i] = s.v[i];
 			}
 		}
-		std::memcpy(cpuRegs.LO.UD, lo.v, 16);
-		std::memcpy(cpuRegs.HI.UD, hi.v, 16);
+		__builtin_memcpy(cpuRegs.LO.UD, lo.v, 16);
+		__builtin_memcpy(cpuRegs.HI.UD, hi.v, 16);
 	}
 
 	// ---- parallel halfword multiply ---------------------------------------------
@@ -417,14 +424,14 @@ namespace ps2n::ee::ops
 	// LO0 LO1 HI0 HI1 LO2 LO3 HI2 HI3; rd gets LO0 HI0 LO2 HI2.
 	inline void phResult(uint32_t rd, const int32_t r[8]) {
 		const Lanes<int32_t> lo{{r[0], r[1], r[4], r[5]}}, hi{{r[2], r[3], r[6], r[7]}};
-		std::memcpy(cpuRegs.LO.UD, lo.v, 16);
-		std::memcpy(cpuRegs.HI.UD, hi.v, 16);
+		__builtin_memcpy(cpuRegs.LO.UD, lo.v, 16);
+		__builtin_memcpy(cpuRegs.HI.UD, hi.v, 16);
 		sl(rd, Lanes<int32_t>{{lo.v[0], hi.v[0], lo.v[2], hi.v[2]}});
 	}
 	inline void phAccumulators(int32_t acc[8]) {
 		const auto lo = loLanes<int32_t>(), hi = hiLanes<int32_t>();
 		const int32_t a[8] = {lo.v[0], lo.v[1], hi.v[0], hi.v[1], lo.v[2], lo.v[3], hi.v[2], hi.v[3]};
-		std::memcpy(acc, a, sizeof(a));
+		__builtin_memcpy(acc, a, sizeof(a));
 	}
 	inline void PMULTH(uint32_t rd, uint32_t rs, uint32_t rt) {
 		const auto s = gl<int16_t>(rs), t = gl<int16_t>(rt);

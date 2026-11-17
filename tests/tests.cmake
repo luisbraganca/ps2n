@@ -42,6 +42,14 @@ endif()
 set(PS2N_GENERATED "${CMAKE_BINARY_DIR}/ps2n/generated")
 set(ps2n_image_sources "")
 set(ps2n_image_ids "")
+# The same by kind, for the modules (PS2N_GAME_MODULE, below): the EE code of
+# the programs, the BIOS's, the micro code, the IOP's code.
+set(ps2n_program_sources "")
+set(ps2n_program_ids "")
+set(ps2n_bios_sources "")
+set(ps2n_bios_ids "")
+set(ps2n_vu_sources "")
+set(ps2n_iop_sources "")
 
 # ps2n_add_image(<id> <elf> [CAPTURE <file>] [COMMENT <text>] [PARTS <n>] [LOADED_BY <elf>])
 # CAPTURE: what an earlier run of the program reported (ps2n-host -capture).
@@ -94,8 +102,11 @@ macro(ps2n_add_image id elf)
 	)
 	list(APPEND ps2n_image_sources ${image_outputs})
 	list(APPEND ps2n_image_ids "${id}")
+	list(APPEND ps2n_program_sources ${image_outputs})
+	list(APPEND ps2n_program_ids "${id}")
 	if(image_CAPTURE AND NOT image_LOADED_BY)
 		list(APPEND ps2n_image_ids "${id}_outside")
+		list(APPEND ps2n_program_ids "${id}_outside")
 	endif()
 endmacro()
 
@@ -597,6 +608,8 @@ if(PS2N_BIOS_IMAGE)
 	)
 	list(APPEND ps2n_image_sources ${bios_outputs})
 	list(APPEND ps2n_image_ids ${bios_ids})
+	set(ps2n_bios_sources ${bios_outputs})
+	set(ps2n_bios_ids ${bios_ids})
 	message(STATUS "PS2Native: the host will hold the compiled EE code of the BIOS ${PS2N_BIOS_IMAGE}")
 endif()
 
@@ -634,6 +647,7 @@ macro(ps2n_add_vu_image id capture comment)
 		VERBATIM
 	)
 	list(APPEND ps2n_image_sources ${vu_outputs})
+	list(APPEND ps2n_vu_sources ${vu_outputs})
 	list(APPEND ps2n_vu_arguments --vu "${id}")
 endmacro()
 
@@ -684,6 +698,7 @@ macro(ps2n_add_iop_image id capture comment)
 		VERBATIM
 	)
 	list(APPEND ps2n_image_sources ${iop_outputs})
+	list(APPEND ps2n_iop_sources ${iop_outputs})
 	list(APPEND ps2n_iop_arguments --iop "${id}")
 endmacro()
 
@@ -711,47 +726,83 @@ add_custom_command(
 	VERBATIM
 )
 
-set(PS2N_GAME_MODULE OFF CACHE BOOL "Build the compiled code into a module of its own, ps2n-game.dll, which ps2n-host loads (docs/phase4-proposal.md, step P4.1)")
+set(PS2N_GAME_MODULE OFF CACHE BOOL "Build the compiled code into modules of its own, which ps2n-host loads (docs/phase4-proposal.md, steps P4.1 and P4.2)")
 set(PS2N_GAME_IMPORTS OFF CACHE BOOL "Compile the compiled code as for a module and link it into ps2n-host all the same: what the import table costs, alone (docs/app-log.md, P4.1)")
 if(PS2N_GAME_MODULE AND PS2N_GAME_IMPORTS)
 	message(FATAL_ERROR "PS2N_GAME_MODULE and PS2N_GAME_IMPORTS are one or the other")
 endif()
+
+# Generated code compiled as for a module (PS2N_MODULE), with PS2Native's
+# own headers and nothing else (docs/phase4-proposal.md, step P4.2): no
+# header of PCSX2's (ps2n/pcsx2.h then gives PS2Native's description of what
+# it reaches), no standard library, no header of the system's (/X: none of
+# the directories the developer shell names), freestanding (of the
+# compiler's own headers only those any compiler has, such as the SSE
+# intrinsics), and nothing of what PCSX2_FLAGS gives the rest of the build
+# (its precompiled header, its definitions) but /GS-: no security cookies,
+# which are the C runtime's. No code may run when a module is loaded: none
+# is, with no C runtime to run it, so any that would be needed is an error.
+function(ps2n_compile_freestanding target)
+	if(NOT (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
+		message(FATAL_ERROR "Generated code is compiled freestanding with clang-cl only so far")
+	endif()
+	target_include_directories(${target} PRIVATE "${PS2N_ROOT}" "${PS2N_ROOT}/core/include" "${PS2N_ROOT}/runtime/include")
+	target_compile_definitions(${target} PRIVATE PS2N_MODULE)
+	target_compile_options(${target} PRIVATE /X /clang:-ffreestanding /Zl /GS-
+		-Werror=global-constructors -Werror=exit-time-destructors)
+endfunction()
+
+set(ps2n_images_targets "")
 if(PS2N_GAME_MODULE)
-	# The compiled code in a module of its own (docs/phase4-proposal.md, step
-	# P4.1; runtime/include/ps2n/module.h, runtime/game_module.h): a DLL beside
-	# the host, linked with the host's import library and never with the core
-	# or the runtime, which it reaches through what the host exports. It takes
-	# only what compiling needs of the runtime and of PCSX2_FLAGS
-	# ($<COMPILE_ONLY:...>): linked with their libraries, it would hold copies
-	# of their code.
+	# The compiled code in modules of its own (docs/phase4-proposal.md, steps
+	# P4.1 and P4.2; runtime/game_module.h): DLLs beside the host, one for each
+	# kind of code. ps2n-game, the programs' EE code (the game's executables
+	# and, in this build, the test programs'); ps2n-bios, the BIOS's EE code;
+	# ps2n-vu, the micro code; ps2n-iop, the IOP's code. Each is compiled
+	# freestanding (above), has a list of its own of what it holds
+	# (ps2n-recomp registry), and is linked with the host's import library and
+	# nothing else: no C runtime, no entry point of its own (/NODEFAULTLIB,
+	# /NOENTRY). Everything it needs of the runtime and of the core, the host
+	# exports (below).
 	if(NOT WIN32)
 		message(FATAL_ERROR "PS2N_GAME_MODULE is set up for Windows only so far")
 	endif()
 	if(PS2N_PGO STREQUAL "generate" OR PS2N_LTO STREQUAL "thin")
 		message(FATAL_ERROR "PS2N_GAME_MODULE is not set up with PS2N_PGO=generate or PS2N_LTO=thin yet")
 	endif()
-	add_library(ps2n-game SHARED ${ps2n_image_sources} "${PS2N_GENERATED}/registry.cpp"
-		"${PS2N_ROOT}/runtime/module_entry.cpp")
-	set(ps2n_images_target ps2n-game)
-	target_include_directories(ps2n-game PRIVATE
-		"${CMAKE_BINARY_DIR}/common/include"
-		"${CMAKE_SOURCE_DIR}/pcsx2"
-	)
-	target_compile_definitions(ps2n-game PRIVATE PS2N_MODULE)
-	# Linked with the host's import library (the exports are below).
+	set(ps2n_module_sources_game ${ps2n_program_sources})
+	set(ps2n_module_list_game ${ps2n_program_ids})
+	set(ps2n_module_sources_bios ${ps2n_bios_sources})
+	set(ps2n_module_list_bios ${ps2n_bios_ids})
+	set(ps2n_module_sources_vu ${ps2n_vu_sources})
+	set(ps2n_module_list_vu ${ps2n_vu_arguments})
+	set(ps2n_module_sources_iop ${ps2n_iop_sources})
+	set(ps2n_module_list_iop ${ps2n_iop_arguments})
 	set_target_properties(ps2n-host PROPERTIES ENABLE_EXPORTS ON)
-	target_link_libraries(ps2n-game PRIVATE "$<COMPILE_ONLY:ps2n-runtime>" "$<COMPILE_ONLY:PCSX2_FLAGS>" ps2n-host)
-	set_target_properties(ps2n-game PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin")
+	foreach(kind IN ITEMS game bios vu iop)
+		add_custom_command(
+			OUTPUT "${PS2N_GENERATED}/registry_${kind}.cpp"
+			COMMAND "${PS2N_RECOMP}" registry --out "${PS2N_GENERATED}/registry_${kind}.cpp" ${ps2n_module_list_${kind}}
+			DEPENDS "${PS2N_RECOMP}"
+			COMMENT "Listing the compiled code of the module ps2n-${kind}"
+			VERBATIM
+		)
+		add_library(ps2n-${kind} SHARED ${ps2n_module_sources_${kind}} "${PS2N_GENERATED}/registry_${kind}.cpp"
+			"${PS2N_ROOT}/runtime/module_entry.cpp")
+		ps2n_compile_freestanding(ps2n-${kind})
+		target_link_libraries(ps2n-${kind} PRIVATE ps2n-host)
+		target_link_options(ps2n-${kind} PRIVATE /NODEFAULTLIB /NOENTRY)
+		set_target_properties(ps2n-${kind} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin")
+		list(APPEND ps2n_images_targets ps2n-${kind})
+	endforeach()
+	# The four at once, for a build of the host to name (build.ps1).
+	add_custom_target(ps2n-modules)
+	add_dependencies(ps2n-modules ${ps2n_images_targets})
 	target_compile_definitions(ps2n-host PRIVATE PS2N_GAME_MODULE)
-	message(STATUS "PS2Native: the compiled code goes into a module of its own, ps2n-game.dll")
+	message(STATUS "PS2Native: the compiled code goes into modules of its own: ${ps2n_images_targets}")
 else()
 	add_library(ps2n-test-images STATIC ${ps2n_image_sources} "${PS2N_GENERATED}/registry.cpp")
-	set(ps2n_images_target ps2n-test-images)
-	target_include_directories(ps2n-test-images PRIVATE
-		"${CMAKE_BINARY_DIR}/common/include"
-		"${CMAKE_SOURCE_DIR}/pcsx2"
-	)
-	target_link_libraries(ps2n-test-images PRIVATE ps2n-runtime PCSX2_FLAGS)
+	set(ps2n_images_targets ps2n-test-images)
 	target_link_libraries(ps2n-host PRIVATE ps2n-test-images)
 	if(PS2N_GAME_IMPORTS)
 		# Compiled as for a module, linked into the host all the same: the
@@ -761,16 +812,21 @@ else()
 		# such an entry names only when something else names it too, which
 		# the exports below do: without them the first call of the runtime
 		# went to the start of the host's image.
-		target_compile_definitions(ps2n-test-images PRIVATE PS2N_MODULE)
+		ps2n_compile_freestanding(ps2n-test-images)
 		target_link_options(ps2n-host PRIVATE /ignore:4217)
 		message(STATUS "PS2Native: the compiled code is compiled as for a module and linked into the host")
+	else()
+		target_include_directories(ps2n-test-images PRIVATE
+			"${CMAKE_BINARY_DIR}/common/include"
+			"${CMAKE_SOURCE_DIR}/pcsx2"
+		)
+		target_link_libraries(ps2n-test-images PRIVATE ps2n-runtime PCSX2_FLAGS)
 	endif()
 endif()
 if(PS2N_GAME_MODULE OR PS2N_GAME_IMPORTS)
 	# The host exports the runtime's variables and functions that compiled
-	# code uses (PS2N_API), and these of PCSX2's: its variables, which
-	# runtime/include/ps2n/module.h declares imported, and its functions,
-	# which a module reaches through the import library's thunks.
+	# code uses (PS2N_API), and these of PCSX2's under their own symbols,
+	# which ps2n/pcsx2.h declares imported: its variables and its functions.
 	target_compile_definitions(ps2n-runtime PRIVATE PS2N_EXPORTS)
 	target_compile_definitions(ps2n-host PRIVATE PS2N_EXPORTS)
 	set(ps2n_core_exports
@@ -811,7 +867,9 @@ endif()
 # symbol handler to read (578 MB); it also takes longer to compile and link.
 # The machine code is the same either way.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-	target_compile_options(${ps2n_images_target} PRIVATE -gline-tables-only)
+	foreach(ps2n_images_target IN LISTS ps2n_images_targets)
+		target_compile_options(${ps2n_images_target} PRIVATE -gline-tables-only)
+	endforeach()
 endif()
 
 # Profile-guided optimization of the generated code (docs/adr/0019). With
@@ -837,8 +895,10 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 		if(NOT EXISTS "${PS2N_PGO_DATA}")
 			message(FATAL_ERROR "PS2N_PGO=use needs PS2N_PGO_DATA, a merged profile: ${PS2N_PGO_DATA}")
 		endif()
-		target_compile_options(${ps2n_images_target} PRIVATE "-fprofile-instr-use=${PS2N_PGO_DATA}"
-			-Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date)
+		foreach(ps2n_images_target IN LISTS ps2n_images_targets)
+			target_compile_options(${ps2n_images_target} PRIVATE "-fprofile-instr-use=${PS2N_PGO_DATA}"
+				-Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date)
+		endforeach()
 	elseif(NOT PS2N_PGO STREQUAL "")
 		message(FATAL_ERROR "PS2N_PGO is generate, use or empty, not ${PS2N_PGO}")
 	endif()

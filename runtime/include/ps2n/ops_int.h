@@ -30,7 +30,7 @@
 #include "ps2n/ee_memory.h"
 #include "ps2n/ee_state.h"
 
-#include <cstdint>
+#include <stdint.h>
 
 // ---- on values ------------------------------------------------------------------
 // The arithmetic of the instructions that do nothing but compute a general

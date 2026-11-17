@@ -28,7 +28,7 @@
 
 #include "ps2n/iop_ops.h"
 
-#include <cstdint>
+#include <stdint.h>
 
 // A block's call of the next one, in the place of its return: under clang a
 // jump, so that a stretch of any length uses no host stack. Elsewhere the

@@ -30,6 +30,8 @@
 // next build (planText, readPlans).
 #pragma once
 
+#include "ps2n/vu_step.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -37,39 +39,12 @@
 
 namespace ps2n::vu {
 
-enum class StepOp : uint16_t {
-#define PS2N_VU_STEP(name, operands) name,
-#include "ps2n/vu_steps.inc"
-#undef PS2N_VU_STEP
-    Count
-};
-
-inline constexpr uint32_t kStepOperands = 5;
-
-// In the place of a host register: VI00, which reads as zero.
-inline constexpr uint32_t kNone = 0xFF;
-
-struct Step {
-    StepOp op = StepOp::Count;
-    uint32_t o[kStepOperands] = {};
-
-    bool operator==(const Step&) const = default;
-};
-
 const char* stepName(StepOp op);
 uint32_t stepOperandCount(StepOp op);
 // The step of that name, or StepOp::Count.
 StepOp stepByName(const char* name, size_t length);
 
-// A fingerprint of a plan: of which VU it is for and of its steps, each
-// with the operands it has.
-struct PlanKey {
-    uint64_t a = 0, b = 0;
-
-    bool operator==(const PlanKey&) const = default;
-    bool operator<(const PlanKey& other) const { return a != other.a ? a < other.a : b < other.b; }
-};
-
+// The key of a plan (PlanKey, in ps2n/vu_step.h).
 PlanKey planKey(int vu, const Step* steps, size_t count);
 
 // The key as 32 hexadecimal digits.

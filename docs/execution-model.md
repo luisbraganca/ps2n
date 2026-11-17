@@ -53,13 +53,21 @@ code is right and this file needs fixing.
   recompiler ("The I/O processor's code" at the end).
 - **Where compiled code is.** All of it, the EE code's images, the micro
   code's and the IOP code's, is built into `ps2n-host`, or, with
-  `build.ps1 -Module on`, into a module of its own, `ps2n-game.dll` beside
-  the host, which the host loads when it starts (`runtime/game_module.h`;
-  [phase4-proposal.md](phase4-proposal.md), step P4.1). The module reaches
-  the core's state and the runtime through what the host exports
-  (`runtime/include/ps2n/module.h`): the code is the same, but that each of
-  the core's variables is reached through its address in the module's
-  import table. A run is the same run either way.
+  `build.ps1 -Module on`, into modules of its own beside the host, one for
+  each kind of code (`ps2n-game.dll`, the programs' EE code;
+  `ps2n-bios.dll`, the BIOS's; `ps2n-vu.dll`, the micro code;
+  `ps2n-iop.dll`, the IOP's code), which the host loads when it starts
+  (`runtime/game_module.h`; [phase4-proposal.md](phase4-proposal.md), steps
+  P4.1 and P4.2). A module reaches the core's state and the runtime through
+  what the host exports (`runtime/include/ps2n/module.h`), and is compiled
+  with PS2Native's own headers and nothing else: what it reaches of the
+  core is PS2Native's description of PCSX2's structures
+  (`ps2n/pcsx2_layout.h`, under PCSX2's names through `ps2n/pcsx2.h`), which
+  the runtime compares with PCSX2's own when it is built and when it
+  starts (`runtime/pcsx2_check.cpp`). The semantics and the generated code
+  are the same text either way, but that in a module each of the core's
+  variables is reached through its address in the import table. A run is
+  the same run either way.
 
 There is no guest state outside the core, but for the length of a stretch
 of straight-line compiled code. Registers are `cpuRegs` and `fpuRegs`,

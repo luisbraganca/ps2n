@@ -17,15 +17,10 @@
 #pragma once
 
 #include "ps2n/module.h"
+#include "ps2n/pcsx2.h"
 #include "ps2n/r3000a.h"
 
-#include "IopBios.h"
-#include "IopDma.h"
-#include "IopMem.h"
-#include "R3000A.h"
-
-#include <cstdint>
-#include <cstring>
+#include <stdint.h>
 
 #define PS2N_IOP_OP [[gnu::always_inline]] inline
 
@@ -166,7 +161,7 @@ namespace ps2n::iop
 		if (!(address & 0x10000000)) [[likely]]
 		{
 			uint16_t v;
-			std::memcpy(&v, Ram(address), 2);
+			__builtin_memcpy(&v, Ram(address), 2);
 			return v;
 		}
 		return iopMemRead16(address);
@@ -176,7 +171,7 @@ namespace ps2n::iop
 		if (!(address & 0x10000000)) [[likely]]
 		{
 			uint32_t v;
-			std::memcpy(&v, Ram(address), 4);
+			__builtin_memcpy(&v, Ram(address), 4);
 			return v;
 		}
 		return iopMemRead32(address);
@@ -210,7 +205,7 @@ namespace ps2n::iop
 		if (physical < 0x00800000) [[likely]]
 		{
 			uint32_t v;
-			std::memcpy(&v, Ram(physical), 4);
+			__builtin_memcpy(&v, Ram(physical), 4);
 			return v;
 		}
 		return iopMemRead32(address);
@@ -239,7 +234,7 @@ namespace ps2n::iop
 		if (PlainRam(physical)) [[likely]]
 		{
 			const uint16_t v = static_cast<uint16_t>(value);
-			std::memcpy(Ram(physical), &v, 2);
+			__builtin_memcpy(Ram(physical), &v, 2);
 			Written(physical);
 		}
 		else
@@ -250,7 +245,7 @@ namespace ps2n::iop
 		const uint32_t physical = address & 0x1FFFFFFF;
 		if (PlainRam(physical)) [[likely]]
 		{
-			std::memcpy(Ram(physical), &value, 4);
+			__builtin_memcpy(Ram(physical), &value, 4);
 			Written(physical);
 		}
 		else

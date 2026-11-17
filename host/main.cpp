@@ -22,6 +22,7 @@
 
 #include "runtime/ee_provider.h"
 #include "runtime/iop_provider.h"
+#include "runtime/pcsx2_check.h"
 #include "runtime/vu_interp.h"
 
 #include "ps2n/iop_recomp.h"
@@ -81,9 +82,13 @@
 
 #include "runtime/game_module.h"
 
-// The compiled code is in a module of its own beside the host
-// (runtime/game_module.h), which wmain() loads before anything else. These
-// are its lists, as below.
+// The compiled code is in modules of its own beside the host
+// (runtime/game_module.h), which wmain() loads before anything else. Their
+// lists, put together in the modules' order, each ending with a null entry
+// as below.
+static std::vector<const ps2n::ee::ImageInfo*> s_module_images;
+static std::vector<const ps2n::vu::ImageInfo*> s_module_vu_images;
+static std::vector<const ps2n::iop::ImageInfo*> s_module_iop_images;
 static const ps2n::ee::ImageInfo* const* ps2n_images = nullptr;
 static size_t ps2n_image_count = 0;
 static const ps2n::vu::ImageInfo* const* ps2n_vu_images = nullptr;
@@ -2625,6 +2630,16 @@ namespace
 
 	int Run(int argc, char* argv[])
 	{
+		// PS2Native's description of PCSX2's structures, which a module of
+		// compiled code is built against (ps2n/pcsx2_layout.h): what a
+		// compiler could not compare with PCSX2's when the runtime was built.
+		if (const std::string differs = ps2n::pcsx2::CheckLayout(); !differs.empty())
+		{
+			std::fprintf(stderr, "ps2n-host: PS2Native's description of PCSX2's structures differs from PCSX2's: %s\n",
+				differs.c_str());
+			return EXIT_ERROR;
+		}
+
 		if (!ParseCommandLine(argc, argv))
 		{
 			PrintUsage();
@@ -3059,58 +3074,70 @@ void ps2n::host::RunOnCPUThread(std::function<void()> function, bool block)
 #ifdef _WIN32
 
 #if defined(PS2N_GAME_MODULE)
-// Loads the module of compiled code beside the host's executable and takes
-// its lists. False, with what went wrong on stderr, when there is none or it
-// was not built for this host.
-static bool LoadGameModule()
+// Loads the modules of compiled code beside the host's executable and puts
+// their lists together. False, with what went wrong on stderr, when one is
+// missing or was not built for this host.
+static bool LoadGameModules()
 {
-	std::wstring path(MAX_PATH, L'\0');
+	std::wstring directory(MAX_PATH, L'\0');
 	for (;;)
 	{
-		const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+		const DWORD length = GetModuleFileNameW(nullptr, directory.data(), static_cast<DWORD>(directory.size()));
 		if (length == 0)
 		{
 			std::fprintf(stderr, "ps2n-host: cannot find its own executable (error %lu)\n", GetLastError());
 			return false;
 		}
-		if (length < path.size())
+		if (length < directory.size())
 		{
-			path.resize(length);
+			directory.resize(length);
 			break;
 		}
-		path.resize(path.size() * 2);
+		directory.resize(directory.size() * 2);
 	}
-	path.erase(path.find_last_of(L"\\/") + 1);
-	path += ps2n::kGameModuleFile;
-	const std::string shown = StringUtil::WideStringToUTF8String(path);
+	directory.erase(directory.find_last_of(L"\\/") + 1);
 
-	const HMODULE module = LoadLibraryExW(path.c_str(), nullptr,
-		LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-	if (!module)
+	for (const wchar_t* file : ps2n::kGameModuleFiles)
 	{
-		std::fprintf(stderr, "ps2n-host: cannot load the game module %s (error %lu)\n", shown.c_str(), GetLastError());
-		return false;
+		const std::wstring path = directory + file;
+		const std::string shown = StringUtil::WideStringToUTF8String(path);
+		const HMODULE module = LoadLibraryExW(path.c_str(), nullptr,
+			LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+		if (!module)
+		{
+			std::fprintf(stderr, "ps2n-host: cannot load the module of compiled code %s (error %lu)\n", shown.c_str(),
+				GetLastError());
+			return false;
+		}
+		const auto entry = reinterpret_cast<ps2n::GameModuleEntry>(GetProcAddress(module, ps2n::kGameModuleEntry));
+		if (!entry)
+		{
+			std::fprintf(stderr, "ps2n-host: %s is not a module of compiled code: it has no %s\n", shown.c_str(),
+				ps2n::kGameModuleEntry);
+			return false;
+		}
+		ps2n::GameModuleImages images{};
+		entry(&images);
+		if (images.version != ps2n::kGameModuleVersion)
+		{
+			std::fprintf(stderr, "ps2n-host: %s was built for another host (version %u, this host's %u)\n", shown.c_str(),
+				images.version, ps2n::kGameModuleVersion);
+			return false;
+		}
+		s_module_images.insert(s_module_images.end(), images.ee, images.ee + images.ee_count);
+		s_module_vu_images.insert(s_module_vu_images.end(), images.vu, images.vu + images.vu_count);
+		s_module_iop_images.insert(s_module_iop_images.end(), images.iop, images.iop + images.iop_count);
 	}
-	const auto entry = reinterpret_cast<ps2n::GameModuleEntry>(GetProcAddress(module, ps2n::kGameModuleEntry));
-	if (!entry)
-	{
-		std::fprintf(stderr, "ps2n-host: %s is not a game module: it has no %s\n", shown.c_str(), ps2n::kGameModuleEntry);
-		return false;
-	}
-	ps2n::GameModuleImages images{};
-	entry(&images);
-	if (images.version != ps2n::kGameModuleVersion)
-	{
-		std::fprintf(stderr, "ps2n-host: %s was built for another host (version %u, this host's %u)\n", shown.c_str(),
-			images.version, ps2n::kGameModuleVersion);
-		return false;
-	}
-	ps2n_images = images.ee;
-	ps2n_image_count = images.ee_count;
-	ps2n_vu_images = images.vu;
-	ps2n_vu_image_count = images.vu_count;
-	ps2n_iop_images = images.iop;
-	ps2n_iop_image_count = images.iop_count;
+
+	ps2n_image_count = s_module_images.size();
+	ps2n_vu_image_count = s_module_vu_images.size();
+	ps2n_iop_image_count = s_module_iop_images.size();
+	s_module_images.push_back(nullptr);
+	s_module_vu_images.push_back(nullptr);
+	s_module_iop_images.push_back(nullptr);
+	ps2n_images = s_module_images.data();
+	ps2n_vu_images = s_module_vu_images.data();
+	ps2n_iop_images = s_module_iop_images.data();
 	return true;
 }
 #endif
@@ -3119,7 +3146,7 @@ static bool LoadGameModule()
 int wmain(int argc, wchar_t** argv)
 {
 #if defined(PS2N_GAME_MODULE)
-	if (!LoadGameModule())
+	if (!LoadGameModules())
 		return EXIT_ERROR;
 #endif
 

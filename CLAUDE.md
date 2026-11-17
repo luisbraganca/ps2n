@@ -45,7 +45,16 @@ chose a loader of PS2Native's own, which would let compiled code reach the
 core's variables without the import table, if it made the game faster, and
 the import table otherwise. The code such a loader would give measured
 slower on 2026-11-17 (ADR 0029), so a module reaches the runtime through
-its import table; P4.1 is done and P4.2 is next.**
+its import table; P4.1 is done. P4.2 was done the same day: the generated
+code is compiled against PS2Native's own description of what it reaches of
+PCSX2's core (`ps2n/pcsx2_layout.h`, compared with PCSX2's own when the
+runtime is built and when the host starts), with no system header and no
+standard library, into four modules (the programs' EE code, the BIOS's,
+the micro code, the IOP's code) linked with the host's import library and
+nothing else; every test passes in all three build trees, Agent Under
+Fire's script is the stock run at every sync point from them, the
+maintainer's sessions replay at every fingerprint, and they take what
+P4.1's module took. P4.3, the toolchain the wizard brings, is next.**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -524,9 +533,10 @@ CMakeLists.txt, core/     build-time tools, a project of their own with no PCSX2
                           instruction decoder, disassembler, assembler, ELF/IRX/SNR2 readers, the reader of a
                           BIOS image's directory (romdir); for the vector units, the first pass of PCSX2's VU
                           recompiler (ps2n/vu_mvu.h) and a block of micro code as a list of steps, its plan
-                          (ps2n/vu_plan.h, vu_steps.inc); for the IOP, its instructions as PCSX2's IOP
+                          (ps2n/vu_plan.h; the steps themselves, which compiled micro code needs, in
+                          ps2n/vu_step.h and vu_steps.inc); for the IOP, its instructions as PCSX2's IOP
                           recompiler treats them and what a block of them is (ps2n/r3000a.h); all used by the
-                          runtime too
+                          runtime too, and vu_step.h and r3000a.h by compiled code as well
 recompiler/               ps2n-recomp, in that same project: analysis and C++ generation for EE executables
                           and for the BIOS's EE code (bios.cpp), and C++ generation for the blocks of micro
                           code (vu_codegen.cpp) and of IOP code (iop_codegen.cpp) that runs captured
@@ -539,7 +549,10 @@ runtime/                  what PS2Native adds to the core at run time: the EE pr
                           IOP provider (iop_provider), which follows PCSX2's IOP recompiler: its record of
                           blocks, the interpreter; the IOP's instructions carried out (ps2n/iop_ops.h) and the
                           contract for compiled IOP code (ps2n/iop_recomp.h); what a module of compiled code
-                          and the host share (game_module.h, module_entry.cpp, ps2n/module.h)
+                          and the host share (game_module.h, module_entry.cpp, ps2n/module.h); what compiled
+                          code reaches of PCSX2's core, PCSX2's own in the runtime and PS2Native's description
+                          of it in a module (ps2n/pcsx2.h, ps2n/pcsx2_layout.h), and the description compared
+                          with PCSX2's when the runtime is built and when the host starts (pcsx2_check.cpp)
 host/                     ps2n-host: console frontend for the PCSX2 core, the test bench (the self-test of the
                           instruction semantics, of the VU provider and of the IOP provider; the watches on the
                           core's providers: sync_trace, vu_report, iop_report); with -window, where a game
@@ -616,17 +629,27 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   `/Fp`) and an include directory searched first, into a scratch folder
   outside the build, and read `llvm-size -A` of the object. `game.ps1 -CallSites off` times one
   build with calls through a register sent to the runtime's dispatcher.
-- The compiled code in a module of its own (Phase 4, step P4.1):
+- The compiled code in modules of its own (Phase 4, steps P4.1 and P4.2):
   `scripts\windows\build.ps1 -BuildDir build\windows-clang-module -Module on`
   with the main tree's game settings builds everything the host would hold
-  compiled into `ps2n-game.dll` beside `ps2n-host.exe`, which the host
-  loads when it starts (`runtime/game_module.h`); what crosses between them
-  is `runtime/include/ps2n/module.h`. `test.ps1` and `game.ps1` take the
-  same `-BuildDir`. Without `-Module on` nothing changes. `-Module imports`
-  (in a tree of its own, `build\windows-clang-imports`) compiles the code as
-  for a module and links it into the host all the same: what reaching the
-  core through the import table costs, alone. What it costs is in
-  [docs/app-log.md](docs/app-log.md), "P4.1".
+  compiled into four modules beside `ps2n-host.exe`, one for each kind of
+  code (`ps2n-game.dll`, the programs' EE code; `ps2n-bios.dll`;
+  `ps2n-vu.dll`, the micro code; `ps2n-iop.dll`), which the host loads when
+  it starts (`runtime/game_module.h`); what crosses between them is
+  `runtime/include/ps2n/module.h`. A module is compiled with PS2Native's own
+  headers and nothing else, no system header, no standard library, nothing
+  of PCSX2's (`ps2n/pcsx2.h` gives it `ps2n/pcsx2_layout.h` in their place),
+  and linked with the host's import library and nothing else. So a header
+  the generated code includes takes PS2Native's own headers, `<stdint.h>`,
+  `<stddef.h>` and the SSE intrinsics' headers, and nothing of PCSX2's but
+  through `ps2n/pcsx2.h`; a field of PCSX2's that compiled code comes to use
+  goes into `pcsx2_layout.h` and its check, `runtime/pcsx2_check.cpp`. `test.ps1` and
+  `game.ps1` take the same `-BuildDir`. Without `-Module on` the code is
+  built into the host as before. `-Module imports` (in a tree of its own,
+  `build\windows-clang-imports`) compiles the code as for a module and
+  links it into the host all the same: what reaching the core through the
+  import table costs, alone. What it costs is in
+  [docs/app-log.md](docs/app-log.md), "P4.1" and "P4.2".
 - The game: `scripts\windows\build.ps1 -Game <its boot executable>` compiles
   it into the host (the build tree remembers it; `-GameCapture <file>` adds
   what runs reported). A game made of several executables, whose boot

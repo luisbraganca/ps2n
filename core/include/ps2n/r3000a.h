@@ -12,7 +12,7 @@
 // run captured. Nothing here touches memory or the machine.
 #pragma once
 
-#include <cstdint>
+#include <stdint.h>
 
 namespace ps2n::r3000a
 {

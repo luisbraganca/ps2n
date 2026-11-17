@@ -68,13 +68,10 @@
 #pragma once
 
 #include "ps2n/module.h"
+#include "ps2n/pcsx2.h"
 
-#include "Config.h"
-#include "VU.h"
-
-#include <cstdint>
-#include <cstring>
 #include <smmintrin.h>
+#include <stdint.h>
 
 #if !defined(__clang__) && !defined(__GNUC__)
 #error "ps2n/ops_vu0.h writes the host's SSE instructions as GNU inline assembly"
@@ -821,7 +818,7 @@ namespace ps2n::ee::vu0
 		if (EmuConfig.Gamefixes.IbitHack) [[unlikely]]
 		{
 			uint32_t word;
-			std::memcpy(&word, VU0.Micro, sizeof(word));
+			__builtin_memcpy(&word, VU0.Micro, sizeof(word));
 			imm5 = static_cast<int32_t>(word << 21) >> 27;
 		}
 		SetVI(it, VI(is) + static_cast<uint32_t>(imm5));

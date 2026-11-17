@@ -27,8 +27,7 @@
 
 #include "ps2n/vu_ops.h"
 
-#include <cstdint>
-#include <cstring>
+#include <stdint.h>
 
 // The calling convention of compiled blocks: as compiled EE functions
 // (PS2N_CC in ps2n/recomp.h), under clang they keep no registers for their
@@ -229,7 +228,7 @@ namespace ps2n::vu
 					c.branch = branch_;
 #define PS2N_VU_GIVE(r) \
 	if (viWritten_ & (1u << r)) \
-		R_->VI[r].US[0] = static_cast<u16>(vi_[r]);
+		R_->VI[r].US[0] = static_cast<uint16_t>(vi_[r]);
 				PS2N_VU_EACH16(PS2N_VU_GIVE)
 #undef PS2N_VU_GIVE
 #define PS2N_VU_GIVE(i) \
@@ -329,7 +328,7 @@ namespace ps2n::vu
 				: Mem{ctx}
 			{
 				ctx.base = base;
-				std::memset(ctx.h, 0, sizeof(ctx.h));
+				__builtin_memset(ctx.h, 0, sizeof(ctx.h));
 			}
 		};
 	} // namespace step

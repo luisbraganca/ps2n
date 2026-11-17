@@ -42,14 +42,11 @@
 #pragma once
 
 #include "ps2n/ops_vu0.h"
-#include "ps2n/vu_plan.h"
+#include "ps2n/pcsx2.h"
+#include "ps2n/vu_step.h"
 
-#include "Config.h"
-#include "VU.h"
-
-#include <cstdint>
-#include <cstring>
 #include <smmintrin.h>
+#include <stdint.h>
 
 #define PS2N_VU_OP [[gnu::always_inline]] inline
 
@@ -168,7 +165,7 @@ namespace ps2n::vu
 			PS2N_VU_OP __m128 acc() const { return _mm_load_ps(c.R->ACC.F); }
 			PS2N_VU_OP void setAcc(__m128 v) { _mm_store_ps(c.R->ACC.F, v); }
 			PS2N_VU_OP uint32_t vi(uint32_t r) const { return c.R->VI[r].US[0]; }
-			PS2N_VU_OP void setVi(uint32_t r, uint32_t v) { c.R->VI[r].US[0] = static_cast<u16>(v); }
+			PS2N_VU_OP void setVi(uint32_t r, uint32_t v) { c.R->VI[r].US[0] = static_cast<uint16_t>(v); }
 			PS2N_VU_OP uint32_t& h(uint32_t slot) { return c.h[slot]; }
 			PS2N_VU_OP uint32_t stat(uint32_t i) const { return c.statFlag[i]; }
 			PS2N_VU_OP void setStat(uint32_t i, uint32_t v) { c.statFlag[i] = v; }
@@ -358,7 +355,7 @@ namespace ps2n::vu
 		PS2N_VU_OP void T0Rd16(A& a, uint32_t lane)
 		{
 			uint16_t v;
-			std::memcpy(&v, a.ea() + lane * 4, 2);
+			__builtin_memcpy(&v, a.ea() + lane * 4, 2);
 			a.t0() = v;
 		}
 		template <class A>
@@ -679,13 +676,13 @@ namespace ps2n::vu
 			alignas(16) uint32_t v[4];
 			_mm_store_si128(reinterpret_cast<__m128i*>(v), d::Int(a.vf(fs)));
 			if (dest & 8)
-				std::memcpy(p + 0, &v[0], 4);
+				__builtin_memcpy(p + 0, &v[0], 4);
 			if (dest & 4)
-				std::memcpy(p + 4, &v[1], 4);
+				__builtin_memcpy(p + 4, &v[1], 4);
 			if (dest & 2)
-				std::memcpy(p + 8, &v[2], 4);
+				__builtin_memcpy(p + 8, &v[2], 4);
 			if (dest & 1)
-				std::memcpy(p + 12, &v[3], 4);
+				__builtin_memcpy(p + 12, &v[3], 4);
 		}
 		// ISW and ISWR store all 32 bits of the host register.
 		template <class A>
@@ -694,13 +691,13 @@ namespace ps2n::vu
 			uint8_t* p = a.ea();
 			const uint32_t v = a.h(h);
 			if (dest & 8)
-				std::memcpy(p + 0, &v, 4);
+				__builtin_memcpy(p + 0, &v, 4);
 			if (dest & 4)
-				std::memcpy(p + 4, &v, 4);
+				__builtin_memcpy(p + 4, &v, 4);
 			if (dest & 2)
-				std::memcpy(p + 8, &v, 4);
+				__builtin_memcpy(p + 8, &v, 4);
 			if (dest & 1)
-				std::memcpy(p + 12, &v, 4);
+				__builtin_memcpy(p + 12, &v, 4);
 		}
 
 		// ---- the upper instructions (microVU_Upper.inl) --------------------------------------
@@ -1173,7 +1170,8 @@ namespace ps2n::vu
 					__m128 t2 = f;
 					f = d::MULPS(f, d::Scalar(0xbe2aaaa4u)); // S2
 					pq = d::Compute(d::Arith::Add, pq, true, f, fsClampable, c);
-					for (const uint32_t k : {0x3c08873eu, 0xb94fb21fu}) // S3, S4
+					constexpr uint32_t kS[] = {0x3c08873eu, 0xb94fb21fu}; // S3, S4
+					for (const uint32_t k : kS)
 					{
 						t2 = d::Compute(d::Arith::Mul, t2, true, t1, true, c);
 						f = d::MULPS(t2, d::Scalar(k));
@@ -1203,7 +1201,8 @@ namespace ps2n::vu
 					__m128 t2 = t1;
 					t1 = d::MULPS(t1, d::Scalar(0x3d0007f4u)); // E2
 					pq = d::Compute(d::Arith::Add, pq, true, t1, true, c);
-					for (const uint32_t k : {0x3b29d3ffu, 0x3933e553u, 0x36b63510u}) // E3, E4, E5
+					constexpr uint32_t kE[] = {0x3b29d3ffu, 0x3933e553u, 0x36b63510u}; // E3, E4, E5
+					for (const uint32_t k : kE)
 					{
 						t2 = d::Compute(d::Arith::Mul, t2, true, x, fsClampable, c);
 						t1 = d::MULPS(t2, d::Scalar(k));

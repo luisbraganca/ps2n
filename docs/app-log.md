@@ -9,7 +9,7 @@ its date. Nothing here comes from a game or a BIOS but counts and times.
 | Step | Pass criterion | State |
 |---|---|---|
 | P4.1 The module's cost | Every test passes; the game's time measured against today's build, and the cost put to the maintainer | **Measured** (2026-11-16): every test passes with the compiled code in a module of its own; Agent Under Fire takes the time it takes with the code built into the host (its script 1.17 times stock PCSX2's time against 1.18; the maintainer's second session replayed, 0.98 of the built-in code's time, its fourth mission 0.95); the generated code is 4 to 8% larger. **Done** (2026-11-17): put to the maintainer, who chose a loader of PS2Native's own if it made the game faster; the code it would give, which reaches the core directly, measured slower, so a module reaches the runtime through its import table ([ADR 0029](adr/0029-a-games-module-reaches-the-runtime-through-its-import-table.md)) |
-| P4.2 Freestanding generated code | A game module compiled with nothing but `clang`, `lld` and PS2Native's own headers; every test passes; a game is still the stock run | |
+| P4.2 Freestanding generated code | A game module compiled with nothing but `clang`, `lld` and PS2Native's own headers; every test passes; a game is still the stock run | **Done** (2026-11-17): the generated code compiled against PS2Native's description of PCSX2's structures, which the runtime checks against PCSX2's own (636 assertions when it is built, the settings' bits when it starts), with no system header and no standard library, into four modules (the programs' EE code, the BIOS's, the micro code, the IOP's code) linked with the host's import library and nothing else; every test passes (533) in the three build trees; Agent Under Fire's script is the stock run at every sync point from the modules, and the maintainer's sessions replayed are the sessions at every fingerprint; the modules take what P4.1's module took (the script 1.17 times stock PCSX2's time, built in 1.19) |
 | P4.3 The shipped toolchain | A game compiled and run on a computer with nothing else installed (a fresh Windows user, without Visual Studio) | |
 | P4.4 The packaged game | Killzone and Agent Under Fire run from their folders, at the console's pace, the same runs as from the development host | |
 | P4.5 The wizard | A game packaged from the disc image and the BIOS with every default accepted, without a command line | |
@@ -18,7 +18,7 @@ its date. Nothing here comes from a game or a BIOS but counts and times.
 
 ## How to run it
 
-The compiled code in a module of its own, in a build tree of its own beside
+The compiled code in modules of its own, in a build tree of its own beside
 the usual one, with the same game, BIOS and captures:
 
 ```powershell
@@ -30,12 +30,13 @@ scripts\windows\game.ps1 -Image <disc image> -BuildDir build\windows-clang-modul
 ```
 
 The tree remembers `-Module` as it remembers `-Game`; `build.ps1` then
-builds `ps2n-game` with `ps2n-host`. Without `-Module on` nothing changes:
-the compiled code is built into the host, and the generated code is the same,
-byte for byte (below). `-Module imports` compiles the generated code as for a
-module and links it into the host all the same, whose linker fills the
-import table's entries itself: what reaching the core through the import
-table costs, alone, the module's file apart (below).
+builds the four modules (`ps2n-modules`: `ps2n-game`, `ps2n-bios`,
+`ps2n-vu`, `ps2n-iop`) with `ps2n-host`. Without `-Module on` the compiled
+code is built into the host as before (P4.2, "Every test"). `-Module
+imports` compiles the generated code as for a module and links it into the
+host all the same, whose linker fills the import table's entries itself:
+what reaching the core through the import table costs, alone, the modules'
+files apart (below).
 
 ## P4.1 The module's cost
 
@@ -231,3 +232,194 @@ would not make the game faster, so a module reaches the runtime through its
 import table, as an ordinary DLL does
 ([ADR 0029](adr/0029-a-games-module-reaches-the-runtime-through-its-import-table.md)).
 P4.1 is done; P4.2 goes on on this design.
+
+## P4.2 Freestanding generated code
+
+The question: can a game's compiled code be built with what the wizard is
+to bring, `clang` and `lld`, and PS2Native's own headers, and nothing else
+(ADR 0028, decision 1); with the host a runtime built once that loads the
+compiled code as modules: the game's, the BIOS's, the micro code's, the
+IOP code's.
+
+### What was built (2026-11-17)
+
+- **What compiled code reaches of the core, described by PS2Native**
+  (`runtime/include/ps2n/pcsx2_layout.h`): PCSX2's structures that compiled
+  code reads or writes, transcribed field for field into a namespace of
+  their own: the EE's registers with the FPU's, the vector units' (the
+  whole of `VURegs`, since there are two side by side), the IOP's, the
+  VIFs' (compiled micro code reads `itop` and `top`), the IOP's memory, the
+  address table (of which compiled code reads only where the entries are),
+  and of PCSX2's settings the words compiled code reads (the FPU's and
+  VU0's clamping, three game fixes, the FPU's two rounding settings), with
+  where they are among the settings; the numbers it uses (the VI registers'
+  numbers, a bit of a VU's flags, the address table's page size); and the
+  types of the 19 functions of the core it calls.
+- **PCSX2's names, either way** (`ps2n/pcsx2.h`). In the runtime, built with
+  PCSX2's headers, they are PCSX2's own. In a module (`PS2N_MODULE`) they
+  are PS2Native's description under PCSX2's names, and the core's
+  variables and functions are imported under the symbols PCSX2's compiler
+  gives them, which the host exports. The semantics and the generated code
+  are the same text either way; the generator is unchanged but for one
+  line of the lists it writes (`<stddef.h>` where it was `<cstddef>`).
+- **The description checked against PCSX2's** (`runtime/pcsx2_check.cpp`).
+  When the runtime is built, 636 assertions compare it with PCSX2's
+  headers: the size and alignment of 29 structures, the place and type of
+  269 fields, every number, the type of every function and variable
+  compiled code reaches. A change to any of them upstream stops the
+  runtime's build. The settings are words of bit-fields, whose bits a
+  compiler cannot place; the host compares the eight that compiled code
+  reads when it starts, with where the VIFs' registers are, and refuses to
+  go on if any differs (`ps2n::pcsx2::CheckLayout()`). The check caught its
+  own first draft: where the CPU options and the game fixes are among
+  PCSX2's settings had been left as guesses, and the runtime's build
+  stopped with the true places (4 and 552 bytes in).
+- **No standard library in the semantics.** `std::memcpy` and `std::memset`
+  became the compiler's own (`__builtin_memcpy`, `__builtin_memset`), which
+  is what they were compiled as; the FPU's guard-bit masks a structure of
+  their own instead of `std::array`; the MMI's saturation limits a small
+  table instead of `std::numeric_limits`; PLZCW's count of leading zeros
+  the compiler's builtin instead of `std::countl_zero`, whose version in
+  Microsoft's library looks at a variable of the C runtime's
+  (`__isa_available`) each time to choose its instruction; two loops over
+  braced lists loops over arrays; `<cstdint>` and `<cstddef>`, `<stdint.h>`
+  and `<stddef.h>`. What compiled micro code needs of a plan, its steps and
+  its key, moved into a header without `std::string`
+  (`core/include/ps2n/vu_step.h`).
+- **Four modules** (tests/tests.cmake): `ps2n-game` (the programs' EE code:
+  the game's four executables, and in this build the test programs'),
+  `ps2n-bios`, `ps2n-vu` (the micro code) and `ps2n-iop` (the IOP's code),
+  each with a list of its own (`ps2n-recomp registry`). Each is compiled
+  with none of the system's include directories (`/X`), freestanding, with
+  no library named in its objects (`/Zl`), no security cookies (`/GS-`),
+  and nothing of what PCSX2's build gives its own files; code that would
+  have to run when a module is loaded is an error
+  (`-Werror=global-constructors`), since nothing would run it. Each is
+  linked with the host's import library and nothing else (`/NODEFAULTLIB`),
+  with no entry point (`/NOENTRY`). The one name the compiler asks of a C
+  runtime, `_fltused` (named by any file that does floating-point
+  arithmetic), the module defines itself (`runtime/module_entry.cpp`). The
+  host loads the four in that order and puts their lists together
+  (`LoadGameModules()` in `host/main.cpp`).
+
+### What a module needs
+
+- **To compile:** generated files of each kind compiled outside the
+  developer shell, with `-I` to PS2Native's directories, `/X` and
+  `-ffreestanding`, include 19 of PS2Native's headers (`runtime/include`,
+  `core/include`) and 18 of the compiler's own, 569 KB: `<stdint.h>`,
+  `<stddef.h>` and its pieces, and the SSE intrinsics as far as SSE4.1
+  (the compiler's whole include folder is 15.6 MB here).
+- **To link:** the four linked again by `lld-link` alone, outside the
+  developer shell (no `LIB`, no `INCLUDE`), from the objects the build
+  links, with the host's import library and nothing else: all four link,
+  to within a kilobyte of the build's own files (which also name their
+  debugging information).
+- **What each imports**, from its import table: from `ps2n-host.exe` and
+  nothing else; `ps2n-game` 55 symbols, `ps2n-bios` 52, `ps2n-vu` 4,
+  `ps2n-iop` 20.
+
+### Every test
+
+533 of 533 pass in each of the three trees, built from the same sources on
+2026-11-17: the compiled code built into the host as usual, in the four
+modules, and compiled as for a module and linked into the host
+(`-Module imports`).
+
+Built into the host, the EE code's objects (the game's four executables,
+the BIOS's, the test programs') came out the same size to the byte. The
+IOP code's are 700 bytes larger each, which is not their code: the whole
+list of PCSX2's headers that the semantics now include brings two
+functions of Microsoft's standard library into each
+(`time_get::_Getvals`), which the linker keeps once. The host is 1,536
+bytes larger (the check, the loader of four modules, and the session's new
+micro code and IOP code, below).
+
+### The game
+
+The maintainer played Agent Under Fire on 2026-11-17, on the build of
+P4.1 with the code in the host: 27.6 minutes (82,844 frames, at 49.99
+frames a second, where the console shows 50.00). The session met no new EE
+code of the game's, and one block each of VU1's micro code and of the
+IOP's code that no build had compiled, each run once; both are compiled in
+since.
+
+From the modules:
+
+- **Agent Under Fire's script into its first mission** (9,000 frames,
+  `tests/games/agent-under-fire/start.pad`), held to stock PCSX2
+  (`same-as-stock`): the stock run at every one of its 49,981,658 sync
+  points, with the same picture at the frame compared and the sound
+  hardware in the same state; nothing of the game's EE code, of its micro
+  code or of its IOP code interpreted.
+- **The session of 2026-11-17**, replayed: the session at every one of its
+  1,656 fingerprints, the sound at its last frame as it was in play;
+  nothing of its micro code or IOP code interpreted.
+- **The maintainer's second session**, replayed (below): the session at
+  every one of its 2,115 fingerprints, as from the host.
+
+### The time
+
+As P4.1 timed it (2026-11-17, every run fully compiled). Agent Under Fire's
+script, three rounds, stock PCSX2, the code built into the host and the
+code in the modules in turn, on the fast cores; times from frame 1, and
+its play, the last 2,250 frames:
+
+| | Stock PCSX2 | Built into the host | In the modules |
+|---|---:|---:|---:|
+| From frame 1 | 26.27, 26.43, 26.30 s | 31.37, 31.24, 31.08 s | 30.82, 30.74, 30.54 s |
+| Against stock PCSX2 (means) | 1 | 1.19 | 1.17 |
+| Its play | 8.16, 8.14, 8.13 s | 8.99, 8.99, 8.94 s | 8.82, 8.75, 8.67 s |
+| Against stock PCSX2 (means) | 1 | 1.10 | 1.07 |
+
+The maintainer's second session replayed (105,784 frames, on Vulkan at
+three times the console's resolution, timed every 500 frames):
+
+| | Built into the host | In the modules | In the modules / built in |
+|---|---:|---:|---:|
+| To frame 80,000 | 364.2 s | 359.7 s | 0.988 (median of the 500-frame stretches 0.986) |
+| From frame 80,000, the fourth mission | 143.4 s | 139.1 s | 0.970 (0.967) |
+| The whole, from frame 1 | 507.6 s | 498.9 s | 0.983 (0.978) |
+
+What P4.1 measured, then: the modules take no longer than the code built
+into the host, as P4.1's one module did (0.977 and 0.979 of its time over
+the session), and as the code reached through the import table did inside
+the host (ADR 0029).
+
+### The size
+
+Machine code of the generated objects (`.text`), built into the host and
+in the modules, from the same sources:
+
+| | Built into the host | In the modules | |
+|---|---:|---:|---:|
+| `ACTION.UK` | 46,796,702 | 50,360,618 | +7.6% |
+| `DRIVING.ELF` | 37,129,388 | 39,524,227 | +6.4% |
+| `MOVIE.ELF` | 4,398,542 | 4,620,251 | +5.0% |
+| The boot executable | 1,244,414 | 1,272,679 | +2.3% |
+| The test programs | 71,831,164 | 75,978,540 | +5.8% |
+| The BIOS | 1,136,395 | 1,179,403 | +3.8% |
+| The IOP's code, the game's and the self-test's | 6,125,739 and 2,854,835 | 6,431,675 and 2,957,567 | +5.0% and +3.6% |
+| The micro code, the game's and the self-test's | 1,086,408 and 902,332 | 1,081,967 and 897,226 | -0.4% and -0.6% |
+
+The loads of the import table's addresses, as in P4.1; the game's code in
+the modules is what it was in P4.1's module (`ACTION.UK` 50,363,765 bytes
+then): PS2Native's description of the core gives the code PCSX2's own
+headers gave. The files: `ps2n-game.dll` 189,061,632 bytes,
+`ps2n-bios.dll` 1,328,128, `ps2n-vu.dll` 2,119,168, `ps2n-iop.dll`
+10,037,760, together 202,546,688 where P4.1's one module was 203,023,872;
+`ps2n-host.exe` 11,218,432.
+
+### What it found for the steps after
+
+- **P4.3 has its list**: what a module needs of the compiler is `clang`
+  (as `clang-cl`), `lld-link` and those 18 headers; of PS2Native, its 19
+  headers and the runtime's import library.
+- **The symbols a module imports PCSX2's variables and functions under are
+  Windows's** (the names Microsoft's ABI gives them, in `ps2n/pcsx2.h`):
+  P4.7 needs Linux's beside them.
+- **The test programs' EE code is in `ps2n-game`** in this build; a
+  packaged game's holds only the game's (P4.4), as the modules still import
+  from `ps2n-host.exe` by name (P4.1).
+- **Not tried with the modules**, as with P4.1's: profile-guided
+  optimization's training build and link-time optimization.

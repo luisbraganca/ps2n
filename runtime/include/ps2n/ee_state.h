@@ -10,16 +10,16 @@
 // interpreter and PCSX2's own functions therefore always agree on where a
 // register is.
 //
-// PCSX2's R5900.h is included directly rather than mirrored: it is small and
-// self-contained, and a change to it upstream then shows as a compile error
-// or a failing test here, never as a silent layout mismatch.
+// In the runtime they are PCSX2's own structures (R5900.h); in a game's
+// module PS2Native's description of them, which the runtime compares with
+// PCSX2's when it is built (ps2n/pcsx2.h), so that a change upstream shows as
+// a failed build, never as a silent difference of layout.
 #pragma once
 
 #include "ps2n/module.h"
+#include "ps2n/pcsx2.h"
 
-#include "R5900.h"
-
-#include <cstdint>
+#include <stdint.h>
 
 namespace ps2n::ee
 {
