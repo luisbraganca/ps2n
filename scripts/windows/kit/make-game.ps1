@@ -48,7 +48,12 @@ param(
     [ValidateSet('', 'vulkan', 'dx11', 'dx12', 'opengl', 'sw', 'auto')][string]$Renderer = '',
     # More options for the runtime when it plays (ps2n-host -help has them): '-mute', '-window-size',
     # '1280x720', '-frames', '3000' and the like.
-    [string[]]$HostOptions = @()
+    [string[]]$HostOptions = @(),
+    # PCSX2's archive of game patches (patches.zip, in an installed PCSX2's resources folder or in PCSX2's
+    # own release), for the game's widescreen and frame-rate patches (ADR 0025): an installed PCSX2's is
+    # taken by itself; this gives one where PCSX2 is not installed. PS2Native ships none (ADR 0028).
+    # Without one the game plays as its disc has it, 4:3.
+    [string]$PatchArchive = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -264,15 +269,23 @@ foreach ($card in 'Mcd001.ps2', 'Mcd002.ps2') {
     $cardPath = Join-Path $game "data\PCSX2\memcards\$card"
     if (Test-Path -LiteralPath $cardPath) { Copy-Item -LiteralPath $cardPath -Destination $record }
 }
+# And the console's NVRAM as it is now, which the core keeps beside the BIOS image it is given: the link
+# in the game's folder, or the image itself where it could not be linked.
+foreach ($extension in '.nvm', '.mec') {
+    $nvram = Join-Path (Split-Path $biosUsed) ($biosFile.BaseName + $extension)
+    if (Test-Path -LiteralPath $nvram) { Copy-Item -LiteralPath $nvram -Destination $record }
+}
 $hostArgs = @('-bios', $biosUsed, '-data', (Join-Path $game 'data'), '-log', (Join-Path $game 'core.log'),
     '-out', (Join-Path $game 'guest.txt'), '-ee', 'ps2n', '-iop', 'jit', '-vu', 'jit', '-static', 'on', '-image', 'game',
     '-until', '@@ no such line @@', '-window', '-record', $record,
     '-capture', (Join-Path $record 'capture.toml'), '-vu-ps2n', 'both', '-vu-capture', (Join-Path $record 'vu-capture.toml'),
     '-iop-ps2n', '-iop-capture', (Join-Path $record 'iop-capture.toml'))
-# PCSX2's archive of patches, where an installed PCSX2 keeps it (ADR 0025): the game's widescreen and
-# frame-rate patches by default, when it has them.
-$patchArchive = Join-Path ${env:ProgramFiles} 'PCSX2\resources\patches.zip'
-if (Test-Path -LiteralPath $patchArchive) { $hostArgs += @('-patch-archive', $patchArchive) }
+# PCSX2's archive of patches, the one given or where an installed PCSX2 keeps it (ADR 0025): the game's
+# widescreen and frame-rate patches by default, when it has them. ($archive: to PowerShell $patchArchive
+# would be the parameter -PatchArchive.)
+$archive = if ($PatchArchive) { (Resolve-Path -LiteralPath $PatchArchive).Path } else { Join-Path ${env:ProgramFiles} 'PCSX2\resources\patches.zip' }
+if (Test-Path -LiteralPath $archive) { $hostArgs += @('-patch-archive', $archive) }
+else { Say 'no archive of PCSX2''s patches here: the game plays as its disc has it, 4:3 (-PatchArchive gives one)' }
 if ($Renderer) { $hostArgs += @('-renderer', $Renderer) }
 $hostArgs += $HostOptions
 $hostArgs += $imagePath

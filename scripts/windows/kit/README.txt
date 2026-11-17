@@ -8,6 +8,13 @@ and one command, make-game.ps1. You bring the game's disc image and a BIOS
 image of your own console; both are read where they are and nothing of them is
 copied but into the game's folder this command makes.
 
+What the computer needs: Windows 10 version 1803 or later, or Windows 11,
+64-bit (winver says which); a processor with SSE4.1 (Intel from 2008, AMD from
+2011); a graphics driver with Vulkan, or else add -Renderer dx11 to the
+command; about 1 GB of free disk; and, while it compiles, up to about 0.6 GB of
+memory for each file compiled at once, one per processor unless -Jobs says
+fewer (-Jobs 4 on a computer with 8 GB of memory, -Jobs 2 with 4 GB).
+
 Compile a game and play it, from a PowerShell window in this folder:
 
     powershell -ExecutionPolicy Bypass -File .\make-game.ps1 -Image <disc image> -Bios <BIOS image> -Play
@@ -17,6 +24,12 @@ name them, and give what earlier sessions had to interpret, if you have it:
 
     powershell -ExecutionPolicy Bypass -File .\make-game.ps1 -Image <disc image> -Bios <BIOS image> `
         -More MOVIE.ELF,ACTION.UK,DRIVING.ELF -Captures <folder> -Play
+
+A game's widescreen and frame-rate patches come from PCSX2's own archive of
+them, patches.zip, which PS2Native does not ship: an installed PCSX2's is taken
+by itself; where PCSX2 is not installed, give one with -PatchArchive <file>
+(it is in the resources folder of PCSX2's release). Without it the game plays
+as its disc has it, 4:3.
 
 The game goes into games\<name>: its modules beside a copy of the runtime, its
 memory cards, every session played (written down to be run again), and what a

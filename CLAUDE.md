@@ -54,13 +54,16 @@ the micro code, the IOP's code) linked with the host's import library and
 nothing else; every test passes in all three build trees, Agent Under
 Fire's script is the stock run at every sync point from them, the
 maintainer's sessions replay at every fingerprint, and they take what
-P4.1's module took. P4.3, the toolchain the wizard brings, is under way:
-LLVM's own 22.1.3 at the maintainer's choice (ADR 0030), a folder of 254 MB
-(`scripts\windows\kit.ps1`) whose one command compiles Agent Under Fire
-from its disc image here with nothing but Windows on the path, into code
-the same byte for byte as the development build's, and the game replays
-the maintainer's session at every fingerprint; the run on another computer
-of the maintainer's is to come.**
+P4.1's module took. P4.3, the toolchain the wizard brings, was done the
+same day: LLVM's own 22.1.3 at the maintainer's choice (ADR 0030), a folder
+of 254 MB (`scripts\windows\kit.ps1`) whose one command compiles Agent
+Under Fire from its disc image; on the maintainer's Windows 10 laptop,
+without Visual Studio, it compiled the game in about 8 minutes into code
+the same byte for byte as this computer's, and the game played there for 15
+minutes within 3% of the console's pace, a run this computer replays at
+every fingerprint. That run found what a session record lacked (the patches
+as applied, the BIOS's ROM1 and ROM2), put right. P4.4, the packaged game,
+is next.**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first

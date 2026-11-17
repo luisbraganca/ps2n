@@ -26,12 +26,19 @@
 //                                 asks for, which a replay's patches ask for again
 //   ee-cycle-rate 0               PCSX2's EE cycle rate, only where the session was
 //                                 given one (-ee-cycle-rate)
+//   bios-roms rom1,rom2           which of the images the core loads from beside the
+//                                 BIOS image it had (none for none): what the machine
+//                                 is changes with them (a replay without them parts
+//                                 from the session at once), so a replay must have the
+//                                 same; the test driver links those (tests/guest_test.cmake)
 //   41 pad FFFF7F7F7F7F00000000000000000000FF00   at frame 41, the 18 bytes
 //   50 state 0123456789ABCDEF     at the start of frame 50, the registers' fingerprint
 //   end 8358                      the number of frames the session ran
 //
 // A session written down before the patches were (2026-11-15) has no
-// patches line: it is run again with none unless it is given them.
+// patches line: it is run again with none unless it is given them. One
+// written down before the BIOS's images were (2026-11-17) has no bios-roms
+// line: it is run again with whatever is beside the BIOS image given.
 #pragma once
 
 #include <array>
@@ -50,10 +57,17 @@ namespace ps2n::host::session
 	std::string FormatClock(const Clock& clock);
 
 	/// Starts writing a session down into `directory`/input.txt: its clock, its
-	/// patches ("widescreen,fps", "none"), and PCSX2's EE cycle rate where it was
-	/// given one. False when the file cannot be made.
+	/// patches ("widescreen,fps", "none"), PCSX2's EE cycle rate where it was
+	/// given one, and the images beside the BIOS image ("rom1,rom2", "none";
+	/// BiosRoms()). False when the file cannot be made.
 	bool StartRecording(const std::string& directory, const Clock& clock, const std::string& patches,
-		std::optional<int> ee_cycle_rate);
+		std::optional<int> ee_cycle_rate, const std::string& bios_roms);
+
+	/// Which of the images the core loads from beside a BIOS image are there, as
+	/// it looks for them (LoadExtraRom in pcsx2/ps2/BiosTools.cpp: <image>.rom1,
+	/// then the image's name with .rom1 for its extension; the same for rom2):
+	/// "rom1,rom2", "rom1", "rom2" or "none".
+	std::string BiosRoms(const std::string& bios_path);
 
 	/// What a replay needs before the machine starts: reads `path`. False, with
 	/// a message, when it cannot be read or is not such a file.
@@ -63,6 +77,7 @@ namespace ps2n::host::session
 		std::optional<uint32_t> frames;
 		std::optional<std::string> patches; // as -patches takes them
 		std::optional<int> ee_cycle_rate;
+		std::optional<std::string> bios_roms; // as BiosRoms() gives them
 	};
 	bool LoadReplay(const std::string& path, ReplayInfo* info);
 

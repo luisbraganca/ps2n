@@ -1119,6 +1119,38 @@ namespace
 				o.ee_cycle_rate = *info.ee_cycle_rate;
 				o.ee_cycle_rate_given = true;
 			}
+			// The images beside the BIOS make the machine another one: a session
+			// run again with others would part from it at once.
+			if (info.bios_roms)
+			{
+				const std::string here = ps2n::host::session::BiosRoms(o.bios_path);
+				if (here != *info.bios_roms)
+				{
+					std::fprintf(stderr,
+						"ps2n-host: %s was played with the BIOS's images %s beside it; this BIOS has %s (give it a BIOS image "
+						"with the same beside it)\n",
+						o.input_path.c_str(), info.bios_roms->c_str(), here.c_str());
+					return false;
+				}
+			}
+		}
+
+		// The game's patches come from PCSX2's archive of them (-patch-archive;
+		// PS2Native ships none, ADR 0028). Without one there is nothing to apply.
+		// A window, which asks for them by default, then plays without them, and
+		// writes the session down as it is played: with none. A run told to
+		// apply them, or a session played with them run again, could not be
+		// what it was asked to be.
+		if ((o.patch_widescreen || o.patch_fps) && o.patch_archive.empty())
+		{
+			if (patches_given || !o.input_path.empty())
+			{
+				std::fputs("ps2n-host: the game's patches need PCSX2's archive of them (-patch-archive)\n", stderr);
+				return false;
+			}
+			o.patch_widescreen = false;
+			o.patch_fps = false;
+			std::fputs("ps2n-host: no archive of PCSX2's patches (-patch-archive): the game is played without them\n", stderr);
 		}
 		return true;
 	}
@@ -2678,7 +2710,8 @@ namespace
 		if (!s_options.record_dir.empty() &&
 			!ps2n::host::session::StartRecording(s_options.record_dir, s_clock_used,
 				PatchesText(s_options.patch_widescreen, s_options.patch_fps),
-				s_options.ee_cycle_rate_given ? std::optional<int>(s_options.ee_cycle_rate) : std::nullopt))
+				s_options.ee_cycle_rate_given ? std::optional<int>(s_options.ee_cycle_rate) : std::nullopt,
+				ps2n::host::session::BiosRoms(s_options.bios_path)))
 			return EXIT_ERROR;
 		if (!s_options.pad_path.empty() && !LoadPadScript(s_options.pad_path))
 			return EXIT_ERROR;

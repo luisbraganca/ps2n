@@ -10,7 +10,7 @@ its date. Nothing here comes from a game or a BIOS but counts and times.
 |---|---|---|
 | P4.1 The module's cost | Every test passes; the game's time measured against today's build, and the cost put to the maintainer | **Measured** (2026-11-16): every test passes with the compiled code in a module of its own; Agent Under Fire takes the time it takes with the code built into the host (its script 1.17 times stock PCSX2's time against 1.18; the maintainer's second session replayed, 0.98 of the built-in code's time, its fourth mission 0.95); the generated code is 4 to 8% larger. **Done** (2026-11-17): put to the maintainer, who chose a loader of PS2Native's own if it made the game faster; the code it would give, which reaches the core directly, measured slower, so a module reaches the runtime through its import table ([ADR 0029](adr/0029-a-games-module-reaches-the-runtime-through-its-import-table.md)) |
 | P4.2 Freestanding generated code | A game module compiled with nothing but `clang`, `lld` and PS2Native's own headers; every test passes; a game is still the stock run | **Done** (2026-11-17): the generated code compiled against PS2Native's description of PCSX2's structures, which the runtime checks against PCSX2's own (636 assertions when it is built, the settings' bits when it starts), with no system header and no standard library, into four modules (the programs' EE code, the BIOS's, the micro code, the IOP's code) linked with the host's import library and nothing else; every test passes (533) in the three build trees; Agent Under Fire's script is the stock run at every sync point from the modules, and the maintainer's sessions replayed are the sessions at every fingerprint; the modules take what P4.1's module took (the script 1.17 times stock PCSX2's time, built in 1.19) |
-| P4.3 The shipped toolchain | A game compiled and run on a computer with nothing else installed (a fresh Windows user, without Visual Studio) | **Under way** (2026-11-17): the toolchain is LLVM's own 22.1.3 ([ADR 0030](adr/0030-the-wizards-compiler-is-llvms-own-release.md)), whose code is the code the development builds make, byte for byte; a folder of 254 MB (`scripts\windows\kit.ps1`) and one command in it (`make-game.ps1`) compile Agent Under Fire from its disc image and the BIOS in 101 seconds here, with nothing on the path but Windows, and the game they make replays the maintainer's session at every fingerprint; the run on another computer of the maintainer's is to come |
+| P4.3 The shipped toolchain | A game compiled and run on a computer with nothing else installed (a fresh Windows user, without Visual Studio) | **Done** (2026-11-17): the toolchain is LLVM's own 22.1.3 ([ADR 0030](adr/0030-the-wizards-compiler-is-llvms-own-release.md)), whose code is the code the development builds make, byte for byte; a folder of 254 MB (`scripts\windows\kit.ps1`) and one command in it (`make-game.ps1`) compile Agent Under Fire from its disc image and the BIOS (101 seconds here); on the maintainer's Windows 10 laptop, without Visual Studio, in about 8 minutes into the same code, byte for byte, and the game played there for 15 minutes within 3% of the console's pace, a run this computer replays at every fingerprint. The run found the session record missing two things (the patches as applied, the BIOS's ROM images), put right |
 | P4.4 The packaged game | Killzone and Agent Under Fire run from their folders, at the console's pace, the same runs as from the development host | |
 | P4.5 The wizard | A game packaged from the disc image and the BIOS with every default accepted, without a command line | |
 | P4.6 New code in play | A session that meets new code finds it compiled at its next start | |
@@ -506,7 +506,48 @@ bytes (the game's code alone), `ps2n-bios.dll` 1,327,104, `ps2n-vu.dll`
   session written down, and what it had to interpret added to the game's
   captures.
 
-What remains of the step is its criterion on another computer: the folder
-`build\p43\for-another-computer` (the kit, made again without a game in
-it, and beside it the captures of the maintainer's sessions), copied there
-and run as its `README.txt` says.
+### On another computer of the maintainer's
+
+The folder `build\p43\for-another-computer` (the kit, made again without a
+game in it, and beside it the captures of the maintainer's sessions) was
+run by the maintainer on 2026-11-17 on the only other Windows computer they
+have ("It's the only windows machine I have besides this one"): a laptop
+with Windows 10, an Intel Core i7-7700HQ (4 cores, 8 threads), 16 GB of
+memory and an NVIDIA GeForce GTX 1050 (Vulkan 1.3), without Visual Studio,
+the folder, the disc image and the BIOS image on a USB stick.
+
+- **It compiled the game**, in about 8 minutes (the times of the files it
+  wrote): the 205 objects it compiled are, in every code section, the bytes
+  this computer's compile of the same files gave, and the four modules are
+  the same size to the byte.
+- **It played the game**: 44,249 frames (14 minutes 45 seconds of the
+  game's) in at most 15 minutes 14 seconds (from the session's folder being
+  made to the console's settings being saved as the window closed): within
+  3% of the console's pace over the whole session, its start included.
+- **It was the same run**: the session, replayed here from the same
+  modules, is the session at every one of its 884 fingerprints, once the
+  BIOS image here had nothing beside it, as on the laptop.
+
+P4.3's criterion is met. The run found two things wrong, both put right
+since (below):
+
+- **The patches.** The laptop has no PCSX2, and so no archive of its
+  patches: the game played as its disc has it, in 4:3, without the
+  widescreen patch the window asks for (the maintainer: "btw it wasn't
+  1920x1080"), and the session was written down as played with the patches
+  asked for, which a replay elsewhere would have applied. Now, without an
+  archive, the host plays without them, says so, and writes the session
+  down as played with none; a run told to apply them, or a session played
+  with them run again, stops instead of being another run.
+  `make-game.ps1 -PatchArchive <file>` gives an archive where PCSX2 is not
+  installed (the one in the resources folder of PCSX2's release, ADR 0028;
+  PS2Native ships none).
+- **What the machine starts from.** The images the core loads from beside
+  the BIOS image, ROM1 and ROM2, make it another machine: with them beside
+  the BIOS image here, the replay parted from the session at its first
+  fingerprint (frame 50, a second in). A session now writes down which it
+  had (`bios-roms`), a replay is given those (`tests/guest_test.cmake`),
+  and the host refuses to run a session again with a BIOS that has others.
+  `make-game.ps1` also keeps the console's NVRAM beside a session, as
+  `game.ps1 -Play` does, which the laptop's session, its first, did not
+  need.

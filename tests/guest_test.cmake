@@ -244,11 +244,28 @@ function(ps2n_fresh_bios result_var)
 		endif()
 
 		# The optional ROM1, ROM2 and EROM images the core loads from beside the
-		# BIOS image, under either naming the core accepts.
+		# BIOS image, under either naming the core accepts. A session run again
+		# gets the ROM1 and ROM2 it was played with, as its bios-roms line says
+		# (host/session_record.h; one written down before has none, and gets
+		# what is there): the machine is another one without them.
+		set(roms_wanted "")
+		set(roms_from_session FALSE)
+		if(DEFINED INPUT AND NOT "${INPUT}" STREQUAL "" AND EXISTS "${INPUT}")
+			file(STRINGS "${INPUT}" roms_line REGEX "^bios-roms ")
+			if(roms_line)
+				set(roms_from_session TRUE)
+				string(REGEX REPLACE "^bios-roms +" "" roms_line "${roms_line}")
+				string(REPLACE "," ";" roms_wanted "${roms_line}")
+			endif()
+		endif()
 		file(GLOB siblings LIST_DIRECTORIES false "${bios_dir}/${bios_stem}.*" "${bios_dir}/${bios_name}.*")
 		foreach(sibling IN LISTS siblings)
 			get_filename_component(extension "${sibling}" LAST_EXT)
 			string(TOLOWER "${extension}" extension)
+			string(SUBSTRING "${extension}" 1 -1 kind)
+			if(roms_from_session AND kind MATCHES "^rom[12]$" AND NOT kind IN_LIST roms_wanted)
+				continue()
+			endif()
 			if(extension MATCHES "^\\.(rom1|rom2|erom)$")
 				get_filename_component(sibling_name "${sibling}" NAME)
 				ps2n_link("${sibling}" "${WORK_DIR}/bios/${sibling_name}" ignored)
