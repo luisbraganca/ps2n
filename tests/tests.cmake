@@ -712,6 +712,10 @@ add_custom_command(
 )
 
 set(PS2N_GAME_MODULE OFF CACHE BOOL "Build the compiled code into a module of its own, ps2n-game.dll, which ps2n-host loads (docs/phase4-proposal.md, step P4.1)")
+set(PS2N_GAME_IMPORTS OFF CACHE BOOL "Compile the compiled code as for a module and link it into ps2n-host all the same: what the import table costs, alone (docs/app-log.md, P4.1)")
+if(PS2N_GAME_MODULE AND PS2N_GAME_IMPORTS)
+	message(FATAL_ERROR "PS2N_GAME_MODULE and PS2N_GAME_IMPORTS are one or the other")
+endif()
 if(PS2N_GAME_MODULE)
 	# The compiled code in a module of its own (docs/phase4-proposal.md, step
 	# P4.1; runtime/include/ps2n/module.h, runtime/game_module.h): a DLL beside
@@ -734,23 +738,49 @@ if(PS2N_GAME_MODULE)
 		"${CMAKE_SOURCE_DIR}/pcsx2"
 	)
 	target_compile_definitions(ps2n-game PRIVATE PS2N_MODULE)
-	# The host exports the runtime's variables and functions that compiled
-	# code uses (PS2N_API), and these of PCSX2's: its variables under names of
-	# PS2Native's own, which runtime/include/ps2n/module.h puts in the place
-	# of PCSX2's, its functions under their own.
+	# Linked with the host's import library (the exports are below).
 	set_target_properties(ps2n-host PROPERTIES ENABLE_EXPORTS ON)
 	target_link_libraries(ps2n-game PRIVATE "$<COMPILE_ONLY:ps2n-runtime>" "$<COMPILE_ONLY:PCSX2_FLAGS>" ps2n-host)
 	set_target_properties(ps2n-game PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin")
+	target_compile_definitions(ps2n-host PRIVATE PS2N_GAME_MODULE)
+	message(STATUS "PS2Native: the compiled code goes into a module of its own, ps2n-game.dll")
+else()
+	add_library(ps2n-test-images STATIC ${ps2n_image_sources} "${PS2N_GENERATED}/registry.cpp")
+	set(ps2n_images_target ps2n-test-images)
+	target_include_directories(ps2n-test-images PRIVATE
+		"${CMAKE_BINARY_DIR}/common/include"
+		"${CMAKE_SOURCE_DIR}/pcsx2"
+	)
+	target_link_libraries(ps2n-test-images PRIVATE ps2n-runtime PCSX2_FLAGS)
+	target_link_libraries(ps2n-host PRIVATE ps2n-test-images)
+	if(PS2N_GAME_IMPORTS)
+		# Compiled as for a module, linked into the host all the same: the
+		# host's linker makes an entry of the import table for each variable
+		# and function the code imports, defined in the host itself, and
+		# would say so for each one (LNK4217). It keeps a function that only
+		# such an entry names only when something else names it too, which
+		# the exports below do: without them the first call of the runtime
+		# went to the start of the host's image.
+		target_compile_definitions(ps2n-test-images PRIVATE PS2N_MODULE)
+		target_link_options(ps2n-host PRIVATE /ignore:4217)
+		message(STATUS "PS2Native: the compiled code is compiled as for a module and linked into the host")
+	endif()
+endif()
+if(PS2N_GAME_MODULE OR PS2N_GAME_IMPORTS)
+	# The host exports the runtime's variables and functions that compiled
+	# code uses (PS2N_API), and these of PCSX2's: its variables, which
+	# runtime/include/ps2n/module.h declares imported, and its functions,
+	# which a module reaches through the import library's thunks.
 	target_compile_definitions(ps2n-runtime PRIVATE PS2N_EXPORTS)
-	target_compile_definitions(ps2n-host PRIVATE PS2N_EXPORTS PS2N_GAME_MODULE)
+	target_compile_definitions(ps2n-host PRIVATE PS2N_EXPORTS)
 	set(ps2n_core_exports
-		"ps2n_imp_cpuRegistersPack=?_cpuRegistersPack@@3UcpuRegistersPack@@A,DATA"
-		"ps2n_imp_vuRegs=?vuRegs@@3PAUVURegs@@A,DATA"
-		"ps2n_imp_eeHw=?eeHw@@3PAEA,DATA"
-		"ps2n_imp_iopMem=?iopMem@@3PEAUIopVM_MemoryAllocMess@@EA,DATA"
-		"ps2n_imp_psxRegs=?psxRegs@@3UpsxRegisters@@A,DATA"
-		"ps2n_imp_EmuConfig=?EmuConfig@@3UPcsx2Config@@A,DATA"
-		"ps2n_imp_vtlbdata=?vtlbdata@vtlb_private@@3UMapData@1@A,DATA"
+		"?_cpuRegistersPack@@3UcpuRegistersPack@@A,DATA"
+		"?vuRegs@@3PAUVURegs@@A,DATA"
+		"?eeHw@@3PAEA,DATA"
+		"?iopMem@@3PEAUIopVM_MemoryAllocMess@@EA,DATA"
+		"?psxRegs@@3UpsxRegisters@@A,DATA"
+		"?EmuConfig@@3UPcsx2Config@@A,DATA"
+		"?vtlbdata@vtlb_private@@3UMapData@1@A,DATA"
 		"??$vtlb_memRead@I@@YAII@Z"
 		"??$vtlb_memRead@_K@@YA_KI@Z"
 		"??$vtlb_memWrite@I@@YAXII@Z"
@@ -774,16 +804,6 @@ if(PS2N_GAME_MODULE)
 	foreach(ps2n_export IN LISTS ps2n_core_exports)
 		target_link_options(ps2n-host PRIVATE "/EXPORT:${ps2n_export}")
 	endforeach()
-	message(STATUS "PS2Native: the compiled code goes into a module of its own, ps2n-game.dll")
-else()
-	add_library(ps2n-test-images STATIC ${ps2n_image_sources} "${PS2N_GENERATED}/registry.cpp")
-	set(ps2n_images_target ps2n-test-images)
-	target_include_directories(ps2n-test-images PRIVATE
-		"${CMAKE_BINARY_DIR}/common/include"
-		"${CMAKE_SOURCE_DIR}/pcsx2"
-	)
-	target_link_libraries(ps2n-test-images PRIVATE ps2n-runtime PCSX2_FLAGS)
-	target_link_libraries(ps2n-host PRIVATE ps2n-test-images)
 endif()
 # Generated code needs no debugging information but the functions' names and
 # line tables, which is what the profiler reads (ps2n-host -profile). With all

@@ -8,7 +8,7 @@ its date. Nothing here comes from a game or a BIOS but counts and times.
 
 | Step | Pass criterion | State |
 |---|---|---|
-| P4.1 The module's cost | Every test passes; the game's time measured against today's build, and the cost put to the maintainer | **Measured** (2026-11-16): every test passes with the compiled code in a module of its own; Agent Under Fire takes the time it takes with the code built into the host (its script 1.17 times stock PCSX2's time against 1.18; the maintainer's second session replayed, 0.98 of the built-in code's time, its fourth mission 0.95); the generated code is 4 to 8% larger. Put to the maintainer, who chose a loader of PS2Native's own if it makes the game faster (below) |
+| P4.1 The module's cost | Every test passes; the game's time measured against today's build, and the cost put to the maintainer | **Measured** (2026-11-16): every test passes with the compiled code in a module of its own; Agent Under Fire takes the time it takes with the code built into the host (its script 1.17 times stock PCSX2's time against 1.18; the maintainer's second session replayed, 0.98 of the built-in code's time, its fourth mission 0.95); the generated code is 4 to 8% larger. **Done** (2026-11-17): put to the maintainer, who chose a loader of PS2Native's own if it made the game faster; the code it would give, which reaches the core directly, measured slower, so a module reaches the runtime through its import table ([ADR 0029](adr/0029-a-games-module-reaches-the-runtime-through-its-import-table.md)) |
 | P4.2 Freestanding generated code | A game module compiled with nothing but `clang`, `lld` and PS2Native's own headers; every test passes; a game is still the stock run | |
 | P4.3 The shipped toolchain | A game compiled and run on a computer with nothing else installed (a fresh Windows user, without Visual Studio) | |
 | P4.4 The packaged game | Killzone and Agent Under Fire run from their folders, at the console's pace, the same runs as from the development host | |
@@ -32,7 +32,10 @@ scripts\windows\game.ps1 -Image <disc image> -BuildDir build\windows-clang-modul
 The tree remembers `-Module` as it remembers `-Game`; `build.ps1` then
 builds `ps2n-game` with `ps2n-host`. Without `-Module on` nothing changes:
 the compiled code is built into the host, and the generated code is the same,
-byte for byte (below).
+byte for byte (below). `-Module imports` compiles the generated code as for a
+module and links it into the host all the same, whose linker fills the
+import table's entries itself: what reaching the core through the import
+table costs, alone, the module's file apart (below).
 
 ## P4.1 The module's cost
 
@@ -173,4 +176,58 @@ P4.2 on this design; the other way, a loader of PS2Native's own that places
 the module beside the runtime, so that compiled code reaches the core's
 variables directly, without the import table. The maintainer: "If the
 custom loader makes the game faster, I'd go with the custom loader. If not,
-your recommendation." Whether it would is measured next.
+your recommendation." And: "If it doesn't affect game speed, only compile
+speed, I'd also go with your recommendation."
+
+### Would a loader of PS2Native's own make the game faster?
+
+Such a loader would change one thing: compiled code would reach the core's
+variables directly, as code built into the host does. Measured alone
+(2026-11-17): the same generated code compiled as for a module and linked
+into the host all the same (`build.ps1 -BuildDir build\windows-clang-imports
+-Module imports`), timed beside the code built into the host as usual. Its
+generated code is the module's, to the byte (the sizes above).
+
+The first build of it stopped at the BIOS's first compiled function, at a
+call to the start of the host's image: the linker kept a function that only
+the import table's entries named, here filled by the linker itself, only
+when something else named it too, and dropped the rest. The host now exports
+them, as for a module (tests/tests.cmake); then every test passed (533 of
+533, as in the usual build and with the module, all three built from the
+same sources on 2026-11-17).
+
+| Agent Under Fire | Stock PCSX2 | Built into the host (direct) | The same, through the import table |
+|---|---:|---:|---:|
+| Its script, from frame 1 | 26.69, 26.33, 26.43 s | 31.21, 31.08, 31.26 s | 30.75, 30.67, 30.77 s |
+| Against stock PCSX2 (means) | 1 | 1.18 | 1.16 |
+| Its play | 8.20, 8.13, 8.18 s | 9.01, 8.98, 8.99 s | 8.70, 8.72, 8.75 s |
+| Against stock PCSX2 (means) | 1 | 1.10 | 1.07 |
+
+| The second session replayed | Built into the host (direct) | Through the import table | |
+|---|---:|---:|---:|
+| To frame 80,000 | 366.2 s | 361.2 s | 0.987 |
+| From frame 80,000, the fourth mission | 146.1 s | 139.4 s | 0.954 |
+| The whole, from frame 1 | 512.3 s | 500.6 s | 0.977 |
+
+Both replays are the session at every fingerprint and interpreted the same
+87 instructions. The code that reaches the core directly is the slower one,
+in every part. The module, timed the same night against the built-in code
+once more, came out as before: the session 0.979 of its time, the fourth
+mission 0.959, the part before it 0.987; its script runs 31.37, 31.22, 31.07
+s against 31.45, 31.44, 30.98, its play 8.85, 8.79, 8.75 s against 9.07,
+9.11, 8.92. So the module is as fast as the code that goes through the
+import table inside the host: what it gains is not its being a file of its
+own.
+
+Why the import table's code is faster is not known. In the fourth mission's
+wait loop the two differ only in how the core's register block is addressed
+(`[rip+offset]` against `[rbp+offset]`, the address loaded once), the same
+instructions otherwise; it may come from where the code falls in memory
+rather than from the import table itself. That is for the speed step left
+for later.
+
+**The outcome**, by the maintainer's rule: a loader of PS2Native's own
+would not make the game faster, so a module reaches the runtime through its
+import table, as an ordinary DLL does
+([ADR 0029](adr/0029-a-games-module-reaches-the-runtime-through-its-import-table.md)).
+P4.1 is done; P4.2 goes on on this design.

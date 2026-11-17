@@ -98,9 +98,10 @@ param(
     # (ThinLTO), or "off". PCSX2's code is compiled as before either way. Remembered by the build tree, as -Game is.
     [ValidateSet('', 'thin', 'off')][string]$Lto = '',
     # The compiled code built into a module of its own, ps2n-game.dll beside the host, which the host loads when it
-    # starts (docs\phase4-proposal.md, step P4.1): "on", or "off" to build it into the host, as by default.
-    # Remembered by the build tree, as -Game is.
-    [ValidateSet('', 'on', 'off')][string]$Module = ''
+    # starts (docs\phase4-proposal.md, step P4.1): "on", or "off" to build it into the host, as by default, or
+    # "imports" to compile it as for a module and link it into the host all the same (what reaching the core
+    # through the import table costs, alone; docs\app-log.md, P4.1). Remembered by the build tree, as -Game is.
+    [ValidateSet('', 'on', 'off', 'imports')][string]$Module = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -206,6 +207,7 @@ if ($Lto) {
 }
 if ($Module) {
     $gameSettings += "-DPS2N_GAME_MODULE=$(if ($Module -eq 'on') { 'ON' } else { 'OFF' })"
+    $gameSettings += "-DPS2N_GAME_IMPORTS=$(if ($Module -eq 'imports') { 'ON' } else { 'OFF' })"
 }
 
 if ($Reconfigure -or $gameSettings -or -not (Test-Path (Join-Path $build 'build.ninja'))) {

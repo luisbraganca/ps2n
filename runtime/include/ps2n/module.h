@@ -10,15 +10,19 @@
 //
 //  - the runtime's variables and functions that compiled code uses are
 //    declared PS2N_API: exported by the host, imported by the module;
-//  - PCSX2's variables that it uses are exported by the host under names of
-//    PS2Native's own (host/targets.cmake). Below, a module declares them
-//    imported and puts them in the place of PCSX2's names, so that the
-//    headers of the semantics and the generated code reach them unchanged;
+//  - PCSX2's variables that it uses are exported by the host
+//    (tests/tests.cmake). Below, a module declares them imported, under
+//    names of PS2Native's own bound to PCSX2's symbols, and puts those in the
+//    place of PCSX2's names, so that the headers of the semantics and the
+//    generated code reach them unchanged;
 //  - PCSX2's functions that it calls are exported under their own names,
 //    and reached through the import library's thunks.
 //
 // Every header of the semantics that reaches PCSX2's state includes this one
 // first. Built into the host, as compiled code has been, it changes nothing.
+// With PS2N_GAME_IMPORTS the code is compiled as for a module and linked into
+// the host all the same, whose linker then makes the import table's entries
+// itself: what reaching the core through the import table costs, alone.
 // This is the prototype that measures what the boundary costs; the
 // generated code that needs neither PCSX2's headers nor a standard library
 // is step P4.2.
@@ -53,19 +57,18 @@
 #include "Vif.h"
 #include "vtlb.h"
 
-// PCSX2's variables, as the host exports them.
-extern "C"
-{
-	__declspec(dllimport) extern cpuRegistersPack ps2n_imp_cpuRegistersPack;
-	__declspec(dllimport) extern VURegs ps2n_imp_vuRegs[2];
-	__declspec(dllimport) extern u8 ps2n_imp_eeHw[Ps2MemSize::Hardware];
-	__declspec(dllimport) extern IopVM_MemoryAllocMess* ps2n_imp_iopMem;
-	__declspec(dllimport) extern psxRegisters ps2n_imp_psxRegs;
-	__declspec(dllimport) extern Pcsx2Config ps2n_imp_EmuConfig;
-}
+// PCSX2's variables, imported: each bound to PCSX2's own symbol (its name as
+// the compiler gives it, which PCSX2's declarations above have), since a
+// declaration of PCSX2's name itself cannot be made an import after PCSX2's.
+__declspec(dllimport) extern cpuRegistersPack ps2n_imp_cpuRegistersPack __asm__("?_cpuRegistersPack@@3UcpuRegistersPack@@A");
+__declspec(dllimport) extern VURegs ps2n_imp_vuRegs[2] __asm__("?vuRegs@@3PAUVURegs@@A");
+__declspec(dllimport) extern u8 ps2n_imp_eeHw[Ps2MemSize::Hardware] __asm__("?eeHw@@3PAEA");
+__declspec(dllimport) extern IopVM_MemoryAllocMess* ps2n_imp_iopMem __asm__("?iopMem@@3PEAUIopVM_MemoryAllocMess@@EA");
+__declspec(dllimport) extern psxRegisters ps2n_imp_psxRegs __asm__("?psxRegs@@3UpsxRegisters@@A");
+__declspec(dllimport) extern Pcsx2Config ps2n_imp_EmuConfig __asm__("?EmuConfig@@3UPcsx2Config@@A");
 namespace vtlb_private
 {
-	extern "C" __declspec(dllimport) MapData ps2n_imp_vtlbdata;
+	__declspec(dllimport) extern MapData ps2n_imp_vtlbdata __asm__("?vtlbdata@vtlb_private@@3UMapData@1@A");
 }
 
 // In the place of PCSX2's names. cpuRegs, fpuRegs, VU0, VU1, vif0Regs and

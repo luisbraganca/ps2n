@@ -42,8 +42,10 @@ same day: with the compiled code in a module of its own that the host
 loads (`build.ps1 -Module on`), every test passes and Agent Under Fire
 takes the time it takes with the code built into the host. The maintainer
 chose a loader of PS2Native's own, which would let compiled code reach the
-core's variables without the import table, if it makes the game faster,
-and the import table otherwise: measured next.**
+core's variables without the import table, if it made the game faster, and
+the import table otherwise. The code such a loader would give measured
+slower on 2026-11-17 (ADR 0029), so a module reaches the runtime through
+its import table; P4.1 is done and P4.2 is next.**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -500,6 +502,17 @@ Decisions:
   PCSX2's time), speed later. Windows first, the design portable. The
   steps P4.1 to P4.7 in the proposal's order, beginning with what the
   module costs.
+- [ADR 0029](docs/adr/0029-a-games-module-reaches-the-runtime-through-its-import-table.md):
+  a game's module reaches the runtime through its import table, as an
+  ordinary DLL does; no loader of PS2Native's own. The maintainer's rule
+  on 2026-11-16 ("If the custom loader makes the game faster, I'd go with
+  the custom loader. If not, your recommendation"; "If it doesn't affect
+  game speed, only compile speed, I'd also go with your recommendation"),
+  applied to a measurement of 2026-11-17: the same generated code reaching
+  the core directly, as such a loader would have it, took longer than
+  through the import table (Agent Under Fire's second session 1 against
+  0.977, its fourth mission 1 against 0.954), why not known yet.
+  `build.ps1 -Module imports` measures it.
 
 ## Layout, build and test
 
@@ -609,8 +622,11 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   compiled into `ps2n-game.dll` beside `ps2n-host.exe`, which the host
   loads when it starts (`runtime/game_module.h`); what crosses between them
   is `runtime/include/ps2n/module.h`. `test.ps1` and `game.ps1` take the
-  same `-BuildDir`. Without `-Module on` nothing changes. What it costs is
-  in [docs/app-log.md](docs/app-log.md), "P4.1".
+  same `-BuildDir`. Without `-Module on` nothing changes. `-Module imports`
+  (in a tree of its own, `build\windows-clang-imports`) compiles the code as
+  for a module and links it into the host all the same: what reaching the
+  core through the import table costs, alone. What it costs is in
+  [docs/app-log.md](docs/app-log.md), "P4.1".
 - The game: `scripts\windows\build.ps1 -Game <its boot executable>` compiles
   it into the host (the build tree remembers it; `-GameCapture <file>` adds
   what runs reported). A game made of several executables, whose boot
