@@ -94,7 +94,10 @@
 #   EE_CYCLE_RATE  PCSX2's EE cycle rate setting, its overclock (ps2n-host
 #              -ee-cycle-rate)
 #   INPUT      a session played in the window and written down, to run again
-#              (ps2n-host -input): its controller, its clock, its frames
+#              (ps2n-host -input): its controller, its clock, its frames; one
+#              played from a game's folder the wizard made (its "packaged"
+#              line) is run with the game's settings file and patch file
+#              found beside it, in the run's data folder
 #   MEMCARDS_FROM  a folder whose Mcd001.ps2 and Mcd002.ps2 every run gets a
 #              copy of, in the slots (ps2n-host -memcards); a slot the folder
 #              has no card for gets a new one, as in a window
@@ -302,6 +305,23 @@ function(ps2n_run tag)
 		endif()
 		set(memcards -memcards "${WORK_DIR}/memcards${tag}")
 	endif()
+	# A game's own settings file and patch file: those of a session played
+	# from a game's folder the wizard made, put back where it had them, and
+	# none for any other run (PCSX2 would load a settings file left there).
+	set(pcsx2_data "${WORK_DIR}/data${tag}/PCSX2")
+	file(REMOVE_RECURSE "${pcsx2_data}/gamesettings")
+	if(ps2n_packaged)
+		get_filename_component(session_dir "${INPUT}" DIRECTORY)
+		file(GLOB settings_files LIST_DIRECTORIES false "${session_dir}/*.ini")
+		file(GLOB patch_files LIST_DIRECTORIES false "${session_dir}/*.pnach")
+		file(MAKE_DIRECTORY "${pcsx2_data}/gamesettings" "${pcsx2_data}/patches")
+		if(settings_files)
+			file(COPY ${settings_files} DESTINATION "${pcsx2_data}/gamesettings")
+		endif()
+		if(patch_files)
+			file(COPY ${patch_files} DESTINATION "${pcsx2_data}/patches")
+		endif()
+	endif()
 	execute_process(
 		COMMAND "${HOST}"
 			-bios "${bios_for_run}"
@@ -417,8 +437,15 @@ endif()
 if(DEFINED PAD AND NOT "${PAD}" STREQUAL "")
 	list(APPEND limits -pad "${PAD}")
 endif()
+set(ps2n_packaged FALSE)
 if(DEFINED INPUT AND NOT "${INPUT}" STREQUAL "")
 	list(APPEND limits -input "${INPUT}")
+	if(EXISTS "${INPUT}")
+		file(STRINGS "${INPUT}" packaged_line REGEX "^packaged$")
+		if(packaged_line)
+			set(ps2n_packaged TRUE)
+		endif()
+	endif()
 endif()
 if(DEFINED PATCHES AND NOT "${PATCHES}" STREQUAL "")
 	list(APPEND limits -patches ${PATCHES})

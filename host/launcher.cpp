@@ -12,6 +12,10 @@
 //
 // It needs nothing but Windows: Microsoft's C runtime is built into it
 // (host/targets.cmake).
+//
+// The same program is the folder kit.ps1 puts together's PS2Native.exe: where
+// there is no settings.txt beside it but the wizard is in the runtime folder
+// beside it, it starts the wizard (docs/phase4-proposal.md, step P4.5).
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -112,6 +116,29 @@ namespace
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 {
 	const std::wstring folder = OwnFolder();
+
+	// PS2Native's own folder: the wizard, which has a window of its own and
+	// says itself what goes wrong.
+	const std::wstring wizard = folder + L"runtime\\ps2n-wizard.exe";
+	if (GetFileAttributesW((folder + L"settings.txt").c_str()) == INVALID_FILE_ATTRIBUTES &&
+		GetFileAttributesW(wizard.c_str()) != INVALID_FILE_ATTRIBUTES)
+	{
+		std::wstring command = Quoted(wizard);
+		STARTUPINFOW startup = {};
+		startup.cb = sizeof(startup);
+		PROCESS_INFORMATION process = {};
+		if (!CreateProcessW(wizard.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr, (folder + L"runtime").c_str(),
+				&startup, &process))
+		{
+			Say(L"PS2Native could not be started: " + wizard + L" did not start (Windows error " + std::to_wstring(GetLastError()) +
+				L"). Is PS2Native's folder whole?");
+			return 1;
+		}
+		CloseHandle(process.hThread);
+		CloseHandle(process.hProcess);
+		return 0;
+	}
+
 	const std::wstring host = folder + L"ps2n-host.exe";
 	std::wstring command = Quoted(host) + L" -settings " + Quoted(folder + L"settings.txt");
 	int count = 0;

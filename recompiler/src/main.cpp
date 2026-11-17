@@ -112,6 +112,11 @@ void usage() {
         "      own: it belongs in the build tree, or on the user's computer, never in\n"
         "      the repository.\n"
         "\n"
+        "  ps2n-recomp executables <disc image>\n"
+        "      Lists the EE's executables on a disc image, by their ELF headers:\n"
+        "      \"boot <path>\" for the one the disc boots, then \"loads <path>\" for\n"
+        "      each other, which a game made of several executables loads itself.\n"
+        "\n"
         "  ps2n-recomp registry --out <file.cpp> [--vu <id>]... [--iop <id>]... <id>...\n"
         "      Writes the list of images a host is linked with; --vu names an image\n"
         "      of compiled micro code, --iop one of compiled IOP code.\n"
@@ -490,6 +495,18 @@ int extract(const Args& a) {
     return 0;
 }
 
+// The EE's executables on a disc image (iso::executables): "boot <path>" for the
+// one SYSTEM.CNF boots, "loads <path>" for each other, which a game made of
+// several executables loads itself (docs/adr/0026).
+int executables(const Args& a) {
+    if (a.positional.size() != 1) throw Error("executables needs a disc image");
+    const iso::SectorReader read = iso::openImage(a.positional[0]);
+    const std::optional<std::string> boot = iso::bootExecutable(read);
+    for (const std::string& path : iso::executables(read))
+        std::printf("%s %s\n", boot && path == *boot ? "boot" : "loads", path.c_str());
+    return 0;
+}
+
 int registry(const Args& a) {
     if (a.out.empty()) throw Error("registry needs --out <file.cpp>");
     if (a.out.has_parent_path()) std::filesystem::create_directories(a.out.parent_path());
@@ -650,6 +667,7 @@ int main(int argc, char** argv) {
         if (a.command == "capture") return capture(a);
         if (a.command == "registry") return registry(a);
         if (a.command == "extract") return extract(a);
+        if (a.command == "executables") return executables(a);
         if (a.command == "vu") return vuCompile(a);
         if (a.command == "vu-capture") return vuCapture(a);
         if (a.command == "iop") return iopCompile(a);

@@ -73,7 +73,16 @@ host's sessions run again from them (the maintainer's four of Agent Under
 Fire among them) are the sessions at every fingerprint, and the other way
 round. Killzone's code needed a module to
 have its own stack probe (`__chkstk`, `runtime/module_entry.cpp`), which a
-test of the module tree holds. P4.5, the wizard, is next.**
+test of the module tree holds. P4.5, the wizard, is under way: at the
+maintainer's word it goes through all of PCSX2's settings that apply to a
+game (ADR 0032), PCSX2's own per-game pages compiled unchanged into
+`ps2n-wizard` (`wizard/`), what PS2Native carries out in PCSX2's place shown
+but fixed; a game's settings are a file in its folder that the runtime
+reads (`ps2n-host -packaged`); the five steps make a game from its disc
+image into a folder that plays it, `PS2Native.exe` at the root of the
+folder `kit.ps1` makes (Agent Under Fire in 336 seconds, every default
+accepted, played from its folder at the console's pace). The maintainer's
+own run of the step's criterion is next.**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -556,6 +565,18 @@ Decisions:
   Studio's redistributable files; nothing is installed for it, and newer
   copies come with PS2Native's updates. The maintainer's choice on
   2026-11-17, the session's recommendation.
+- [ADR 0032](docs/adr/0032-the-wizard-goes-through-pcsx2s-settings.md):
+  the wizard goes through every setting of PCSX2's that applies to a game,
+  at PCSX2's defaults but the window's (ADR 0025: the patches with their
+  overclock, Vulkan, 1920 by 1080 at three times the console's
+  resolution); those that change how the processors are emulated shown
+  but fixed at what PS2Native follows, each changeable once checked
+  against PCSX2; the core's on-screen display not offered (ADR 0012);
+  PCSX2's own per-game settings pages inside the wizard if they build into
+  it unchanged, PS2Native's own otherwise; PCSX2's program settings,
+  hotkeys and RetroAchievements left out. The maintainer's words on
+  2026-11-17 ("the wizard should go through all the PCSX2 settings"), and
+  four recommendations accepted.
 
 ## Layout, build and test
 
@@ -593,6 +614,12 @@ host/                     ps2n-host: console frontend for the PCSX2 core, the te
                           core's providers: sync_trace, vu_report, iop_report); with -window, where a game
                           is played (window.cpp: Windows only so far); and a game's launcher (launcher.cpp:
                           the program a game's folder is started from, which starts the runtime beside it)
+wizard/                   ps2n-wizard, the application a game is made with (Phase 4, step P4.5; ADR 0032):
+                          its five steps (wizard_window.cpp), the recompile (pipeline.cpp), the game's folder
+                          (package.cpp); PCSX2's own settings pages, compiled from the submodule unchanged, in
+                          a window of its own (settings_window.cpp: PCSX2's SettingsWindow class with the pages a
+                          game has), with what they call of the rest of PCSX2's frontend (stand_ins.cpp,
+                          pcsx2-qt/MainWindow.h, found before PCSX2's) and of the core (host_interface.cpp)
 tests/unit/               unit tests of the build-time tools
 tests/module/             what a module defines for itself, tested (stack_probe.cpp: its __chkstk)
 tests/                    CTest registration for programs booted on the core, the driver script, the recorded
@@ -710,7 +737,22 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   too. `game.ps1 -Runtime <folder>\ps2n-host.exe` runs a packaged game as
   it is, a session again among them. Run it from the folder with nothing
   but Windows on `PATH` to check that it needs nothing else; what it makes
-  stays in the build tree, as everything made from a game does.
+  stays in the build tree, as everything made from a game does. The
+  wizard (P4.5) does the same in five steps: built with `build.ps1
+  -BuildDir build\windows-clang-module -Wizard on` (Qt from PCSX2's
+  dependency package), it goes into the folder's `runtime` with Qt and its
+  plugins (`runtime\wizard-files.txt` lists what a game's folder leaves
+  out), and `PS2Native.exe` at the folder's root starts it. It finds a
+  disc's executables itself (`ps2n-recomp executables`), writes the game's
+  own settings file and patch file into its folder's data, and makes the
+  folder with `-packaged`: the runtime then takes the game's settings from
+  that file, over the defaults the wizard showed, which are the runtime's
+  too (`host/game_settings.h`, `ps2n::game::SetDefaults`). For checks,
+  `ps2n-wizard --kit build\kit --image <iso> --bios <bin> --shots <folder>
+  --auto [--until <step>]` fills the first steps in, saves each step (the
+  settings, each category) as a picture, and presses Next itself; run from
+  the build tree it needs `deps\windows-x64\deps\bin` on `PATH` and
+  `QT_PLUGIN_PATH` set to `deps\windows-x64\deps\plugins`.
 - The game: `scripts\windows\build.ps1 -Game <its boot executable>` compiles
   it into the host (the build tree remembers it; `-GameCapture <file>` adds
   what runs reported). A game made of several executables, whose boot

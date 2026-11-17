@@ -103,7 +103,11 @@ param(
     # host, as by default, or
     # "imports" to compile it as for a module and link it into the host all the same (what reaching the core
     # through the import table costs, alone; docs\app-log.md, P4.1). Remembered by the build tree, as -Game is.
-    [ValidateSet('', 'on', 'off', 'imports')][string]$Module = ''
+    [ValidateSet('', 'on', 'off', 'imports')][string]$Module = '',
+    # The wizard, the application a game is made with (docs\phase4-proposal.md, step P4.5): "on" builds
+    # ps2n-wizard.exe beside the host, with Qt from PCSX2's dependency package; "off" does not, as by default.
+    # Remembered by the build tree, as -Game is.
+    [ValidateSet('', 'on', 'off')][string]$Wizard = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -211,6 +215,9 @@ if ($Module) {
     $gameSettings += "-DPS2N_GAME_MODULE=$(if ($Module -eq 'on') { 'ON' } else { 'OFF' })"
     $gameSettings += "-DPS2N_GAME_IMPORTS=$(if ($Module -eq 'imports') { 'ON' } else { 'OFF' })"
 }
+if ($Wizard) {
+    $gameSettings += "-DPS2N_WIZARD=$(if ($Wizard -eq 'on') { 'ON' } else { 'OFF' })"
+}
 
 if ($Reconfigure -or $gameSettings -or -not (Test-Path (Join-Path $build 'build.ninja'))) {
     # The flags PCSX2's own CI uses for its Windows CMake build with clang-cl,
@@ -233,6 +240,11 @@ $cache = Join-Path $build 'CMakeCache.txt'
 if (($Target -contains 'ps2n-host') -and (Test-Path $cache) -and
     (Select-String -LiteralPath $cache -Pattern '^PS2N_GAME_MODULE:BOOL=ON$' -Quiet)) {
     $Target = @($Target) + 'ps2n-modules'
+}
+# And the wizard, where the tree builds it.
+if (($Target -contains 'ps2n-host') -and (Test-Path $cache) -and
+    (Select-String -LiteralPath $cache -Pattern '^PS2N_WIZARD:BOOL=ON$' -Quiet)) {
+    $Target = @($Target) + 'ps2n-wizard'
 }
 
 cmake --build $build --target $Target

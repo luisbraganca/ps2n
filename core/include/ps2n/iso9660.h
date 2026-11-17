@@ -53,4 +53,12 @@ std::vector<uint8_t> readFile(const SectorReader& read, const Entry& file);
 // gives "SLES_505.39"), or nothing when the disc has no SYSTEM.CNF or it names none.
 std::optional<std::string> bootExecutable(const SectorReader& read);
 
+// The EE's executables on the disc, by their headers (ELF, 32 bits,
+// little-endian, an executable for MIPS; an IOP module has a type of its own):
+// the one SYSTEM.CNF boots first, as bootExecutable() names it, then the others
+// in the order of the disc's directories, by their path from the root
+// ("SUB/GAME.ELF"). A game made of several executables loads the others
+// itself (docs/adr/0026), and the wizard compiles every one.
+std::vector<std::string> executables(const SectorReader& read);
+
 } // namespace ps2n::iso

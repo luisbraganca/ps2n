@@ -156,7 +156,7 @@ namespace ps2n::host::session
 	}
 
 	bool StartRecording(const std::string& directory, const Clock& clock, const std::string& patches,
-		std::optional<int> ee_cycle_rate, const std::string& bios_roms)
+		std::optional<int> ee_cycle_rate, const std::string& bios_roms, bool packaged)
 	{
 		s_record_path = Path::Combine(directory, "input.txt");
 		s_record = FileSystem::OpenCFile(s_record_path.c_str(), "wb");
@@ -173,13 +173,16 @@ namespace ps2n::host::session
 			"# that frame. The memory cards and the console's NVRAM as they were when the session began are\n"
 			"# beside this file. patches: the game's patches it was played with, with the EE overclock their\n"
 			"# note asks for; ee-cycle-rate: PCSX2's EE cycle rate, where the session was given one;\n"
-			"# bios-roms: which of the images the core loads from beside the BIOS image it had.\n"
+			"# bios-roms: which of the images the core loads from beside the BIOS image it had; packaged: played\n"
+			"# from a game's folder the wizard made, its own settings file and patch file beside this file.\n"
 			"clock %s\n"
 			"patches %s\n",
 			FormatClock(clock).c_str(), patches.c_str());
 		if (ee_cycle_rate)
 			std::fprintf(s_record, "ee-cycle-rate %d\n", *ee_cycle_rate);
 		std::fprintf(s_record, "bios-roms %s\n", bios_roms.c_str());
+		if (packaged)
+			std::fputs("packaged\n", s_record);
 		return true;
 	}
 
@@ -228,6 +231,11 @@ namespace ps2n::host::session
 			{
 				// Compared by the host with the images beside the BIOS it is given.
 				info->bios_roms = std::string(words[1]);
+				good = true;
+			}
+			else if (words[0] == "packaged" && words.size() == 1)
+			{
+				info->packaged = true;
 				good = true;
 			}
 			else if (words.size() == 3)

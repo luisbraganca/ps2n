@@ -253,9 +253,15 @@ if (-not $PlayOnly) {
     Say "linked: $((Get-ChildItem -LiteralPath $game -Filter 'ps2n-*.dll' | ForEach-Object { '{0} ({1:N0} bytes)' -f $_.Name, $_.Length }) -join ', ')"
 
     # ---- the runtime beside them, and the launcher named after the game ------------------------------
-    Copy-Item -Path (Join-Path $runtime '*') -Destination $game -Recurse -Force
+    # All of the runtime but what only the wizard needs, as its wizard-files.txt names it (the wizard, Qt
+    # and its plugins, and what they import), as the wizard packages a game.
+    $wizardFiles = @('ps2n-launcher.exe')
+    $listed = Join-Path $runtime 'wizard-files.txt'
+    if (Test-Path -LiteralPath $listed) { $wizardFiles += @(Get-Content -LiteralPath $listed | Where-Object { $_.Trim() }) }
+    Get-ChildItem -LiteralPath $runtime | Where-Object { $wizardFiles -notcontains $_.Name } |
+        Copy-Item -Destination $game -Recurse -Force
     $launcher = Join-Path $game ((Plain $Title) + '.exe')
-    Move-Item -LiteralPath (Join-Path $game 'ps2n-launcher.exe') -Destination $launcher -Force
+    Copy-Item -LiteralPath (Join-Path $runtime 'ps2n-launcher.exe') -Destination $launcher -Force
     Say "the runtime beside them, and the launcher: $launcher"
 }
 

@@ -39,6 +39,8 @@ if (-not ((Test-Path $cache) -and (Select-String -LiteralPath $cache -Pattern '^
 }
 $hostExe = Join-Path $build 'ps2n\bin\ps2n-host.exe'
 $launcherExe = Join-Path $build 'ps2n\bin\ps2n-launcher.exe'
+# The wizard (P4.5), where the tree builds it (build.ps1 -Wizard on).
+$wizardExe = Join-Path $build 'ps2n\bin\ps2n-wizard.exe'
 $implib = Join-Path $build 'ps2n-host.lib'
 $recomp = Join-Path $root 'build\tools-windows\bin\ps2n-recomp.exe'
 foreach ($needed in $hostExe, $launcherExe, $implib, $recomp) { if (-not (Test-Path $needed)) { throw "Build first: $needed is missing." } }
@@ -92,24 +94,32 @@ $deps = Join-Path $root 'deps\windows-x64\deps\bin'
 function Get-Imports([string]$file) {
     & $readobj --coff-imports $file | Select-String '^\s*Name: (.+)$' | ForEach-Object { $_.Matches[0].Groups[1].Value }
 }
-$wanted = New-Object System.Collections.Generic.Queue[string]
-$wanted.Enqueue($hostExe)
-$wanted.Enqueue((Join-Path $deps 'shaderc_shared.dll'))
 $taken = @{}
-while ($wanted.Count -gt 0) {
-    $file = $wanted.Dequeue()
-    foreach ($dll in (Get-Imports $file)) {
-        $from = Join-Path $deps $dll
-        if ($taken.ContainsKey($dll.ToLower()) -or -not (Test-Path $from)) { continue }
-        $taken[$dll.ToLower()] = $true
-        Copy-Item -LiteralPath $from -Destination $runtime
-        $wanted.Enqueue($from)
+# The libraries of PCSX2's dependency package `start` imports, and theirs, copied into the runtime folder;
+# their names, lower case, as the walk took them.
+function Copy-Imports([string[]]$start) {
+    $got = New-Object System.Collections.Generic.List[string]
+    $wanted = New-Object System.Collections.Generic.Queue[string]
+    foreach ($file in $start) { $wanted.Enqueue($file) }
+    while ($wanted.Count -gt 0) {
+        $file = $wanted.Dequeue()
+        foreach ($dll in (Get-Imports $file)) {
+            $from = Join-Path $deps $dll
+            if ($taken.ContainsKey($dll.ToLower()) -or -not (Test-Path $from)) { continue }
+            $taken[$dll.ToLower()] = $true
+            $got.Add($dll.ToLower())
+            Copy-Item -LiteralPath $from -Destination $runtime
+            $wanted.Enqueue($from)
+        }
+        if ($file -like "$deps*" -and -not $taken.ContainsKey((Split-Path $file -Leaf).ToLower())) {
+            $taken[(Split-Path $file -Leaf).ToLower()] = $true
+            $got.Add((Split-Path $file -Leaf).ToLower())
+            Copy-Item -LiteralPath $file -Destination $runtime
+        }
     }
-    if ($file -like "$deps*" -and -not $taken.ContainsKey((Split-Path $file -Leaf).ToLower())) {
-        $taken[(Split-Path $file -Leaf).ToLower()] = $true
-        Copy-Item -LiteralPath $file -Destination $runtime
-    }
+    return $got.ToArray()
 }
+$null = Copy-Imports @($hostExe, (Join-Path $deps 'shaderc_shared.dll'))
 # Microsoft's C++ runtime, which those libraries and the host use, from Visual Studio's redistributable
 # files: it travels in the folder (docs\adr\0031).
 $crt = Get-ChildItem (Join-Path $vs 'VC\Redist\MSVC') -Directory | Where-Object { $_.Name -match '^\d' } |
@@ -117,6 +127,34 @@ $crt = Get-ChildItem (Join-Path $vs 'VC\Redist\MSVC') -Directory | Where-Object 
 $crt = Get-ChildItem (Join-Path $crt.FullName 'x64') -Directory -Filter 'Microsoft.VC*.CRT' | Select-Object -First 1
 foreach ($dll in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
     Copy-Item -LiteralPath (Join-Path $crt.FullName $dll) -Destination $runtime
+}
+
+# The wizard beside the runtime, whose libraries and resources it shares, with Qt's own (from PCSX2's
+# dependency package): its libraries, and the plugins it loads, under qt\plugins (qt.conf says where). A
+# game's folder has none of it (scripts\windows\kit\make-game.ps1, wizard/package.cpp). PS2Native.exe
+# in the folder's root, the launcher, starts it (host/launcher.cpp).
+Remove-Item -LiteralPath (Join-Path $kit 'PS2Native.exe') -ErrorAction SilentlyContinue
+if (Test-Path $wizardExe) {
+    Copy-Item -LiteralPath $wizardExe -Destination $runtime
+    $plugins = Join-Path $root 'deps\windows-x64\deps\plugins'
+    $pluginFiles = @('platforms\qwindows.dll', 'styles\qmodernwindowsstyle.dll', 'imageformats\qsvg.dll', 'imageformats\qico.dll',
+        'iconengines\qsvgicon.dll')
+    foreach ($plugin in $pluginFiles) {
+        $to = Join-Path $runtime "qt\plugins\$(Split-Path $plugin)"
+        New-Item -ItemType Directory -Force $to | Out-Null
+        Copy-Item -LiteralPath (Join-Path $plugins $plugin) -Destination $to
+    }
+    # The libraries the wizard and its plugins import that the runtime does not: Qt's, and theirs.
+    $wizardOnly = Copy-Imports (@($wizardExe) + @($pluginFiles | ForEach-Object { Join-Path $plugins $_ }))
+    [IO.File]::WriteAllLines((Join-Path $runtime 'qt.conf'), [string[]]@('[Paths]', 'Plugins = qt/plugins'))
+    # What of the runtime folder only the wizard needs, for a game's folder to leave out (wizard/package.cpp,
+    # make-game.ps1): one path to a line, from the runtime folder.
+    [IO.File]::WriteAllLines((Join-Path $runtime 'wizard-files.txt'),
+        [string[]](@('wizard-files.txt', 'ps2n-wizard.exe', 'qt.conf', 'qt') + @($wizardOnly | Where-Object { $_ })))
+    Copy-Item -LiteralPath $launcherExe -Destination (Join-Path $kit 'PS2Native.exe')
+}
+else {
+    Write-Host "No wizard in $BuildDir (build.ps1 -BuildDir $BuildDir -Wizard on): the folder has make-game.ps1 alone."
 }
 
 # The toolchain.

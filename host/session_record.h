@@ -31,6 +31,10 @@
 //                                 is changes with them (a replay without them parts
 //                                 from the session at once), so a replay must have the
 //                                 same; the test driver links those (tests/guest_test.cmake)
+//   packaged                      played from a game's folder the wizard made
+//                                 (ps2n-host -packaged): the game's own settings file
+//                                 and patch file are copied beside this file, and a
+//                                 replay runs packaged with them in its data folder
 //   41 pad FFFF7F7F7F7F00000000000000000000FF00   at frame 41, the 18 bytes
 //   50 state 0123456789ABCDEF     at the start of frame 50, the registers' fingerprint
 //   end 8358                      the number of frames the session ran
@@ -58,10 +62,11 @@ namespace ps2n::host::session
 
 	/// Starts writing a session down into `directory`/input.txt: its clock, its
 	/// patches ("widescreen,fps", "none"), PCSX2's EE cycle rate where it was
-	/// given one, and the images beside the BIOS image ("rom1,rom2", "none";
-	/// BiosRoms()). False when the file cannot be made.
+	/// given one, the images beside the BIOS image ("rom1,rom2", "none";
+	/// BiosRoms()), and whether it is played from a game's folder the wizard
+	/// made. False when the file cannot be made.
 	bool StartRecording(const std::string& directory, const Clock& clock, const std::string& patches,
-		std::optional<int> ee_cycle_rate, const std::string& bios_roms);
+		std::optional<int> ee_cycle_rate, const std::string& bios_roms, bool packaged);
 
 	/// Which of the images the core loads from beside a BIOS image are there, as
 	/// it looks for them (LoadExtraRom in pcsx2/ps2/BiosTools.cpp: <image>.rom1,
@@ -78,6 +83,7 @@ namespace ps2n::host::session
 		std::optional<std::string> patches; // as -patches takes them
 		std::optional<int> ee_cycle_rate;
 		std::optional<std::string> bios_roms; // as BiosRoms() gives them
+		bool packaged = false; // played from a game's folder the wizard made
 	};
 	bool LoadReplay(const std::string& path, ReplayInfo* info);
 

@@ -151,4 +151,44 @@ std::optional<std::string> bootExecutable(const SectorReader& read) {
     return std::nullopt;
 }
 
+namespace {
+
+// An ELF header of a program of the EE's: 32 bits, little-endian, an executable
+// (ET_EXEC) for MIPS. An IOP module has the type 0xFF80, and is not one.
+bool isEeExecutable(const uint8_t* h) {
+    if (h[0] != 0x7F || h[1] != 'E' || h[2] != 'L' || h[3] != 'F' || h[4] != 1 || h[5] != 1) return false;
+    const uint32_t type = h[16] | (static_cast<uint32_t>(h[17]) << 8);
+    const uint32_t machine = h[18] | (static_cast<uint32_t>(h[19]) << 8);
+    return type == 2 && machine == 8;
+}
+
+// Every file's first sector, directory after directory; a disc's own nesting
+// goes nowhere near the limit, which only keeps a broken image from looping.
+void collectExecutables(const SectorReader& read, const Entry& directory, const std::string& prefix, int depth,
+                        std::vector<std::string>* out) {
+    if (depth > 32) return;
+    uint8_t first[kSectorSize];
+    for (const Entry& e : list(read, directory)) {
+        const std::string path = prefix.empty() ? e.name : prefix + "/" + e.name;
+        if (e.directory)
+            collectExecutables(read, e, path, depth + 1, out);
+        else if (e.size >= 52 && read(e.sector, first) && isEeExecutable(first))
+            out->push_back(path);
+    }
+}
+
+} // namespace
+
+std::vector<std::string> executables(const SectorReader& read) {
+    std::vector<std::string> found;
+    collectExecutables(read, root(read), "", 0, &found);
+    std::vector<std::string> out;
+    const std::optional<std::string> boot = bootExecutable(read);
+    if (boot) out.push_back(*boot);
+    for (const std::string& path : found) {
+        if (!boot || toUpper(path) != toUpper(*boot)) out.push_back(path);
+    }
+    return out;
+}
+
 } // namespace ps2n::iso

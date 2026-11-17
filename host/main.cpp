@@ -14,6 +14,7 @@
 #include "host_state.h"
 #include "profile.h"
 #include "selftest.h"
+#include "game_settings.h"
 #include "session_record.h"
 #include "sync_trace.h"
 #include "iop_report.h"
@@ -193,6 +194,7 @@ namespace
 		std::string memcards_dir; // without -window: the memory cards to put in the slots (Mcd001.ps2, Mcd002.ps2)
 		bool patch_widescreen = false; // apply the game's widescreen patch (-patches; the default with -window)
 		bool patch_fps = false; // and its frame-rate patch (the same)
+		bool packaged = false; // the game's own settings file and patch file are in the data folder, as the wizard leaves them (-packaged)
 		std::string patch_archive; // the PCSX2 archive of patches the game's patch file is taken from (-patch-archive)
 		int ee_cycle_rate = 0; // PCSX2's EE cycle rate setting (-ee-cycle-rate): 0 its default, 1 to 3 an overclock
 		bool ee_cycle_rate_given = false; // then a patch's note does not change it
@@ -390,6 +392,13 @@ namespace
 			"  -patch-archive <zip>  PCSX2's archive of patches (patches.zip of an installed\n"
 			"                     PCSX2), from which the game's own patch file is taken\n"
 			"                     into the run's data folder when the game has booted.\n"
+			"  -packaged          A game's folder the wizard made (docs/adr/0032): the\n"
+			"                     game's own settings file (PCSX2's, in the data folder's\n"
+			"                     gamesettings) and its patch file (in patches) say how it\n"
+			"                     is played, over PS2Native's defaults for a game\n"
+			"                     (host/game_settings.h), the widescreen patch among them;\n"
+			"                     no archive is read. A session is written down with both\n"
+			"                     beside it, and run again with them.\n"
 			"  -ee-cycle-rate <n> PCSX2's EE cycle rate setting, -3 to 3: 0 its default, 1,\n"
 			"                     2 and 3 its overclock of 130%, 180% and 300%, -1 to -3\n"
 			"                     75%, 60% and 50%; given, a patch does not change it.\n"
@@ -630,6 +639,8 @@ namespace
 				o.window = true;
 			else if (is("-mute"))
 				o.mute = true;
+			else if (is("-packaged"))
+				o.packaged = true;
 			else if (is("-osd"))
 				o.osd = true;
 			else if (is("-hostfs"))
@@ -1152,6 +1163,29 @@ namespace
 					return false;
 				}
 			}
+			// One played from a game's folder the wizard made is run again as one,
+			// its settings file and patch file in the data folder (the test driver
+			// puts them there).
+			if (info.packaged)
+				o.packaged = true;
+		}
+
+		// A game's folder the wizard made (docs/adr/0032): under the game's own
+		// settings are the defaults the wizard showed (ps2n::game::SetDefaults),
+		// the widescreen patch among them, and the game's settings name its other
+		// patches and the overclock they ask for; its patch file is already in
+		// the data folder, where the core reads it. So nothing is taken from an
+		// archive, and -patches has nothing to say.
+		if (o.packaged)
+		{
+			if (patches_given)
+			{
+				std::fputs("ps2n-host: -patches is not for -packaged: the game's own settings say which patches\n", stderr);
+				return false;
+			}
+			o.patch_widescreen = true;
+			o.patch_fps = false;
+			o.patch_archive.clear();
 		}
 
 		// An archive named that is not there (a game's folder made where PCSX2
@@ -1168,7 +1202,7 @@ namespace
 		// writes the session down as it is played: with none. A run told to
 		// apply them, or a session played with them run again, could not be
 		// what it was asked to be.
-		if ((o.patch_widescreen || o.patch_fps) && o.patch_archive.empty())
+		if ((o.patch_widescreen || o.patch_fps) && o.patch_archive.empty() && !o.packaged)
 		{
 			if (patches_given || !o.input_path.empty())
 			{
@@ -1234,6 +1268,19 @@ namespace
 			const std::string from = Path::ReplaceExtension(o.bios_path, extension);
 			if (FileSystem::FileExists(from.c_str()))
 				FileSystem::CopyFilePath(from.c_str(), Path::Combine(o.record_dir, Path::GetFileName(from)).c_str(), false);
+		}
+		// From a game's folder the wizard made, the game's own settings file and
+		// patch file too, which a replay puts back in its data folder.
+		if (o.packaged)
+		{
+			const std::string pcsx2 = Path::Combine(o.data_dir, "PCSX2");
+			for (const auto& [folder, pattern] : {std::pair{"gamesettings", "*.ini"}, std::pair{"patches", "*.pnach"}})
+			{
+				FileSystem::FindResultsArray found;
+				FileSystem::FindFiles(Path::Combine(pcsx2, folder).c_str(), pattern, FILESYSTEM_FIND_FILES, &found);
+				for (const FILESYSTEM_FIND_DATA& file : found)
+					FileSystem::CopyFilePath(file.FileName.c_str(), Path::Combine(o.record_dir, Path::GetFileName(file.FileName)).c_str(), false);
+			}
 		}
 		return true;
 	}
@@ -1513,7 +1560,13 @@ namespace
 
 		MemorySettingsInterface& si = s_settings;
 		Host::Internal::SetBaseSettingsLayer(&si);
-		VMManager::SetDefaultSettings(si, true, true, true, true, true);
+		// From a game's folder the wizard made, under the game's own settings,
+		// the defaults the wizard showed for them (docs/adr/0032); what follows
+		// sets the same values again, as the options have them.
+		if (o.packaged)
+			ps2n::game::SetDefaults(si);
+		else
+			VMManager::SetDefaultSettings(si, true, true, true, true, true);
 
 		// The BIOS is used where it is. The core keeps the console's NVRAM in
 		// files beside this path, so a link given here is deliberately not
@@ -2849,7 +2902,7 @@ namespace
 			!ps2n::host::session::StartRecording(s_options.record_dir, s_clock_used,
 				PatchesText(s_options.patch_widescreen, s_options.patch_fps),
 				s_options.ee_cycle_rate_given ? std::optional<int>(s_options.ee_cycle_rate) : std::nullopt,
-				ps2n::host::session::BiosRoms(s_options.bios_path)))
+				ps2n::host::session::BiosRoms(s_options.bios_path), s_options.packaged))
 			return EXIT_ERROR;
 		if (!s_options.pad_path.empty() && !LoadPadScript(s_options.pad_path))
 			return EXIT_ERROR;
@@ -2931,164 +2984,90 @@ namespace
 
 namespace
 {
-	// The EE overclock a group of a patch file asks for in its note, as
-	// PCSX2's archive words it ("Might need EE Overclock (130%).", "Might need
-	// EE overclock at 180%.", "set \"EE Cyclerate\" to 2"; ADR 0025): PCSX2's
-	// EE cycle rate setting, 1 to 3 for 130%, 180% and 300%, or 0 where the
-	// note asks for none. A note that names no figure asks for the mildest,
-	// 130%; one that names two ("130-180%"), for the first.
-	int OverclockAsked(std::string_view lines)
-	{
-		int asked = 0;
-		for (const std::string_view line : StringUtil::SplitString(lines, '\n', true))
-		{
-			const std::string lower = StringUtil::toLower(line);
-			const bool cycle_rate = lower.find("cycle rate") != std::string::npos || lower.find("cyclerate") != std::string::npos;
-			if (!cycle_rate && lower.find("overclock") == std::string::npos)
-				continue;
-			int rate = 1;
-			size_t first = std::string::npos;
-			static constexpr std::pair<std::string_view, int> kFigures[] = {{"130", 1}, {"180", 2}, {"300", 3}};
-			for (const auto& [figure, value] : kFigures)
-			{
-				const size_t at = lower.find(figure);
-				if (at < first)
-				{
-					first = at;
-					rate = value;
-				}
-			}
-			if (first == std::string::npos && cycle_rate)
-			{
-				// The setting itself: "to 2".
-				const size_t to = lower.find(" to ");
-				if (to != std::string::npos && to + 4 < lower.size() && lower[to + 4] >= '1' && lower[to + 4] <= '3' &&
-					(to + 5 == lower.size() || !std::isdigit(static_cast<unsigned char>(lower[to + 5]))))
-				{
-					rate = lower[to + 4] - '0';
-				}
-			}
-			asked = std::max(asked, rate);
-		}
-		return asked;
-	}
-
 	// Takes the booted game's patch file out of PCSX2's archive into the folder
 	// where the core looks for patch files (ADR 0025): the core loads it just
 	// after this, and applies the groups asked for. Only that one file is
 	// copied, for this run; the archive stays where it is.
 	void TakePatchFile(std::string_view serial, u32 crc)
 	{
-		const std::string names[2] = {fmt::format("{}_{:08X}.pnach", serial, crc), fmt::format("{:08X}.pnach", crc)};
-		zip_error_t error = {};
-		const auto archive = zip_open_managed(s_options.patch_archive.c_str(), ZIP_RDONLY, &error);
-		if (!archive)
+		std::string error;
+		const std::optional<ps2n::game::PatchFile> file = ps2n::game::ReadPatchFile(s_options.patch_archive, serial, crc, &error);
+		if (!file)
 		{
-			s_patch_line = fmt::format("ps2n-host: patches: cannot open {}", s_options.patch_archive);
+			s_patch_line = error.empty() ?
+				fmt::format("ps2n-host: patches: {} has none for {} {:08X}", s_options.patch_archive, serial, crc) :
+				fmt::format("ps2n-host: patches: {}", error);
 			return;
 		}
-		for (const std::string& name : names)
+		const std::string path = Path::Combine(EmuFolders::Patches, file->name);
+		if (!FileSystem::EnsureDirectoryExists(EmuFolders::Patches.c_str(), false) ||
+			!FileSystem::WriteStringToFile(path.c_str(), file->text))
 		{
-			if (serial.empty() && &name == &names[0])
-				continue;
-			const std::optional<std::string> text = ReadFileInZipToString(archive.get(), name.c_str());
-			if (!text)
-				continue;
-			const std::string path = Path::Combine(EmuFolders::Patches, name);
-			if (!FileSystem::EnsureDirectoryExists(EmuFolders::Patches.c_str(), false) ||
-				!FileSystem::WriteStringToFile(path.c_str(), *text))
-			{
-				s_patch_line = fmt::format("ps2n-host: patches: cannot write {}", path);
-				return;
-			}
-
-			// The widescreen group is PCSX2's own setting: the group named
-			// "Widescreen 16:9", read when the machine started. A frame-rate
-			// group has no name PCSX2 knows ("50/60 FPS", "60 FPS"): the one
-			// group whose name says FPS is put in the list of enabled patches,
-			// which the core reads again here. Where several say FPS they are
-			// choices, not one patch ("60 FPS" beside "50 FPS", "Onscreen FPS
-			// Display", "Slow Motion (60 fps)"), and none of them is applied.
-			std::vector<std::string> groups;
-			std::map<std::string, std::string> group_lines; // each group's lines, its note among them
-			std::string* current = nullptr;
-			for (std::string_view line : StringUtil::SplitString(*text, '\n', true))
-			{
-				line = StringUtil::StripWhitespace(line);
-				if (line.size() > 2 && line.front() == '[' && line.back() == ']')
-				{
-					std::string group(line.substr(1, line.size() - 2));
-					if (std::find(groups.begin(), groups.end(), group) == groups.end())
-						groups.push_back(group);
-					current = &group_lines[std::move(group)];
-				}
-				else if (current)
-				{
-					current->append(line);
-					current->push_back('\n');
-				}
-			}
-			std::vector<std::string> applied;
-			std::string left_out;
-			if (s_options.patch_widescreen && std::find(groups.begin(), groups.end(), "Widescreen 16:9") != groups.end())
-				applied.emplace_back("Widescreen 16:9");
-			if (s_options.patch_fps)
-			{
-				std::vector<std::string> fps;
-				for (const std::string& group : groups)
-				{
-					if (StringUtil::toLower(group).find("fps") != std::string::npos)
-						fps.push_back(group);
-				}
-				if (fps.size() == 1)
-				{
-					{
-						std::unique_lock<std::mutex> lock = Host::GetSettingsLock();
-						s_settings.AddToStringList("Patches", "Enable", fps.front().c_str());
-					}
-					VMManager::ReloadPatches(true, true, false, false);
-					applied.push_back(fps.front());
-				}
-				else if (fps.size() > 1)
-				{
-					left_out = fmt::format("; {} groups say FPS, so none of them is applied: {}", fps.size(),
-						StringUtil::JoinString(fps.begin(), fps.end(), ", "));
-				}
-			}
-
-			// What a group applied asks for in its note is applied with it (the
-			// maintainer's answer, ADR 0025): the EE overclock. The core reads
-			// it with the game's other settings just after this
-			// (VMManager::HandleELFChange), and throws every block away for it,
-			// as its recompiler and PS2Native's EE provider both do then.
-			std::string overclock;
-			int asked = 0;
-			for (const std::string& group : applied)
-				asked = std::max(asked, OverclockAsked(group_lines[group]));
-			if (asked != 0)
-			{
-				static constexpr int kPercent[] = {100, 130, 180, 300};
-				if (s_options.ee_cycle_rate_given)
-				{
-					overclock = fmt::format("; the EE overclock asked for ({}%) left out: -ee-cycle-rate {} given", kPercent[asked],
-						s_options.ee_cycle_rate);
-				}
-				else
-				{
-					{
-						std::unique_lock<std::mutex> lock = Host::GetSettingsLock();
-						s_settings.SetIntValue("EmuCore/Speedhacks", "EECycleRate", asked);
-					}
-					overclock = fmt::format("; with the EE overclock asked for, {}% (EE cycle rate {})", kPercent[asked], asked);
-				}
-			}
-
-			s_patch_line = fmt::format("ps2n-host: patches: {} taken from {} for this run; groups applied: {}{}{}", name,
-				s_options.patch_archive, applied.empty() ? std::string("none") : StringUtil::JoinString(applied.begin(), applied.end(), ", "),
-				left_out, overclock);
+			s_patch_line = fmt::format("ps2n-host: patches: cannot write {}", path);
 			return;
 		}
-		s_patch_line = fmt::format("ps2n-host: patches: {} has none for {} {:08X}", s_options.patch_archive, serial, crc);
+
+		// The widescreen group is PCSX2's own setting: the group named
+		// "Widescreen 16:9", read when the machine started. A frame-rate group
+		// has no name PCSX2 knows ("50/60 FPS", "60 FPS"): the one group whose
+		// name says FPS is put in the list of enabled patches, which the core
+		// reads again here (ps2n::game::FrameRateGroup).
+		std::vector<std::string> applied;
+		std::string left_out;
+		if (s_options.patch_widescreen &&
+			std::find(file->groups.begin(), file->groups.end(), ps2n::game::kWidescreenGroup) != file->groups.end())
+		{
+			applied.emplace_back(ps2n::game::kWidescreenGroup);
+		}
+		if (s_options.patch_fps)
+		{
+			std::vector<std::string> fps;
+			if (const std::optional<std::string> group = ps2n::game::FrameRateGroup(*file, &fps))
+			{
+				{
+					std::unique_lock<std::mutex> lock = Host::GetSettingsLock();
+					s_settings.AddToStringList("Patches", "Enable", group->c_str());
+				}
+				VMManager::ReloadPatches(true, true, false, false);
+				applied.push_back(*group);
+			}
+			else if (fps.size() > 1)
+			{
+				left_out = fmt::format("; {} groups say FPS, so none of them is applied: {}", fps.size(),
+					StringUtil::JoinString(fps.begin(), fps.end(), ", "));
+			}
+		}
+
+		// What a group applied asks for in its note is applied with it (the
+		// maintainer's answer, ADR 0025): the EE overclock. The core reads it
+		// with the game's other settings just after this
+		// (VMManager::HandleELFChange), and throws every block away for it, as
+		// its recompiler and PS2Native's EE provider both do then.
+		std::string overclock;
+		int asked = 0;
+		for (const std::string& group : applied)
+			asked = std::max(asked, ps2n::game::OverclockAsked(file->group_lines.at(group)));
+		if (asked != 0)
+		{
+			static constexpr int kPercent[] = {100, 130, 180, 300};
+			if (s_options.ee_cycle_rate_given)
+			{
+				overclock = fmt::format("; the EE overclock asked for ({}%) left out: -ee-cycle-rate {} given", kPercent[asked],
+					s_options.ee_cycle_rate);
+			}
+			else
+			{
+				{
+					std::unique_lock<std::mutex> lock = Host::GetSettingsLock();
+					s_settings.SetIntValue("EmuCore/Speedhacks", "EECycleRate", asked);
+				}
+				overclock = fmt::format("; with the EE overclock asked for, {}% (EE cycle rate {})", kPercent[asked], asked);
+			}
+		}
+
+		s_patch_line = fmt::format("ps2n-host: patches: {} taken from {} for this run; groups applied: {}{}{}", file->name,
+			s_options.patch_archive, applied.empty() ? std::string("none") : StringUtil::JoinString(applied.begin(), applied.end(), ", "),
+			left_out, overclock);
 	}
 } // namespace
 
@@ -3098,7 +3077,20 @@ void ps2n::host::OnGameChanged(std::string_view title, std::string_view serial, 
 	if (s_options.window && s_options.window_title.empty())
 		window::SetTitle(title.empty() ? std::string(kWindowTitle) : fmt::format("{} - {}", title, kWindowTitle));
 	if (crc != 0 && (s_options.patch_widescreen || s_options.patch_fps) && !s_options.patch_archive.empty())
+	{
 		TakePatchFile(serial, crc);
+	}
+	else if (crc != 0 && s_options.packaged)
+	{
+		// What the game's own settings apply (-packaged), as the core has them
+		// now: it loaded the game's settings when it read the disc.
+		const std::vector<std::string> enabled = Host::GetStringListSetting("Patches", "Enable");
+		s_patch_line = fmt::format("ps2n-host: patches: the game's own settings and patch file, in {}; widescreen patches {}; "
+								   "groups enabled: {}; EE cycle rate {}",
+			EmuFolders::Patches, EmuConfig.EnableWideScreenPatches ? "on" : "off",
+			enabled.empty() ? std::string("none") : StringUtil::JoinString(enabled.begin(), enabled.end(), ", "),
+			static_cast<int>(EmuConfig.Speedhacks.EECycleRate));
+	}
 }
 
 void ps2n::host::OnInputDeviceConnected(std::string_view identifier)

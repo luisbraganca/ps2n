@@ -12,7 +12,7 @@ its date. Nothing here comes from a game or a BIOS but counts and times.
 | P4.2 Freestanding generated code | A game module compiled with nothing but `clang`, `lld` and PS2Native's own headers; every test passes; a game is still the stock run | **Done** (2026-11-17): the generated code compiled against PS2Native's description of PCSX2's structures, which the runtime checks against PCSX2's own (636 assertions when it is built, the settings' bits when it starts), with no system header and no standard library, into four modules (the programs' EE code, the BIOS's, the micro code, the IOP's code) linked with the host's import library and nothing else; every test passes (533) in the three build trees; Agent Under Fire's script is the stock run at every sync point from the modules, and the maintainer's sessions replayed are the sessions at every fingerprint; the modules take what P4.1's module took (the script 1.17 times stock PCSX2's time, built in 1.19) |
 | P4.3 The shipped toolchain | A game compiled and run on a computer with nothing else installed (a fresh Windows user, without Visual Studio) | **Done** (2026-11-17): the toolchain is LLVM's own 22.1.3 ([ADR 0030](adr/0030-the-wizards-compiler-is-llvms-own-release.md)), whose code is the code the development builds make, byte for byte; a folder of 254 MB (`scripts\windows\kit.ps1`) and one command in it (`make-game.ps1`) compile Agent Under Fire from its disc image and the BIOS (101 seconds here); on the maintainer's Windows 10 laptop, without Visual Studio, in about 8 minutes into the same code, byte for byte, and the game played there for 15 minutes within 3% of the console's pace, a run this computer replays at every fingerprint. The run found the session record missing two things (the patches as applied, the BIOS's ROM images), put right |
 | P4.4 The packaged game | Killzone and Agent Under Fire run from their folders, at the console's pace, the same runs as from the development host | **Done** (2026-11-17): a game is a folder that plays it (`make-game.ps1 -Title`), started from a launcher named after the game, which starts the runtime beside it with the folder's settings, without a console, and says why when it cannot play; the sessions written down in the folder. Killzone and Agent Under Fire, started from their launchers, played at the console's pace (50.00 frames a second in play), nothing of their code interpreted; the maintainer's four sessions of Agent Under Fire and three of Killzone's from the development host, run again from the folders, and the launchers' sessions run again by the development host, are the sessions at every fingerprint. Killzone's code needed a module to have its own stack probe (`__chkstk`), which a test of the module tree holds |
-| P4.5 The wizard | A game packaged from the disc image and the BIOS with every default accepted, without a command line | |
+| P4.5 The wizard | A game packaged from the disc image and the BIOS with every default accepted, without a command line | **Under way** (2026-11-17): the maintainer's word that it goes through all of PCSX2's settings, and how ([ADR 0032](adr/0032-the-wizard-goes-through-pcsx2s-settings.md)); PCSX2's own per-game settings pages work in `ps2n-wizard`, compiled unchanged, what PS2Native carries out in PCSX2's place fixed; a game's settings are a file in its folder that the runtime reads (`-packaged`), and a session played so is run again at every fingerprint; the five steps, from the disc image to a folder that plays the game, in `PS2Native.exe` at the root of the folder `kit.ps1` makes: Agent Under Fire made with every default accepted in 336 seconds, and played from its folder at the console's pace. The maintainer's own run is next |
 | P4.6 New code in play | A session that meets new code finds it compiled at its next start | |
 | P4.7 Linux | On the maintainer's own Linux machine ([ADR 0004](adr/0004-proof-of-concept-environment.md)) | |
 
@@ -733,3 +733,173 @@ folders, at the console's pace, the same runs as from the development host.
 - What a session in the folder had to interpret is written down in it,
   and the next `make-game.ps1` compiles it; compiling it by itself in the
   background, for the game's next start, is P4.6.
+
+## P4.5 The wizard
+
+The question: can a game be packaged from its disc image and the BIOS by an
+application with every default accepted, without a command line. At the
+step's start the maintainer said what its settings step is: "the wizard
+should go through all the PCSX2 settings", PCSX2's defaults but for the
+window's, and chose, on the session's recommendations, how
+([ADR 0032](adr/0032-the-wizard-goes-through-pcsx2s-settings.md)): every
+setting of PCSX2's that applies to a game; those that change how the
+processors are emulated shown but fixed at what PS2Native follows; the
+core's on-screen display not offered (ADR 0012); PCSX2's own per-game
+settings pages inside the wizard if they build into it without changing
+PCSX2; PCSX2's program settings, hotkeys and RetroAchievements left out.
+
+### What has been built so far (2026-11-17)
+
+- **PCSX2's own settings pages in a wizard of PS2Native's**
+  (`ps2n-wizard`, `wizard/`, `build.ps1 -Wizard on`, Qt 6.12 from PCSX2's
+  dependency package): the pages a game has (Summary, Emulation, Patches,
+  Cheats, Game Fixes, Graphics, Audio, Memory Cards, Network & HDD,
+  Advanced) and the dialogs they open, compiled from the submodule
+  unchanged. Compiling PCSX2's own settings window would have brought in
+  every page, and with the pages left out (Interface, Debug, Hotkeys) its
+  updater, its debugger and its controller windows; so the window that
+  holds the pages is PS2Native's (`wizard/settings_window.cpp`: PCSX2's
+  `SettingsWindow` class, from its header, implemented from PCSX2's own
+  file with only the pages a game has). What the pages call of the rest of
+  PCSX2's frontend, where no machine runs, is PS2Native's too: the
+  machine's thread told that a setting changed, a game list rescanned,
+  three of `QtHost`'s helpers (`wizard/stand_ins.cpp`), and a
+  `MainWindow.h` of the wizard's own, found before PCSX2's
+  (`wizard/pcsx2-qt`), which declares the two things the pages use of it;
+  and the callbacks PCSX2's core asks of a frontend
+  (`wizard/host_interface.cpp`, the runtime's list with nothing to show a
+  game in). The wizard recognizes a game from its disc image with PCSX2's
+  own code and databases (`GameList::PopulateEntryFromPath`): Killzone,
+  `SCES-52004`, CRC `6624A78C`, PAL-M, "Playable" with four stars. The
+  pages look and work as in PCSX2; their category icons are not there yet
+  (PCSX2's icon theme is not loaded).
+- **A game's settings are a file in its folder.** The pages write what
+  is changed into the game's own settings file, where PCSX2's core loads
+  it as the game's layer over the defaults when it reads the disc
+  (`data\PCSX2\gamesettings\<serial>_<crc>.ini`). So that a default
+  accepted in the wizard is the one the game is played with, the defaults
+  the pages show and the runtime's are one definition
+  (`host/game_settings.h`, `ps2n::game::SetDefaults`: PCSX2's, with
+  Vulkan, three times the console's resolution, the widescreen patch with
+  the films at 4:3, none of the on-screen display, none of PCSX2's
+  hotkeys). The game's patch file is taken from PCSX2's archive into the
+  folder (as ADR 0028 has it: the game keeps the one patch file it uses),
+  and the settings file is made the first time with the frame-rate group
+  enabled and the EE overclock the groups applied ask for, by the
+  runtime's own rules, now shared (`ps2n::game::FrameRateGroup`,
+  `OverclockAsked`): for Killzone, "50/60 FPS" and the EE cycle rate at
+  130%.
+- **The runtime plays such a folder** (`ps2n-host -packaged`): the
+  defaults under the game's settings are the wizard's, the patch file is
+  read from the folder, and no archive of PCSX2's is needed any more. A
+  session played so writes `packaged` in its record and has the game's
+  settings file and patch file beside it; a replay puts them in its data
+  folder (`tests/guest_test.cmake`) and runs packaged.
+
+Measured, with Killzone's folder given the wizard's settings and played
+through its launcher with the level script (9,300 frames): 49.95 frames a
+second in the window, the patches and the overclock as the game's
+settings have them ("widescreen patches on; groups enabled: 50/60 FPS; EE
+cycle rate 1"), and the session, run again by the development host, is
+the session at every one of its 186 fingerprints, ending on the same
+picture and the same sound. It is not the session of the same script
+played with `-patches` (P4.4): the runtime applied the overclock a patch
+asks for when the game's executable started, and PCSX2 applies a game's
+own settings, the overclock among them, when it reads the disc, during
+the BIOS's boot; from the same start (no memory card, no NVRAM), the two
+part at the first fingerprint (frame 50), and the packaged run ends on the
+same picture and sound whichever start it has. The new timing met 3
+blocks of IOP code and 22 of VU1's micro code no compile had seen, which
+the session wrote down for the next. Every test passes: 533 in the usual
+tree, 534 in the module tree.
+
+### The wizard's five steps (2026-11-17)
+
+- **Its window** (`wizard/wizard_window.cpp`), one page for each of the
+  brief's steps: the game, the BIOS, the settings, the recompile, the
+  game's folder. Every default can be accepted as it is.
+  1. **The game**: its disc image, recognized by PCSX2's own code and
+     database (title, serial, CRC, region, PCSX2's compatibility rating),
+     and its executables, found by their ELF headers
+     (`ps2n-recomp executables`, `iso::executables` with a unit test): the
+     one the disc boots, and every other program of the EE's on it, which a
+     game made of several executables loads itself and the wizard compiles
+     all of. For Agent Under Fire, the three `make-game.ps1 -More` named by
+     hand, and `ACTION.UK`'s five other languages; for Killzone, a
+     `LOADER.ELF` nothing compiled before. The game's name gives its folder,
+     under the folder's `games`.
+  2. **The BIOS**: recognized by PCSX2's own code, and remembered.
+  3. **The settings**: PCSX2's pages for the game, in its own folder (above),
+     with a button that goes back to the defaults; PCSX2's own buttons, which
+     close its window or open another, are not there.
+  4. **The recompile** (`wizard/pipeline.cpp`): what `make-game.ps1` does,
+     each program a process of its own, the compiles as many at once as the
+     computer has processors, with what it is doing, a bar of the files
+     compiled, and what a program said when it failed.
+  5. **The game's folder** (`wizard/package.cpp`): the runtime, the launcher
+     under the game's name, the BIOS image linked in where it can be, and
+     `settings.txt` with `-packaged`; and what may be done with it: "This
+     folder is yours alone. It holds code translated from your game and from
+     your console's BIOS: do not give it to anyone, nor put it where others
+     can take it." With "Play it now", it starts the game.
+- **What is fixed** (ADR 0032, decision 2): what PS2Native carries out in
+  PCSX2's place, the EE, its FPU, the VUs, the IOP and the time they count,
+  and what the runtime decides itself, is shown disabled at PCSX2's value,
+  each saying why in its help and its tooltip: the rounding and clamping
+  modes, the recompilers, wait loop and INTC spin detection, fast memory,
+  the EE cache, the mVU flag hack, instant VU1, extended RAM, the game
+  fixes (all of them, at what PCSX2's database gives the game) and the
+  compatibility patches, save states, PINE, EE cycle skipping, MTVU, the
+  console's clock. The EE's cycle rate, checked at every rate (G17), is
+  not among them. They are taken out of a game's settings file too, so
+  that a value written there before does not stand.
+- **In the folder** `kit.ps1` makes: the wizard in `runtime`, beside the
+  runtime whose libraries and resources it shares, with Qt's libraries and
+  the five plugins it loads (`qt\plugins`, `qt.conf`); and `PS2Native.exe`
+  at the root, the launcher, which there starts the wizard. What only the
+  wizard needs is listed in `runtime\wizard-files.txt` (the wizard, Qt,
+  and what they import: `harfbuzz.dll` beside Qt's own), which a game's
+  folder leaves out, whether the wizard or `make-game.ps1` made it. The
+  folder is 292 MB. Started from it with nothing but Windows on the path,
+  `PS2Native.exe` opens the wizard's window in half a second. Its first
+  version did not open: Qt's `Qt6Gui.dll` imports `harfbuzz.dll`, which
+  the folder did not have, and Windows' box saying so belongs to a process
+  of the system's, so the wizard sat waiting; the folder takes what the
+  wizard and its plugins import as it takes the runtime's now.
+- **The icons** of PCSX2's pages: its two icon themes, compiled into the
+  wizard from where they are in the submodule (none of PCSX2's logo), the
+  white one for a dark window, as PCSX2 chooses.
+
+Measured. **Agent Under Fire made by the wizard**, every default accepted
+(the wizard driven by its own check, `--auto`, which presses Next whenever
+a page is complete): 336 seconds from the disc image to the folder, 333 of
+them the recompile (419 files, 20 at a time); its EE code 379 MB, against
+104 MB with the four executables `make-game.ps1` was given, for the five
+other languages' `ACTION` files. Its folder, started from its launcher
+with the controller script into the first mission: the console's pace,
+50.00 frames a second in play, 49.94 with the start, with all of its IOP
+code and micro code interpreted (no session had met any of it yet), which
+the session wrote down for the next compile.
+
+### What is left of the step
+
+- **The maintainer's own run**: the criterion, a game packaged with every
+  default accepted without a command line, by someone clicking through it.
+- **Disc images** other than `.iso` files of 2048-byte sectors (`.bin` and
+  `.cue`, `.chd`, `.cso`): PCSX2 recognizes them, PS2Native's reader of a
+  disc's files does not read them yet.
+- **PCSX2's archive of patches** where PCSX2 is not installed: fetched at
+  the user's word, as ADR 0028 has it, or given; the wizard has no way to
+  do either yet.
+- **The licences** of the libraries the folder carries beside PS2Native's,
+  PCSX2's and LLVM's (Qt's, and PCSX2's dependencies'), most of which
+  PCSX2's dependency package has not got: to be gathered before the folder
+  goes to anyone but the maintainer.
+- **A settings file edited by hand** could still give a fixed setting
+  another value; the runtime does not refuse one yet.
+- **Every executable on the disc is compiled**, a game's other languages
+  among them (Agent Under Fire's module four times as large); a choice in
+  the first step could leave some out.
+- **A game's first session** interprets its micro code and IOP code, which
+  no session had met; compiling what it wrote down for the game's next
+  start, by itself, is P4.6.

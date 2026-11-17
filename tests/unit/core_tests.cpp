@@ -623,7 +623,7 @@ TEST_CASE(iso9660_files_and_boot_executable) {
     // set's terminator at 17, the root directory at 18, a directory SUB at
     // 19, and the files' data from 20 on, one of them over two sectors.
     constexpr uint32_t S = iso::kSectorSize;
-    std::vector<uint8_t> image(24 * S, 0);
+    std::vector<uint8_t> image(26 * S, 0);
     const auto sector = [&](uint32_t n) { return image.data() + n * S; };
     // A number in both byte orders, little-endian first.
     const auto both32 = [](uint8_t* p, uint32_t v) {
@@ -671,9 +671,22 @@ TEST_CASE(iso9660_files_and_boot_executable) {
     at += record(sector(19) + at, std::string_view("\0", 1), 19, S, true);
     at += record(sector(19) + at, std::string_view("\1", 1), 18, S, true);
     at += record(sector(19) + at, "BIG.BIN;1", 22, static_cast<uint32_t>(big.size()), false);
+    // A program of the EE's the game loads itself, and an IOP module: ELF
+    // headers both, executables for MIPS, the module of the type IOP modules have.
+    at += record(sector(19) + at, "GAME.ELF;1", 24, 64, false);
+    at += record(sector(19) + at, "MOD.IRX;1", 25, 64, false);
     std::memcpy(sector(20), cnf.data(), cnf.size());
     std::memcpy(sector(21), elf.data(), elf.size());
     std::memcpy(sector(22), big.data(), big.size());
+    const auto elfHeader = [&](uint8_t* p, uint16_t type) {
+        const uint8_t ident[] = {0x7F, 'E', 'L', 'F', 1, 1, 1};
+        std::memcpy(p, ident, sizeof(ident));
+        p[16] = static_cast<uint8_t>(type);
+        p[17] = static_cast<uint8_t>(type >> 8);
+        p[18] = 8; // MIPS
+    };
+    elfHeader(sector(24), 2);
+    elfHeader(sector(25), 0xFF80);
 
     const iso::SectorReader read = [&](uint32_t n, uint8_t* out) {
         if ((static_cast<size_t>(n) + 1) * S > image.size()) return false;
@@ -706,6 +719,9 @@ TEST_CASE(iso9660_files_and_boot_executable) {
     CHECK(!iso::find(read, "NOPE").has_value());
     CHECK(!iso::find(read, "SYSTEM.CNF/X").has_value());
     CHECK(iso::bootExecutable(read) == std::optional<std::string>("SLES_000.00"));
+    // The executables: the one the disc boots first, then the EE's others; not
+    // the IOP module, not the other files.
+    CHECK(iso::executables(read) == (std::vector<std::string>{"SLES_000.00", "SUB/GAME.ELF"}));
 
     // An image without a file system.
     const iso::SectorReader blank = [&](uint32_t, uint8_t* out) {
