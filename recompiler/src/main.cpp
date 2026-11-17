@@ -10,6 +10,7 @@
 
 #include "ps2n/assembler.h"
 #include "ps2n/elf.h"
+#include "ps2n/iso9660.h"
 #include "ps2n/util.h"
 
 #include <algorithm>
@@ -102,6 +103,14 @@ void usage() {
         "      Puts what several runs reported of IOP code (the host's -iop-capture\n"
         "      files) into one file, each block once. The output may be one of the\n"
         "      inputs.\n"
+        "\n"
+        "  ps2n-recomp extract <disc image> [<file>]... --out-dir <dir>\n"
+        "      Writes files of a disc image (ISO 9660, sectors of 2048 bytes) into\n"
+        "      <dir>: those named, by their path on the disc, or with none named the\n"
+        "      executable the disc boots (SYSTEM.CNF's BOOT2). Prints, for each, its\n"
+        "      path on the disc and the file written. What this writes is the game's\n"
+        "      own: it belongs in the build tree, or on the user's computer, never in\n"
+        "      the repository.\n"
         "\n"
         "  ps2n-recomp registry --out <file.cpp> [--vu <id>]... [--iop <id>]... <id>...\n"
         "      Writes the list of images a host is linked with; --vu names an image\n"
@@ -459,6 +468,28 @@ int capture(const Args& a) {
     return 0;
 }
 
+int extract(const Args& a) {
+    if (a.positional.empty()) throw Error("extract needs a disc image");
+    if (a.outDir.empty()) throw Error("extract needs --out-dir <dir>");
+    const iso::SectorReader read = iso::openImage(a.positional[0]);
+    std::vector<std::string> names(a.positional.begin() + 1, a.positional.end());
+    if (names.empty()) {
+        const std::optional<std::string> boot = iso::bootExecutable(read);
+        if (!boot) throw Error("the disc names no executable to boot (SYSTEM.CNF's BOOT2)");
+        names.push_back(*boot);
+    }
+    std::filesystem::create_directories(a.outDir);
+    for (const std::string& name : names) {
+        const std::optional<iso::Entry> entry = iso::find(read, name);
+        if (!entry || entry->directory) throw Error("the disc image has no file " + name);
+        const std::vector<uint8_t> data = iso::readFile(read, *entry);
+        const std::filesystem::path to = a.outDir / entry->name;
+        writeFileIfChanged(to, std::string_view(reinterpret_cast<const char*>(data.data()), data.size()));
+        std::printf("%s %s\n", name.c_str(), to.string().c_str());
+    }
+    return 0;
+}
+
 int registry(const Args& a) {
     if (a.out.empty()) throw Error("registry needs --out <file.cpp>");
     if (a.out.has_parent_path()) std::filesystem::create_directories(a.out.parent_path());
@@ -618,6 +649,7 @@ int main(int argc, char** argv) {
         if (a.command == "bios-info") return biosInfo(a);
         if (a.command == "capture") return capture(a);
         if (a.command == "registry") return registry(a);
+        if (a.command == "extract") return extract(a);
         if (a.command == "vu") return vuCompile(a);
         if (a.command == "vu-capture") return vuCapture(a);
         if (a.command == "iop") return iopCompile(a);

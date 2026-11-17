@@ -57,6 +57,7 @@ page.
 | The phases and their states | `CLAUDE.md`, "Status"; Phase 3's end and Phase 4's start, [ADR 0027](../adr/0027-phase-3-ends-phase-4-begins-with-a-design-proposal.md); Phase 4's design, [ADR 0028](../adr/0028-phase-4s-design-a-shipped-compiler-and-game-modules.md) |
 | Phase 4's first step: a game's code as a module costs no time that shows, Agent Under Fire as long as built in, every test passing | [app-log.md](../app-log.md), "P4.1" |
 | Phase 4's second step: the compiled code needs only a compiler and PS2Native's own headers, four modules, every test passing, Agent Under Fire the stock run at every point compared | [app-log.md](../app-log.md), "P4.2" |
+| Phase 4's third step, under way: LLVM's own compiler, Agent Under Fire compiled from its disc image in under two minutes, the same code as the development build's | [app-log.md](../app-log.md), "P4.3"; [ADR 0030](../adr/0030-the-wizards-compiler-is-llvms-own-release.md) |
 | Steps G0 to G18 and their states | [game-log.md](../game-log.md), the table at the top |
 | 1,003,452 instructions, 22,668 functions | game-log.md, "What is on the disc" |
 | 1.8 s, 152.4 MB, 119 s | game-log.md, "G2" |

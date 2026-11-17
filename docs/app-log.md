@@ -10,7 +10,7 @@ its date. Nothing here comes from a game or a BIOS but counts and times.
 |---|---|---|
 | P4.1 The module's cost | Every test passes; the game's time measured against today's build, and the cost put to the maintainer | **Measured** (2026-11-16): every test passes with the compiled code in a module of its own; Agent Under Fire takes the time it takes with the code built into the host (its script 1.17 times stock PCSX2's time against 1.18; the maintainer's second session replayed, 0.98 of the built-in code's time, its fourth mission 0.95); the generated code is 4 to 8% larger. **Done** (2026-11-17): put to the maintainer, who chose a loader of PS2Native's own if it made the game faster; the code it would give, which reaches the core directly, measured slower, so a module reaches the runtime through its import table ([ADR 0029](adr/0029-a-games-module-reaches-the-runtime-through-its-import-table.md)) |
 | P4.2 Freestanding generated code | A game module compiled with nothing but `clang`, `lld` and PS2Native's own headers; every test passes; a game is still the stock run | **Done** (2026-11-17): the generated code compiled against PS2Native's description of PCSX2's structures, which the runtime checks against PCSX2's own (636 assertions when it is built, the settings' bits when it starts), with no system header and no standard library, into four modules (the programs' EE code, the BIOS's, the micro code, the IOP's code) linked with the host's import library and nothing else; every test passes (533) in the three build trees; Agent Under Fire's script is the stock run at every sync point from the modules, and the maintainer's sessions replayed are the sessions at every fingerprint; the modules take what P4.1's module took (the script 1.17 times stock PCSX2's time, built in 1.19) |
-| P4.3 The shipped toolchain | A game compiled and run on a computer with nothing else installed (a fresh Windows user, without Visual Studio) | |
+| P4.3 The shipped toolchain | A game compiled and run on a computer with nothing else installed (a fresh Windows user, without Visual Studio) | **Under way** (2026-11-17): the toolchain is LLVM's own 22.1.3 ([ADR 0030](adr/0030-the-wizards-compiler-is-llvms-own-release.md)), whose code is the code the development builds make, byte for byte; a folder of 254 MB (`scripts\windows\kit.ps1`) and one command in it (`make-game.ps1`) compile Agent Under Fire from its disc image and the BIOS in 101 seconds here, with nothing on the path but Windows, and the game they make replays the maintainer's session at every fingerprint; the run on another computer of the maintainer's is to come |
 | P4.4 The packaged game | Killzone and Agent Under Fire run from their folders, at the console's pace, the same runs as from the development host | |
 | P4.5 The wizard | A game packaged from the disc image and the BIOS with every default accepted, without a command line | |
 | P4.6 New code in play | A session that meets new code finds it compiled at its next start | |
@@ -423,3 +423,90 @@ headers gave. The files: `ps2n-game.dll` 189,061,632 bytes,
   from `ps2n-host.exe` by name (P4.1).
 - **Not tried with the modules**, as with P4.1's: profile-guided
   optimization's training build and link-time optimization.
+
+## P4.3 The shipped toolchain
+
+The question: can a game be compiled and played on a computer with nothing
+else installed, from its disc image and a BIOS image, with what PS2Native
+ships. The maintainer chose the compiler, LLVM's own release, and where the
+step's criterion is checked, another computer of theirs without Visual
+Studio ([ADR 0030](adr/0030-the-wizards-compiler-is-llvms-own-release.md)).
+
+### What was built (2026-11-17)
+
+- **The compiler**: LLVM's own 22.1.3 for Windows on x64, its archive
+  (861,872,156 bytes) fetched from LLVM's release into `deps` and checked
+  against the SHA-256 the release publishes, and of it `clang-cl` (108 MB),
+  `lld-link` (72 MB) and the compiler's headers. Both programs need nothing
+  but Windows's own libraries. Their version is the one Visual Studio
+  brings, from the same commit of LLVM's (`e9846648fd61`): the same
+  generated files compiled by both, with the same flags, gave the same
+  objects, every section byte for byte. LLVM's licence, which the archive
+  does not carry, is taken from its source at the same tag.
+- **A game's executables from its disc image**: `ps2n-recomp extract`
+  (`core/include/ps2n/iso9660.h`, with a unit test on a small image built
+  in memory) reads the disc's ISO 9660 file system a sector at a time and
+  writes out the files named, or the executable `SYSTEM.CNF` boots. From
+  Agent Under Fire's image, its four executables came out the same, byte
+  for byte, as the copies extracted before, in a tenth of a second.
+- **The folder** (`scripts\windows\kit.ps1`, into `build\kit`): the runtime
+  (`ps2n-host.exe` from a tree built with `-Module on`, the libraries of
+  PCSX2's it imports, and theirs, the Vulkan renderer's shader compiler,
+  which PCSX2 loads while it runs, Microsoft's C++ runtime, and PCSX2's
+  resources: 55.6 MB); the toolchain (`clang-cl`, `lld-link`, the
+  compiler's headers, `ps2n-recomp`, PS2Native's headers the generated code
+  includes, the runtime's import library: 198.5 MB); the licences; and the
+  one command, `make-game.ps1`. 254 MB, nothing in it from a game or a
+  BIOS. `kit.ps1` fetches LLVM's archive when `deps` has not got it.
+- **The command** (`make-game.ps1 -Image <disc image> -Bios <BIOS image>`;
+  for Agent Under Fire also `-More MOVIE.ELF,ACTION.UK,DRIVING.ELF`; with
+  `-Captures <folder>` what earlier runs had to interpret): it takes the
+  game's executables from the disc image, translates them, the BIOS's code
+  and the captured micro code and IOP code to C++ as the development build
+  does, compiles the files with `clang-cl`, as many at once as the
+  computer has processors, links the four modules with `lld-link` into
+  `games\<name>` beside a copy of the runtime, and with `-Play` opens the
+  game in a window, as `game.ps1 -Play` does: the session written down to
+  be run again, and what it had to interpret added to the game's own
+  captures, which the next compile takes.
+
+The Microsoft C++ runtime's libraries come from Visual Studio's files
+meant for redistribution; PCSX2's own libraries need them, so linking the
+host with the C runtime built in would not do without them. They are in
+the folder for the maintainer's own computers; whether a packaged game
+given to others may carry them is put to the maintainer at P4.4.
+
+### On this computer
+
+`make-game.ps1` run from `build\kit` in a process whose `PATH` holds only
+Windows's own folders, with Visual Studio's `LIB`, `INCLUDE` and `LIBPATH`
+unset, from Agent Under Fire's disc image, the BIOS and the captures of the
+maintainer's sessions: 101 seconds, of which 12 to translate, 86 to compile
+205 files 20 at a time, 3 to link. The modules: `ps2n-game.dll` 104,018,432
+bytes (the game's code alone), `ps2n-bios.dll` 1,327,104, `ps2n-vu.dll`
+1,139,200, `ps2n-iop.dll` 6,871,552.
+
+- **The same code**: the 197 objects of generated code it compiled are,
+  in every code section, the bytes the development build's module tree
+  compiled from the same files.
+- **It runs**: the host started from the game's folder with nothing but
+  Windows on the path finds every library it imports, loads the four
+  modules and passes the check of PS2Native's description of PCSX2's
+  structures.
+- **It plays the game**: the maintainer's session of 2026-11-17 replayed
+  from the game's folder (its host, its modules, its libraries) is the
+  session at every one of its 1,656 fingerprints, the sound at its last
+  frame as it was in play; nothing of its micro code or IOP code was
+  interpreted.
+- **It plays in a window**: `make-game.ps1 -PlayOnly` from the folder,
+  again with nothing but Windows on the path, muted and stopped after 900
+  frames for the check: the game on Vulkan in its window, with its
+  widescreen patch from the installed PCSX2's archive, 49.07 frames a
+  second over those 18 seconds of its start (the console shows 50.00); the
+  session written down, and what it had to interpret added to the game's
+  captures.
+
+What remains of the step is its criterion on another computer: the folder
+`build\p43\for-another-computer` (the kit, made again without a game in
+it, and beside it the captures of the maintainer's sessions), copied there
+and run as its `README.txt` says.

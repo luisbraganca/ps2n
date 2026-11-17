@@ -5,6 +5,7 @@
 #include "ps2n/assembler.h"
 #include "ps2n/elf.h"
 #include "ps2n/irx.h"
+#include "ps2n/iso9660.h"
 #include "ps2n/r3000a.h"
 #include "ps2n/r5900.h"
 #include "ps2n/romdir.h"
@@ -615,6 +616,103 @@ TEST_CASE(a_delay_slot_goes_before_its_jump_where_pcsx2s_recompiler_puts_it_ther
     CHECK(r3000a::swapsDelaySlot(10, 0, 0, 0x00850018));
     CHECK(r3000a::swapsDelaySlot(10, 0, 0, 0xAC850000));
     CHECK(r3000a::swapsDelaySlot(10, 0, 0, 0x4A000001));
+}
+
+TEST_CASE(iso9660_files_and_boot_executable) {
+    // A small disc image: the primary volume descriptor at sector 16, the
+    // set's terminator at 17, the root directory at 18, a directory SUB at
+    // 19, and the files' data from 20 on, one of them over two sectors.
+    constexpr uint32_t S = iso::kSectorSize;
+    std::vector<uint8_t> image(24 * S, 0);
+    const auto sector = [&](uint32_t n) { return image.data() + n * S; };
+    // A number in both byte orders, little-endian first.
+    const auto both32 = [](uint8_t* p, uint32_t v) {
+        for (int i = 0; i < 4; ++i) {
+            p[i] = static_cast<uint8_t>(v >> (8 * i));
+            p[7 - i] = static_cast<uint8_t>(v >> (8 * i));
+        }
+    };
+    const auto record = [&](uint8_t* at, std::string_view name, uint32_t where, uint32_t size, bool directory) {
+        const size_t length = 33 + name.size() + (name.size() % 2 == 0 ? 1 : 0);
+        at[0] = static_cast<uint8_t>(length);
+        both32(at + 2, where);
+        both32(at + 10, size);
+        at[25] = directory ? 2 : 0;
+        at[32] = static_cast<uint8_t>(name.size());
+        std::memcpy(at + 33, name.data(), name.size());
+        return length;
+    };
+    const std::string cnf = "BOOT2 = cdrom0:\\SLES_000.00;1\r\nVER = 1.00\r\nVMODE = PAL\r\n";
+    const std::string elf = "\x7f" "ELF and the rest";
+    std::vector<uint8_t> big(S + 10);
+    for (size_t i = 0; i < big.size(); ++i) big[i] = static_cast<uint8_t>(i * 7);
+
+    uint8_t* pvd = sector(16);
+    pvd[0] = 1;
+    std::memcpy(pvd + 1, "CD001", 5);
+    pvd[6] = 1;
+    pvd[128] = 0x00; // 2048 in both byte orders
+    pvd[129] = 0x08;
+    pvd[130] = 0x08;
+    pvd[131] = 0x00;
+    record(pvd + 156, std::string_view("\0", 1), 18, S, true);
+    uint8_t* terminator = sector(17);
+    terminator[0] = 255;
+    std::memcpy(terminator + 1, "CD001", 5);
+    terminator[6] = 1;
+
+    size_t at = 0;
+    at += record(sector(18) + at, std::string_view("\0", 1), 18, S, true);
+    at += record(sector(18) + at, std::string_view("\1", 1), 18, S, true);
+    at += record(sector(18) + at, "SYSTEM.CNF;1", 20, static_cast<uint32_t>(cnf.size()), false);
+    at += record(sector(18) + at, "SLES_000.00;1", 21, static_cast<uint32_t>(elf.size()), false);
+    at += record(sector(18) + at, "SUB", 19, S, true);
+    at = 0;
+    at += record(sector(19) + at, std::string_view("\0", 1), 19, S, true);
+    at += record(sector(19) + at, std::string_view("\1", 1), 18, S, true);
+    at += record(sector(19) + at, "BIG.BIN;1", 22, static_cast<uint32_t>(big.size()), false);
+    std::memcpy(sector(20), cnf.data(), cnf.size());
+    std::memcpy(sector(21), elf.data(), elf.size());
+    std::memcpy(sector(22), big.data(), big.size());
+
+    const iso::SectorReader read = [&](uint32_t n, uint8_t* out) {
+        if ((static_cast<size_t>(n) + 1) * S > image.size()) return false;
+        std::memcpy(out, sector(n), S);
+        return true;
+    };
+
+    const iso::Entry root = iso::root(read);
+    CHECK(root.directory);
+    CHECK_EQ(root.sector, 18u);
+    const std::vector<iso::Entry> top = iso::list(read, root);
+    CHECK_EQ(top.size(), size_t{3});
+    if (top.size() == 3) {
+        CHECK_EQ(top[0].name, std::string("SYSTEM.CNF"));
+        CHECK_EQ(top[1].name, std::string("SLES_000.00"));
+        CHECK_EQ(top[2].name, std::string("SUB"));
+        CHECK(top[2].directory);
+    }
+
+    const std::optional<iso::Entry> boot = iso::find(read, "sles_000.00");
+    CHECK(boot.has_value());
+    if (boot) {
+        CHECK_EQ(boot->sector, 21u);
+        const std::vector<uint8_t> bytes = iso::readFile(read, *boot);
+        CHECK(std::string(bytes.begin(), bytes.end()) == elf);
+    }
+    const std::optional<iso::Entry> file = iso::find(read, "SUB\\big.bin");
+    CHECK(file.has_value());
+    if (file) CHECK(iso::readFile(read, *file) == big);
+    CHECK(!iso::find(read, "NOPE").has_value());
+    CHECK(!iso::find(read, "SYSTEM.CNF/X").has_value());
+    CHECK(iso::bootExecutable(read) == std::optional<std::string>("SLES_000.00"));
+
+    // An image without a file system.
+    const iso::SectorReader blank = [&](uint32_t, uint8_t* out) {
+        std::memset(out, 0, S);
+        return true;
+    };
+    CHECK_THROWS(iso::root(blank));
 }
 
 int main(int argc, char** argv) { return ::testing::runAll(argc, argv); }

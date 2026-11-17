@@ -54,7 +54,13 @@ the micro code, the IOP's code) linked with the host's import library and
 nothing else; every test passes in all three build trees, Agent Under
 Fire's script is the stock run at every sync point from them, the
 maintainer's sessions replay at every fingerprint, and they take what
-P4.1's module took. P4.3, the toolchain the wizard brings, is next.**
+P4.1's module took. P4.3, the toolchain the wizard brings, is under way:
+LLVM's own 22.1.3 at the maintainer's choice (ADR 0030), a folder of 254 MB
+(`scripts\windows\kit.ps1`) whose one command compiles Agent Under Fire
+from its disc image here with nothing but Windows on the path, into code
+the same byte for byte as the development build's, and the game replays
+the maintainer's session at every fingerprint; the run on another computer
+of the maintainer's is to come.**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -522,6 +528,14 @@ Decisions:
   through the import table (Agent Under Fire's second session 1 against
   0.977, its fourth mission 1 against 0.954), why not known yet.
   `build.ps1 -Module imports` measures it.
+- [ADR 0030](docs/adr/0030-the-wizards-compiler-is-llvms-own-release.md):
+  the `clang` and `lld-link` the wizard ships are LLVM's own release, 22.1.3
+  (the version the development builds use), from its Windows x64 archive
+  downloaded once into `deps`, of which only what a module needs is kept;
+  not Visual Studio's copy. P4.3's criterion is checked on another computer
+  of the maintainer's, without Visual Studio, with a folder and one command
+  the session prepares. The maintainer's choices on 2026-11-17, both the
+  session's recommendations.
 
 ## Layout, build and test
 
@@ -531,7 +545,8 @@ third_party/ps2autotests  hardware-verified PS2 test programs, a pinned submodul
 cmake/ps2n-inject.cmake   adds PS2Native's targets to PCSX2's own CMake project without touching it
 CMakeLists.txt, core/     build-time tools, a project of their own with no PCSX2 dependency: the
                           instruction decoder, disassembler, assembler, ELF/IRX/SNR2 readers, the reader of a
-                          BIOS image's directory (romdir); for the vector units, the first pass of PCSX2's VU
+                          BIOS image's directory (romdir) and of a disc image's files (iso9660); for the
+                          vector units, the first pass of PCSX2's VU
                           recompiler (ps2n/vu_mvu.h) and a block of micro code as a list of steps, its plan
                           (ps2n/vu_plan.h; the steps themselves, which compiled micro code needs, in
                           ps2n/vu_step.h and vu_steps.inc); for the IOP, its instructions as PCSX2's IOP
@@ -650,6 +665,17 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   links it into the host all the same: what reaching the core through the
   import table costs, alone. What it costs is in
   [docs/app-log.md](docs/app-log.md), "P4.1" and "P4.2".
+- What a computer with nothing else installed compiles and plays a game
+  from (Phase 4, step P4.3): `scripts\windows\kit.ps1` puts it together in
+  `build\kit` from the module tree, LLVM's own release (ADR 0030; fetched
+  into `deps\llvm-22.1.3` when not there, its SHA-256 checked) and Visual
+  Studio's redistributable C++ runtime; its one command,
+  `make-game.ps1 -Image <disc image> -Bios <BIOS image> [-More <names on the
+  disc>] [-Captures <folder>] [-Play]` (`scripts\windows\kit\`), compiles
+  the game into `games\<name>` there. It takes the game's executables from
+  the disc image (`ps2n-recomp extract`). Run it from the folder with
+  nothing but Windows on `PATH` to check that it needs nothing else; what
+  it makes stays in the build tree, as everything made from a game does.
 - The game: `scripts\windows\build.ps1 -Game <its boot executable>` compiles
   it into the host (the build tree remembers it; `-GameCapture <file>` adds
   what runs reported). A game made of several executables, whose boot
