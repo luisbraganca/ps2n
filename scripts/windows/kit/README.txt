@@ -48,13 +48,14 @@ game and your BIOS: it is yours alone, not to be given to anyone.
 A game's first session can be slower than the console wherever it meets code
 no compile has seen: the vector units' and the I/O processor's code, and the
 code a game loads from its own data rather than from an executable on the disc
-(Gran Turismo 3 does). The session writes that code down, and when you close
-the game's window the game compiles it itself, in the background, with the
-toolchain in its folder: an icon in the notification area while it does, and a
-notification when it is done. From its next start the game has it. A session
-that met nothing new compiles nothing. Making the game again with PS2Native.exe
-from the same disc image compiles it too, and keeps the folder's settings, its
-memory cards and its sessions.
+(Gran Turismo 3 does). While the game runs such code, a notice in the top left
+corner of its picture says so for a few seconds. The session writes that code
+down, and when you close the game's window the game compiles it itself, in the
+background, with the toolchain in its folder: a notification says so at once,
+and another when it is done. From its next start the game has it. A session
+that met nothing new compiles nothing and shows nothing. Making the game again
+with PS2Native.exe from the same disc image compiles it too, and keeps the
+folder's settings, its memory cards and its sessions.
 
 In the window: the keyboard and the first controller play; F11 or Alt+Enter
 covers the screen; closing the window ends the session.

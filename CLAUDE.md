@@ -619,6 +619,23 @@ Decisions:
   The rest as the session laid it out: the compile starts when the window
   closes, at low priority, only what changed, the new modules taken at the
   next start.
+- [ADR 0035](docs/adr/0035-a-game-says-when-it-runs-new-code-and-when-it-compiles-it.md):
+  at the maintainer's word on 2026-11-18, having tried it ("The compilation
+  notification was really delayed... It should show right after closing
+  the game showing that is compiling, than a different one saying it's
+  compiled. Also when the game is running on interpreted code that can be
+  compiled, there should show an overlayed notification saying so"): a
+  game's own recompile shows one notification as soon as it finds the
+  session met new code (it merges only the sessions it has not merged,
+  `captures\merged.txt`) and a different one when it is done; and while a
+  game in its folder runs interpreted code a compile would compile, a
+  notice of PS2Native's own shows over its picture, in a window of
+  PS2Native's laid over the game's (`host/window.cpp`, `ShowNotice`), never
+  PCSX2's on-screen display, which ADR 0012 keeps off. The session's
+  choices, for the maintainer to decide otherwise: when over the last half
+  second at least 1% of the EE's, the IOP's or the VUs' work was
+  interpreted; five seconds; at most once a minute; top left; the brand's
+  colours.
 
 ## Layout, build and test
 

@@ -1064,3 +1064,44 @@ kit's sizes and times, so a game's first recompile keeps the objects the
 wizard compiled), Qt and `ps2n-remake.exe` beside the runtime, the wizard
 itself left out; `ps2n-remake` run then found nothing new in 0.6 s. Every
 test passes: 533 in the usual tree, 534 in the module tree.
+
+### Said at once, and over the picture (2026-11-18)
+
+The maintainer tried it: "The compilation notification was really
+delayed... It should show right after closing the game showing that is
+compiling, than a different one saying it's compiled. Also when the game is
+running on interpreted code that can be compiled, there should show an
+overlayed notification saying so" (ADR 0035). The first notification was
+late because the recompile merged every session's captures before it knew
+whether there was anything new (three sessions of Gran Turismo 3, twelve
+merges of a 5.6 MB file), and what it showed then was an icon, which
+Windows 11 keeps in the notification area's overflow, with no notification
+before the end.
+
+- **The recompile merges only the sessions it has not merged**
+  (`captures\merged.txt`; one whose kind of capture the folder's captures
+  lack is merged again), and shows a notification as soon as it finds new
+  code, "Compiling what your session met for the first time, for the
+  game's next start", and a different one at the end, "Compiled: the game's
+  next start has what your session met for the first time".
+- **A notice over the picture** while the game runs code a compile would
+  compile, interpreted: PS2Native's own, a window of PS2Native's laid over
+  the game's top left corner, letting clicks through (`host/window.cpp`,
+  `ShowNotice`), never PCSX2's on-screen display. The runtime looks every
+  30 frames, on the CPU thread, at what its providers count (the EE's
+  interpreted cycles, the IOP's and the VUs' interpreted blocks), and shows
+  it, "Running code met for the first time, interpreted. It may be slower
+  now. PS2Native compiles it when you close the game.", for five seconds
+  at most once a minute, when at least 1% of a processor's work over the
+  last half second was interpreted; in a game's folder only (`-sessions`).
+- **The executables say they are PS2Native** (a version resource in
+  `assets/ps2n.rc`), which Windows puts at the head of the notifications in
+  the place of `ps2n-remake.exe`.
+
+Checked with a fresh folder of Gran Turismo 3 and one session of 900 frames
+through its launcher, muted: the notice over the picture 2.7 seconds into
+the session (at its boot, the IOP's code interpreted), gone five seconds
+later; the window closed, the recompile knew there was new code 0.4
+seconds after the launcher had ended, and its first notification was on
+the screen a second later; the second 11 seconds after, when the compile
+of 128 files was done. Both photographed.

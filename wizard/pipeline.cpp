@@ -195,9 +195,27 @@ namespace ps2n::wizard
 			{"capture", "capture"}, {"vu-capture", "vu-capture"}, {"iop-capture", "iop-capture"}, {"bios-capture", "capture"}};
 		std::deque<Job> jobs;
 		std::set<QString> will_exist;
+		// The sessions merged before (merged.txt among the captures), which the
+		// captures hold already, are not merged again: a recompile of the game's
+		// own knows within moments whether the last session met anything new.
+		// One whose kind of capture is missing from the folder's is merged again.
+		const QString merged_list = QDir(own).filePath(QStringLiteral("merged.txt"));
+		std::set<QString> merged;
+		for (const QString& line : ReadText(merged_list).split(QLatin1Char('\n'), Qt::SkipEmptyParts))
+			merged.insert(line.trimmed());
 		const QDir sessions(QDir(m_in.folder).filePath(QStringLiteral("sessions")));
 		for (const QString& session : sessions.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name))
 		{
+			bool held = merged.count(session) != 0;
+			for (const auto& [kind, command] : kinds)
+			{
+				const QString name = QString::fromLatin1(kind) + QStringLiteral(".toml");
+				if (QFileInfo::exists(QDir(sessions.filePath(session)).filePath(name)) && !QFileInfo::exists(QDir(own).filePath(name)))
+					held = false;
+			}
+			if (held)
+				continue;
+			merged.insert(session);
 			for (const auto& [kind, command] : kinds)
 			{
 				const QString name = QString::fromLatin1(kind) + QStringLiteral(".toml");
@@ -215,7 +233,9 @@ namespace ps2n::wizard
 				will_exist.insert(mine);
 			}
 		}
-		runInTurn(std::move(jobs), [this]() {
+		runInTurn(std::move(jobs), [this, merged_list, merged]() {
+			QStringList names(merged.begin(), merged.end());
+			WriteText(merged_list, names.join(QLatin1Char('\n')) + QLatin1Char('\n'));
 			// A game's own recompile has nothing to do when the sessions met
 			// nothing its modules were not compiled from.
 			m_fingerprint = fingerprint();

@@ -96,4 +96,10 @@ namespace ps2n::host::window
 	/// Alt+Enter and F11 switch as well.
 	bool IsFullscreen();
 	void SetFullscreen(bool enabled);
+
+	/// A notice over the picture, PS2Native's own (docs/adr/0035), never the
+	/// core's on-screen display: `title` on a line above `text`, in the
+	/// window's top left corner, for `seconds`, letting clicks through. One
+	/// shown while another is replaces it. Any thread.
+	void ShowNotice(const std::string& title, const std::string& text, uint32_t seconds);
 } // namespace ps2n::host::window

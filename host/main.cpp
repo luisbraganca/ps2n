@@ -42,6 +42,7 @@
 #include <deque>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -3110,6 +3111,66 @@ void ps2n::host::OnInputDeviceConnected(std::string_view identifier)
 	s_queue.push_back([]() { MapFirstController(); });
 }
 
+// The notice over the picture while the game runs code it met for the first
+// time interpreted, code that closing its window has compiled (docs/adr/0035):
+// in a game's folder (-sessions in a window, which the wizard and make-game.ps1
+// write into its settings), when over the last half second at least 1% of the
+// EE's, the IOP's or the vector units' work was interpreted; for five seconds,
+// at most once a minute. CPU thread, where the providers count.
+static void WatchNewCode()
+{
+	struct Counts
+	{
+		u64 ee = 0, ee_interpreted = 0; // EE cycles
+		u64 iop = 0, iop_interpreted = 0; // blocks begun
+		u64 vu = 0, vu_interpreted = 0; // blocks carried out
+	};
+	static Counts s_last;
+	static bool s_have_last = false;
+	static std::optional<std::chrono::steady_clock::time_point> s_shown;
+	if (!s_options.window || s_options.sessions_dir.empty() || s_frames % 30 != 0)
+		return;
+
+	Counts now;
+	if (s_options.ee == EEProvider::Ps2n)
+	{
+		now.ee = cpuRegs.cycle;
+		now.ee_interpreted = ps2n::ee::GetStats().interpreted_cycles;
+	}
+	if (s_options.iop_ps2n)
+	{
+		const ps2n::iop::Stats iop = ps2n::iop::GetStats();
+		now.iop = iop.runs;
+		now.iop_interpreted = iop.runsInterpreted;
+	}
+	for (int vu = 0; vu < 2; vu++)
+	{
+		if (s_options.vu_ps2n & (1 << vu))
+		{
+			now.vu += ps2n::vu::Stats(vu).blocks;
+			now.vu_interpreted += ps2n::vu::Stats(vu).interpreted;
+		}
+	}
+	const Counts last = s_last;
+	s_last = now;
+	if (!std::exchange(s_have_last, true))
+		return;
+
+	const auto interpreting = [](u64 all, u64 interpreted) {
+		return all > 0 && static_cast<double>(interpreted) >= 0.01 * static_cast<double>(all);
+	};
+	if (!interpreting(now.ee - last.ee, now.ee_interpreted - last.ee_interpreted) &&
+		!interpreting(now.iop - last.iop, now.iop_interpreted - last.iop_interpreted) &&
+		!interpreting(now.vu - last.vu, now.vu_interpreted - last.vu_interpreted))
+		return;
+	const auto time = std::chrono::steady_clock::now();
+	if (s_shown && time - *s_shown < std::chrono::minutes(1))
+		return;
+	s_shown = time;
+	ps2n::host::window::ShowNotice("Running code met for the first time, interpreted",
+		"It may be slower now. PS2Native compiles it when you close the game.", 5);
+}
+
 void ps2n::host::OnGuestFrame()
 {
 	s_frames++;
@@ -3153,6 +3214,9 @@ void ps2n::host::OnGuestFrame()
 	// (-iop-report).
 	ps2n::host::vureport::Frame(s_frames);
 	ps2n::host::iopreport::Frame(s_frames);
+
+	// Code met for the first time, interpreted: said over the picture.
+	WatchNewCode();
 
 	// Never run on with a provider other than the one that was asked for. The
 	// VU report's watch stands in front of the VU interpreter when both are

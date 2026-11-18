@@ -2,3 +2,30 @@
 // ps2n-recomp.exe and ps2n-host.exe. Explorer shows it, and a window can load
 // it as resource 1. The path is relative to this file.
 1 ICON "branding/icons/favicon.ico"
+
+// What the executables say they are: Windows names them by it, in Task Manager
+// and at the head of a notification (ps2n-remake's, docs/adr/0035), where it
+// would otherwise show the file's name. (0x40004: for Windows NT; 0x1: an
+// application. Without a FileVersion string some readers, .NET's among them,
+// take none of the strings.)
+1 VERSIONINFO
+FILEVERSION 0,0,0,0
+PRODUCTVERSION 0,0,0,0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+	BLOCK "StringFileInfo"
+	BEGIN
+		BLOCK "040904B0"
+		BEGIN
+			VALUE "FileDescription", "PS2Native"
+			VALUE "FileVersion", "0.0.0.0"
+			VALUE "ProductName", "PS2Native"
+			VALUE "ProductVersion", "0.0.0.0"
+		END
+	END
+	BLOCK "VarFileInfo"
+	BEGIN
+		VALUE "Translation", 0x409, 1200
+	END
+END

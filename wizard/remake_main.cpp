@@ -187,19 +187,21 @@ int main(int argc, char* argv[])
 		input.incremental = true;
 		pipeline.start(input);
 	};
+	// Two notifications (docs/adr/0035): one as soon as the session is found to
+	// have met new code, another, different, at the end.
 	const auto end = [&](int code, bool tell) {
 		if (tell && tray.isVisible())
 		{
 			if (code == 0)
 			{
 				tray.showMessage(recipe.title,
-					QStringLiteral("What your last session met for the first time is compiled: the game has it from its next start."),
+					QStringLiteral("Compiled: the game's next start has what your session met for the first time."),
 					QSystemTrayIcon::Information, 8000);
 			}
 			else
 			{
 				tray.showMessage(recipe.title,
-					QStringLiteral("What your last session met for the first time could not be compiled; work\\remake.log in the "
+					QStringLiteral("What your session met for the first time could not be compiled; work\\remake.log in the "
 								   "game's folder says why."),
 					QSystemTrayIcon::Warning, 10000);
 			}
@@ -211,7 +213,12 @@ int main(int argc, char* argv[])
 	QObject::connect(&pipeline, &ps2n::wizard::Pipeline::newCode, &app, [&]() {
 		say(QStringLiteral("new code met: compiling it into %1").arg(QDir::toNativeSeparators(modules)));
 		if (can_show && !tray.isVisible())
+		{
 			tray.show();
+			tray.showMessage(recipe.title,
+				QStringLiteral("Compiling what your session met for the first time, for the game's next start."),
+				QSystemTrayIcon::Information, 6000);
+		}
 	});
 	QObject::connect(&pipeline, &ps2n::wizard::Pipeline::stage, &app, [&](const QString& what) { say(what); });
 	QObject::connect(&pipeline, &ps2n::wizard::Pipeline::line, &app, [&](const QString& text) { say(text); });

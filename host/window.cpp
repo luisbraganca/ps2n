@@ -7,14 +7,17 @@
 // in pcsx2-gsrunner/Main.cpp of PCSX2 v2.9.170, Copyright 2002-2026 PCSX2 Dev
 // Team, GPL-3.0+. Changes for PS2Native: the window is PS2Native's (its class,
 // its icon, its title), it follows the display's scaling, it can cover the
-// screen, and it passes on the keyboard, its size and its closing.
+// screen, and it passes on the keyboard, its size and its closing. And a
+// notice of PS2Native's own can show over the picture (docs/adr/0035).
 
 #include "window.h"
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <iterator>
+#include <memory>
 
 namespace ps2n::host::window
 {
@@ -92,8 +95,24 @@ namespace ps2n::host::window
 	namespace
 	{
 		constexpr LPCWSTR kWindowClass = L"PS2NativeGame";
+		constexpr LPCWSTR kNoticeClass = L"PS2NativeNotice";
 		constexpr UINT kMessageSetTitle = WM_APP + 1; // lParam: a std::wstring made with new, which the window deletes
 		constexpr UINT kMessageSetFullscreen = WM_APP + 2; // wParam: whether to cover the screen
+		constexpr UINT kMessageShowNotice = WM_APP + 3; // lParam: a Notice made with new, which the window deletes
+
+		// A notice over the picture (ShowNotice).
+		struct Notice
+		{
+			std::wstring title;
+			std::wstring text;
+			UINT seconds = 0;
+		};
+
+		// The brand's colours (assets/branding/README.md): navy behind, the
+		// emblem's blue down the side, white text.
+		constexpr COLORREF kNoticeNavy = RGB(0x0A, 0x10, 0x22);
+		constexpr COLORREF kNoticeBlue = RGB(0x00, 0x60, 0xFC);
+		constexpr COLORREF kNoticeWhite = RGB(0xFF, 0xFF, 0xFF);
 
 		// Written on the main thread before the machine starts and after it has
 		// stopped; read by the core's threads in between.
@@ -104,6 +123,12 @@ namespace ps2n::host::window
 		// Main thread only: where the window was before it covered the screen.
 		LONG s_windowed_style = 0;
 		WINDOWPLACEMENT s_windowed_placement = {sizeof(WINDOWPLACEMENT)};
+
+		// Main thread only: the notice's window, made the first time one is
+		// shown and owned by the game's, so that it stays above it; and what it
+		// shows.
+		HWND s_notice = nullptr;
+		Notice s_notice_shown;
 
 		std::optional<uint32_t> KeyFromVirtualKey(WPARAM vk)
 		{
@@ -173,6 +198,119 @@ namespace ps2n::host::window
 			s_fullscreen.store(enabled);
 		}
 
+		// The notice's measures, in pixels at the game window's scaling.
+		int Scaled(int pixels, float scale)
+		{
+			return static_cast<int>(std::lround(static_cast<float>(pixels) * scale));
+		}
+
+		// Its fonts: the title semi-bold above the text.
+		HFONT NoticeFont(float scale, bool title)
+		{
+			return CreateFontW(-Scaled(title ? 17 : 15, scale), 0, 0, 0, title ? FW_SEMIBOLD : FW_NORMAL, FALSE, FALSE, FALSE,
+				DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+		}
+
+		// The notice sized to what it says, in the top left corner of the
+		// picture, a margin in.
+		void PlaceNotice(HWND owner)
+		{
+			if (!s_notice)
+				return;
+			const float scale = ScaleOf(owner);
+			const HDC dc = GetDC(s_notice);
+			const HFONT title_font = NoticeFont(scale, true);
+			const HFONT text_font = NoticeFont(scale, false);
+			RECT title = {}, text = {};
+			const HGDIOBJ old = SelectObject(dc, title_font);
+			DrawTextW(dc, s_notice_shown.title.c_str(), -1, &title, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+			SelectObject(dc, text_font);
+			DrawTextW(dc, s_notice_shown.text.c_str(), -1, &text, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+			SelectObject(dc, old);
+			DeleteObject(title_font);
+			DeleteObject(text_font);
+			ReleaseDC(s_notice, dc);
+
+			const int width = Scaled(4 + 14 + 16, scale) + std::max(title.right, text.right);
+			const int height = Scaled(12 + 4 + 12, scale) + title.bottom + text.bottom;
+			POINT corner = {Scaled(16, scale), Scaled(16, scale)};
+			ClientToScreen(owner, &corner);
+			SetWindowPos(s_notice, nullptr, corner.x, corner.y, width, height, SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+		}
+
+		LRESULT CALLBACK NoticeProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+		{
+			switch (message)
+			{
+				case WM_NCHITTEST:
+					// Clicks go through to the game.
+					return HTTRANSPARENT;
+
+				case WM_ERASEBKGND:
+					return 1;
+
+				case WM_PAINT:
+				{
+					PAINTSTRUCT paint;
+					const HDC dc = BeginPaint(hwnd, &paint);
+					const HWND owner = GetWindow(hwnd, GW_OWNER);
+					const float scale = ScaleOf(owner ? owner : hwnd);
+					RECT client = {};
+					GetClientRect(hwnd, &client);
+					const HBRUSH navy = CreateSolidBrush(kNoticeNavy);
+					const HBRUSH blue = CreateSolidBrush(kNoticeBlue);
+					FillRect(dc, &client, navy);
+					const RECT side = {0, 0, Scaled(4, scale), client.bottom};
+					FillRect(dc, &side, blue);
+					DeleteObject(navy);
+					DeleteObject(blue);
+
+					SetBkMode(dc, TRANSPARENT);
+					SetTextColor(dc, kNoticeWhite);
+					const HFONT title_font = NoticeFont(scale, true);
+					const HFONT text_font = NoticeFont(scale, false);
+					const HGDIOBJ old = SelectObject(dc, title_font);
+					RECT line = {Scaled(4 + 14, scale), Scaled(12, scale), client.right, client.bottom};
+					const int title_height = DrawTextW(dc, s_notice_shown.title.c_str(), -1, &line, DT_SINGLELINE | DT_NOPREFIX | DT_TOP);
+					SelectObject(dc, text_font);
+					line.top += title_height + Scaled(4, scale);
+					DrawTextW(dc, s_notice_shown.text.c_str(), -1, &line, DT_SINGLELINE | DT_NOPREFIX | DT_TOP);
+					SelectObject(dc, old);
+					DeleteObject(title_font);
+					DeleteObject(text_font);
+					EndPaint(hwnd, &paint);
+					return 0;
+				}
+
+				case WM_TIMER:
+					// Its time is up.
+					KillTimer(hwnd, wParam);
+					ShowWindow(hwnd, SW_HIDE);
+					return 0;
+
+				default:
+					break;
+			}
+			return DefWindowProcW(hwnd, message, wParam, lParam);
+		}
+
+		void ShowNoticeNow(HWND owner, Notice notice)
+		{
+			if (!s_notice)
+			{
+				s_notice = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, kNoticeClass, L"",
+					WS_POPUP, 0, 0, 1, 1, owner, nullptr, GetModuleHandleW(nullptr), nullptr);
+				if (!s_notice)
+					return;
+				SetLayeredWindowAttributes(s_notice, 0, 235, LWA_ALPHA);
+			}
+			s_notice_shown = std::move(notice);
+			PlaceNotice(owner);
+			InvalidateRect(s_notice, nullptr, FALSE);
+			ShowWindow(s_notice, SW_SHOWNOACTIVATE);
+			SetTimer(s_notice, 1, s_notice_shown.seconds * 1000, nullptr);
+		}
+
 		LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 		{
 			switch (message)
@@ -186,6 +324,13 @@ namespace ps2n::host::window
 				case WM_SIZE:
 					if (wParam != SIZE_MINIMIZED && s_listener.resized)
 						s_listener.resized(LOWORD(lParam), HIWORD(lParam), ScaleOf(hwnd));
+					if (s_notice && IsWindowVisible(s_notice))
+						PlaceNotice(hwnd);
+					return 0;
+
+				case WM_MOVE:
+					if (s_notice && IsWindowVisible(s_notice))
+						PlaceNotice(hwnd);
 					return 0;
 
 				case WM_DPICHANGED:
@@ -253,6 +398,13 @@ namespace ps2n::host::window
 					ApplyFullscreen(hwnd, wParam != 0);
 					return 0;
 
+				case kMessageShowNotice:
+				{
+					const std::unique_ptr<Notice> notice(reinterpret_cast<Notice*>(lParam));
+					ShowNoticeNow(hwnd, std::move(*notice));
+					return 0;
+				}
+
 				case kShotMessage:
 					if (s_listener.shot_requested)
 						s_listener.shot_requested(static_cast<uint32_t>(wParam));
@@ -295,6 +447,15 @@ namespace ps2n::host::window
 		if (!RegisterClassExW(&wc))
 			return false;
 
+		// The notice's (ShowNotice).
+		WNDCLASSEXW notice = {};
+		notice.cbSize = sizeof(WNDCLASSEXW);
+		notice.lpfnWndProc = NoticeProcedure;
+		notice.hInstance = instance;
+		notice.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+		notice.lpszClassName = kNoticeClass;
+		RegisterClassExW(&notice);
+
 		s_listener = listener;
 
 		const std::wstring wide_title = StringUtil::UTF8StringToWideString(title);
@@ -304,6 +465,7 @@ namespace ps2n::host::window
 		if (!hwnd)
 		{
 			UnregisterClassW(kWindowClass, instance);
+			UnregisterClassW(kNoticeClass, instance);
 			return false;
 		}
 
@@ -359,8 +521,14 @@ namespace ps2n::host::window
 			return;
 
 		s_listener = {};
+		if (s_notice)
+		{
+			DestroyWindow(s_notice);
+			s_notice = nullptr;
+		}
 		DestroyWindow(hwnd);
 		UnregisterClassW(kWindowClass, GetModuleHandleW(nullptr));
+		UnregisterClassW(kNoticeClass, GetModuleHandleW(nullptr));
 		s_fullscreen.store(false);
 	}
 
@@ -403,6 +571,18 @@ namespace ps2n::host::window
 		if (const HWND hwnd = s_window.load())
 			PostMessageW(hwnd, kMessageSetFullscreen, enabled ? 1 : 0, 0);
 	}
+
+	void ShowNotice(const std::string& title, const std::string& text, uint32_t seconds)
+	{
+		// Posted, as the title is: the window's thread makes and shows it.
+		const HWND hwnd = s_window.load();
+		if (!hwnd)
+			return;
+
+		Notice* notice = new Notice{StringUtil::UTF8StringToWideString(title), StringUtil::UTF8StringToWideString(text), seconds};
+		if (!PostMessageW(hwnd, kMessageShowNotice, 0, reinterpret_cast<LPARAM>(notice)))
+			delete notice;
+	}
 } // namespace ps2n::host::window
 
 #else // no window code for this platform yet
@@ -438,6 +618,10 @@ namespace ps2n::host::window
 	}
 
 	void SetFullscreen(bool enabled)
+	{
+	}
+
+	void ShowNotice(const std::string& title, const std::string& text, uint32_t seconds)
 	{
 	}
 } // namespace ps2n::host::window
