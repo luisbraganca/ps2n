@@ -24,6 +24,7 @@ add_executable(ps2n-host
 	"${CMAKE_CURRENT_LIST_DIR}/selftest_vu.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/session_record.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/session_record.h"
+	"${CMAKE_CURRENT_LIST_DIR}/shm_names.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/sync_trace.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/sync_trace.h"
 	"${CMAKE_CURRENT_LIST_DIR}/vu_report.cpp"
@@ -47,6 +48,14 @@ target_link_libraries(ps2n-host PRIVATE
 set_target_properties(ps2n-host PROPERTIES
 	RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin"
 )
+
+# The game's window on Linux (host/window.cpp): X11, and XRandR for the screen
+# it comes up on, which PCSX2's own build finds and links; Xft, for the
+# notice's text, is loaded when the first notice is shown, and so are the
+# modules of compiled code (dlopen).
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+	target_link_libraries(ps2n-host PRIVATE X11::X11 X11::Xrandr ${CMAKE_DL_LIBS})
+endif()
 
 # The profiler tells PS2Native's own code from PCSX2's by where its source
 # files are (host/profile.cpp).

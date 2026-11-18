@@ -2952,11 +2952,18 @@ private:
 				const uint32_t target = c.evilBranch;
 				c.evilBranch = c.evilevilBranch;
 				EndProgram(b, 2, target);
-				// normJumpCompile stores arg1regd in TPC after mVUendProgram,
-				// which has used that register (ecx, gprT2, on Windows) for
-				// the clip flag last. (On Linux it is edi, which the call to
-				// mVU1clearlpStateJIT leaves as it may: nothing to follow.)
+				// normJumpCompile stores arg1regd in TPC after mVUendProgram.
+#ifdef _WIN32
+				// There that register is ecx, gprT2, which mVUendProgram has
+				// used for the clip flag last.
 				R.VI[REG_TPC].UL = R.VI[REG_CLIP_FLAG].UL;
+#else
+				// On Linux it is edi, which mVUendProgram does not use, and the
+				// call to mVU0clearlpStateJIT or mVU1clearlpStateJIT in it, as
+				// PCSX2's build compiles them, leaves as it was: TPC is the
+				// branch's target, as EndProgram stored it (the self-test held
+				// it to microVU on Linux, 2026-11-19).
+#endif
 				break;
 			}
 			default:

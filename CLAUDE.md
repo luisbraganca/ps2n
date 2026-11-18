@@ -127,7 +127,23 @@ done (ADR 0037). With it, at the maintainer's word, a game does not play
 while it compiles: started while its own recompile compiles, its launcher
 waits for the compile, in a window that says so, and then plays with it,
 which the maintainer confirmed the next day. P4.7, Linux, the step left,
-is next, at the maintainer's word ("4. Ok", 2026-11-19).**
+is next, at the maintainer's word ("4. Ok", 2026-11-19), built and tested
+first on a Linux inside this computer, WSL 2 with Ubuntu 22.04 (ADR 0038).
+It was begun the same day: PS2Native builds on Linux with LLVM's 22.1.3 and
+PCSX2's own dependencies, and every test passes there (534), the compiled
+code in the host and in shared objects of its own; the game's window is an
+X11 one, the notice over its picture; the launcher, the wizard and the
+recompile work there (`wizard/platform.h`), and `scripts/linux/kit.sh` puts
+the Linux folder together, with the libraries a desktop Linux may not have
+taken from Ubuntu 22.04 into it. With it, inside that Linux, Silent Hill 3
+was made from the maintainer's `.chd` as without PCSX2 (123 s), played from
+its folder by its own launcher at the console's pace, what its first
+session met compiled in the background and taken at the next start, and the
+launcher waited for that compile when started during it. The maintainer's
+run on their own Linux machine is next. Found with it:
+the notice over a game covering the screen on Windows showed only at a
+session's start, which disallowing exclusive full screen put right (ADR
+0039).**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -693,6 +709,30 @@ Decisions:
   `work\remake.lock`, which it now lets go of as soon as its modules are
   ready, or for 20 s after one is started, before it takes it; the window
   shows after a second and a half.
+- [ADR 0038](docs/adr/0038-p4-7-built-and-tested-on-a-linux-inside-the-development-computer-first.md):
+  P4.7 is built and tested first on a Linux inside the development
+  computer, WSL 2 with Ubuntu 22.04 (PCSX2 makes its own Linux releases on
+  it), the packages PCSX2's Linux build needs installed in it by the
+  session: the maintainer's "1. Sure." on 2026-11-19. ADR 0004 stands:
+  Linux is reported as working only after the maintainer's run on their own
+  machine. That machine is a laptop with Linux Mint and, as the maintainer
+  thinks, NVIDIA's GTX 1660; P4.7's criterion, the session's proposal, is
+  accepted ("3. Yes"): there, a game made with the wizard from its disc
+  image plays from its folder at the console's pace, and what a session
+  meets for the first time is compiled in the background for its next
+  start.
+- [ADR 0039](docs/adr/0039-the-notice-over-a-full-screen-game-exclusive-full-screen-disallowed.md):
+  the notice over the picture (ADR 0035) reached the screen over a game
+  covering it only at a session's start: PCSX2's default lets the graphics
+  driver take such a game over (Vulkan's full-screen exclusive), which
+  NVIDIA's does once it has run a moment, and from then on nothing Windows
+  lays over it shows. At the maintainer's "Fix it" (having watched both),
+  exclusive full screen is disallowed by default on Windows
+  (`ExclusiveFullscreenControl = 0`, `ps2n::game::SetDefaults` and every
+  window run), a game's settings file may allow it again; the game folders
+  on this computer got the line in their settings files; and the runtime's
+  report says how near the notice's line a run came and how often it was
+  shown.
 
 ## Layout, build and test
 
@@ -728,7 +768,9 @@ runtime/                  what PS2Native adds to the core at run time: the EE pr
 host/                     ps2n-host: console frontend for the PCSX2 core, the test bench (the self-test of the
                           instruction semantics, of the VU provider and of the IOP provider; the watches on the
                           core's providers: sync_trace, vu_report, iop_report); with -window, where a game
-                          is played (window.cpp: Windows only so far); a game's launcher (launcher.cpp:
+                          is played (window.cpp: a Win32 window on Windows, an X11 one on Linux; on Linux
+                          shm_names.cpp gives PCSX2's one shared memory name for every process the process's
+                          number); a game's launcher on Windows (launcher.cpp:
                           the program a game's folder is started from, which starts the runtime beside it,
                           never while the game's own recompile compiles: ADR 0037);
                           and a disc image's files read through PCSX2's own readers of every format it plays
@@ -738,7 +780,10 @@ wizard/                   ps2n-wizard, the application a game is made with (Phas
                           (package.cpp), PCSX2's archive of patches fetched or given where PCSX2 is not installed
                           (patches.cpp; step P4.8); and ps2n-remake (remake_main.cpp; step P4.6, ADR 0034), the same
                           recompile without the window, with which a game's folder compiles what its sessions
-                          met for the first time itself; PCSX2's own settings pages, compiled from the submodule unchanged, in
+                          met for the first time itself; a game's launcher on Linux (launcher_main.cpp, Qt's
+                          windows; step P4.7), and what differs between the two systems for the wizard, the
+                          recompile and a game's folder (platform.h: the files' names, the toolchain's compiler and
+                          linker and what they are given); PCSX2's own settings pages, compiled from the submodule unchanged, in
                           a window of its own (settings_window.cpp: PCSX2's SettingsWindow class with the pages a
                           game has), with what they call of the rest of PCSX2's frontend (stand_ins.cpp,
                           pcsx2-qt/MainWindow.h, found before PCSX2's) and of the core (host_interface.cpp)
@@ -1101,7 +1146,24 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   thrown away, how many different blocks ran compiled and interpreted, how
   many blocks PCSX2's IOP recompiler holds (none, when it carried out
   nothing), and what the provider stopped at, if anything.
-- The Linux scripts have never been run. Only the maintainer can run them.
+- Linux (step P4.7): `scripts/linux/build.sh` (its options are `build.ps1`'s)
+  and `test.sh` (`PS2N_BIOS=<BIOS image>`, `--build-dir` as `test.ps1
+  -BuildDir`, half the processors unless `--jobs`) are run in WSL 2 with Ubuntu 22.04 on this computer (ADR
+  0038), in a clone of the repository inside it, never on `/mnt/c` (Git for
+  Windows gives the working tree CRLF line endings, which PCSX2's shell
+  scripts do not run with). It needs CMake 3.25 or later (Qt 6.12), LLVM's
+  22.1.3 in `deps/llvm-22.1.3-linux`, and builds PCSX2's dependencies with
+  PCSX2's own script the first time. `scripts/linux/kit.sh` puts the Linux
+  folder together in `build/kit-linux` from the module tree built with
+  `--module on --wizard on` (`--archive`: a `.tar.xz` of it as well, which
+  keeps who may run a program): `kit.ps1`'s counterpart, with the libraries
+  a desktop Linux may not have taken from Ubuntu 22.04 into it (all but
+  those AppImages leave to the system, as PCSX2's own Linux release), each
+  finding the others beside it (`$ORIGIN`), and their licences
+  (`licences/Ubuntu`); `patchelf` does the run paths. Linux is reported as working only after
+  the maintainer's run on their own machine (ADR 0004). A game the
+  maintainer may be playing on this computer keeps its pace: Linux builds and
+  tests on half the processors, Windows ones at below-normal priority.
 - Never run stock `pcsx2-gsrunner` here: it writes into the maintainer's own
   `Documents\PCSX2`.
 - The website: `scripts\windows\site.ps1 -Open` serves `docs` on this

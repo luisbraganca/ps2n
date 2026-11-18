@@ -20,6 +20,12 @@ if(NOT PS2N_WIZARD)
 endif()
 
 find_package(Qt6 6.10 COMPONENTS CoreTools Core GuiTools Gui WidgetsTools Widgets REQUIRED)
+# PCSX2's pages reach Qt's private platform headers on Linux (pcsx2-qt/QtUtils.h,
+# qpa/qplatformnativeinterface.h), which Qt 6.10 and later keep in modules of
+# their own, as PCSX2's own build finds them (cmake/SearchForStuff.cmake).
+if(NOT WIN32 AND NOT APPLE)
+	find_package(Qt6 COMPONENTS CorePrivate GuiPrivate WidgetsPrivate REQUIRED)
+endif()
 
 set(ps2n_qt "${CMAKE_SOURCE_DIR}/pcsx2-qt")
 
@@ -73,6 +79,7 @@ add_executable(ps2n-wizard WIN32
 	"${CMAKE_CURRENT_LIST_DIR}/patches.h"
 	"${CMAKE_CURRENT_LIST_DIR}/pipeline.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/pipeline.h"
+	"${CMAKE_CURRENT_LIST_DIR}/platform.h"
 	"${CMAKE_CURRENT_LIST_DIR}/settings_window.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/stand_ins.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/wizard_window.cpp"
@@ -98,6 +105,9 @@ target_include_directories(ps2n-wizard PRIVATE
 )
 target_compile_definitions(ps2n-wizard PRIVATE QT_NO_EXCEPTIONS)
 target_link_libraries(ps2n-wizard PRIVATE PCSX2_FLAGS PCSX2 Qt6::Core Qt6::Gui Qt6::Widgets)
+if(NOT WIN32 AND NOT APPLE)
+	target_link_libraries(ps2n-wizard PRIVATE Qt6::GuiPrivate)
+endif()
 
 # ps2n-remake: a game's folder compiling by itself what its sessions met for the
 # first time (step P4.6, docs/adr/0034): the wizard's recompile without its
@@ -107,6 +117,7 @@ add_executable(ps2n-remake WIN32
 	"${PS2N_ROOT}/assets/ps2n.rc"
 	"${CMAKE_CURRENT_LIST_DIR}/pipeline.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/pipeline.h"
+	"${CMAKE_CURRENT_LIST_DIR}/platform.h"
 	"${CMAKE_CURRENT_LIST_DIR}/remake_main.cpp"
 )
 set_target_properties(ps2n-remake PROPERTIES
@@ -115,3 +126,32 @@ set_target_properties(ps2n-remake PROPERTIES
 )
 target_compile_features(ps2n-remake PRIVATE cxx_std_20)
 target_link_libraries(ps2n-remake PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+
+# On Linux (step P4.7): PS2Native's icon, which Windows' executables carry as
+# a resource of theirs (assets/ps2n.rc), as a resource of Qt's
+# (":/ps2native/icon.png"), for ps2n-remake's icon in the notification area and
+# the launcher's windows; and a game's launcher (wizard/launcher_main.cpp),
+# Windows' being host/launcher.cpp, whose windows, the wait for a compile and
+# why a game could not play, are Qt's, which a game's folder carries for
+# ps2n-remake.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+	set(ps2n_icon_qrc_file "${CMAKE_BINARY_DIR}/ps2n-icon.qrc")
+	set(ps2n_icon_qrc "<RCC>\n<qresource prefix=\"/ps2native\">\n<file alias=\"icon.png\">${PS2N_ROOT}/assets/branding/icons/ps2native-icon-blue-256.png</file>\n</qresource>\n</RCC>\n")
+	if(EXISTS "${ps2n_icon_qrc_file}")
+		file(READ "${ps2n_icon_qrc_file}" ps2n_icon_qrc_old)
+	endif()
+	if(NOT "${ps2n_icon_qrc}" STREQUAL "${ps2n_icon_qrc_old}")
+		file(WRITE "${ps2n_icon_qrc_file}" "${ps2n_icon_qrc}")
+	endif()
+	target_sources(ps2n-remake PRIVATE "${ps2n_icon_qrc_file}")
+	set_target_properties(ps2n-remake PROPERTIES AUTORCC ON)
+
+	add_executable(ps2n-launcher "${CMAKE_CURRENT_LIST_DIR}/launcher_main.cpp" "${ps2n_icon_qrc_file}")
+	set_target_properties(ps2n-launcher PROPERTIES
+		AUTORCC ON
+		RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin"
+	)
+	target_compile_features(ps2n-launcher PRIVATE cxx_std_20)
+	target_link_libraries(ps2n-launcher PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+	add_dependencies(ps2n-remake ps2n-launcher)
+endif()

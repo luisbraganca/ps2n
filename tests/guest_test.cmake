@@ -270,8 +270,11 @@ function(ps2n_fresh_bios result_var)
 				continue()
 			endif()
 			if(extension MATCHES "^\\.(rom1|rom2|erom)$")
-				get_filename_component(sibling_name "${sibling}" NAME)
-				ps2n_link("${sibling}" "${WORK_DIR}/bios/${sibling_name}" ignored)
+				# Linked under the extension in lower case, which is the one the
+				# core asks for: on a file system that tells cases apart (Linux),
+				# the only one it finds.
+				get_filename_component(sibling_stem "${sibling}" NAME_WLE)
+				ps2n_link("${sibling}" "${WORK_DIR}/bios/${sibling_stem}.${kind}" ignored)
 			endif()
 		endforeach()
 	else()

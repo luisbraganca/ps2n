@@ -51,6 +51,9 @@
 
 #ifdef _WIN32
 #include "common/RedtapeWindows.h"
+#else
+#include <dlfcn.h>
+#include <link.h>
 #endif
 
 #include "common/Console.h"
@@ -69,6 +72,7 @@
 
 #include "pcsx2/Config.h"
 #include "pcsx2/Counters.h"
+#include "pcsx2/GS/GSUtil.h"
 #include "pcsx2/Host.h"
 #include "pcsx2/INISettingsInterface.h"
 #include "pcsx2/ImGui/ImGuiManager.h"
@@ -87,7 +91,8 @@
 #include "runtime/game_module.h"
 
 // The compiled code is in modules of its own beside the host
-// (runtime/game_module.h), which wmain() loads before anything else. Their
+// (runtime/game_module.h), which main() (wmain() on Windows) loads before
+// anything else. Their
 // lists, put together in the modules' order, each ending with a null entry
 // as below.
 static std::vector<const ps2n::ee::ImageInfo*> s_module_images;
@@ -325,6 +330,20 @@ namespace
 	bool s_controller_mapped = false;
 	std::chrono::steady_clock::time_point s_first_frame_time;
 	std::chrono::steady_clock::time_point s_latest_frame_time;
+
+	// What WatchNewCode saw of code met for the first time, interpreted, for the
+	// run's report: how many half seconds it looked at, in how many of them a
+	// processor's work interpreted was over the notice's line and the first of
+	// those, the most of each processor's work interpreted in one, and how often
+	// the notice was shown. CPU thread only.
+	struct NewCodeSeen
+	{
+		u32 halves = 0;
+		u32 over = 0;
+		u32 first_over = 0; // the frame, 0 for none
+		double most_ee = 0.0, most_iop = 0.0, most_vu = 0.0; // fractions of the work
+		u32 shown = 0;
+	} s_new_code;
 
 	// When the host started, when the profile began looking (-profile-from),
 	// and the wall-clock time at the frames asked for with -mark, in seconds
@@ -1704,6 +1723,12 @@ namespace
 			// makes in the data directory when there is none.
 			si.SetBoolValue("SPU2/Output", "OutputMuted", o.mute);
 
+#ifdef _WIN32
+			// Exclusive full screen disallowed (ps2n::game::SetDefaults has why);
+			// a game's own settings file may allow it.
+			si.SetIntValue("EmuCore/GS", "ExclusiveFullscreenControl", 0);
+#endif
+
 			// What the core can draw over the picture: none of it, unless asked
 			// for (docs/adr/0012-ps2native-branding-not-pcsx2s.md).
 			if (!o.osd)
@@ -2348,6 +2373,11 @@ namespace
 		}
 	}
 
+#ifndef _WIN32
+	bool UsesOpenGL(GSRendererType renderer);
+	void PinLoadedLibraries();
+#endif
+
 	void CPUThreadMain()
 	{
 		s_cpu_thread_id = std::this_thread::get_id();
@@ -2363,7 +2393,13 @@ namespace
 			if (!s_options.selftest)
 				params.filename = Path::RealPath(s_options.boot_path);
 
-			if (VMManager::Initialize(params) == VMBootResult::StartupSuccess && s_options.selftest)
+			const bool booted = VMManager::Initialize(params) == VMBootResult::StartupSuccess;
+#ifndef _WIN32
+			// What the renderer has loaded stays loaded (PinLoadedLibraries).
+			if (booted)
+				PinLoadedLibraries();
+#endif
+			if (booted && s_options.selftest)
 			{
 				// The machine is whole but has executed nothing: the state the
 				// self-test needs.
@@ -2709,6 +2745,19 @@ namespace
 						s_frames - 1, seconds, seconds > 0.0 ? static_cast<double>(s_frames - 1) / seconds : 0.0,
 						static_cast<double>(GetVerticalFrequency()));
 				}
+				if (s_new_code.halves > 0)
+				{
+					// How near the notice's line code met for the first time came
+					// (WatchNewCode), and how often the notice was shown.
+					const std::string first =
+						s_new_code.over > 0 ? fmt::format(", the first at frame {}", s_new_code.first_over) : std::string();
+					std::fprintf(stderr,
+						"ps2n-host: code met for the first time, interpreted: over the notice's line (1%% of a processor's work in half a "
+						"second) in %u of %u half seconds%s; at most %.2f%% of the EE's cycles, %.2f%% of the IOP's blocks and %.2f%% of "
+						"the vector units' blocks in one; the notice shown %u times\n",
+						s_new_code.over, s_new_code.halves, first.c_str(), s_new_code.most_ee * 100.0, s_new_code.most_iop * 100.0,
+						s_new_code.most_vu * 100.0, s_new_code.shown);
+				}
 				if (!s_options.marks.empty() && s_frames > 0)
 				{
 					// The first frame, those asked for, and the last, each with its
@@ -2785,6 +2834,46 @@ namespace
 		VMManager::Internal::CPUThreadShutdown();
 		s_cpu_thread_done.store(true);
 	}
+
+#ifndef _WIN32
+	// Whether the core will draw with OpenGL: asked for, or what it picks for
+	// the renderers that leave the graphics device to it (GetAPIForRenderer in
+	// GS.cpp): Vulkan, unless the first device's is a software one or Intel's.
+	bool UsesOpenGL(GSRendererType renderer)
+	{
+		switch (renderer)
+		{
+			case GSRendererType::OGL:
+				return true;
+			case GSRendererType::VK:
+				return false;
+			default:
+				return GSUtil::GetPreferredRenderer() == GSRendererType::OGL;
+		}
+	}
+
+	// The libraries loaded by now, the renderer's among them, kept loaded until
+	// the process ends. PCSX2 unloads its graphics library when it closes the
+	// renderer (libEGL, and with it the driver; libvulkan, and with it every
+	// Vulkan driver), before the GS thread ends; some of those libraries left a
+	// destructor of that thread's own data behind (libglvnd's libEGL does, and
+	// the drivers it loads under WSL), which glibc calls as the thread ends,
+	// in code no longer there: the process ended with a crash after every run
+	// with OpenGL. Each is marked never to be unloaded (RTLD_NODELETE).
+	void PinLoadedLibraries()
+	{
+		std::vector<std::string> names;
+		dl_iterate_phdr(
+			[](dl_phdr_info* info, size_t, void* data) {
+				if (info->dlpi_name && info->dlpi_name[0] != '\0')
+					static_cast<std::vector<std::string>*>(data)->emplace_back(info->dlpi_name);
+				return 0;
+			},
+			&names);
+		for (const std::string& name : names)
+			dlopen(name.c_str(), RTLD_NOW | RTLD_NOLOAD | RTLD_NODELETE);
+	}
+#endif
 
 	// Keeps the process on the processor's fastest cores (-fast-cores). A
 	// processor with performance and efficiency cores runs the same work about
@@ -2957,6 +3046,16 @@ namespace
 		if (!s_options.pad_path.empty() && !LoadPadScript(s_options.pad_path))
 			return EXIT_ERROR;
 
+#ifndef _WIN32
+		// The graphics device the core picks for itself, decided here, on this
+		// thread, which ends only with the process: to decide, the core loads
+		// every Vulkan driver there is and unloads them again, and keeps what it
+		// found (GSUtil::GetPreferredRenderer). A driver that left a destructor
+		// of the thread's own data behind (PinLoadedLibraries) would otherwise
+		// have left it on the GS thread.
+		const bool uses_opengl = UsesOpenGL(s_options.renderer);
+#endif
+
 		// The window belongs to this thread, which serves its messages below
 		// while the machine runs on its own.
 		if (s_options.window)
@@ -2970,6 +3069,17 @@ namespace
 				return EXIT_ERROR;
 			}
 		}
+#ifndef _WIN32
+		else if (uses_opengl && !ps2n::host::window::CreateHidden())
+		{
+			// PCSX2's OpenGL on Linux draws only into a window, and it is what
+			// PCSX2 picks where the first graphics device's Vulkan is a software
+			// one or Intel's (GSDeviceVK::IsSuitableDefaultRenderer).
+			std::fputs("ps2n-host: this computer's renderer is OpenGL, which needs a window even to draw nothing, and there is "
+					   "no X display to make one on\n",
+				stderr);
+		}
+#endif
 
 		std::thread watchdog(WatchdogMain);
 
@@ -3006,6 +3116,11 @@ namespace
 				DispatchMessageW(&msg);
 			}
 		}
+#else
+		// The game's window, when there is one, is served by this thread until
+		// the machine has stopped.
+		if (s_options.window)
+			ps2n::host::window::ServeUntil(s_cpu_thread_done);
 #endif
 
 		cpu_thread.Join();
@@ -3159,7 +3274,9 @@ void ps2n::host::OnInputDeviceConnected(std::string_view identifier)
 // in a game's folder (-sessions in a window, which the wizard and make-game.ps1
 // write into its settings), when over the last half second at least 1% of the
 // EE's, the IOP's or the vector units' work was interpreted; for five seconds,
-// at most once a minute. CPU thread, where the providers count.
+// at most once a minute. What it sees is kept for the run's report
+// (s_new_code), in a session run again (-input) too, where there is no notice
+// to show. CPU thread, where the providers count.
 static void WatchNewCode()
 {
 	struct Counts
@@ -3171,7 +3288,7 @@ static void WatchNewCode()
 	static Counts s_last;
 	static bool s_have_last = false;
 	static std::optional<std::chrono::steady_clock::time_point> s_shown;
-	if (!s_options.window || s_options.sessions_dir.empty() || s_frames % 30 != 0)
+	if ((s_options.sessions_dir.empty() && s_options.input_path.empty()) || s_frames % 30 != 0)
 		return;
 
 	Counts now;
@@ -3199,17 +3316,28 @@ static void WatchNewCode()
 	if (!std::exchange(s_have_last, true))
 		return;
 
-	const auto interpreting = [](u64 all, u64 interpreted) {
-		return all > 0 && static_cast<double>(interpreted) >= 0.01 * static_cast<double>(all);
+	const auto share = [](u64 all, u64 interpreted) {
+		return all > 0 ? static_cast<double>(interpreted) / static_cast<double>(all) : 0.0;
 	};
-	if (!interpreting(now.ee - last.ee, now.ee_interpreted - last.ee_interpreted) &&
-		!interpreting(now.iop - last.iop, now.iop_interpreted - last.iop_interpreted) &&
-		!interpreting(now.vu - last.vu, now.vu_interpreted - last.vu_interpreted))
+	const double ee = share(now.ee - last.ee, now.ee_interpreted - last.ee_interpreted);
+	const double iop = share(now.iop - last.iop, now.iop_interpreted - last.iop_interpreted);
+	const double vu = share(now.vu - last.vu, now.vu_interpreted - last.vu_interpreted);
+	s_new_code.halves++;
+	s_new_code.most_ee = std::max(s_new_code.most_ee, ee);
+	s_new_code.most_iop = std::max(s_new_code.most_iop, iop);
+	s_new_code.most_vu = std::max(s_new_code.most_vu, vu);
+	if (ee < 0.01 && iop < 0.01 && vu < 0.01)
+		return;
+	s_new_code.over++;
+	if (s_new_code.first_over == 0)
+		s_new_code.first_over = s_frames;
+	if (!s_options.window || s_options.sessions_dir.empty())
 		return;
 	const auto time = std::chrono::steady_clock::now();
 	if (s_shown && time - *s_shown < std::chrono::minutes(1))
 		return;
 	s_shown = time;
+	s_new_code.shown++;
 	ps2n::host::window::ShowNotice("Running code met for the first time, interpreted",
 		"It may be slower now. PS2Native compiles it when you close the game.", 5);
 }
@@ -3349,6 +3477,42 @@ void ps2n::host::RunOnCPUThread(std::function<void()> function, bool block)
 	done_cv.wait(done_lock, [&done]() { return done; });
 }
 
+#if defined(PS2N_GAME_MODULE)
+// Puts the lists of a module just loaded after those of the modules loaded
+// before it. False, with what went wrong on stderr, when it was not built for
+// this host.
+static bool TakeGameModule(ps2n::GameModuleEntry entry, const std::string& shown)
+{
+	ps2n::GameModuleImages images{};
+	entry(&images);
+	if (images.version != ps2n::kGameModuleVersion)
+	{
+		std::fprintf(stderr, "ps2n-host: %s was built for another host (version %u, this host's %u)\n", shown.c_str(),
+			images.version, ps2n::kGameModuleVersion);
+		return false;
+	}
+	s_module_images.insert(s_module_images.end(), images.ee, images.ee + images.ee_count);
+	s_module_vu_images.insert(s_module_vu_images.end(), images.vu, images.vu + images.vu_count);
+	s_module_iop_images.insert(s_module_iop_images.end(), images.iop, images.iop + images.iop_count);
+	return true;
+}
+
+// The modules' lists put together, each ending with a null entry, where the
+// runtime looks for compiled code.
+static void PublishGameModules()
+{
+	ps2n_image_count = s_module_images.size();
+	ps2n_vu_image_count = s_module_vu_images.size();
+	ps2n_iop_image_count = s_module_iop_images.size();
+	s_module_images.push_back(nullptr);
+	s_module_vu_images.push_back(nullptr);
+	s_module_iop_images.push_back(nullptr);
+	ps2n_images = s_module_images.data();
+	ps2n_vu_images = s_module_vu_images.data();
+	ps2n_iop_images = s_module_iop_images.data();
+}
+#endif
+
 #ifdef _WIN32
 
 #if defined(PS2N_GAME_MODULE)
@@ -3394,28 +3558,10 @@ static bool LoadGameModules()
 				ps2n::kGameModuleEntry);
 			return false;
 		}
-		ps2n::GameModuleImages images{};
-		entry(&images);
-		if (images.version != ps2n::kGameModuleVersion)
-		{
-			std::fprintf(stderr, "ps2n-host: %s was built for another host (version %u, this host's %u)\n", shown.c_str(),
-				images.version, ps2n::kGameModuleVersion);
+		if (!TakeGameModule(entry, shown))
 			return false;
-		}
-		s_module_images.insert(s_module_images.end(), images.ee, images.ee + images.ee_count);
-		s_module_vu_images.insert(s_module_vu_images.end(), images.vu, images.vu + images.vu_count);
-		s_module_iop_images.insert(s_module_iop_images.end(), images.iop, images.iop + images.iop_count);
 	}
-
-	ps2n_image_count = s_module_images.size();
-	ps2n_vu_image_count = s_module_vu_images.size();
-	ps2n_iop_image_count = s_module_iop_images.size();
-	s_module_images.push_back(nullptr);
-	s_module_vu_images.push_back(nullptr);
-	s_module_iop_images.push_back(nullptr);
-	ps2n_images = s_module_images.data();
-	ps2n_vu_images = s_module_vu_images.data();
-	ps2n_iop_images = s_module_iop_images.data();
+	PublishGameModules();
 	return true;
 }
 #endif
@@ -3449,11 +3595,54 @@ int wmain(int argc, wchar_t** argv)
 
 #else
 
+#if defined(PS2N_GAME_MODULE)
+// Loads the modules of compiled code beside the host's executable and puts
+// their lists together, as on Windows. Each is bound whole when it is loaded
+// (RTLD_NOW), so that no import is looked up while compiled code runs.
+static bool LoadGameModules()
+{
+	const std::string directory = std::string(Path::GetDirectory(FileSystem::GetProgramPath()));
+	if (directory.empty())
+	{
+		std::fputs("ps2n-host: cannot find its own executable\n", stderr);
+		return false;
+	}
+	for (const char* file : ps2n::kGameModuleFiles)
+	{
+		const std::string path = Path::Combine(directory, file);
+		void* module = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+		if (!module)
+		{
+			std::fprintf(stderr, "ps2n-host: cannot load the module of compiled code %s (%s)\n", path.c_str(), dlerror());
+			return false;
+		}
+		const auto entry = reinterpret_cast<ps2n::GameModuleEntry>(dlsym(module, ps2n::kGameModuleEntry));
+		if (!entry)
+		{
+			std::fprintf(stderr, "ps2n-host: %s is not a module of compiled code: it has no %s\n", path.c_str(),
+				ps2n::kGameModuleEntry);
+			return false;
+		}
+		if (!TakeGameModule(entry, path))
+			return false;
+	}
+	PublishGameModules();
+	return true;
+}
+#endif
+
 int main(int argc, char* argv[])
 {
-	// A disc image's files (host/disc.h): no machine.
+	// A disc image's files (host/disc.h): no module of compiled code, which the
+	// wizard's folder has none of, and no machine.
 	if (const std::optional<int> code = ps2n::host::disc::Run(std::vector<std::string>(argv, argv + argc)))
 		return *code;
+
+#if defined(PS2N_GAME_MODULE)
+	if (!LoadGameModules())
+		return EXIT_ERROR;
+#endif
+
 	return Run(argc, argv);
 }
 

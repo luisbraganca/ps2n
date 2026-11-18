@@ -36,6 +36,18 @@ namespace ps2n::game
 		// (ApplyPatchSettingOverrides in Patch.cpp): a game drawn wide without one is shown wide too.
 		si.SetStringValue("EmuCore/GS", "AspectRatio", "16:9");
 
+#ifdef _WIN32
+		// Exclusive full screen disallowed, in the place of PCSX2's "Automatic",
+		// which leaves it to the graphics driver: NVIDIA's Vulkan driver took a
+		// game covering the screen over as its own once it had run a moment, and
+		// from then on nothing Windows lays over the picture showed, the notice
+		// of PS2Native's own among them (docs/adr/0035). On 2026-11-19, a notice
+		// shown a minute into a session never reached the maintainer's screen,
+		// and with this it did (ADR 0039). (Linux has no such control: PCSX2
+		// only says so when it is set.)
+		si.SetIntValue("EmuCore/GS", "ExclusiveFullscreenControl", 0);
+#endif
+
 		si.SetIntValue("EmuCore/GS", "OsdMessagesPos", 0);
 		si.SetIntValue("EmuCore/GS", "OsdPerformancePos", 0);
 		for (const char* name : {"OsdShowSpeed", "OsdShowFPS", "OsdShowVPS", "OsdShowCPU", "OsdShowGPU", "OsdShowGPUDebug",

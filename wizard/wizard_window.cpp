@@ -6,6 +6,7 @@
 #include "package.h"
 #include "patches.h"
 #include "pipeline.h"
+#include "platform.h"
 
 #include "Settings/SettingsWindow.h"
 
@@ -279,7 +280,7 @@ namespace ps2n::wizard
 				// the runtime through PCSX2's own readers (ps2n-host -disc-executables).
 				QProcess reader;
 				reader.setProcessChannelMode(QProcess::MergedChannels);
-				reader.start(QDir(s().kit.runtime).filePath(QStringLiteral("ps2n-host.exe")),
+				reader.start(QDir(s().kit.runtime).filePath(platform::Program(QStringLiteral("ps2n-host"))),
 					{QStringLiteral("-disc-executables"), QDir::toNativeSeparators(path)});
 				const bool ran = reader.waitForFinished(60000) && reader.exitStatus() == QProcess::NormalExit && reader.exitCode() == 0;
 				const QString listed = QString::fromUtf8(reader.readAll());
@@ -702,12 +703,28 @@ namespace ps2n::wizard
 	{
 		m_state.kit = std::move(kit);
 		// PCSX2's archive of patches: an installed PCSX2's, or else the one this
-		// folder keeps once fetched or given (patches.h).
+		// folder keeps once fetched or given (patches.h). On Linux PCSX2 installed
+		// from a distribution's package or as a Flatpak has it where it can be
+		// read; an AppImage keeps it inside itself.
+		QStringList installed;
+#ifdef _WIN32
 		const char* program_files = std::getenv("ProgramFiles");
-		const QString installed =
-			QDir(QString::fromLocal8Bit(program_files ? program_files : "C:\\Program Files")).filePath(QStringLiteral("PCSX2/resources/patches.zip"));
-		m_state.patch_archive =
-			QFileInfo::exists(installed) ? installed : QDir(m_state.kit.root).filePath(QStringLiteral("patches/patches.zip"));
+		installed.push_back(QDir(QString::fromLocal8Bit(program_files ? program_files : "C:\\Program Files"))
+				.filePath(QStringLiteral("PCSX2/resources/patches.zip")));
+#else
+		const QString flatpak = QStringLiteral("app/net.pcsx2.PCSX2/current/active/files/share/PCSX2/resources/patches.zip");
+		installed = {QStringLiteral("/usr/share/PCSX2/resources/patches.zip"), QStringLiteral("/usr/local/share/PCSX2/resources/patches.zip"),
+			QStringLiteral("/var/lib/flatpak/") + flatpak, QDir::homePath() + QStringLiteral("/.local/share/flatpak/") + flatpak};
+#endif
+		m_state.patch_archive = QDir(m_state.kit.root).filePath(QStringLiteral("patches/patches.zip"));
+		for (const QString& archive : installed)
+		{
+			if (QFileInfo::exists(archive))
+			{
+				m_state.patch_archive = archive;
+				break;
+			}
+		}
 		setWindowTitle(QStringLiteral("PS2Native"));
 		setWizardStyle(QWizard::ModernStyle);
 		setOption(QWizard::NoBackButtonOnLastPage, true);

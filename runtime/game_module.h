@@ -3,7 +3,8 @@
 // What a module of compiled code gives the host that loads it
 // (docs/phase4-proposal.md, steps P4.1 and P4.2). With PS2N_GAME_MODULE the
 // compiled code is not linked into the host but built into modules of its
-// own, DLLs beside the host's executable, one for each kind of code, which
+// own, DLLs (shared objects on Linux) beside the host's executable, one for
+// each kind of code, which
 // the host loads when it starts. A module reaches the machine and the
 // runtime through what the host exports (runtime/include/ps2n/module.h); the
 // host reaches a module's compiled code through the one function each
@@ -56,5 +57,9 @@ namespace ps2n
 	// The modules, beside the host's executable, in the order their lists are
 	// put together: the programs' EE code, the BIOS's, the micro code, the
 	// IOP's code.
+#if defined(_WIN32)
 	inline constexpr const wchar_t* kGameModuleFiles[] = {L"ps2n-game.dll", L"ps2n-bios.dll", L"ps2n-vu.dll", L"ps2n-iop.dll"};
+#else
+	inline constexpr const char* kGameModuleFiles[] = {"ps2n-game.so", "ps2n-bios.so", "ps2n-vu.so", "ps2n-iop.so"};
+#endif
 } // namespace ps2n

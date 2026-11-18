@@ -497,6 +497,22 @@ set(vu_elf "${PS2N_SDK_ROOT}/bin/vu.elf")
 if(EXISTS "${vu_elf}")
 	set(frame_run "-DELF=${vu_elf}" -DIMAGE=sdk_vu -DUNTIL=done -DWHOLE=1 -DSETTLE=4 -DFRAMES=900)
 
+	# What each configuration's frame is compared with. On Windows: the frame
+	# stock PCSX2 drew when it was recorded (vu.software.frame). Elsewhere:
+	# stock PCSX2's frame on the same computer, in the same suite, which its
+	# test writes (frame.txt) before the others compare theirs with it. The
+	# software renderer draws on the processor, but the picture is put together
+	# (PCSX2's merge of its two circuits) and read back on the graphics device,
+	# whose arithmetic is the platform's driver's: on Linux under WSL, through
+	# OpenGL on Direct3D 12, 46 of its 143,360 pixels came out one step from
+	# Windows' Direct3D 11 on 2026-11-19, stock PCSX2's and PS2Native's alike.
+	if(WIN32)
+		set(ps2n_frame_expected "-DFRAME_EXPECTED=${PS2N_SDK_ROOT}/vu.software.frame")
+	else()
+		set(ps2n_frame_expected "-DFRAME_EXPECTED=${PS2N_TEST_WORK}/frames/software/stock-jit/vu/frame.txt")
+	endif()
+
+	set(ps2n_frame_tests "")
 	foreach(config_entry IN LISTS PS2N_TEST_CONFIGS)
 		string(REPLACE "|" ";" config_fields "${config_entry}")
 		list(GET config_fields 0 config)
@@ -507,9 +523,14 @@ if(EXISTS "${vu_elf}")
 		if(config STREQUAL "stock-interp")
 			continue()   # PCSX2's VU interpreters; the program runs under them in sdk/stock-interp/vu
 		endif()
+		set(expected "${ps2n_frame_expected}")
+		if(NOT WIN32 AND config STREQUAL "stock-jit")
+			set(expected -DFRAME_SIZE=320x448)
+		endif()
 		ps2n_add_guest_test("frames/software/${config}/vu" 120 "frames;gpu;${config}"
 			${frame_run} "-DEE=${config_ee}" "-DIOP=${config_iop}" "-DVU=${config_vu}" "-DSTATIC=${config_static}"
-			-DRENDERER=sw "-DFRAME_EXPECTED=${PS2N_SDK_ROOT}/vu.software.frame")
+			-DRENDERER=sw ${expected})
+		list(APPEND ps2n_frame_tests "frames/software/${config}/vu")
 	endforeach()
 
 	# The same picture with PCSX2's VU and IOP recompilers under PS2Native's EE
@@ -517,7 +538,14 @@ if(EXISTS "${vu_elf}")
 	# provider from another.
 	ps2n_add_guest_test("frames/software/ps2n-static-microvu/vu" 120 "frames;gpu;ps2n-static-microvu"
 		${frame_run} -DEE=ps2n -DIOP=jit -DVU=jit -DSTATIC=on
-		-DRENDERER=sw "-DFRAME_EXPECTED=${PS2N_SDK_ROOT}/vu.software.frame")
+		-DRENDERER=sw ${ps2n_frame_expected})
+	list(APPEND ps2n_frame_tests "frames/software/ps2n-static-microvu/vu")
+
+	if(NOT WIN32)
+		list(REMOVE_ITEM ps2n_frame_tests "frames/software/stock-jit/vu")
+		set_tests_properties("frames/software/stock-jit/vu" PROPERTIES FIXTURES_SETUP "frames/software/vu")
+		set_tests_properties(${ps2n_frame_tests} PROPERTIES FIXTURES_REQUIRED "frames/software/vu")
+	endif()
 
 	ps2n_add_guest_test("frames/vulkan-1x/ps2n-static/vu" 120 "frames;gpu;ps2n-static"
 		${frame_run} -DEE=ps2n -DIOP=ps2n -DVU=ps2n -DSTATIC=on -DRENDERER=vulkan -DUPSCALE=1 -DFRAME_SIZE=320x448)
@@ -759,14 +787,24 @@ endif()
 # (its precompiled header, its definitions) but /GS-: no security cookies,
 # which are the C runtime's. No code may run when a module is loaded: none
 # is, with no C runtime to run it, so any that would be needed is an error.
+#
+# On Linux, with clang, the same: -nostdlibinc (none of the system's header
+# directories, the compiler's own kept), -ffreestanding, no stack protector
+# (the C library's), and every symbol hidden but the module's entry
+# (runtime/module_entry.cpp), as PCSX2's build has its own
+# (-fvisibility=hidden, which it gives every file of this directory).
 function(ps2n_compile_freestanding target)
-	if(NOT (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
-		message(FATAL_ERROR "Generated code is compiled freestanding with clang-cl only so far")
-	endif()
 	target_include_directories(${target} PRIVATE "${PS2N_ROOT}" "${PS2N_ROOT}/core/include" "${PS2N_ROOT}/runtime/include")
 	target_compile_definitions(${target} PRIVATE PS2N_MODULE)
-	target_compile_options(${target} PRIVATE /X /clang:-ffreestanding /Zl /GS-
-		-Werror=global-constructors -Werror=exit-time-destructors)
+	if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+		target_compile_options(${target} PRIVATE /X /clang:-ffreestanding /Zl /GS-
+			-Werror=global-constructors -Werror=exit-time-destructors)
+	elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+		target_compile_options(${target} PRIVATE -nostdlibinc -ffreestanding -fno-stack-protector -fvisibility=hidden
+			-Werror=global-constructors -Werror=exit-time-destructors)
+	else()
+		message(FATAL_ERROR "Generated code is compiled freestanding with clang-cl on Windows and clang on Linux only so far")
+	endif()
 endfunction()
 
 set(ps2n_images_targets "")
@@ -780,9 +818,11 @@ if(PS2N_GAME_MODULE)
 	# (ps2n-recomp registry), and is linked with the host's import library and
 	# nothing else: no C runtime, no entry point of its own (/NODEFAULTLIB,
 	# /NOENTRY). Everything it needs of the runtime and of the core, the host
-	# exports (below).
-	if(NOT WIN32)
-		message(FATAL_ERROR "PS2N_GAME_MODULE is set up for Windows only so far")
+	# exports (below). On Linux each is a shared object (ps2n-game.so and so
+	# on), linked with no C library and no start files (-nostdlib), whose
+	# undefined symbols the host's executable defines when it loads it.
+	if(NOT (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+		message(FATAL_ERROR "PS2N_GAME_MODULE is set up for Windows and Linux only so far")
 	endif()
 	if(PS2N_PGO STREQUAL "generate" OR PS2N_LTO STREQUAL "thin")
 		message(FATAL_ERROR "PS2N_GAME_MODULE is not set up with PS2N_PGO=generate or PS2N_LTO=thin yet")
@@ -807,25 +847,35 @@ if(PS2N_GAME_MODULE)
 		add_library(ps2n-${kind} SHARED ${ps2n_module_sources_${kind}} "${PS2N_GENERATED}/registry_${kind}.cpp"
 			"${PS2N_ROOT}/runtime/module_entry.cpp")
 		ps2n_compile_freestanding(ps2n-${kind})
-		target_link_libraries(ps2n-${kind} PRIVATE ps2n-host)
-		target_link_options(ps2n-${kind} PRIVATE /NODEFAULTLIB /NOENTRY)
-		set_target_properties(ps2n-${kind} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin")
+		if(WIN32)
+			target_link_libraries(ps2n-${kind} PRIVATE ps2n-host)
+			target_link_options(ps2n-${kind} PRIVATE /NODEFAULTLIB /NOENTRY)
+		else()
+			target_link_options(ps2n-${kind} PRIVATE -nostdlib)
+			# Built after the host, whose executable it is loaded by.
+			add_dependencies(ps2n-${kind} ps2n-host)
+		endif()
+		set_target_properties(ps2n-${kind} PROPERTIES PREFIX "" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin"
+			LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin")
 		list(APPEND ps2n_images_targets ps2n-${kind})
 	endforeach()
 	# The four at once, for a build of the host to name (build.ps1).
 	add_custom_target(ps2n-modules)
 	add_dependencies(ps2n-modules ${ps2n_images_targets})
-	# The stack probe a module defines for itself (runtime/module_entry.cpp),
-	# which no test program's code calls: a program built as a module is, whose
-	# functions' locals take up to fifty pages, on a thread whose stack Windows
-	# commits a page at a time (tests/module/stack_probe.cpp).
-	add_executable(ps2n-stack-probe "${PS2N_ROOT}/tests/module/stack_probe.cpp" "${PS2N_ROOT}/runtime/module_entry.cpp")
-	ps2n_compile_freestanding(ps2n-stack-probe)
-	target_link_options(ps2n-stack-probe PRIVATE /NODEFAULTLIB /ENTRY:Entry /SUBSYSTEM:CONSOLE)
-	target_link_libraries(ps2n-stack-probe PRIVATE kernel32)
-	set_target_properties(ps2n-stack-probe PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin")
-	add_dependencies(ps2n-modules ps2n-stack-probe)
-	add_test(NAME selftest/module-stack-probe COMMAND ps2n-stack-probe)
+	if(WIN32)
+		# The stack probe a module defines for itself (runtime/module_entry.cpp),
+		# which no test program's code calls: a program built as a module is, whose
+		# functions' locals take up to fifty pages, on a thread whose stack Windows
+		# commits a page at a time (tests/module/stack_probe.cpp). Linux asks for
+		# no such probe.
+		add_executable(ps2n-stack-probe "${PS2N_ROOT}/tests/module/stack_probe.cpp" "${PS2N_ROOT}/runtime/module_entry.cpp")
+		ps2n_compile_freestanding(ps2n-stack-probe)
+		target_link_options(ps2n-stack-probe PRIVATE /NODEFAULTLIB /ENTRY:Entry /SUBSYSTEM:CONSOLE)
+		target_link_libraries(ps2n-stack-probe PRIVATE kernel32)
+		set_target_properties(ps2n-stack-probe PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin")
+		add_dependencies(ps2n-modules ps2n-stack-probe)
+		add_test(NAME selftest/module-stack-probe COMMAND ps2n-stack-probe)
+	endif()
 	target_compile_definitions(ps2n-host PRIVATE PS2N_GAME_MODULE)
 	message(STATUS "PS2Native: the compiled code goes into modules of its own: ${ps2n_images_targets}")
 else()
@@ -885,9 +935,50 @@ if(PS2N_GAME_MODULE OR PS2N_GAME_IMPORTS)
 		"?iopTestIntc@@YAXXZ"
 		"?psxException@@YAXII@Z"
 	)
-	foreach(ps2n_export IN LISTS ps2n_core_exports)
-		target_link_options(ps2n-host PRIVATE "/EXPORT:${ps2n_export}")
-	endforeach()
+	if(WIN32)
+		foreach(ps2n_export IN LISTS ps2n_core_exports)
+			target_link_options(ps2n-host PRIVATE "/EXPORT:${ps2n_export}")
+		endforeach()
+	else()
+		# On Linux PCSX2's build hides its own symbols (-fvisibility=hidden),
+		# which a hidden symbol's own name cannot be exported under. The host's
+		# linker gives each of these another name, ps2n_pcsx2_ and PCSX2's
+		# name, which is not hidden, and the executable exports it with the
+		# runtime's (ENABLE_EXPORTS: --export-dynamic). ps2n/pcsx2.h imports
+		# them under those names.
+		set(ps2n_core_aliases
+			"ps2n_pcsx2__cpuRegistersPack=_cpuRegistersPack"
+			"ps2n_pcsx2_vuRegs=vuRegs"
+			"ps2n_pcsx2_eeHw=eeHw"
+			"ps2n_pcsx2_iopMem=iopMem"
+			"ps2n_pcsx2_psxRegs=psxRegs"
+			"ps2n_pcsx2_EmuConfig=EmuConfig"
+			"ps2n_pcsx2_vtlbdata=_ZN12vtlb_private8vtlbdataE"
+			"ps2n_pcsx2_vtlb_memRead32=_Z12vtlb_memReadIjET_j"
+			"ps2n_pcsx2_vtlb_memRead64=_Z12vtlb_memReadImET_j"
+			"ps2n_pcsx2_vtlb_memWrite32=_Z13vtlb_memWriteIjEvjT_"
+			"ps2n_pcsx2_vtlb_memWrite64=_Z13vtlb_memWriteImEvjT_"
+			"ps2n_pcsx2_vtlb_memRead128=_Z15vtlb_memRead128j"
+			"ps2n_pcsx2_vtlb_memWrite128=_Z16vtlb_memWrite128jDv2_x"
+			"ps2n_pcsx2_COP0_DiagnosticPCCR=_Z19COP0_DiagnosticPCCRv"
+			"ps2n_pcsx2_COP0_UpdatePCCR=_Z15COP0_UpdatePCCRv"
+			"ps2n_pcsx2_WriteCP0Config=_Z14WriteCP0Configj"
+			"ps2n_pcsx2_WriteCP0Status=_Z14WriteCP0Statusj"
+			"ps2n_pcsx2_iopEventTest=_Z12iopEventTestv"
+			"ps2n_pcsx2_iopMemRead8=_Z11iopMemRead8j"
+			"ps2n_pcsx2_iopMemRead16=_Z12iopMemRead16j"
+			"ps2n_pcsx2_iopMemRead32=_Z12iopMemRead32j"
+			"ps2n_pcsx2_iopMemWrite8=_Z12iopMemWrite8jh"
+			"ps2n_pcsx2_iopMemWrite16=_Z13iopMemWrite16jt"
+			"ps2n_pcsx2_iopMemWrite32=_Z13iopMemWrite32jj"
+			"ps2n_pcsx2_iopTestIntc=_Z11iopTestIntcv"
+			"ps2n_pcsx2_psxException=_Z12psxExceptionjj"
+		)
+		foreach(ps2n_alias IN LISTS ps2n_core_aliases)
+			target_link_options(ps2n-host PRIVATE "LINKER:--defsym=${ps2n_alias}")
+		endforeach()
+		set_target_properties(ps2n-host PROPERTIES ENABLE_EXPORTS ON)
+	endif()
 endif()
 # Generated code needs no debugging information but the functions' names and
 # line tables, which is what the profiler reads (ps2n-host -profile). With all

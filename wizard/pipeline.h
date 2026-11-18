@@ -92,7 +92,7 @@ namespace ps2n::wizard
 		void startCompiles();
 
 		void fail(const QString& error);
-		QString tool(const char* name) const;
+		QString tool(const QString& name) const;
 		// What the captures are, with the executables they are for: what
 		// work/compiled-from.txt holds once they are compiled.
 		QString fingerprint() const;

@@ -3,7 +3,8 @@
 // The entry of a module of compiled code (runtime/game_module.h): hands the
 // host that loads it the lists of the compiled code the module holds. Built
 // into each module, which has no C runtime (tests/tests.cmake), and so
-// defines here the two things the compiler asks of one.
+// defines here, on Windows, the two things the compiler asks of one. On
+// Linux the compiler asks for neither.
 
 #include "runtime/game_module.h"
 
@@ -17,7 +18,14 @@ extern const size_t ps2n_vu_image_count;
 extern const ps2n::iop::ImageInfo* const ps2n_iop_images[];
 extern const size_t ps2n_iop_image_count;
 
-extern "C" __declspec(dllexport) void ps2n_game_module(ps2n::GameModuleImages* images)
+#if defined(_WIN32)
+#define PS2N_MODULE_ENTRY extern "C" __declspec(dllexport)
+#else
+// The one symbol a module exports: it is compiled with every other hidden.
+#define PS2N_MODULE_ENTRY extern "C" __attribute__((visibility("default")))
+#endif
+
+PS2N_MODULE_ENTRY void ps2n_game_module(ps2n::GameModuleImages* images)
 {
 	images->version = ps2n::kGameModuleVersion;
 	images->ee = ps2n_images;
@@ -27,6 +35,8 @@ extern "C" __declspec(dllexport) void ps2n_game_module(ps2n::GameModuleImages* i
 	images->iop = ps2n_iop_images;
 	images->iop_count = ps2n_iop_image_count;
 }
+
+#if defined(_WIN32)
 
 // A file of compiled code that does arithmetic on floating point names this
 // symbol, for Microsoft's C runtime to set its floating point up; with no C
@@ -62,3 +72,5 @@ __asm__(
 	"	sub r10, r11\n"
 	"	test byte ptr [r10], al\n"
 	"	ret\n");
+
+#endif // _WIN32

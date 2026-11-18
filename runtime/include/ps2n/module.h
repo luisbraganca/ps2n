@@ -4,16 +4,19 @@
 // and P4.2).
 //
 // The compiled code of a game is built into the host, or, with
-// PS2N_GAME_MODULE (tests/tests.cmake), into modules of their own, DLLs that
-// the host loads when it starts: what a user's computer is to build (ADR
-// 0028). In a module, compiled code reaches the machine's state and the
-// runtime across the module's boundary, through what the host exports:
+// PS2N_GAME_MODULE (tests/tests.cmake), into modules of their own, DLLs on
+// Windows and shared objects on Linux, that the host loads when it starts:
+// what a user's computer is to build (ADR 0028). In a module, compiled code
+// reaches the machine's state and the runtime across the module's boundary,
+// through what the host exports:
 //
 //  - the runtime's variables and functions that compiled code uses are
 //    declared PS2N_API: exported by the host, imported by a module;
 //  - PCSX2's variables and functions that it uses are exported by the host
-//    under their own symbols (tests/tests.cmake), which a module imports
-//    (ps2n/pcsx2.h).
+//    (tests/tests.cmake), which a module imports (ps2n/pcsx2.h): on Windows
+//    under their own symbols; on Linux, where PCSX2's build hides every
+//    symbol of its own (-fvisibility=hidden), under names of PS2Native's
+//    that the host's linker gives them.
 //
 // A module is compiled with PS2N_MODULE, against PS2Native's own headers
 // and nothing else: no header of PCSX2's, no standard library
@@ -28,6 +31,10 @@
 #define PS2N_API __declspec(dllimport)
 #elif defined(_WIN32) && defined(PS2N_EXPORTS)
 #define PS2N_API __declspec(dllexport)
+#elif !defined(_WIN32) && (defined(PS2N_MODULE) || defined(PS2N_EXPORTS))
+// What the executable's dynamic symbols are to have: PCSX2's build hides
+// everything else (-fvisibility=hidden).
+#define PS2N_API __attribute__((visibility("default")))
 #else
 #define PS2N_API
 #endif

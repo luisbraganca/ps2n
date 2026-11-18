@@ -12,11 +12,13 @@
 // headers and nothing else (docs/phase4-proposal.md, step P4.2), they are
 // PS2Native's (ps2n/pcsx2_layout.h, which the runtime checks against
 // PCSX2's), and the core's variables and functions are the runtime's
-// executable's, imported: each declared under PCSX2's own symbol, the name
-// its compiler gives it, which the executable exports (tests/tests.cmake).
-// cpuRegs, fpuRegs, VU0, VU1, vif0Regs and vif1Regs are references in
-// PCSX2, which a module cannot bind to an import without code that runs
-// when it is loaded; here they are macros.
+// executable's, imported, as the executable exports them
+// (tests/tests.cmake): on Windows each under PCSX2's own symbol, the name
+// its compiler gives it; on Linux, where PCSX2's build hides its symbols,
+// each under a name of PS2Native's, ps2n_pcsx2_ and PCSX2's name, which the
+// executable's linker gives it. cpuRegs, fpuRegs, VU0, VU1, vif0Regs and
+// vif1Regs are references in PCSX2, which a module cannot bind to an import
+// without code that runs when it is loaded; here they are macros.
 #pragma once
 
 #include "ps2n/pcsx2_layout.h"
@@ -42,8 +44,22 @@
 
 #else // PS2N_MODULE
 
-#if !defined(_WIN32)
-#error "A game's module is built on Windows only so far (docs/phase4-proposal.md, P4.7 for Linux)."
+#if !defined(_WIN32) && !defined(__linux__)
+#error "A game's module is built on Windows and Linux only so far."
+#endif
+
+// How the core's variables and functions are imported: PS2N_CORE_VARIABLE
+// names a variable's symbol on each platform, PS2N_CORE_ALIAS a function's
+// on Linux (on Windows a function has PCSX2's own symbol, being declared as
+// PCSX2 declares it).
+#if defined(_WIN32)
+#define PS2N_CORE_IMPORT __declspec(dllimport)
+#define PS2N_CORE_VARIABLE(windows, linux) __asm__(windows)
+#define PS2N_CORE_ALIAS(linux)
+#else
+#define PS2N_CORE_IMPORT __attribute__((visibility("default")))
+#define PS2N_CORE_VARIABLE(windows, linux) __asm__(linux)
+#define PS2N_CORE_ALIAS(linux) __asm__(linux)
 #endif
 
 // ---- types and numbers ---------------------------------------------------------------
@@ -103,15 +119,18 @@ using r128 = __m128i;
 
 // ---- the core's variables, imported ------------------------------------------------
 
-__declspec(dllimport) extern ps2n::pcsx2::cpuRegistersPack _cpuRegistersPack __asm__("?_cpuRegistersPack@@3UcpuRegistersPack@@A");
-__declspec(dllimport) extern ps2n::pcsx2::VURegs vuRegs[2] __asm__("?vuRegs@@3PAUVURegs@@A");
-__declspec(dllimport) extern uint8_t eeHw[ps2n::pcsx2::Ps2MemSize::Hardware] __asm__("?eeHw@@3PAEA");
-__declspec(dllimport) extern ps2n::pcsx2::IopVM_MemoryAllocMess* iopMem __asm__("?iopMem@@3PEAUIopVM_MemoryAllocMess@@EA");
-__declspec(dllimport) extern ps2n::pcsx2::psxRegisters psxRegs __asm__("?psxRegs@@3UpsxRegisters@@A");
-__declspec(dllimport) extern ps2n::pcsx2::Pcsx2Config EmuConfig __asm__("?EmuConfig@@3UPcsx2Config@@A");
+PS2N_CORE_IMPORT extern ps2n::pcsx2::cpuRegistersPack _cpuRegistersPack
+	PS2N_CORE_VARIABLE("?_cpuRegistersPack@@3UcpuRegistersPack@@A", "ps2n_pcsx2__cpuRegistersPack");
+PS2N_CORE_IMPORT extern ps2n::pcsx2::VURegs vuRegs[2] PS2N_CORE_VARIABLE("?vuRegs@@3PAUVURegs@@A", "ps2n_pcsx2_vuRegs");
+PS2N_CORE_IMPORT extern uint8_t eeHw[ps2n::pcsx2::Ps2MemSize::Hardware] PS2N_CORE_VARIABLE("?eeHw@@3PAEA", "ps2n_pcsx2_eeHw");
+PS2N_CORE_IMPORT extern ps2n::pcsx2::IopVM_MemoryAllocMess* iopMem
+	PS2N_CORE_VARIABLE("?iopMem@@3PEAUIopVM_MemoryAllocMess@@EA", "ps2n_pcsx2_iopMem");
+PS2N_CORE_IMPORT extern ps2n::pcsx2::psxRegisters psxRegs PS2N_CORE_VARIABLE("?psxRegs@@3UpsxRegisters@@A", "ps2n_pcsx2_psxRegs");
+PS2N_CORE_IMPORT extern ps2n::pcsx2::Pcsx2Config EmuConfig PS2N_CORE_VARIABLE("?EmuConfig@@3UPcsx2Config@@A", "ps2n_pcsx2_EmuConfig");
 namespace vtlb_private
 {
-	__declspec(dllimport) extern ps2n::pcsx2::MapData vtlbdata __asm__("?vtlbdata@vtlb_private@@3UMapData@1@A");
+	PS2N_CORE_IMPORT extern ps2n::pcsx2::MapData vtlbdata
+		PS2N_CORE_VARIABLE("?vtlbdata@vtlb_private@@3UMapData@1@A", "ps2n_pcsx2_vtlbdata");
 } // namespace vtlb_private
 
 #define cpuRegs (_cpuRegistersPack.cpuRegs)
@@ -125,25 +144,61 @@ namespace vtlb_private
 // Declared as PCSX2 declares them, so that each has PCSX2's symbol; their
 // types are the ones the runtime checks (ps2n/pcsx2_layout.h).
 
+#if defined(_WIN32)
 template <typename T>
 __declspec(dllimport) T vtlb_memRead(uint32_t mem);
 template <typename T>
 __declspec(dllimport) void vtlb_memWrite(uint32_t mem, T value);
-__declspec(dllimport) __m128i PS2N_VECTORCALL vtlb_memRead128(uint32_t mem);
-__declspec(dllimport) void PS2N_VECTORCALL vtlb_memWrite128(uint32_t mem, __m128i value);
-__declspec(dllimport) void COP0_UpdatePCCR();
-__declspec(dllimport) void COP0_DiagnosticPCCR();
-__declspec(dllimport) void WriteCP0Status(uint32_t value);
-__declspec(dllimport) void WriteCP0Config(uint32_t value);
-__declspec(dllimport) void iopEventTest();
-__declspec(dllimport) void iopTestIntc();
-__declspec(dllimport) uint8_t iopMemRead8(uint32_t mem);
-__declspec(dllimport) uint16_t iopMemRead16(uint32_t mem);
-__declspec(dllimport) uint32_t iopMemRead32(uint32_t mem);
-__declspec(dllimport) void iopMemWrite8(uint32_t mem, uint8_t value);
-__declspec(dllimport) void iopMemWrite16(uint32_t mem, uint16_t value);
-__declspec(dllimport) void iopMemWrite32(uint32_t mem, uint32_t value);
-__declspec(dllimport) void psxException(uint32_t code, uint32_t bd);
+#else
+// A template's instances cannot be given names of their own: each instance
+// compiled code uses calls the function the executable exports for it.
+namespace ps2n::pcsx2::core
+{
+	PS2N_CORE_IMPORT uint32_t vtlb_memRead32(uint32_t mem) __asm__("ps2n_pcsx2_vtlb_memRead32");
+	PS2N_CORE_IMPORT uint64_t vtlb_memRead64(uint32_t mem) __asm__("ps2n_pcsx2_vtlb_memRead64");
+	PS2N_CORE_IMPORT void vtlb_memWrite32(uint32_t mem, uint32_t value) __asm__("ps2n_pcsx2_vtlb_memWrite32");
+	PS2N_CORE_IMPORT void vtlb_memWrite64(uint32_t mem, uint64_t value) __asm__("ps2n_pcsx2_vtlb_memWrite64");
+} // namespace ps2n::pcsx2::core
+template <typename T>
+T vtlb_memRead(uint32_t mem);
+template <typename T>
+void vtlb_memWrite(uint32_t mem, T value);
+template <>
+[[gnu::always_inline]] inline uint32_t vtlb_memRead<uint32_t>(uint32_t mem)
+{
+	return ps2n::pcsx2::core::vtlb_memRead32(mem);
+}
+template <>
+[[gnu::always_inline]] inline uint64_t vtlb_memRead<uint64_t>(uint32_t mem)
+{
+	return ps2n::pcsx2::core::vtlb_memRead64(mem);
+}
+template <>
+[[gnu::always_inline]] inline void vtlb_memWrite<uint32_t>(uint32_t mem, uint32_t value)
+{
+	ps2n::pcsx2::core::vtlb_memWrite32(mem, value);
+}
+template <>
+[[gnu::always_inline]] inline void vtlb_memWrite<uint64_t>(uint32_t mem, uint64_t value)
+{
+	ps2n::pcsx2::core::vtlb_memWrite64(mem, value);
+}
+#endif
+PS2N_CORE_IMPORT __m128i PS2N_VECTORCALL vtlb_memRead128(uint32_t mem) PS2N_CORE_ALIAS("ps2n_pcsx2_vtlb_memRead128");
+PS2N_CORE_IMPORT void PS2N_VECTORCALL vtlb_memWrite128(uint32_t mem, __m128i value) PS2N_CORE_ALIAS("ps2n_pcsx2_vtlb_memWrite128");
+PS2N_CORE_IMPORT void COP0_UpdatePCCR() PS2N_CORE_ALIAS("ps2n_pcsx2_COP0_UpdatePCCR");
+PS2N_CORE_IMPORT void COP0_DiagnosticPCCR() PS2N_CORE_ALIAS("ps2n_pcsx2_COP0_DiagnosticPCCR");
+PS2N_CORE_IMPORT void WriteCP0Status(uint32_t value) PS2N_CORE_ALIAS("ps2n_pcsx2_WriteCP0Status");
+PS2N_CORE_IMPORT void WriteCP0Config(uint32_t value) PS2N_CORE_ALIAS("ps2n_pcsx2_WriteCP0Config");
+PS2N_CORE_IMPORT void iopEventTest() PS2N_CORE_ALIAS("ps2n_pcsx2_iopEventTest");
+PS2N_CORE_IMPORT void iopTestIntc() PS2N_CORE_ALIAS("ps2n_pcsx2_iopTestIntc");
+PS2N_CORE_IMPORT uint8_t iopMemRead8(uint32_t mem) PS2N_CORE_ALIAS("ps2n_pcsx2_iopMemRead8");
+PS2N_CORE_IMPORT uint16_t iopMemRead16(uint32_t mem) PS2N_CORE_ALIAS("ps2n_pcsx2_iopMemRead16");
+PS2N_CORE_IMPORT uint32_t iopMemRead32(uint32_t mem) PS2N_CORE_ALIAS("ps2n_pcsx2_iopMemRead32");
+PS2N_CORE_IMPORT void iopMemWrite8(uint32_t mem, uint8_t value) PS2N_CORE_ALIAS("ps2n_pcsx2_iopMemWrite8");
+PS2N_CORE_IMPORT void iopMemWrite16(uint32_t mem, uint16_t value) PS2N_CORE_ALIAS("ps2n_pcsx2_iopMemWrite16");
+PS2N_CORE_IMPORT void iopMemWrite32(uint32_t mem, uint32_t value) PS2N_CORE_ALIAS("ps2n_pcsx2_iopMemWrite32");
+PS2N_CORE_IMPORT void psxException(uint32_t code, uint32_t bd) PS2N_CORE_ALIAS("ps2n_pcsx2_psxException");
 
 static_assert(__is_same(decltype(vtlb_memRead<uint32_t>), ps2n::pcsx2::vtlb_memRead_t<uint32_t>));
 static_assert(__is_same(decltype(vtlb_memRead<uint64_t>), ps2n::pcsx2::vtlb_memRead_t<uint64_t>));

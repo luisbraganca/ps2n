@@ -19,6 +19,7 @@
 // --fetch-patches then fetches it as if the user had asked: for checks.
 
 #include "game_settings.h"
+#include "platform.h"
 #include "wizard_window.h"
 
 #include "common/MemorySettingsInterface.h"
@@ -96,7 +97,8 @@ int main(int argc, char* argv[])
 	kit.root = kit_root.isEmpty() ? QDir::cleanPath(here.filePath(QStringLiteral(".."))) : QDir(kit_root).absolutePath();
 	kit.runtime = kit_root.isEmpty() ? here.absolutePath() : QDir(kit.root).filePath(QStringLiteral("runtime"));
 	kit.toolchain = QDir(kit.root).filePath(QStringLiteral("toolchain"));
-	if (!QDir(kit.toolchain).exists() || !QFileInfo::exists(QDir(kit.runtime).filePath(QStringLiteral("ps2n-host.exe"))))
+	if (!QDir(kit.toolchain).exists() ||
+		!QFileInfo::exists(QDir(kit.runtime).filePath(ps2n::wizard::platform::Program(QStringLiteral("ps2n-host")))))
 	{
 		QMessageBox::critical(nullptr, QStringLiteral("PS2Native"),
 			QObject::tr("PS2Native's folder is not whole: %1 should have its runtime and its toolchain.").arg(QDir::toNativeSeparators(kit.root)));

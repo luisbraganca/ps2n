@@ -14,7 +14,7 @@ its date. Nothing here comes from a game or a BIOS but counts and times.
 | P4.4 The packaged game | Killzone and Agent Under Fire run from their folders, at the console's pace, the same runs as from the development host | **Done** (2026-11-17): a game is a folder that plays it (`make-game.ps1 -Title`), started from a launcher named after the game, which starts the runtime beside it with the folder's settings, without a console, and says why when it cannot play; the sessions written down in the folder. Killzone and Agent Under Fire, started from their launchers, played at the console's pace (50.00 frames a second in play), nothing of their code interpreted; the maintainer's four sessions of Agent Under Fire and three of Killzone's from the development host, run again from the folders, and the launchers' sessions run again by the development host, are the sessions at every fingerprint. Killzone's code needed a module to have its own stack probe (`__chkstk`), which a test of the module tree holds |
 | P4.5 The wizard | A game packaged from the disc image and the BIOS with every default accepted, without a command line | **Under way** (2026-11-17): the maintainer's word that it goes through all of PCSX2's settings, and how ([ADR 0032](adr/0032-the-wizard-goes-through-pcsx2s-settings.md)); PCSX2's own per-game settings pages work in `ps2n-wizard`, compiled unchanged, what PS2Native carries out in PCSX2's place fixed; a game's settings are a file in its folder that the runtime reads (`-packaged`), and a session played so is run again at every fingerprint; the five steps, from the disc image to a folder that plays the game, in `PS2Native.exe` at the root of the folder `kit.ps1` makes: Agent Under Fire made with every default accepted in 336 seconds, and played from its folder at the console's pace. **Done** (2026-11-18): the maintainer made a game the project had never run, Gran Turismo 3, without a command line (three settings changed, the rest accepted), which counts for the criterion ([ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)); its code, loaded from its own data, was interpreted in its first session, which wrote it down, and the folder made again from that played at the console's pace. What was left of the step is P4.8's |
 | P4.6 New code in play | A session that meets new code finds it compiled at its next start | **Criterion met** (2026-11-18): a game's folder carries its own toolchain, and when a session ends its launcher starts `ps2n-remake`, which compiles what the session met, only what changed, in the background, with an icon and a notification, for the next start ([ADR 0034](adr/0034-a-game-compiles-new-code-with-its-own-toolchain-and-says-so.md)); a fresh folder of Gran Turismo 3: what its first session interpreted (5,871 blocks of its code, 7,846 of the IOP's, 15 of VU1's, the BIOS's kernel) all compiled at the next start, the third session interpreting nothing of it; the code met outside the executables compiled in 16 parts (that compile 151 s to 27 s); the maintainer's fourth game, Jak and Daxter, played from a folder the wizard made for 39 and then 23 minutes at the console's pace, 0.17% and then 0.04% of the EE's cycles interpreted, what each session met compiled about a minute after it |
-| P4.7 Linux | On the maintainer's own Linux machine ([ADR 0004](adr/0004-proof-of-concept-environment.md)) | **Next** (2026-11-19), at the maintainer's word ([ADR 0037](adr/0037-p4-8-done-a-game-does-not-play-while-it-compiles.md)) |
+| P4.7 Linux | On the maintainer's Linux machine, a laptop with Linux Mint ([ADR 0004](adr/0004-proof-of-concept-environment.md)): a game made with the wizard from its disc image plays from its folder at the console's pace, and what a session meets for the first time is compiled in the background for its next start (the session's proposal, accepted: [ADR 0038](adr/0038-p4-7-built-and-tested-on-a-linux-inside-the-development-computer-first.md)) | **Under way** (2026-11-19), at the maintainer's word ([ADR 0037](adr/0037-p4-8-done-a-game-does-not-play-while-it-compiles.md)), built and tested first on a Linux inside this computer, WSL 2 with Ubuntu 22.04 ([ADR 0038](adr/0038-p4-7-built-and-tested-on-a-linux-inside-the-development-computer-first.md)): every test passes on Linux (534), the compiled code in the host and in shared objects of its own; the game's window an X11 one, with the notice over its picture; the launcher, the wizard and the recompile working there, and the folder for Linux put together (`scripts/linux/kit.sh`): with it, inside that Linux, Silent Hill 3 made from the maintainer's `.chd` as without PCSX2 in 123 s, played from its folder by its own launcher at the console's pace (49.72 frames a second of 50), what its first session met compiled in the background, and the next session interpreting none of the IOP's code and 0.00% of the EE's cycles |
 | P4.8 The folder for others | On a computer without PCSX2, a game made with the wizard from a `.chd` image, its patches fetched at the user's word, and the folder carrying the licence of everything in it (the session's proposal, [ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)) | **Under way** (2026-11-18), before P4.7, at the maintainer's word ([ADR 0036](adr/0036-the-folder-for-others-how-p4-8-is-done.md)): a disc in any format PCSX2 plays, read through PCSX2's own readers; the executables chosen; PCSX2's archive of patches fetched at the user's word or given; a fixed setting in a game's settings file refused; the licence of everything in the folder, Qt's made from Qt's own SBOMs. On this computer the wizard made Silent Hill 3, a game the project had never run, from the maintainer's `.chd`, as without PCSX2, its patches fetched, in 155 s, once a function the recompiler made of a megabyte of its data was cut into pieces. **Done** (2026-11-18): on the maintainer's Windows 10 computer, which has no PCSX2, Silent Hill 3 made with the wizard from its `.chd`, PCSX2's patches fetched at the button, and played from its folder for four sessions: "Everything went flawlessly" ([ADR 0037](adr/0037-p4-8-done-a-game-does-not-play-while-it-compiles.md)). At the maintainer's word with it, a game does not play while it compiles: started while its own recompile compiles, its launcher waits for it, in a window that says so, and then plays with what it compiled |
 
 ## How to run it
@@ -1380,3 +1380,192 @@ the same lock, but lets go of it only when it ends, ten seconds after its
 last notification, which a game started meanwhile waits for too. The
 folders made before P4.6 do not compile by themselves, and keep their
 launcher.
+
+## P4.7 Linux
+
+Pass criterion: on the maintainer's Linux machine, a laptop with Linux Mint
+and, as the maintainer thinks, NVIDIA's GTX 1660, a game made with the
+wizard from its disc image plays from its folder at the console's pace, and
+what a session meets for the first time is compiled in the background for
+its next start (the session's proposal, accepted: "3. Yes"). Built and
+tested first on a Linux inside this computer, WSL 2 with Ubuntu 22.04 (ADR
+0038: "1. Sure."). Linux is reported as working only after the
+maintainer's run (ADR 0004).
+
+### The Linux inside this computer (2026-11-19)
+
+- **WSL 3.0.5 with Ubuntu 22.04.5**, which the maintainer installed:
+  20 processors and 31 GB inside it.
+- **PCSX2's build packages** as PCSX2's own Linux build installs them
+  (`.github/workflows/linux_build_qt.yml`), and **PCSX2's dependencies**
+  built by its own script as its CI builds them (`BUILD_FFMPEG=1`): Qt
+  6.12.0, FFmpeg 9.0.1, SDL 3.4.20, shaderc and the rest, in about 8.5
+  minutes. Qt 6.12 asks for CMake 3.25 or later, where Ubuntu 22.04 has
+  3.22: Kitware's own CMake 3.31.12, its SHA-256 checked. **LLVM's own
+  22.1.3** for Linux, the version the Windows builds and the wizard's
+  toolchain use (ADR 0030), its SHA-256 the one GitHub publishes for it.
+  For the tests, Mesa's Vulkan drivers; for a crash, `gdb`.
+- **The repository** inside it is a clone of the Windows one, with git's
+  line endings: Git for Windows gives the working tree CRLF ones, with which
+  PCSX2's shell scripts do not run. The working tree's changes are carried
+  over before each build, only the files whose content changed written.
+
+### Built and tested on Linux (2026-11-19)
+
+- **The build-time tools** and their unit tests: built with no warning,
+  both suites pass.
+- **The runtime**, with `scripts/linux/build.sh` (rewritten: its options are
+  `build.ps1`'s): 918 steps, no error, at the first build.
+- **Every test passes on Linux**: 534 in the usual tree (2 skipped, as on
+  Windows without the self-test's captures), in 110 s on half the
+  processors; 534 in the module tree, the compiled code in shared objects of
+  its own (Windows' 535th, the stack probe a module defines for itself, is
+  Windows' alone: Linux asks for no such probe). Windows still passes all
+  of its own after the changes, 534 and 535.
+
+What it took, Linux's alone:
+
+- **A module of compiled code is a shared object** (`ps2n-game.so` and the
+  three others), compiled freestanding with clang (`-nostdlibinc
+  -ffreestanding`, every symbol hidden but its entry), linked with no C
+  library; it needs no library at all. The host loads it with `dlopen`,
+  bound whole as it is loaded. PCSX2's build hides every symbol of its own
+  on Linux (`-fvisibility=hidden`), which a hidden symbol's own name cannot
+  be exported under: the host's linker gives the 26 of PCSX2's variables
+  and functions that compiled code reaches names of PS2Native's,
+  `ps2n_pcsx2_` and PCSX2's name (`--defsym`), which the executable
+  exports with the runtime's (`ps2n/pcsx2.h`, `tests/tests.cmake`). Every
+  symbol the game's module asks for, the host exports.
+- **A run without a window has a window never shown where its renderer is
+  OpenGL.** PCSX2 picks OpenGL for its null and software renderers where
+  the first Vulkan device is a software one (llvmpipe, as under WSL) or
+  Intel's, and its OpenGL on Linux makes no context without an X11 or
+  Wayland window (`window::CreateHidden`).
+- **Every run with OpenGL ended in a crash**, after its last word: PCSX2
+  unloads its graphics library when it closes the renderer, before its GS
+  thread ends, and libglvnd's `libEGL` (and the drivers it loads under WSL)
+  had left destructors of that thread's own data behind, which glibc called
+  in code no longer there. The host keeps every library loaded by the time
+  the machine is set up (`RTLD_NODELETE`), and has PCSX2 choose its graphics
+  device on the main thread, which ends with the process.
+- **Two runtimes setting their machines up at once collided** (6 of 534
+  tests the first time): PCSX2 makes the GS's memory under one name for
+  every process (`/GS.mem`). The host gives that name its process's number,
+  as PCSX2's other shared memory has (`host/shm_names.cpp`); serializing
+  the machines' setting up instead took the tests from 114 s to 390 s.
+- **A difference from microVU on Linux**, found by the self-test in 3 of
+  6,000 random micro programs: where a program ends at a branch in a
+  branch's delay slot (an "evil jump" with the E bit), TPC is the branch's
+  target on Linux and the clip flag on Windows, by which register each
+  system's calling convention gives microVU's `arg1regd`
+  (`runtime/vu_interp.cpp`).
+- **Linux tells the cases of file names apart**: the tests link the BIOS's
+  ROM1, ROM2 and EROM under the lower-case extension PCSX2 looks for (the
+  maintainer's are `.ROM1` and `.ROM2`).
+- **The software renderer's picture** is put together and read back on the
+  graphics device, whose arithmetic is the platform's: under WSL 46 of its
+  143,360 pixels came out one step from Windows', stock PCSX2's and
+  PS2Native's alike. On Linux each configuration's frame is compared with
+  stock PCSX2's on the same computer, in the same suite.
+- **The game's window** is an X11 one (under Wayland through XWayland, as
+  PCSX2's own Linux build draws): the same keys, full screen through the
+  window manager (Alt+Enter, F11), the notice over the picture a window
+  inside the game's, its text Xft's (loaded when the first is shown; X's
+  "fixed" font where there is no Xft). Under WSLg it showed a test program's
+  picture on Vulkan and on OpenGL, and the notice over it, photographed.
+- **The launcher, the wizard and the recompile build on Linux**: the
+  launcher (`wizard/launcher_main.cpp`) Qt's windows where Windows'
+  (`host/launcher.cpp`) has Windows' own; the wizard with Qt's private
+  platform module, as PCSX2's own Linux build. What the wizard and the
+  recompile do on Linux (the toolchain's programs, the modules' names, the
+  folder) is next, then the folder made for Linux (`kit.sh`).
+
+### The notice over a full-screen game (2026-11-19)
+
+The maintainer asked whether the notice over the picture (ADR 0035) had
+stopped working: Jak and Daxter had slowed down, and closing it the
+recompile's notification said it was compiling, but no notice had shown.
+Found ([ADR 0039](adr/0039-the-notice-over-a-full-screen-game-exclusive-full-screen-disallowed.md)):
+
+- **The runtime now reports how near the notice's line a run came** (in how
+  many half seconds a processor's work interpreted was over it, the first,
+  the most in one, and how often it was shown). The maintainer's session of
+  12:14 (109,508 frames), run again without a window from its folder's own
+  modules, the session at every one of its 2,190 fingerprints: over the
+  line in 12 of 3,649 half seconds, the first at frame 2,640, at most
+  10.70% of the EE's cycles interpreted in one. The notice was due.
+- **Over a game covering the screen, it reached the screen only at a
+  session's start.** Its window was there and shown in every check. The
+  maintainer watched a scratch copy of Jak and Daxter's folder, its own
+  runtime started by its own launcher, interpreting from the start: shown at
+  3 s and at 63 s, only the first seen; with PCSX2's
+  `ExclusiveFullscreenControl = 0`, both. PCSX2's default lets the graphics
+  driver take such a game over (Vulkan's full-screen exclusive), which
+  NVIDIA's does once it has run a moment.
+- **Exclusive full screen is disallowed by default on Windows**, and the
+  game folders on this computer got the line in their settings files.
+- The session's own work on the same computer, Linux test suites on all 20
+  threads, had slowed the maintainer's earlier session: Linux builds and
+  tests now use half the processors, Windows' run at below-normal priority.
+
+### The wizard, the recompile and the folder on Linux (2026-11-19)
+
+- **What the wizard and the recompile do on Linux** (`wizard/platform.h`):
+  they compile a module with the toolchain's `clang`, with the flags the
+  development build compiles one with (`-O3 -fPIC -msse4.1 -nostdlibinc
+  -ffreestanding -fvisibility=hidden`), and link it with the same `clang`,
+  which runs `ld.lld` beside it, with no library and no import library
+  (`ps2n-game.so` and the three others, whose undefined symbols are the
+  runtime's, bound when it loads them). Programs have no `.exe`, and the
+  folder's text files Linux's line ends and separators.
+- **A BIOS image on another file system than the game's folder** (a hard
+  link cannot cross one) is linked into the folder symbolically, its ROM1,
+  ROM2 and EROM under the lower-case extensions PCSX2 looks for; Windows,
+  which lets no user make a symbolic link, still reads such a BIOS where it
+  is.
+- **PCSX2's archive of patches** is taken from a PCSX2 installed from a
+  distribution's packages or from Flathub, where there is one (an AppImage
+  keeps its own inside itself), and otherwise fetched or given, as on
+  Windows.
+- **The folder** (`scripts/linux/kit.sh`, `kit.ps1`'s counterpart, in
+  `build/kit-linux`): `PS2Native` at its root, the launcher, which starts
+  the wizard; the runtime, with Qt's windows on X11 (on Wayland through
+  XWayland, as the game's window) and the libraries its programs need,
+  PCSX2's dependencies and 57 of Ubuntu 22.04's: every one but those
+  AppImages leave to the system (pkg2appimage's list, which linuxdeploy
+  follows, with which PCSX2 makes its own Linux release on the same Ubuntu
+  22.04), from libcurl and OpenSSL to the X11 utilities Qt's plugin needs,
+  each library finding the others beside it (`$ORIGIN`, set with
+  `patchelf`); what is left to the system is glibc 2.35 or later, libstdc++,
+  the graphics driver, X11, fonts and ALSA. The toolchain: LLVM's own
+  `clang` and `ld.lld`, their symbol tables stripped (100 MB of 470;
+  nothing reads them), with the compiler's headers and the libraries
+  `ld.lld` needs (libxml2 and ICU). The licences as `kit.ps1` writes them,
+  Qt's notice made from the SBOMs of PCSX2's Linux build of Qt, with the
+  texts from Qt's source; and each Ubuntu package's own copyright file,
+  with where Ubuntu keeps the source of that very version. The runtime is
+  154 MB and the toolchain 401 MB, which a game's folder copies (ADR 0034);
+  `--archive` packs the folder into a `.tar.xz`, which keeps who may run a
+  program where a copy through a stick formatted for Windows does not.
+- **A game made with it inside that Linux**, in an environment of nothing
+  but the folder (no library path, the system's programs alone), on half the
+  processors: Silent Hill 3 from the maintainer's `.chd`, as on a computer
+  without PCSX2, its patches fetched: in 123 seconds, 116 of them compiling
+  77 files, 10 at a time. Played from its folder by its own launcher (a
+  minute, muted, in a small window without a renderer): 49.72 frames a
+  second, the console's 50.00; its IOP code all interpreted (7,784 blocks,
+  none compiled yet) and 2.23% of the EE's cycles (the BIOS's kernel), the
+  notice due all the time and shown twice. When the session ended, the
+  launcher started the folder's recompile, which compiled what it met (128
+  files) in two minutes; the next start took its modules, and the same
+  minute interpreted none of the IOP's code and 0.00% of the EE's cycles,
+  at 49.93 frames a second.
+- **Started while its recompile compiled** (the game module's 84 objects
+  made again), the launcher waited for it in its window ("Compiling what
+  your last session met for the first time", photographed under WSLg), two
+  minutes, and then played with what it compiled. Having shown that window,
+  it crashed as it ended, after the session: Qt's application, left to go
+  with the program's static data, went after Qt's own (`gdb`:
+  `~QGuiApplication` from the exit handlers). It goes before `main` returns
+  now (`wizard/launcher_main.cpp`), and the same start ends as a session
+  does.

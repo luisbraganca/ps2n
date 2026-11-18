@@ -4,6 +4,7 @@
 
 #include "common/WindowInfo.h"
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -11,7 +12,9 @@
 
 // The window a game is played in (ps2n-host -window). There is one. It is made
 // on the main thread, which also serves its messages; the core's renderer
-// draws into it from the GS thread.
+// draws into it from the GS thread. A Win32 window on Windows, an X11 window
+// on Linux (under Wayland, through XWayland), as PCSX2's own Linux build
+// draws into.
 namespace ps2n::host::window
 {
 	// Keys, as the core's input bindings name them ("Keyboard/Return"). A code
@@ -69,8 +72,11 @@ namespace ps2n::host::window
 	/// The message by which another program asks for the picture on display,
 	/// numbered by wParam (Windows: PostMessage to the window of class
 	/// PS2NativeGame). The runner writes it beside the session's last frame,
-	/// as shot-<number>.png.
+	/// as shot-<number>.png. On Linux the same request is a client message
+	/// of type kShotAtom sent to the window (of class PS2Native), its number
+	/// in the first long of its data.
 	constexpr uint32_t kShotMessage = 0x8000 + 0x50; // WM_APP + 0x50
+	constexpr const char* kShotAtom = "PS2NATIVE_SHOT";
 
 	/// Whether this build has window code for the platform it was built for.
 	bool Available();
@@ -81,6 +87,16 @@ namespace ps2n::host::window
 	/// goes back to is the largest that fits, at the same proportions. Main
 	/// thread.
 	bool Create(const std::string& title, uint32_t width, uint32_t height, const Listener& listener);
+
+	/// A window that is never shown, for a run without one whose renderer can
+	/// draw only into a window: PCSX2's OpenGL on Linux makes no context
+	/// without one. False where there is no display to make it on. Main
+	/// thread.
+	bool CreateHidden();
+
+	/// Serves the window's events on the main thread until `done` is set
+	/// (Linux; on Windows the runner serves the thread's messages itself).
+	void ServeUntil(const std::atomic<bool>& done);
 
 	/// Main thread, after the machine has stopped.
 	void Destroy();

@@ -15,6 +15,7 @@
 //   ps2n-remake [<the game's folder>]      by default the folder it is in
 
 #include "pipeline.h"
+#include "platform.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDateTime>
@@ -88,7 +89,8 @@ namespace
 		return true;
 	}
 
-	// The program's own icon, PS2Native's (assets/ps2n.rc).
+	// The program's own icon, PS2Native's: on Windows the executable's
+	// (assets/ps2n.rc), elsewhere a resource of Qt's (wizard/targets.cmake).
 	QIcon OwnIcon()
 	{
 #ifdef _WIN32
@@ -99,8 +101,10 @@ namespace
 			DestroyIcon(icon);
 			return result;
 		}
-#endif
 		return QIcon();
+#else
+		return QIcon(QStringLiteral(":/ps2native/icon.png"));
+#endif
 	}
 
 	// When a session last wrote down what it met: a round begun before then
@@ -206,8 +210,8 @@ int main(int argc, char* argv[])
 			else
 			{
 				tray.showMessage(recipe.title,
-					QStringLiteral("What your session met for the first time could not be compiled; work\\remake.log in the "
-								   "game's folder says why."),
+					QStringLiteral("What your session met for the first time could not be compiled; %1 in the game's folder says why.")
+						.arg(QDir::toNativeSeparators(QStringLiteral("work/remake.log"))),
 					QSystemTrayIcon::Warning, 10000);
 			}
 		}
@@ -242,8 +246,10 @@ int main(int argc, char* argv[])
 		}
 		// Ready for the launcher, which takes the newest such folder.
 		QSaveFile ready(QDir(modules).filePath(QStringLiteral("ready")));
-		if (!ready.open(QIODevice::WriteOnly) ||
-			ready.write("ps2n-game.dll\nps2n-bios.dll\nps2n-vu.dll\nps2n-iop.dll\n") < 0 || !ready.commit())
+		QString names;
+		for (const char* kind : {"game", "bios", "vu", "iop"})
+			names += ps2n::wizard::platform::Module(QString::fromLatin1(kind)) + QLatin1Char('\n');
+		if (!ready.open(QIODevice::WriteOnly) || ready.write(names.toUtf8()) < 0 || !ready.commit())
 		{
 			// Not for the launcher to take: the next round compiles it all again.
 			QFile::remove(work.filePath(QStringLiteral("compiled-from.txt")));

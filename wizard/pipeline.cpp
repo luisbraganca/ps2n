@@ -12,6 +12,8 @@
 #include <QtCore/QSaveFile>
 #include <QtCore/QThread>
 
+#include "platform.h"
+
 #include <algorithm>
 #include <set>
 
@@ -19,18 +21,6 @@ namespace ps2n::wizard
 {
 	namespace
 	{
-		// What a module is compiled with: the development build's flags
-		// (tests/tests.cmake, ps2n_compile_freestanding), PS2Native's headers and
-		// the compiler's own, nothing else.
-		QStringList CompileFlags(const QString& toolchain)
-		{
-			return {QStringLiteral("/nologo"), QStringLiteral("/c"), QStringLiteral("/X"), QStringLiteral("/clang:-ffreestanding"),
-				QStringLiteral("/Zl"), QStringLiteral("/GS-"), QStringLiteral("/O2"), QStringLiteral("/Ob2"),
-				QStringLiteral("-std:c++20"), QStringLiteral("-msse4.1"), QStringLiteral("/DNDEBUG"), QStringLiteral("/DPS2N_MODULE"),
-				QStringLiteral("-I") + QDir::toNativeSeparators(QDir(toolchain).filePath(QStringLiteral("include"))),
-				QStringLiteral("-Werror=global-constructors"), QStringLiteral("-Werror=exit-time-destructors")};
-		}
-
 		// An executable's file name on the disc, "ACTION.UK" of "DATA/ACTION.UK".
 		QString Leaf(const QString& path)
 		{
@@ -99,9 +89,9 @@ namespace ps2n::wizard
 	{
 	}
 
-	QString Pipeline::tool(const char* name) const
+	QString Pipeline::tool(const QString& name) const
 	{
-		return QDir::toNativeSeparators(QDir(m_in.toolchain).filePath(QStringLiteral("bin/") + QString::fromLatin1(name)));
+		return QDir::toNativeSeparators(QDir(m_in.toolchain).filePath(QStringLiteral("bin/") + name));
 	}
 
 	QString Pipeline::fingerprint() const
@@ -122,8 +112,9 @@ namespace ps2n::wizard
 
 	QString Pipeline::toolchainStamp() const
 	{
-		QStringList files = {QStringLiteral("bin/ps2n-recomp.exe"), QStringLiteral("bin/clang-cl.exe"), QStringLiteral("bin/lld-link.exe"),
-			QStringLiteral("lib/ps2n-host.lib"), QStringLiteral("src/module_entry.cpp")};
+		QStringList files = {QStringLiteral("bin/") + platform::Program(QStringLiteral("ps2n-recomp")),
+			QStringLiteral("bin/") + platform::kCompiler, QStringLiteral("bin/") + platform::kLinker};
+		files += platform::kToolchainFiles;
 		const QDir toolchain(m_in.toolchain);
 		QDirIterator headers(toolchain.filePath(QStringLiteral("include")), QDir::Files, QDirIterator::Subdirectories);
 		while (headers.hasNext())
@@ -153,7 +144,7 @@ namespace ps2n::wizard
 		m_program_ids.clear();
 		m_have_vu = m_have_iop = false;
 		m_jobs = std::max(1, QThread::idealThreadCount());
-		for (const char* name : {"ps2n-recomp.exe", "clang-cl.exe", "lld-link.exe"})
+		for (const QString& name : {platform::Program(QStringLiteral("ps2n-recomp")), platform::kCompiler, platform::kLinker})
 		{
 			if (!QFileInfo::exists(tool(name)))
 			{
@@ -229,7 +220,7 @@ namespace ps2n::wizard
 				if (QFileInfo::exists(mine) || will_exist.count(mine))
 					arguments.push_back(mine);
 				arguments.push_back(from);
-				jobs.push_back({tool("ps2n-recomp.exe"), arguments, tr("adding %1 of %2").arg(name, session)});
+				jobs.push_back({tool(platform::Program(QStringLiteral("ps2n-recomp"))), arguments, tr("adding %1 of %2").arg(name, session)});
 				will_exist.insert(mine);
 			}
 		}
@@ -260,7 +251,7 @@ namespace ps2n::wizard
 		// The runtime reads the disc, through PCSX2's own readers (host/disc.h).
 		QStringList arguments = {QStringLiteral("-disc-extract"), QDir::toNativeSeparators(m_in.image), QDir::toNativeSeparators(disc)};
 		arguments += m_in.executables;
-		runInTurn({{QDir(m_in.runtime).filePath(QStringLiteral("ps2n-host.exe")), arguments,
+		runInTurn({{QDir(m_in.runtime).filePath(platform::Program(QStringLiteral("ps2n-host"))), arguments,
 					  tr("extract %1").arg(m_in.executables.join(QStringLiteral(", ")))}},
 			[this]() { translate(); });
 	}
@@ -300,7 +291,7 @@ namespace ps2n::wizard
 		const QString iop_capture = captured("iop-capture");
 
 		std::deque<Job> jobs;
-		const QString recomp = tool("ps2n-recomp.exe");
+		const QString recomp = tool(platform::Program(QStringLiteral("ps2n-recomp")));
 		const QString boot = QDir(disc).filePath(Leaf(m_in.executables.front()));
 
 		// As the development build does (tests/tests.cmake): the boot executable
@@ -383,7 +374,7 @@ namespace ps2n::wizard
 			QStringList all = sources;
 			all += {QDir(gen).filePath(QStringLiteral("registry_%1.cpp").arg(kind)), entry};
 			for (const QString& source : all)
-				m_compiles.push_back({kind, source, QDir(dir).filePath(QFileInfo(source).completeBaseName() + QStringLiteral(".obj"))});
+				m_compiles.push_back({kind, source, QDir(dir).filePath(QFileInfo(source).completeBaseName() + platform::kObject)});
 		}
 		// The objects from now on are this toolchain's; a game's own recompile
 		// compiles only what is newer than its object.
@@ -419,10 +410,8 @@ namespace ps2n::wizard
 			QProcess* p = new QProcess(this);
 			m_compile_processes.push_back(p);
 			p->setProcessChannelMode(QProcess::MergedChannels);
-			p->setProgram(tool("clang-cl.exe"));
-			QStringList arguments = CompileFlags(m_in.toolchain);
-			arguments += {QStringLiteral("/Fo") + QDir::toNativeSeparators(c.object), QDir::toNativeSeparators(c.source)};
-			p->setArguments(arguments);
+			p->setProgram(tool(platform::kCompiler));
+			p->setArguments(platform::CompileArguments(m_in.toolchain, c.object, c.source));
 			m_compiles_running++;
 			connect(p, &QProcess::finished, this, [this, p, c](int code, QProcess::ExitStatus status) {
 				m_compiles_running--;
@@ -442,7 +431,7 @@ namespace ps2n::wizard
 					emit line(tr("%1 did not compile:").arg(QFileInfo(c.source).fileName()));
 					if (!output.isEmpty())
 						emit line(output);
-					fail(tr("%1 did not compile (clang-cl exit code %2).").arg(QFileInfo(c.source).fileName()).arg(code));
+					fail(tr("%1 did not compile (%2 exit code %3).").arg(QFileInfo(c.source).fileName(), platform::kCompiler).arg(code));
 					return;
 				}
 				m_compiles_done++;
@@ -484,14 +473,10 @@ namespace ps2n::wizard
 					file.write((QStringLiteral("\"") + QDir::toNativeSeparators(c.object) + QStringLiteral("\"\n")).toUtf8());
 			}
 			file.close();
-			jobs.push_back({tool("lld-link.exe"),
-				{QStringLiteral("/nologo"), QStringLiteral("/DLL"), QStringLiteral("/NOENTRY"), QStringLiteral("/NODEFAULTLIB"),
-					QStringLiteral("/MACHINE:X64"), QStringLiteral("/OPT:REF"), QStringLiteral("/OPT:ICF"),
-					QStringLiteral("/OUT:") + QDir::toNativeSeparators(QDir(modules).filePath(QStringLiteral("ps2n-%1.dll").arg(kind))),
-					QStringLiteral("/IMPLIB:") + QDir::toNativeSeparators(QDir(obj).filePath(QStringLiteral("ps2n-%1.lib").arg(kind))),
-					QStringLiteral("@") + QDir::toNativeSeparators(rsp),
-					QDir::toNativeSeparators(QDir(m_in.toolchain).filePath(QStringLiteral("lib/ps2n-host.lib")))},
-				tr("link ps2n-%1.dll").arg(kind)});
+			jobs.push_back({tool(platform::LinkProgram()),
+				platform::LinkArguments(m_in.toolchain, kind, QDir(modules).filePath(platform::Module(kind)), rsp,
+					QDir(obj).filePath(QStringLiteral("ps2n-%1.lib").arg(kind))),
+				tr("link %1").arg(platform::Module(kind))});
 		}
 		runInTurn(std::move(jobs), [this]() {
 			// What these modules were compiled from, for a recompile of the
