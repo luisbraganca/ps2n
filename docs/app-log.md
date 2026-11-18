@@ -881,10 +881,75 @@ with the controller script into the first mission: the console's pace,
 code and micro code interpreted (no session had met any of it yet), which
 the session wrote down for the next compile.
 
+### The maintainer's run (2026-11-18)
+
+The maintainer made a game the project had never run, *Gran Turismo 3:
+A-Spec* (`SCES-50294`, PAL), with `PS2Native.exe` from the folder
+`kit.ps1` makes, without a command line: its disc image and the BIOS
+chosen, three settings changed (the aspect ratio to 16:9, and the patch
+groups "No-Interlacing" and "Adjustable units" beside the "60 FPS" group
+the wizard enables), the rest accepted. The recompile took 7 seconds, and
+"Play it now" played the game from its folder: 8,678 frames in 182.2 s,
+47.59 a second where the console shows 60 (the "60 FPS" patch). In the
+maintainer's words, "The game is all slowed down".
+
+Why. The disc's one executable, the program it boots (`SCES_502.94`,
+39,647 instructions at `01000000`), is a loader: the game's code is loaded
+by it from the game's data while it runs, and is on the disc as no
+executable, so nothing had compiled it. The session interpreted 8.36
+billion instructions of it (25,727 blocks), and, as a game's first session
+does, all of the IOP's code it met (8,485 blocks) and VU1's micro code
+(283 blocks); and 1.27 billion instructions of the BIOS's kernel (510
+block starts), which a folder's BIOS module, compiled with no capture, has
+not got. The session wrote down what it interpreted, the game's code with
+its words (`capture.toml`, as G8's code in kernel memory is written down),
+but not what it interpreted of the BIOS: a session in a game's folder
+wrote no BIOS capture, although the compile of a folder takes one
+(`bios-capture.toml`). It does now (`host/main.cpp`, `-sessions`).
+
+The game made again from what the session wrote down (`make-game.ps1
+-Captures`, into a folder of its own: 111 s, the game's module 15.2 MB
+from 3.1 MB), then with the BIOS's capture as well, which the session run
+again wrote (151 s), and the session run again from each folder without a
+window, on Vulkan at three times the console's resolution:
+
+| The folder | The session's 8,678 frames | Interpreted: the game's code | The IOP's blocks | VU1's blocks | The BIOS's kernel |
+|---|---:|---:|---:|---:|---:|
+| As the wizard made it | 113.6 s | 8.36 billion instructions | 8,485 | 283 | 1.27 billion instructions |
+| Made again with the session's captures | 36.2 s | none | none | none | 1.27 billion instructions |
+| And the BIOS's capture | 28.5 s | none | none | none | 51 instructions, at boot |
+
+Each run is the session at every one of its 173 fingerprints, and ends on
+the same picture and the same sound. At the console's pace those frames
+take 144.6 s; the folder made again runs them in a fifth of that. Of the
+second make's 151 s, 146 are one file: the game's code found outside its
+executable, 28.7 MB of C++ (`game_outside.cpp`), which the recompiler
+writes whole where it writes an executable's code in parts; every other
+file was compiled within 10 s.
+
+After this run, at the maintainer's word, the aspect ratio's default is
+16:9 for every game (ADR 0032).
+
+The maintainer then made the game again in the wizard, from the same disc
+image (its settings and its session kept, and the BIOS's capture that the
+session run again wrote put among the folder's captures), and played it
+again: 13,581 frames in 227.5 s, 59.69 a second where the console shows
+60, its start and loading included ("Looks good"). It interpreted 546
+blocks of the game's code the first session had not met (3.3 million
+instructions), one block of IOP code and one of VU1's micro code, and 51
+instructions of the BIOS, at boot, and wrote them down for the next make,
+the BIOS's among them now (`bios-capture.toml`).
+
 ### What is left of the step
 
-- **The maintainer's own run**: the criterion, a game packaged with every
-  default accepted without a command line, by someone clicking through it.
+- **The criterion's run**: the maintainer's run (above) made a game
+  without a command line, with three settings changed; the criterion has
+  every default accepted.
+- **Code a game loads from its data** (Gran Turismo 3's) is compiled only
+  once a session has met it: such a game's first session is slow, and its
+  folder has to be made again in the wizard; P4.6 is to compile it by
+  itself. The recompiler could write that code in parts, as it does an
+  executable's.
 - **Disc images** other than `.iso` files of 2048-byte sectors (`.bin` and
   `.cue`, `.chd`, `.cso`): PCSX2 recognizes them, PS2Native's reader of a
   disc's files does not read them yet.

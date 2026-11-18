@@ -368,8 +368,9 @@ namespace
 			"                     own in <dir>, named after the time it began (-record\n"
 			"                     there), with the memory cards and the NVRAM it began with\n"
 			"                     beside it, and what it had to interpret (-capture,\n"
-			"                     -vu-capture, -iop-capture there, for the providers that\n"
-			"                     are PS2Native's): what a game's folder does.\n"
+			"                     -bios-capture, -vu-capture, -iop-capture there, for the\n"
+			"                     providers that are PS2Native's): what a game's folder\n"
+			"                     does.\n"
 			"  -title <text>      With -window: the window's title, whatever the game is.\n"
 			"  -settings <file>   Read options from <file>, one to a line (a line beginning\n"
 			"                     with # is left out), in the place of this one; %GAME% in\n"
@@ -1235,6 +1236,11 @@ namespace
 			o.make_session_folder = true;
 			if (o.capture_path.empty() && o.ee == EEProvider::Ps2n)
 				o.capture_path = Path::Combine(o.record_dir, "capture.toml");
+			// What it interpreted of the BIOS too, which the next compile of the
+			// game's folder compiles into its BIOS module (wizard/pipeline.cpp,
+			// make-game.ps1: "bios-capture").
+			if (o.bios_capture_path.empty() && o.ee == EEProvider::Ps2n)
+				o.bios_capture_path = Path::Combine(o.record_dir, "bios-capture.toml");
 			if (o.vu_capture_path.empty() && o.vu_ps2n != 0)
 				o.vu_capture_path = Path::Combine(o.record_dir, "vu-capture.toml");
 			if (o.iop_capture_path.empty() && o.iop_ps2n)

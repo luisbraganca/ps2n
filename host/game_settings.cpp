@@ -31,6 +31,11 @@ namespace ps2n::game
 		si.SetBoolValue("EmuCore", "EnableWideScreenPatches", true);
 		si.SetStringValue("EmuCore/GS", "FMVAspectRatioSwitch", "4:3");
 
+		// The picture 16:9 for every game, at the maintainer's word (2026-11-18, ADR 0032), in the place of
+		// PCSX2's "Auto 4:3/3:2", which only a patch that asks for 16:9 makes wide
+		// (ApplyPatchSettingOverrides in Patch.cpp): a game drawn wide without one is shown wide too.
+		si.SetStringValue("EmuCore/GS", "AspectRatio", "16:9");
+
 		si.SetIntValue("EmuCore/GS", "OsdMessagesPos", 0);
 		si.SetIntValue("EmuCore/GS", "OsdPerformancePos", 0);
 		for (const char* name : {"OsdShowSpeed", "OsdShowFPS", "OsdShowVPS", "OsdShowCPU", "OsdShowGPU", "OsdShowGPUDebug",

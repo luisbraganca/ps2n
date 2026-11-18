@@ -20,8 +20,8 @@ Make a game: start PS2Native.exe, and follow its five steps.
      recognizes it with PCSX2's database, and finds the executables on it.
   2. The BIOS: an image dumped from your own console.
   3. The settings: PCSX2's own settings for the game, each at PCSX2's default
-     but for PS2Native's (Vulkan, three times the console's resolution, the
-     widescreen and frame-rate patches). What PS2Native carries out in PCSX2's
+     but for PS2Native's (Vulkan, three times the console's resolution, a 16:9
+     picture, the widescreen and frame-rate patches). What PS2Native carries out in PCSX2's
      place, the processors and the time they count, is shown but fixed.
   4. The recompile: a few minutes, every processor at work.
   5. The game's folder: games\<name>, which plays it.
@@ -43,6 +43,13 @@ time; when it could not play the game, <name>.exe says why. The folder can be
 moved or copied whole; work\, the generated code, can be deleted. It holds code
 translated from your game and your BIOS: it is yours alone, not to be given to
 anyone.
+
+A game's first session can be slower than the console wherever it meets code
+no compile has seen: the vector units' and the I/O processor's code, and the
+code a game loads from its own data rather than from an executable on the disc
+(Gran Turismo 3 does). The session writes that code down. Make the game again
+with PS2Native.exe, from the same disc image, and it is compiled; the folder
+keeps its settings, its memory cards and its sessions.
 
 In the window: the keyboard and the first controller play; F11 or Alt+Enter
 covers the screen; closing the window ends the session.

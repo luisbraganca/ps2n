@@ -81,3 +81,20 @@ As read:
 The settings chosen are fixed in the game's folder when it is packaged, as
 the brief has it; the runtime's own (ADR 0011, ADR 0012, VU1's thread)
 still apply over them.
+
+## The aspect ratio (2026-11-18)
+
+Making a third game with the wizard, *Gran Turismo 3: A-Spec*, whose patch
+file has no widescreen group, the maintainer set its aspect ratio to 16:9
+(the game's settings file the wizard wrote: `AspectRatio = 16:9`), and
+said: "Also an fyi, this setting on the wizard should always be as
+widescreen (16:9) overriding PCSX2's defaults."
+
+Read as: "this setting" is the aspect ratio (Graphics, Display, "Aspect
+Ratio"); no picture came with the message, and it is the setting the
+maintainer had changed so. Its default, for every game, is "Widescreen
+(16:9)" in the place of PCSX2's "Auto Standard (4:3/3:2 Progressive)",
+which only a patch that asks for 16:9 makes wide; it can be changed for a
+game, as every default can. The films stay at 4:3 (G15). A game drawn at
+4:3 with no widescreen patch is shown stretched unless its aspect ratio is
+changed in the wizard.

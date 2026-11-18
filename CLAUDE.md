@@ -81,8 +81,16 @@ but fixed; a game's settings are a file in its folder that the runtime
 reads (`ps2n-host -packaged`); the five steps make a game from its disc
 image into a folder that plays it, `PS2Native.exe` at the root of the
 folder `kit.ps1` makes (Agent Under Fire in 336 seconds, every default
-accepted, played from its folder at the console's pace). The maintainer's
-own run of the step's criterion is next.**
+accepted, played from its folder at the console's pace). On 2026-11-18
+the maintainer made a game the project had never run with it, *Gran
+Turismo 3* (`SCES-50294`), without a command line: its boot executable is
+a loader, the game's code is loaded from its data, so the first session
+interpreted it and was slow (47.6 frames a second of 60); the folder made
+again from what the session wrote down runs that session in a fifth of the
+console's time, nothing interpreted, the session at every fingerprint, and
+the maintainer played it from it at the console's pace (59.69 of 60). A
+session in a folder now writes the BIOS's capture too, and the aspect
+ratio is 16:9 by default (ADR 0032).**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -576,7 +584,10 @@ Decisions:
   it unchanged, PS2Native's own otherwise; PCSX2's program settings,
   hotkeys and RetroAchievements left out. The maintainer's words on
   2026-11-17 ("the wizard should go through all the PCSX2 settings"), and
-  four recommendations accepted.
+  four recommendations accepted. On 2026-11-18, at the maintainer's word
+  ("this setting on the wizard should always be as widescreen (16:9)"), the
+  aspect ratio's default is 16:9 for every game, not PCSX2's "Auto
+  4:3/3:2" (`ps2n::game::SetDefaults`).
 
 ## Layout, build and test
 

@@ -349,8 +349,8 @@ namespace ps2n::wizard
 			{
 				setTitle(tr("The settings"));
 				setSubTitle(tr("PCSX2's own settings for this game, fixed in its folder when it is made. Each starts at PCSX2's "
-							   "default, but for PS2Native's: Vulkan, three times the console's resolution, the widescreen "
-							   "and frame-rate patches. They can all be accepted as they are."));
+							   "default, but for PS2Native's: Vulkan, three times the console's resolution, a 16:9 picture, "
+							   "the widescreen and frame-rate patches. They can all be accepted as they are."));
 				m_layout = new QVBoxLayout(this);
 				auto* row = new QHBoxLayout;
 				m_note = new QLabel(this);
