@@ -133,7 +133,9 @@ int main(int argc, char* argv[])
 
 	// One at a time in a folder. One started by a session that ends while
 	// another compiles leaves at once; the one compiling takes what that
-	// session met in a round after.
+	// session met in a round after. While it holds the lock the game does not
+	// start: its launcher waits for it (host/launcher.cpp, docs/adr/0037), so
+	// it lets go of it as soon as its modules are ready.
 	QLockFile lock(work.filePath(QStringLiteral("remake.lock")));
 	lock.setStaleLockTime(0);
 	if (!lock.tryLock(0))
@@ -191,6 +193,8 @@ int main(int argc, char* argv[])
 	// Two notifications (docs/adr/0035): one as soon as the session is found to
 	// have met new code, another, different, at the end.
 	const auto end = [&](int code, bool tell) {
+		// Done: a game started now plays without waiting for the notification.
+		lock.unlock();
 		if (tell && tray.isVisible())
 		{
 			if (code == 0)

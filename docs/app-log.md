@@ -14,8 +14,8 @@ its date. Nothing here comes from a game or a BIOS but counts and times.
 | P4.4 The packaged game | Killzone and Agent Under Fire run from their folders, at the console's pace, the same runs as from the development host | **Done** (2026-11-17): a game is a folder that plays it (`make-game.ps1 -Title`), started from a launcher named after the game, which starts the runtime beside it with the folder's settings, without a console, and says why when it cannot play; the sessions written down in the folder. Killzone and Agent Under Fire, started from their launchers, played at the console's pace (50.00 frames a second in play), nothing of their code interpreted; the maintainer's four sessions of Agent Under Fire and three of Killzone's from the development host, run again from the folders, and the launchers' sessions run again by the development host, are the sessions at every fingerprint. Killzone's code needed a module to have its own stack probe (`__chkstk`), which a test of the module tree holds |
 | P4.5 The wizard | A game packaged from the disc image and the BIOS with every default accepted, without a command line | **Under way** (2026-11-17): the maintainer's word that it goes through all of PCSX2's settings, and how ([ADR 0032](adr/0032-the-wizard-goes-through-pcsx2s-settings.md)); PCSX2's own per-game settings pages work in `ps2n-wizard`, compiled unchanged, what PS2Native carries out in PCSX2's place fixed; a game's settings are a file in its folder that the runtime reads (`-packaged`), and a session played so is run again at every fingerprint; the five steps, from the disc image to a folder that plays the game, in `PS2Native.exe` at the root of the folder `kit.ps1` makes: Agent Under Fire made with every default accepted in 336 seconds, and played from its folder at the console's pace. **Done** (2026-11-18): the maintainer made a game the project had never run, Gran Turismo 3, without a command line (three settings changed, the rest accepted), which counts for the criterion ([ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)); its code, loaded from its own data, was interpreted in its first session, which wrote it down, and the folder made again from that played at the console's pace. What was left of the step is P4.8's |
 | P4.6 New code in play | A session that meets new code finds it compiled at its next start | **Criterion met** (2026-11-18): a game's folder carries its own toolchain, and when a session ends its launcher starts `ps2n-remake`, which compiles what the session met, only what changed, in the background, with an icon and a notification, for the next start ([ADR 0034](adr/0034-a-game-compiles-new-code-with-its-own-toolchain-and-says-so.md)); a fresh folder of Gran Turismo 3: what its first session interpreted (5,871 blocks of its code, 7,846 of the IOP's, 15 of VU1's, the BIOS's kernel) all compiled at the next start, the third session interpreting nothing of it; the code met outside the executables compiled in 16 parts (that compile 151 s to 27 s); the maintainer's fourth game, Jak and Daxter, played from a folder the wizard made for 39 and then 23 minutes at the console's pace, 0.17% and then 0.04% of the EE's cycles interpreted, what each session met compiled about a minute after it |
-| P4.7 Linux | On the maintainer's own Linux machine ([ADR 0004](adr/0004-proof-of-concept-environment.md)) | |
-| P4.8 The folder for others | On a computer without PCSX2, a game made with the wizard from a `.chd` image, its patches fetched at the user's word, and the folder carrying the licence of everything in it (the session's proposal, [ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)) | **Under way** (2026-11-18), before P4.7, at the maintainer's word ([ADR 0036](adr/0036-the-folder-for-others-how-p4-8-is-done.md)): a disc in any format PCSX2 plays, read through PCSX2's own readers; the executables chosen; PCSX2's archive of patches fetched at the user's word or given; a fixed setting in a game's settings file refused; the licence of everything in the folder, Qt's made from Qt's own SBOMs. On this computer the wizard made Silent Hill 3, a game the project had never run, from the maintainer's `.chd`, as without PCSX2, its patches fetched, in 155 s, once a function the recompiler made of a megabyte of its data was cut into pieces. The criterion's run, on a computer without PCSX2, is the maintainer's |
+| P4.7 Linux | On the maintainer's own Linux machine ([ADR 0004](adr/0004-proof-of-concept-environment.md)) | **Next** (2026-11-19), at the maintainer's word ([ADR 0037](adr/0037-p4-8-done-a-game-does-not-play-while-it-compiles.md)) |
+| P4.8 The folder for others | On a computer without PCSX2, a game made with the wizard from a `.chd` image, its patches fetched at the user's word, and the folder carrying the licence of everything in it (the session's proposal, [ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)) | **Under way** (2026-11-18), before P4.7, at the maintainer's word ([ADR 0036](adr/0036-the-folder-for-others-how-p4-8-is-done.md)): a disc in any format PCSX2 plays, read through PCSX2's own readers; the executables chosen; PCSX2's archive of patches fetched at the user's word or given; a fixed setting in a game's settings file refused; the licence of everything in the folder, Qt's made from Qt's own SBOMs. On this computer the wizard made Silent Hill 3, a game the project had never run, from the maintainer's `.chd`, as without PCSX2, its patches fetched, in 155 s, once a function the recompiler made of a megabyte of its data was cut into pieces. **Done** (2026-11-18): on the maintainer's Windows 10 computer, which has no PCSX2, Silent Hill 3 made with the wizard from its `.chd`, PCSX2's patches fetched at the button, and played from its folder for four sessions: "Everything went flawlessly" ([ADR 0037](adr/0037-p4-8-done-a-game-does-not-play-while-it-compiles.md)). At the maintainer's word with it, a game does not play while it compiles: started while its own recompile compiles, its launcher waits for it, in a window that says so, and then plays with what it compiled |
 
 ## How to run it
 
@@ -1257,14 +1257,126 @@ the maintainer to decide otherwise ([ADR 0036](adr/0036-the-folder-for-others-ho
   among the recompiler's, the reader of a disc's files without exceptions
   among the core's).
 
-### What is left for the criterion
+### The maintainer's run (2026-11-18)
 
-- **The run itself, on a computer without PCSX2**: the folder for others
-  made with `kit.ps1 -Out` from a tree committed and pushed, Silent Hill 3
-  made in it from the `.chd`, its patches fetched at the button, and
-  `licences\` looked over. The maintainer's to run, on the Windows 10
-  computer of P4.3's run, which has no PCSX2 ("It doesn't have PCSX2").
+The maintainer ran the criterion the same evening on their Windows 10
+computer, P4.3's, which has no PCSX2 ("It doesn't have PCSX2"): the folder
+for others made from `fbb2e77`, on a drive of its own there, with the
+`.chd` and the BIOS beside it. They brought the folder back to this
+computer (`build\kit-for-others`) and said: "Everything went flawlessly,
+however I think running the game while compilation is running in the
+background shouldn't be allowed." From the folder's own files, by the
+laptop's clock:
+
+- **The wizard.** PCSX2's archive of patches fetched at the settings step's
+  button at 23:12 (`patches\patches.zip`, 2.18 MB); the game's own settings
+  file enables the groups "50 FPS" and "Widescreen 16:9", and the EE
+  overclock the first asks for, nothing else. The game's executable taken
+  from the `.chd` at 23:12:36, and the folder written at 23:19:56: about
+  seven minutes and twenty seconds for the recompile (149 s on this
+  computer).
+- **Four sessions** from the game's folder, each written down in its
+  `sessions` with what it met for the first time (and each a few places in
+  the BIOS at boot, 656 the first):
+
+| Session | Began | Frames | Ended | What it met for the first time |
+|---|---|---:|---|---|
+| 1 | 23:20:04 | 3,407 | 23:22:00 | 28 places in the game's code; 9,526 blocks of the IOP's code; 31 blocks of VU0's micro code and 281 of VU1's |
+| 2 | 23:28:30 | 1,891 | 23:29:14 | 112 blocks of the IOP's code |
+| 3 | 23:30:18 | 4,582 | 23:31:54 | 5 places in the game's code; 186 blocks of the IOP's code; 24 blocks of VU0's micro code and 23 of VU1's |
+| 4 | 23:31:57 | 136 | 23:32:06 | nothing |
+
+- **The recompiles.** The first session, which met the most, played its
+  3,407 frames (68 s of the console's time) in the 116 s from its start to
+  its end. The modules the game runs now were finished at 23:29:56 and put
+  in place at the third session's start. The recompile after the third
+  session (`work\remake.log`) translated the game's code in 28 s and
+  compiled 116 of 128 files, eight at a time, ready at 23:38:06, 6 minutes
+  13 seconds after it began; its modules wait in `work\` for the next
+  start. The reports of the earlier sessions and recompiles were written
+  over by the later ones (`last-run.log` and `remake.log` are each the
+  last one's).
+- **The fourth session** began three seconds after the third had ended,
+  while that recompile was under way, and was closed after 136 frames: 3.2
+  s in the window, at 41.41 frames a second where the console shows 50,
+  nothing of the game's code interpreted.
+
+### A game does not play while it compiles (2026-11-18)
+
+At the maintainer's word ([ADR 0037](adr/0037-p4-8-done-a-game-does-not-play-while-it-compiles.md)),
+a game's launcher (`host/launcher.cpp`) no longer starts the game while
+the folder's own recompile compiles. It waits for it in a window of its own
+(Windows' task dialog: "Compiling what your last session met for the first
+time", a moving bar, Cancel), and plays as soon as the compile is done,
+with what was compiled put in place; cancelled, it does not start the
+game, and the compile goes on. The recompile (`wizard/remake_main.cpp`)
+now lets go of its lock, `work\remake.lock`, as soon as its modules are
+ready or could not be made, before the notification it then shows for ten
+seconds. The launcher counts as compiling a recompile that holds the lock,
+or one started less than 20 seconds before that runs still, which may not
+have taken it yet, found among the programs running by its file (the
+folder's `ps2n-remake.exe`). It shows its window only after a second and a
+half of waiting, which a recompile that finds nothing new does not reach.
+The window is drawn at the screen's scale; the launcher looks up Windows'
+function for it (the common controls of version 6, which its manifest now
+names) and says in a message box where it cannot show it, so that it starts
+on any Windows all the same.
+
+Checked on this computer, twice, the second time with the window's text as
+it is now, in the Silent Hill 3 folder made here with the new launcher and
+recompile put in it, each session 120 frames through the launcher, muted,
+in a window of 1280 by 720 (the figures are the second time's):
+
+- **Started before the recompile has taken its lock.** The recompile
+  started and held suspended, the launcher 54 ms after it: three seconds
+  later its window was up and the runtime not started. The recompile let
+  go on, the window stayed until the compile was done, 17 s later, and the
+  runtime started 19 ms after it closed.
+- **Cancelled.** The launcher started two seconds after a recompile: its
+  window up 1.7 s later, closed 1.4 s after that; the launcher ended with
+  code 0, no runtime started, no session written, and the compile went on
+  to its end.
+- **A recompile that finds nothing new**, the launcher 13 ms after it: no
+  window; the runtime started 230 ms after the launcher, against 117 ms
+  with no recompile at all, one wait of 100 ms more (such a recompile ends
+  50 to 60 ms after it starts).
+- **No recompile**: the runtime started 117 ms after the launcher, no
+  window.
+
+The test suites were not run again: neither program is part of what they
+run.
+
+### The step done (2026-11-18)
+
+P4.8's criterion is met with the maintainer's run (ADR 0037). What it
+leaves:
+
+- **The folder for others** is to be made again with `kit.ps1 -Out` from a
+  tree committed and pushed with the launcher that waits, before it goes to
+  anyone.
 - **Microsoft's terms** for its C++ runtime are online
   (`https://aka.ms/vs/18/redistribution`, as Visual Studio's own
   `Redist.txt` names them): what they ask of whoever gives the folder to
   others is the maintainer's to read.
+
+### The maintainer's answers (2026-11-19)
+
+Asked four things the next morning, each with the session's
+recommendation, the maintainer answered "1. Yes 2. Yes 3. Yes 4. Ok": the
+work committed and pushed; the game waits for the compile and then plays,
+as above, rather than being refused or played at once with the compile
+stopped (the maintainer's since, ADR 0037); the new launcher put into the
+folders of the maintainer's games made before it; and P4.7, Linux, next.
+
+The new launcher went into the two such folders that compile what their
+sessions meet themselves, Killzone's and Jak and Daxter's, the old ones
+kept in `build\launchers-before-adr-0037`. Started in each with the
+folder's `work\remake.lock` held as `ps2n-remake` holds it, it showed its
+window 1.7 s later and started nothing; closed, it ended with code 0, no
+session written. Their recompile stays as it was: the new `ps2n-remake.exe`
+takes the executables from the disc through the folder's runtime
+(`-disc-extract`, P4.8), which their runtimes are older than. Theirs takes
+the same lock, but lets go of it only when it ends, ten seconds after its
+last notification, which a game started meanwhile waits for too. The
+folders made before P4.6 do not compile by themselves, and keep their
+launcher.

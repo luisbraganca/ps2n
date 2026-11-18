@@ -119,8 +119,15 @@ made a fifth game the project had never run, *Silent Hill 3*
 (`SLES-51434`), from the maintainer's `.chd`, as on a computer without
 PCSX2, its patches fetched, in 155 seconds, once the recompiler cut into
 pieces a function it had made of a megabyte of the game's data (its
-executable one segment, data with code). The criterion's run, on a
-computer without PCSX2, is the maintainer's.**
+executable one segment, data with code). The maintainer ran the criterion
+the same evening on their Windows 10 computer, which has no PCSX2: Silent
+Hill 3 made there with the wizard from its `.chd`, its patches fetched at
+the button, four sessions played ("Everything went flawlessly"); P4.8 is
+done (ADR 0037). With it, at the maintainer's word, a game does not play
+while it compiles: started while its own recompile compiles, its launcher
+waits for the compile, in a window that says so, and then plays with it,
+which the maintainer confirmed the next day. P4.7, Linux, the step left,
+is next, at the maintainer's word ("4. Ok", 2026-11-19).**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -672,6 +679,20 @@ Decisions:
   where each source is; and, found making Silent Hill 3 (one segment, data
   with code, its last function a megabyte), a function cut into pieces of
   about 16,384 instructions, which changes no other game's analysis.
+- [ADR 0037](docs/adr/0037-p4-8-done-a-game-does-not-play-while-it-compiles.md):
+  P4.8 is done: the maintainer's run of 2026-11-18 on their Windows 10
+  computer, which has no PCSX2, counts for its criterion ("Everything went
+  flawlessly"). And, in their words, "running the game while compilation
+  is running in the background shouldn't be allowed". Started while the
+  folder's recompile compiles, the launcher waits for it in a window that
+  says so (Cancel leaves the game unstarted, the compile going on), then
+  plays with what it compiled: the session's choice, which the maintainer
+  made theirs on 2026-11-19 ("2. Yes"; with it "4. Ok", P4.7 next). The
+  session's choices, for the maintainer to decide otherwise: compiling is
+  while `ps2n-remake` holds
+  `work\remake.lock`, which it now lets go of as soon as its modules are
+  ready, or for 20 s after one is started, before it takes it; the window
+  shows after a second and a half.
 
 ## Layout, build and test
 
@@ -708,7 +729,8 @@ host/                     ps2n-host: console frontend for the PCSX2 core, the te
                           instruction semantics, of the VU provider and of the IOP provider; the watches on the
                           core's providers: sync_trace, vu_report, iop_report); with -window, where a game
                           is played (window.cpp: Windows only so far); a game's launcher (launcher.cpp:
-                          the program a game's folder is started from, which starts the runtime beside it);
+                          the program a game's folder is started from, which starts the runtime beside it,
+                          never while the game's own recompile compiles: ADR 0037);
                           and a disc image's files read through PCSX2's own readers of every format it plays
                           (disc.cpp: -disc-executables, -disc-extract; step P4.8, ADR 0036)
 wizard/                   ps2n-wizard, the application a game is made with (Phase 4, step P4.5; ADR 0032):
@@ -871,7 +893,8 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   their sources stay) into `work\next-<time>`, with an icon in the
   notification area and a notification at the end (`work\remake.log` says
   what it did); the launcher puts those modules in place at the next
-  start. For checks,
+  start. Started while the recompile compiles, the launcher waits for it,
+  in a window that says so, and then plays (ADR 0037). For checks,
   `ps2n-wizard --kit build\kit --image <iso> --bios <bin> --shots <folder>
   --auto [--until <step>] [--without-pcsx2 [--fetch-patches]]` fills the
   first steps in, saves each step (the settings, each category) as a

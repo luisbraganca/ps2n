@@ -60,8 +60,10 @@ code a game loads from its own data rather than from an executable on the disc
 corner of its picture says so for a few seconds. The session writes that code
 down, and when you close the game's window the game compiles it itself, in the
 background, with the toolchain in its folder: a notification says so at once,
-and another when it is done. From its next start the game has it. A session
-that met nothing new compiles nothing and shows nothing. Making the game again
+and another when it is done. From its next start the game has it. Started
+again before then, the game does not play beside the compile: it says so, and
+starts by itself when the compile is done. A session that met nothing new
+compiles nothing and shows nothing. Making the game again
 with PS2Native.exe from the same disc image compiles it too, and keeps the
 folder's settings, its memory cards and its sessions.
 
