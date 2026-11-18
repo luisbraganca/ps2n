@@ -100,7 +100,14 @@ the maintainer's choice every game's folder carries its own toolchain (ADR
 compiles what the session met, only what changed, in the background, with
 an icon and a notification, for the next start; in a fresh folder of Gran
 Turismo 3 everything its first session interpreted was compiled at the
-next start.**
+next start. At the maintainer's word, having tried it (ADR 0035), a
+notification says at once that it compiles and another when it is done,
+and a notice over the picture says when the game runs code met for the
+first time. The maintainer then played a fourth game made with the
+wizard, *Jak and Daxter* (`SCES-50361`), from its folder: 39 minutes and
+then 23 at the console's pace, 0.17% and then 0.04% of the EE's cycles
+interpreted, what each session met compiled about a minute after it. P4.8,
+the folder for others, is next, before P4.7, at the maintainer's word.**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first

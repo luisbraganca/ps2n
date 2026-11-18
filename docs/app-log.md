@@ -13,9 +13,9 @@ its date. Nothing here comes from a game or a BIOS but counts and times.
 | P4.3 The shipped toolchain | A game compiled and run on a computer with nothing else installed (a fresh Windows user, without Visual Studio) | **Done** (2026-11-17): the toolchain is LLVM's own 22.1.3 ([ADR 0030](adr/0030-the-wizards-compiler-is-llvms-own-release.md)), whose code is the code the development builds make, byte for byte; a folder of 254 MB (`scripts\windows\kit.ps1`) and one command in it (`make-game.ps1`) compile Agent Under Fire from its disc image and the BIOS (101 seconds here); on the maintainer's Windows 10 laptop, without Visual Studio, in about 8 minutes into the same code, byte for byte, and the game played there for 15 minutes within 3% of the console's pace, a run this computer replays at every fingerprint. The run found the session record missing two things (the patches as applied, the BIOS's ROM images), put right |
 | P4.4 The packaged game | Killzone and Agent Under Fire run from their folders, at the console's pace, the same runs as from the development host | **Done** (2026-11-17): a game is a folder that plays it (`make-game.ps1 -Title`), started from a launcher named after the game, which starts the runtime beside it with the folder's settings, without a console, and says why when it cannot play; the sessions written down in the folder. Killzone and Agent Under Fire, started from their launchers, played at the console's pace (50.00 frames a second in play), nothing of their code interpreted; the maintainer's four sessions of Agent Under Fire and three of Killzone's from the development host, run again from the folders, and the launchers' sessions run again by the development host, are the sessions at every fingerprint. Killzone's code needed a module to have its own stack probe (`__chkstk`), which a test of the module tree holds |
 | P4.5 The wizard | A game packaged from the disc image and the BIOS with every default accepted, without a command line | **Under way** (2026-11-17): the maintainer's word that it goes through all of PCSX2's settings, and how ([ADR 0032](adr/0032-the-wizard-goes-through-pcsx2s-settings.md)); PCSX2's own per-game settings pages work in `ps2n-wizard`, compiled unchanged, what PS2Native carries out in PCSX2's place fixed; a game's settings are a file in its folder that the runtime reads (`-packaged`), and a session played so is run again at every fingerprint; the five steps, from the disc image to a folder that plays the game, in `PS2Native.exe` at the root of the folder `kit.ps1` makes: Agent Under Fire made with every default accepted in 336 seconds, and played from its folder at the console's pace. **Done** (2026-11-18): the maintainer made a game the project had never run, Gran Turismo 3, without a command line (three settings changed, the rest accepted), which counts for the criterion ([ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)); its code, loaded from its own data, was interpreted in its first session, which wrote it down, and the folder made again from that played at the console's pace. What was left of the step is P4.8's |
-| P4.6 New code in play | A session that meets new code finds it compiled at its next start | **Criterion met** (2026-11-18): a game's folder carries its own toolchain, and when a session ends its launcher starts `ps2n-remake`, which compiles what the session met, only what changed, in the background, with an icon and a notification, for the next start ([ADR 0034](adr/0034-a-game-compiles-new-code-with-its-own-toolchain-and-says-so.md)); a fresh folder of Gran Turismo 3: what its first session interpreted (5,871 blocks of its code, 7,846 of the IOP's, 15 of VU1's, the BIOS's kernel) all compiled at the next start, the third session interpreting nothing of it; the code met outside the executables compiled in 16 parts (that compile 151 s to 27 s) |
+| P4.6 New code in play | A session that meets new code finds it compiled at its next start | **Criterion met** (2026-11-18): a game's folder carries its own toolchain, and when a session ends its launcher starts `ps2n-remake`, which compiles what the session met, only what changed, in the background, with an icon and a notification, for the next start ([ADR 0034](adr/0034-a-game-compiles-new-code-with-its-own-toolchain-and-says-so.md)); a fresh folder of Gran Turismo 3: what its first session interpreted (5,871 blocks of its code, 7,846 of the IOP's, 15 of VU1's, the BIOS's kernel) all compiled at the next start, the third session interpreting nothing of it; the code met outside the executables compiled in 16 parts (that compile 151 s to 27 s); the maintainer's fourth game, Jak and Daxter, played from a folder the wizard made for 39 and then 23 minutes at the console's pace, 0.17% and then 0.04% of the EE's cycles interpreted, what each session met compiled about a minute after it |
 | P4.7 Linux | On the maintainer's own Linux machine ([ADR 0004](adr/0004-proof-of-concept-environment.md)) | |
-| P4.8 The folder for others | On a computer without PCSX2, a game made with the wizard from a `.chd` image, its patches fetched at the user's word, and the folder carrying the licence of everything in it (the session's proposal, [ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)) | |
+| P4.8 The folder for others | On a computer without PCSX2, a game made with the wizard from a `.chd` image, its patches fetched at the user's word, and the folder carrying the licence of everything in it (the session's proposal, [ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)) | **Next** (2026-11-18), before P4.7, at the maintainer's word |
 
 ## How to run it
 
@@ -1105,3 +1105,33 @@ later; the window closed, the recompile knew there was new code 0.4
 seconds after the launcher had ended, and its first notification was on
 the screen a second later; the second 11 seconds after, when the compile
 of 128 files was done. Both photographed.
+
+### The maintainer's run with Jak and Daxter (2026-11-18)
+
+The maintainer made a fourth game the project had never run, *Jak and
+Daxter: The Precursor Legacy* (`SCES-50361`, PAL), with `PS2Native.exe`,
+and played three sessions from its folder around noon (about 11 minutes
+together); at 14:29 made it again in the wizard from the same disc image,
+with the kit that has the notice (its sessions kept), and played a session
+of 20 seconds and two long ones from its launcher, with the patch groups
+"Widescreen 16:9", "No-Interlacing" and "NTSC Mode". Like Gran Turismo 3,
+it runs code it loads from its data, which no executable on the disc
+holds. In the maintainer's words, "Looks good" and "I tested with Jak and
+Daxter". From the folder's own logs (`last-run.log`, `work\remake.log`):
+
+| | The first long session | The second |
+|---|---:|---:|
+| Its modules | compiled from what the sessions before it met | the recompile's after the first |
+| In the window | 141,248 frames in 2,358.1 s: 59.89 a second, where the console shows 59.93 | 82,638 frames in 1,380.5 s: 59.86 a second |
+| The EE's cycles interpreted | 0.17%: 886 million instructions, none in the executable, all but 51 (the BIOS's, at boot) of code the executable does not hold | 0.04%: 142 million instructions, likewise |
+| The IOP's blocks interpreted | 112 of 8,985 | 53 of 9,018 |
+| VU1's blocks interpreted | 17 | 24 |
+| VU0's blocks interpreted | none | none |
+| The recompile after it | new code known within a second of the session's end; 51 of 128 files compiled; ready 58 s after it began | likewise; 51 of 128 files; 63 s |
+
+The first recompile's modules were put in place at the next start, the
+second long session's; the second's wait, ready, for the game's next start.
+
+Asked what next, the session recommended P4.8, the folder for others,
+before P4.7, Linux, which needs the maintainer's Linux machine for every
+run; the maintainer answered "Yep".
