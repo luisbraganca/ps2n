@@ -8,8 +8,10 @@ The folder (build\kit unless -Out says otherwise) holds:
 
   runtime\     the runtime, built here once: ps2n-host.exe from a tree built with -Module on, the
                libraries it uses (PCSX2's, from deps; Microsoft's C++ runtime, from Visual Studio's
-               redistributable files, ADR 0031) and PCSX2's resources; and ps2n-launcher.exe, which a
-               game's folder holds under the game's name
+               redistributable files, ADR 0031) and PCSX2's resources; ps2n-launcher.exe, which a
+               game's folder holds under the game's name; the wizard (PS2Native.exe at the root starts
+               it) and ps2n-remake, with which a game compiles new code itself (ADR 0034), with Qt. A
+               game's folder gets all of it but the wizard, and a copy of the toolchain
   toolchain\   what compiles a game's modules: LLVM's own clang-cl and lld-link (22.1.3, the version
                the development builds use; fetched from LLVM's release into deps\llvm-22.1.3 when
                not there yet, its SHA-256 checked) with the compiler's headers; ps2n-recomp;
@@ -39,8 +41,10 @@ if (-not ((Test-Path $cache) -and (Select-String -LiteralPath $cache -Pattern '^
 }
 $hostExe = Join-Path $build 'ps2n\bin\ps2n-host.exe'
 $launcherExe = Join-Path $build 'ps2n\bin\ps2n-launcher.exe'
-# The wizard (P4.5), where the tree builds it (build.ps1 -Wizard on).
+# The wizard (P4.5), where the tree builds it (build.ps1 -Wizard on), and what a game compiles what its
+# sessions meet with itself (P4.6, docs\adr\0034), built with it.
 $wizardExe = Join-Path $build 'ps2n\bin\ps2n-wizard.exe'
+$remakeExe = Join-Path $build 'ps2n\bin\ps2n-remake.exe'
 $implib = Join-Path $build 'ps2n-host.lib'
 $recomp = Join-Path $root 'build\tools-windows\bin\ps2n-recomp.exe'
 foreach ($needed in $hostExe, $launcherExe, $implib, $recomp) { if (-not (Test-Path $needed)) { throw "Build first: $needed is missing." } }
@@ -130,12 +134,15 @@ foreach ($dll in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
 }
 
 # The wizard beside the runtime, whose libraries and resources it shares, with Qt's own (from PCSX2's
-# dependency package): its libraries, and the plugins it loads, under qt\plugins (qt.conf says where). A
-# game's folder has none of it (scripts\windows\kit\make-game.ps1, wizard/package.cpp). PS2Native.exe
-# in the folder's root, the launcher, starts it (host/launcher.cpp).
+# dependency package): its libraries, and the plugins it loads, under qt\plugins (qt.conf says where); and
+# ps2n-remake, with which a game compiles what its sessions meet for the first time itself (docs\adr\0034).
+# A game's folder has all of it but the wizard (scripts\windows\kit\make-game.ps1, wizard/package.cpp), and
+# a copy of the toolchain. PS2Native.exe in the folder's root, the launcher, starts the wizard
+# (host/launcher.cpp).
 Remove-Item -LiteralPath (Join-Path $kit 'PS2Native.exe') -ErrorAction SilentlyContinue
 if (Test-Path $wizardExe) {
-    Copy-Item -LiteralPath $wizardExe -Destination $runtime
+    if (-not (Test-Path $remakeExe)) { throw "Build first: $remakeExe is missing (build.ps1 -BuildDir $BuildDir)." }
+    Copy-Item -LiteralPath $wizardExe, $remakeExe -Destination $runtime
     $plugins = Join-Path $root 'deps\windows-x64\deps\plugins'
     $pluginFiles = @('platforms\qwindows.dll', 'styles\qmodernwindowsstyle.dll', 'imageformats\qsvg.dll', 'imageformats\qico.dll',
         'iconengines\qsvgicon.dll')
@@ -144,13 +151,12 @@ if (Test-Path $wizardExe) {
         New-Item -ItemType Directory -Force $to | Out-Null
         Copy-Item -LiteralPath (Join-Path $plugins $plugin) -Destination $to
     }
-    # The libraries the wizard and its plugins import that the runtime does not: Qt's, and theirs.
-    $wizardOnly = Copy-Imports (@($wizardExe) + @($pluginFiles | ForEach-Object { Join-Path $plugins $_ }))
+    # The libraries the wizard, ps2n-remake and the plugins import that the runtime does not: Qt's, and theirs.
+    $null = Copy-Imports (@($wizardExe, $remakeExe) + @($pluginFiles | ForEach-Object { Join-Path $plugins $_ }))
     [IO.File]::WriteAllLines((Join-Path $runtime 'qt.conf'), [string[]]@('[Paths]', 'Plugins = qt/plugins'))
     # What of the runtime folder only the wizard needs, for a game's folder to leave out (wizard/package.cpp,
     # make-game.ps1): one path to a line, from the runtime folder.
-    [IO.File]::WriteAllLines((Join-Path $runtime 'wizard-files.txt'),
-        [string[]](@('wizard-files.txt', 'ps2n-wizard.exe', 'qt.conf', 'qt') + @($wizardOnly | Where-Object { $_ })))
+    [IO.File]::WriteAllLines((Join-Path $runtime 'wizard-files.txt'), [string[]]@('wizard-files.txt', 'ps2n-wizard.exe'))
     Copy-Item -LiteralPath $launcherExe -Destination (Join-Path $kit 'PS2Native.exe')
 }
 else {

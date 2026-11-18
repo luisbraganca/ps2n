@@ -16,6 +16,13 @@
 // The same program is the folder kit.ps1 puts together's PS2Native.exe: where
 // there is no settings.txt beside it but the wizard is in the runtime folder
 // beside it, it starts the wizard (docs/phase4-proposal.md, step P4.5).
+//
+// And a game compiles what its sessions meet for the first time itself (step
+// P4.6, docs/adr/0034): when a session has ended, the launcher starts the
+// folder's ps2n-remake.exe (wizard/remake_main.cpp) at low priority, which
+// compiles it, when there is anything new, into work\next-<time>; and at the
+// game's next start, before the runtime loads them, it puts those modules in
+// place.
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -23,7 +30,9 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#include <algorithm>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -83,6 +92,81 @@ namespace
 		MessageBoxW(nullptr, text.c_str(), L"PS2Native", MB_OK | MB_ICONERROR);
 	}
 
+	// A folder of files, and it.
+	void RemoveFolder(const std::wstring& folder)
+	{
+		WIN32_FIND_DATAW found = {};
+		const HANDLE find = FindFirstFileW((folder + L"\\*").c_str(), &found);
+		if (find != INVALID_HANDLE_VALUE)
+		{
+			do
+			{
+				if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+					DeleteFileW((folder + L"\\" + found.cFileName).c_str());
+			} while (FindNextFileW(find, &found));
+			FindClose(find);
+		}
+		RemoveDirectoryW(folder.c_str());
+	}
+
+	// The modules a recompile of the game's own (ps2n-remake) has finished
+	// since the game last started. Each of its rounds links them into a folder
+	// of its own, work\next-<time>, and writes "ready" there last. The newest
+	// ready one is put in place before the runtime loads them, and every ready
+	// one is taken away, an older one having less than the newer. Where a
+	// module cannot be replaced (the game is running beside), the rest is left
+	// for the next start.
+	void TakeNewModules(const std::wstring& folder)
+	{
+		const std::wstring work = folder + L"work\\";
+		std::vector<std::wstring> ready;
+		WIN32_FIND_DATAW found = {};
+		const HANDLE find = FindFirstFileW((work + L"next-*").c_str(), &found);
+		if (find == INVALID_HANDLE_VALUE)
+			return;
+		do
+		{
+			if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+				GetFileAttributesW((work + found.cFileName + L"\\ready").c_str()) != INVALID_FILE_ATTRIBUTES)
+				ready.push_back(found.cFileName);
+		} while (FindNextFileW(find, &found));
+		FindClose(find);
+		if (ready.empty())
+			return;
+		std::sort(ready.begin(), ready.end());
+		const std::wstring newest = work + ready.back() + L"\\";
+		for (const wchar_t* module : {L"ps2n-game.dll", L"ps2n-bios.dll", L"ps2n-vu.dll", L"ps2n-iop.dll"})
+		{
+			const std::wstring from = newest + module;
+			// (Not there: put in place at a start that could not finish.)
+			if (GetFileAttributesW(from.c_str()) != INVALID_FILE_ATTRIBUTES &&
+				!MoveFileExW(from.c_str(), (folder + module).c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED))
+				return;
+		}
+		for (const std::wstring& name : ready)
+			RemoveFolder(work + name);
+	}
+
+	// What the session met for the first time, compiled in the background
+	// for the game's next start; ps2n-remake does nothing, and shows nothing,
+	// when the session met nothing new.
+	void StartRemake(const std::wstring& folder)
+	{
+		const std::wstring remake = folder + L"ps2n-remake.exe";
+		if (GetFileAttributesW(remake.c_str()) == INVALID_FILE_ATTRIBUTES)
+			return;
+		std::wstring command = Quoted(remake);
+		STARTUPINFOW startup = {};
+		startup.cb = sizeof(startup);
+		PROCESS_INFORMATION process = {};
+		if (CreateProcessW(remake.c_str(), command.data(), nullptr, nullptr, FALSE, BELOW_NORMAL_PRIORITY_CLASS, nullptr,
+				folder.c_str(), &startup, &process))
+		{
+			CloseHandle(process.hThread);
+			CloseHandle(process.hProcess);
+		}
+	}
+
 	// What the runtime said of itself: its last few lines that begin with
 	// "ps2n-host:" (the help it prints after an option it does not take, and
 	// the core's own messages, are left to the log), or, where it said nothing
@@ -138,6 +222,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 		CloseHandle(process.hProcess);
 		return 0;
 	}
+
+	TakeNewModules(folder);
 
 	const std::wstring host = folder + L"ps2n-host.exe";
 	std::wstring command = Quoted(host) + L" -settings " + Quoted(folder + L"settings.txt");
@@ -206,6 +292,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 	{
 		Say(L"The game could not be played. What the runtime said (all of it is in last-run.log in the game's folder):\n\n" +
 			Widened(WhatItSaid(output)));
+	}
+	else if (code == 0 || code == 2 || code == 3)
+	{
+		StartRemake(folder);
 	}
 	return static_cast<int>(code);
 }

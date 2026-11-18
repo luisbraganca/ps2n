@@ -9,6 +9,12 @@
 // linked with its lld-link into the game's four modules. Each program is run
 // as a process of its own, one after another but for the compiles, so that
 // the window stays awake, and what each says when it fails is passed on.
+//
+// The same recompile is a game's own, when its sessions met new code (step
+// P4.6, docs/adr/0034; remake_main.cpp): then it keeps what the last compile
+// left and compiles only what changed since, and does nothing at all when the
+// captures are those the modules were compiled from (work/compiled-from.txt,
+// which every compile that ends well writes).
 
 #pragma once
 
@@ -25,11 +31,13 @@ namespace ps2n::wizard
 {
 	struct PipelineInput
 	{
-		QString toolchain; // the kit's toolchain folder: bin, include, lib, src
+		QString toolchain; // the toolchain folder: bin, include, lib, src
 		QString image; // the disc image
 		QString bios; // the BIOS image
 		QStringList executables; // on the disc: the one it boots first, then those it loads itself
-		QString folder; // the game's folder: its modules go there, its work in work, its captures in captures
+		QString folder; // the game's folder: its work in work, its captures in captures
+		QString modules; // where the four modules are linked: the game's folder when empty
+		bool incremental = false; // the game's own recompile (above)
 	};
 
 	class Pipeline : public QObject
@@ -42,8 +50,14 @@ namespace ps2n::wizard
 		void start(const PipelineInput& input);
 		void cancel();
 		bool running() const { return m_running; }
+		// After an incremental run that finished well: whether it found the
+		// captures to be those the modules were compiled from, and did nothing.
+		bool nothingNew() const { return m_nothing_new; }
 
 	Q_SIGNALS:
+		// The captures hold what the modules were not compiled from: it goes on
+		// to compile.
+		void newCode();
 		// What it is doing now, in a few words.
 		void stage(const QString& what);
 		// How many of the files are compiled.
@@ -76,10 +90,18 @@ namespace ps2n::wizard
 
 		void fail(const QString& error);
 		QString tool(const char* name) const;
+		// What the captures are, with the executables they are for: what
+		// work/compiled-from.txt holds once they are compiled.
+		QString fingerprint() const;
+		// What the toolchain is: work/objects/toolchain.txt holds it for the
+		// objects there, which another toolchain's would not match.
+		QString toolchainStamp() const;
 
 		PipelineInput m_in;
 		bool m_running = false;
 		bool m_cancelled = false;
+		bool m_nothing_new = false;
+		QString m_fingerprint;
 
 		std::deque<Job> m_turn;
 		std::function<void()> m_after_turn;
@@ -91,8 +113,9 @@ namespace ps2n::wizard
 			QString source;
 			QString object;
 		};
-		std::vector<Compile> m_compiles;
-		size_t m_next_compile = 0;
+		std::vector<Compile> m_compiles; // every object a module is linked from
+		std::vector<size_t> m_todo; // of them, those to compile now
+		size_t m_next_compile = 0; // in m_todo
 		int m_compiles_done = 0;
 		int m_compiles_running = 0;
 		int m_jobs = 1;

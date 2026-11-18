@@ -7,11 +7,15 @@
 // the runtime, the launcher under the game's name, the BIOS image linked into
 // the folder where it can be, and settings.txt, what the launcher starts the
 // runtime with, with -packaged (the game's own settings file and patch file
-// are already in the folder's data).
+// are already in the folder's data). And what the game compiles what its
+// sessions meet with itself (step P4.6, docs/adr/0034): a copy of the
+// toolchain, ps2n-remake with Qt (in the runtime folder), and make.txt, how
+// its modules are made.
 
 #pragma once
 
 #include <QtCore/QString>
+#include <QtCore/QStringList>
 
 namespace ps2n::wizard
 {
@@ -22,6 +26,8 @@ namespace ps2n::wizard
 		QString title; // the launcher's name and the window's title
 		QString image; // the disc image, read where it is
 		QString bios; // the BIOS image
+		QString toolchain; // the kit's toolchain folder, which the game's folder gets a copy of
+		QStringList executables; // compiled from the disc: the one it boots first, then those it loads itself
 	};
 
 	// A name Windows takes for a file or a folder: the title without what it

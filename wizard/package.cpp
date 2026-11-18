@@ -23,8 +23,9 @@ namespace ps2n::wizard
 	{
 		// What of the runtime folder a game's folder has: all of it but what
 		// only the wizard needs, as the folder's wizard-files.txt names it
-		// (scripts/windows/kit.ps1: the wizard, Qt and its plugins, and what
-		// they import), and the launcher, which it has under the game's name.
+		// (scripts/windows/kit.ps1: the wizard itself; Qt goes with the game,
+		// for its ps2n-remake), and the launcher, which it has under the
+		// game's name.
 		class GameFiles
 		{
 		public:
@@ -117,6 +118,24 @@ namespace ps2n::wizard
 			return false;
 		}
 
+		// The toolchain, a copy of the kit's own, which the game compiles what
+		// its sessions meet for the first time with (docs/adr/0034); whatever
+		// an older one had goes.
+		const QDir toolchain(input.toolchain);
+		QDir(folder.filePath(QStringLiteral("toolchain"))).removeRecursively();
+		QDirIterator tools(toolchain.path(), QDir::Files, QDirIterator::Subdirectories);
+		while (tools.hasNext())
+		{
+			const QString from = tools.next();
+			const QString to = folder.filePath(QStringLiteral("toolchain/") + toolchain.relativeFilePath(from));
+			QDir().mkpath(QFileInfo(to).path());
+			if (!QFile::copy(from, to))
+			{
+				*error = QObject::tr("Cannot copy %1 into %2.").arg(QDir::toNativeSeparators(from), folder.path());
+				return false;
+			}
+		}
+
 		// The BIOS image linked into the folder with the ROM1, ROM2 and EROM
 		// images beside it, so that the core keeps the console's settings
 		// there and not beside the image; read where it is where it cannot be
@@ -164,6 +183,22 @@ namespace ps2n::wizard
 		if (!file.commit())
 		{
 			*error = QObject::tr("Cannot write %1.").arg(file.fileName());
+			return false;
+		}
+
+		// How its modules are made, for the game's own recompile (ps2n-remake).
+		QStringList make = {
+			QStringLiteral("# How this game's modules are made, for the game to compile by itself what its sessions meet for"),
+			QStringLiteral("# the first time (ps2n-remake.exe; PS2Native's docs/adr/0034). %GAME% is this folder."),
+			QStringLiteral("title=") + input.title, QStringLiteral("image=") + QDir::toNativeSeparators(QFileInfo(input.image).absoluteFilePath()),
+			QStringLiteral("bios=") + bios_used};
+		for (const QString& executable : input.executables)
+			make.push_back(QStringLiteral("executable=") + executable);
+		QSaveFile recipe(folder.filePath(QStringLiteral("make.txt")));
+		if (!recipe.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+			recipe.write((make.join(QStringLiteral("\r\n")) + QStringLiteral("\r\n")).toUtf8()) < 0 || !recipe.commit())
+		{
+			*error = QObject::tr("Cannot write %1.").arg(recipe.fileName());
 			return false;
 		}
 		return true;

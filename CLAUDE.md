@@ -24,7 +24,8 @@ ahead-of-time static recompilation. This repository is a reboot of
   first.
 - [docs/phase4-proposal.md](docs/phase4-proposal.md): Phase 4's design as
   the maintainer decided it (ADR 0028), and its steps, P4.1 to P4.7, with
-  their pass criteria.
+  their pass criteria; a step P4.8, the folder for others, was added by
+  ADR 0033 ([docs/app-log.md](docs/app-log.md) has all eight).
 
 ## Status
 
@@ -90,7 +91,16 @@ again from what the session wrote down runs that session in a fifth of the
 console's time, nothing interpreted, the session at every fingerprint, and
 the maintainer played it from it at the console's pace (59.69 of 60). A
 session in a folder now writes the BIOS's capture too, and the aspect
-ratio is 16:9 by default (ADR 0032).**
+ratio is 16:9 by default (ADR 0032). P4.5 is done, the maintainer's run
+counted for its criterion (ADR 0033); what was left of it is a step of its
+own, P4.8, the folder for others, done before the folder goes to anyone but
+the maintainer. P4.6, new code in play, met its criterion the same day: at
+the maintainer's choice every game's folder carries its own toolchain (ADR
+0034), and when a session ends its launcher starts `ps2n-remake`, which
+compiles what the session met, only what changed, in the background, with
+an icon and a notification, for the next start; in a fresh folder of Gran
+Turismo 3 everything its first session interpreted was compiled at the
+next start.**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -588,6 +598,27 @@ Decisions:
   ("this setting on the wizard should always be as widescreen (16:9)"), the
   aspect ratio's default is 16:9 for every game, not PCSX2's "Auto
   4:3/3:2" (`ps2n::game::SetDefaults`).
+- [ADR 0033](docs/adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md):
+  P4.5 is done: the maintainer's run of 2026-11-18 (Gran Turismo 3, made
+  without a command line, three settings changed) counts for its
+  criterion. What was left of it is a step of its own, P4.8, the folder for
+  others, done before the folder `kit.ps1` makes goes to anyone but the
+  maintainer: the licences of everything in it, disc images other than
+  `.iso`, PCSX2's patches where PCSX2 is not installed, a fixed setting
+  edited by hand refused, a choice of the executables compiled. P4.6 is
+  next, beginning with the game's code a session finds outside its
+  executables compiled in parts. The maintainer's word: "Agree", to the
+  session's recommendation.
+- [ADR 0034](docs/adr/0034-a-game-compiles-new-code-with-its-own-toolchain-and-says-so.md):
+  how a game compiles new code itself (P4.6), the maintainer's two choices
+  on 2026-11-18: every game's folder carries its own copy of the toolchain
+  (about 200 MB more per game), so it compiles wherever it is, against the
+  session's recommendation (PS2Native's folder's); and it says so with an
+  icon in Windows' notification area while it compiles and a notification
+  when the next start will have it, nothing when a session met nothing new.
+  The rest as the session laid it out: the compile starts when the window
+  closes, at low priority, only what changed, the new modules taken at the
+  next start.
 
 ## Layout, build and test
 
@@ -627,7 +658,9 @@ host/                     ps2n-host: console frontend for the PCSX2 core, the te
                           the program a game's folder is started from, which starts the runtime beside it)
 wizard/                   ps2n-wizard, the application a game is made with (Phase 4, step P4.5; ADR 0032):
                           its five steps (wizard_window.cpp), the recompile (pipeline.cpp), the game's folder
-                          (package.cpp); PCSX2's own settings pages, compiled from the submodule unchanged, in
+                          (package.cpp); and ps2n-remake (remake_main.cpp; step P4.6, ADR 0034), the same
+                          recompile without the window, with which a game's folder compiles what its sessions
+                          met for the first time itself; PCSX2's own settings pages, compiled from the submodule unchanged, in
                           a window of its own (settings_window.cpp: PCSX2's SettingsWindow class with the pages a
                           game has), with what they call of the rest of PCSX2's frontend (stand_ins.cpp,
                           pcsx2-qt/MainWindow.h, found before PCSX2's) and of the core (host_interface.cpp)
@@ -758,7 +791,17 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   own settings file and patch file into its folder's data, and makes the
   folder with `-packaged`: the runtime then takes the game's settings from
   that file, over the defaults the wizard showed, which are the runtime's
-  too (`host/game_settings.h`, `ps2n::game::SetDefaults`). For checks,
+  too (`host/game_settings.h`, `ps2n::game::SetDefaults`). A game's
+  folder, whichever made it, also has a copy of the toolchain, Qt and
+  `ps2n-remake.exe`, and `make.txt`, how its modules are made (step P4.6,
+  ADR 0034): when a session ends, its launcher starts `ps2n-remake` at low
+  priority, which merges what the sessions met into the folder's captures
+  and, when that is more than the modules were compiled from
+  (`work\compiled-from.txt`), compiles only what changed (objects newer than
+  their sources stay) into `work\next-<time>`, with an icon in the
+  notification area and a notification at the end (`work\remake.log` says
+  what it did); the launcher puts those modules in place at the next
+  start. For checks,
   `ps2n-wizard --kit build\kit --image <iso> --bios <bin> --shots <folder>
   --auto [--until <step>]` fills the first steps in, saves each step (the
   settings, each category) as a picture, and presses Next itself; run from

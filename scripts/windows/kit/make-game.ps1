@@ -150,7 +150,9 @@ if (-not $PlayOnly) {
     $programIds = @('game')
     $arguments = @('compile', $bootElf, '--id', 'game', '--out', (Join-Path $gen 'game.cpp'), '--parts', '64')
     if ($capture['capture']) {
-        $arguments += @('--capture', $capture['capture'], '--outside', (Join-Path $gen 'game_outside.cpp'))
+        # The code runs met outside the executable, in 16 files as the micro code and IOP code are: all of
+        # a game's own code when its executable is a loader (Gran Turismo 3's).
+        $arguments += @('--capture', $capture['capture'], '--outside', (Join-Path $gen 'game_outside.cpp'), '--outside-parts', '16')
         $programIds += 'game_outside'
     }
     Run $recomp $arguments | Out-Null
@@ -253,8 +255,9 @@ if (-not $PlayOnly) {
     Say "linked: $((Get-ChildItem -LiteralPath $game -Filter 'ps2n-*.dll' | ForEach-Object { '{0} ({1:N0} bytes)' -f $_.Name, $_.Length }) -join ', ')"
 
     # ---- the runtime beside them, and the launcher named after the game ------------------------------
-    # All of the runtime but what only the wizard needs, as its wizard-files.txt names it (the wizard, Qt
-    # and its plugins, and what they import), as the wizard packages a game.
+    # All of the runtime but what only the wizard needs, as its wizard-files.txt names it (the wizard), as
+    # the wizard packages a game: with ps2n-remake and Qt, with which the game compiles what its sessions
+    # meet for the first time itself (docs\adr\0034), and a copy of the toolchain for it.
     $wizardFiles = @('ps2n-launcher.exe')
     $listed = Join-Path $runtime 'wizard-files.txt'
     if (Test-Path -LiteralPath $listed) { $wizardFiles += @(Get-Content -LiteralPath $listed | Where-Object { $_.Trim() }) }
@@ -262,7 +265,10 @@ if (-not $PlayOnly) {
         Copy-Item -Destination $game -Recurse -Force
     $launcher = Join-Path $game ((Plain $Title) + '.exe')
     Copy-Item -LiteralPath (Join-Path $runtime 'ps2n-launcher.exe') -Destination $launcher -Force
-    Say "the runtime beside them, and the launcher: $launcher"
+    $ownToolchain = Join-Path $game 'toolchain'
+    if (Test-Path -LiteralPath $ownToolchain) { Remove-Item -LiteralPath $ownToolchain -Recurse -Force }
+    Copy-Item -LiteralPath $toolchain -Destination $game -Recurse
+    Say "the runtime beside them, the toolchain, and the launcher: $launcher"
 }
 
 # ---- the game's settings ------------------------------------------------------------------------------
@@ -302,6 +308,15 @@ if ($Renderer) { $settings += @('-renderer', $Renderer) }
 $settings += $imagePath
 [IO.File]::WriteAllLines((Join-Path $game 'settings.txt'), [string[]]$settings, (New-Object System.Text.UTF8Encoding($false)))
 Say "its settings: $(Join-Path $game 'settings.txt')"
+# How its modules are made, for the game's own recompile (ps2n-remake; docs\adr\0034).
+if (-not $PlayOnly) {
+    $make = @(
+        "# How this game's modules are made, for the game to compile by itself what its sessions meet for",
+        "# the first time (ps2n-remake.exe; PS2Native's docs/adr/0034). %GAME% is this folder.",
+        "title=$Title", "image=$imagePath", "bios=$biosUsed")
+    $make += @(@($boot) + $moreNames | ForEach-Object { "executable=$_" })
+    [IO.File]::WriteAllLines((Join-Path $game 'make.txt'), [string[]]$make, (New-Object System.Text.UTF8Encoding($false)))
+}
 
 if (-not ($Play -or $PlayOnly)) { exit 0 }
 

@@ -492,7 +492,7 @@ namespace ps2n::wizard
 
 			void initializePage() override
 			{
-				PackageInput input{s().kit.runtime, s().folder, s().title, s().image, s().bios};
+				PackageInput input{s().kit.runtime, s().folder, s().title, s().image, s().bios, s().kit.toolchain, s().executables};
 				QString error;
 				m_ok = Package(input, &error);
 				m_launcher = LauncherPath(input);

@@ -1544,6 +1544,32 @@ TEST_CASE(code_run_outside_the_executable_makes_an_image_of_its_own) {
     CHECK_CONTAINS(code, "kImageOutside,");
     CHECK_CONTAINS(code, strprintf("0x%08Xu,", pcsx2Crc(elf)));
 
+    // Spread over parts as an executable's code is (compile --outside-parts):
+    // the main file holds the tables, the parts hold the functions, and a part
+    // may be left with none.
+    go.parts = 3;
+    go.headerName = "test_outside.h";
+    const std::vector<GeneratedFile> files = generateFiles(prog, go);
+    CHECK_EQ(files.size(), size_t{5});
+    if (files.size() == 5) {
+        CHECK_CONTAINS(files[0].text, "kImageOutside,");
+        CHECK_CONTAINS(files[0].text, "#include \"test_outside.h\"");
+        CHECK(!contains(files[0].text, "PS2N_BLOCK_START"));
+        CHECK_CONTAINS(files[1].text, "namespace ps2n_image_test_outside");
+        std::string bodies;
+        for (size_t i = 2; i < files.size(); ++i) bodies += files[i].text;
+        CHECK_CONTAINS(bodies, "\nuint32_t PS2N_CC fn_80075000(uint32_t pc)\n{");
+        CHECK_CONTAINS(bodies, "\nuint32_t PS2N_CC fn_80076000(uint32_t pc)\n{");
+    }
+
+    // An executable that ran nothing outside its own makes the image all the
+    // same, in as many files, its tables holding nothing.
+    Program none;
+    none.elf = &pieces;
+    const std::vector<GeneratedFile> empty = generateFiles(none, go);
+    CHECK_EQ(empty.size(), size_t{5});
+    if (!empty.empty()) CHECK_CONTAINS(empty[0].text, "{0, 0, nullptr, 0, 0, 0, 0},   // (none)");
+
     // Two different words captured at one address: the first is kept, and said.
     capture.code.push_back({0x80076004u, {0x24020002u}});
     notes.clear();

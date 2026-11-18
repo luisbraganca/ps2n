@@ -48,6 +48,9 @@ void usage() {
         "                         captures hold outside the executable's code (code it\n"
         "                         copied into kernel memory, for one), followed from\n"
         "                         where it ran. It may hold nothing\n"
+        "      --outside-parts <n>  spread that image's functions over n files, as\n"
+        "                         --parts does the executable's: <file>_part001.cpp\n"
+        "                         and so on, and a header <file>.h, beside it\n"
         "      --loaded-by <elf>  the executable is one that program loads itself (a\n"
         "                         game made of several executables): the image is\n"
         "                         used while memory holds its code, and takes from\n"
@@ -147,6 +150,7 @@ struct Args {
     bool symbols = true;
     bool comments = true;
     unsigned parts = 1;
+    unsigned outsideParts = 1;
     std::optional<uint32_t> at, base;
     unsigned count = 32;
 };
@@ -171,11 +175,11 @@ Args parse(int argc, char** argv) {
         else if (arg == "--iop") a.iopIds.push_back(value());
         else if (arg == "--no-symbols") a.symbols = false;
         else if (arg == "--no-comments") a.comments = false;
-        else if (arg == "--parts") {
+        else if (arg == "--parts" || arg == "--outside-parts") {
             const std::string text = value();
             const auto n = parseInt(text);
-            if (!n || *n < 1 || *n > 999) throw Error("--parts takes a number from 1 to 999, not '" + text + "'");
-            a.parts = static_cast<unsigned>(*n);
+            if (!n || *n < 1 || *n > 999) throw Error(arg + " takes a number from 1 to 999, not '" + text + "'");
+            (arg == "--parts" ? a.parts : a.outsideParts) = static_cast<unsigned>(*n);
         }
         else if (arg == "--at" || arg == "--base" || arg == "--count") {
             const std::string text = value();
@@ -222,6 +226,7 @@ void printAnalysis(const ElfFile& elf, const Program& prog) {
 int compile(const Args& a) {
     if (a.positional.size() != 1) throw Error("compile takes one executable");
     if (a.out.empty()) throw Error("compile needs --out <file.cpp>");
+    if (a.outsideParts > 1 && a.outside.empty()) throw Error("--outside-parts is for the image --outside writes");
 
     const std::filesystem::path path = a.positional[0];
     const ElfFile elf = ElfFile::load(path);
@@ -285,10 +290,19 @@ int compile(const Args& a) {
         og.kind = 2;
         og.name = pieces.name();
         og.crc = pcsx2Crc(elf);
+        // In parts as the executable's code is, when it is asked for: a game
+        // that loads its code from its data has all of it here (Gran Turismo
+        // 3's, 28.7 MB of C++, took 146 s to compile as one file).
+        og.parts = a.outsideParts;
+        if (og.parts > 1) og.headerName = a.outside.stem().string() + ".h";
         GenerateStats otherStats;
         const std::vector<GeneratedFile> otherFiles = generateFiles(other, og, &otherStats);
         if (a.outside.has_parent_path()) std::filesystem::create_directories(a.outside.parent_path());
-        writeFileIfChanged(a.outside, otherFiles.front().text);
+        for (const GeneratedFile& file : otherFiles) {
+            const std::filesystem::path path =
+                file.suffix == ".cpp" ? a.outside : a.outside.parent_path() / (a.outside.stem().string() + file.suffix);
+            writeFileIfChanged(path, file.text);
+        }
         std::printf("%s: %zu functions, %zu instructions of the code it ran outside its executable\n", og.id.c_str(), otherStats.functions,
                     otherStats.instructions);
         for (const Note& n : notes) std::printf("  note: %s\n", n.message.c_str());

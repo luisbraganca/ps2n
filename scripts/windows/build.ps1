@@ -241,10 +241,10 @@ if (($Target -contains 'ps2n-host') -and (Test-Path $cache) -and
     (Select-String -LiteralPath $cache -Pattern '^PS2N_GAME_MODULE:BOOL=ON$' -Quiet)) {
     $Target = @($Target) + 'ps2n-modules'
 }
-# And the wizard, where the tree builds it.
+# And the wizard, where the tree builds it, with what a game compiles new code with itself (P4.6).
 if (($Target -contains 'ps2n-host') -and (Test-Path $cache) -and
     (Select-String -LiteralPath $cache -Pattern '^PS2N_WIZARD:BOOL=ON$' -Quiet)) {
-    $Target = @($Target) + 'ps2n-wizard'
+    $Target = @($Target) + 'ps2n-wizard' + 'ps2n-remake'
 }
 
 cmake --build $build --target $Target

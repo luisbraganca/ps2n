@@ -2,10 +2,14 @@
 
 #include "pipeline.h"
 
+#include <QtCore/QCryptographicHash>
+#include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QDirIterator>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QRegularExpression>
+#include <QtCore/QSaveFile>
 #include <QtCore/QThread>
 
 #include <algorithm>
@@ -55,6 +59,39 @@ namespace ps2n::wizard
 				out.push_back(dir.filePath(name));
 			return out;
 		}
+
+		// Whether an object is older than what it is compiled from: its source,
+		// and for an image's tables and parts the image's header, which they
+		// include (ps2n-recomp writes a file only when it changes).
+		bool Stale(const QString& source, const QString& object)
+		{
+			const QFileInfo built(object);
+			if (!built.exists())
+				return true;
+			const QFileInfo from(source);
+			QDateTime newest = from.lastModified();
+			QString image = from.completeBaseName();
+			image.remove(QRegularExpression(QStringLiteral("_part\\d{3}$")));
+			const QFileInfo header(from.dir().filePath(image + QStringLiteral(".h")));
+			if (header.exists())
+				newest = std::max(newest, header.lastModified());
+			return built.lastModified() < newest;
+		}
+
+		bool WriteText(const QString& path, const QString& text)
+		{
+			QSaveFile file(path);
+			if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+				return false;
+			file.write(text.toUtf8());
+			return file.commit();
+		}
+
+		QString ReadText(const QString& path)
+		{
+			QFile file(path);
+			return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
+		}
 	} // namespace
 
 	Pipeline::Pipeline(QObject* parent)
@@ -67,12 +104,49 @@ namespace ps2n::wizard
 		return QDir::toNativeSeparators(QDir(m_in.toolchain).filePath(QStringLiteral("bin/") + QString::fromLatin1(name)));
 	}
 
+	QString Pipeline::fingerprint() const
+	{
+		QCryptographicHash hash(QCryptographicHash::Sha256);
+		const QDir own(QDir(m_in.folder).filePath(QStringLiteral("captures")));
+		for (const char* kind : {"capture", "bios-capture", "vu-capture", "iop-capture"})
+		{
+			hash.addData(QByteArray(kind) + "\n");
+			QFile file(own.filePath(QString::fromLatin1(kind) + QStringLiteral(".toml")));
+			if (file.open(QIODevice::ReadOnly))
+				hash.addData(file.readAll());
+			hash.addData(QByteArrayView("\n--\n"));
+		}
+		hash.addData(m_in.executables.join(QLatin1Char('\n')).toUtf8());
+		return QString::fromLatin1(hash.result().toHex());
+	}
+
+	QString Pipeline::toolchainStamp() const
+	{
+		QStringList files = {QStringLiteral("bin/ps2n-recomp.exe"), QStringLiteral("bin/clang-cl.exe"), QStringLiteral("bin/lld-link.exe"),
+			QStringLiteral("lib/ps2n-host.lib"), QStringLiteral("src/module_entry.cpp")};
+		const QDir toolchain(m_in.toolchain);
+		QDirIterator headers(toolchain.filePath(QStringLiteral("include")), QDir::Files, QDirIterator::Subdirectories);
+		while (headers.hasNext())
+			files.push_back(toolchain.relativeFilePath(headers.next()));
+		std::sort(files.begin(), files.end());
+		QString stamp;
+		for (const QString& file : files)
+		{
+			const QFileInfo info(toolchain.filePath(file));
+			stamp += QStringLiteral("%1 %2 %3\n").arg(file).arg(info.size()).arg(info.lastModified().toMSecsSinceEpoch());
+		}
+		return stamp;
+	}
+
 	void Pipeline::start(const PipelineInput& input)
 	{
 		m_in = input;
 		m_running = true;
 		m_cancelled = false;
+		m_nothing_new = false;
+		m_fingerprint.clear();
 		m_compiles.clear();
+		m_todo.clear();
 		m_next_compile = 0;
 		m_compiles_done = 0;
 		m_compiles_running = 0;
@@ -130,21 +204,32 @@ namespace ps2n::wizard
 				const QString from = QDir(sessions.filePath(session)).filePath(name);
 				if (!QFileInfo::exists(from))
 					continue;
+				// The first one too as the merge writes it, so that the file
+				// changes only when a session adds to it (fingerprint()).
 				const QString mine = QDir(own).filePath(name);
+				QStringList arguments = {QString::fromLatin1(command), QStringLiteral("--out"), mine};
 				if (QFileInfo::exists(mine) || will_exist.count(mine))
-				{
-					jobs.push_back({tool("ps2n-recomp.exe"),
-						{QString::fromLatin1(command), QStringLiteral("--out"), mine, mine, from},
-						tr("adding %1 of %2").arg(name, session)});
-				}
-				else
-				{
-					QFile::copy(from, mine);
-				}
+					arguments.push_back(mine);
+				arguments.push_back(from);
+				jobs.push_back({tool("ps2n-recomp.exe"), arguments, tr("adding %1 of %2").arg(name, session)});
 				will_exist.insert(mine);
 			}
 		}
-		runInTurn(std::move(jobs), [this]() { extract(); });
+		runInTurn(std::move(jobs), [this]() {
+			// A game's own recompile has nothing to do when the sessions met
+			// nothing its modules were not compiled from.
+			m_fingerprint = fingerprint();
+			if (m_in.incremental &&
+				ReadText(QDir(m_in.folder).filePath(QStringLiteral("work/compiled-from.txt"))).trimmed() == m_fingerprint)
+			{
+				m_nothing_new = true;
+				m_running = false;
+				emit finished(true, QString());
+				return;
+			}
+			emit newCode();
+			extract();
+		});
 	}
 
 	void Pipeline::extract()
@@ -165,10 +250,23 @@ namespace ps2n::wizard
 		const QDir folder(m_in.folder);
 		const QString disc = folder.filePath(QStringLiteral("work/disc"));
 		const QString gen = folder.filePath(QStringLiteral("work/generated"));
+		const QString obj = folder.filePath(QStringLiteral("work/objects"));
 		const QString own = folder.filePath(QStringLiteral("captures"));
-		// What an earlier compile left is no guide to this one.
-		QDir(gen).removeRecursively();
-		QDir(folder.filePath(QStringLiteral("work/objects"))).removeRecursively();
+		if (!m_in.incremental)
+		{
+			// What an earlier compile left is no guide to this one, nor are the
+			// modules a recompile of the game's own left for its next start.
+			QDir(gen).removeRecursively();
+			QDir(obj).removeRecursively();
+			const QDir work(folder.filePath(QStringLiteral("work")));
+			for (const QString& next : work.entryList({QStringLiteral("next-*")}, QDir::Dirs | QDir::NoDotAndDotDot))
+				QDir(work.filePath(next)).removeRecursively();
+		}
+		else if (ReadText(QDir(obj).filePath(QStringLiteral("toolchain.txt"))) != toolchainStamp())
+		{
+			// Objects another toolchain compiled.
+			QDir(obj).removeRecursively();
+		}
 		QDir().mkpath(gen);
 
 		const auto captured = [&](const char* kind) {
@@ -186,13 +284,16 @@ namespace ps2n::wizard
 
 		// As the development build does (tests/tests.cmake): the boot executable
 		// in 64 files, one the game loads itself in one file for each 64 KB of
-		// it, at most 64, the micro code and the IOP code in 16.
+		// it, at most 64, the micro code and the IOP code in 16. And the code
+		// sessions met outside the executable in 16 as well, which is all of a
+		// game's own code when its executable is a loader (Gran Turismo 3's).
 		m_program_ids = {QStringLiteral("game")};
 		QStringList arguments = {QStringLiteral("compile"), boot, QStringLiteral("--id"), QStringLiteral("game"), QStringLiteral("--out"),
 			QDir(gen).filePath(QStringLiteral("game.cpp")), QStringLiteral("--parts"), QStringLiteral("64")};
 		if (!capture.isEmpty())
 		{
-			arguments += {QStringLiteral("--capture"), capture, QStringLiteral("--outside"), QDir(gen).filePath(QStringLiteral("game_outside.cpp"))};
+			arguments += {QStringLiteral("--capture"), capture, QStringLiteral("--outside"), QDir(gen).filePath(QStringLiteral("game_outside.cpp")),
+				QStringLiteral("--outside-parts"), QStringLiteral("16")};
 			m_program_ids.push_back(QStringLiteral("game_outside"));
 		}
 		jobs.push_back({recomp, arguments, tr("translate %1").arg(Leaf(boot))});
@@ -263,8 +364,22 @@ namespace ps2n::wizard
 			for (const QString& source : all)
 				m_compiles.push_back({kind, source, QDir(dir).filePath(QFileInfo(source).completeBaseName() + QStringLiteral(".obj"))});
 		}
-		emit stage(tr("Compiling %1 files, %2 at a time").arg(m_compiles.size()).arg(m_jobs));
-		emit progress(0, static_cast<int>(m_compiles.size()));
+		// The objects from now on are this toolchain's; a game's own recompile
+		// compiles only what is newer than its object.
+		if (!WriteText(QDir(obj).filePath(QStringLiteral("toolchain.txt")), toolchainStamp()))
+		{
+			fail(tr("Cannot write %1.").arg(QDir(obj).filePath(QStringLiteral("toolchain.txt"))));
+			return;
+		}
+		for (size_t i = 0; i < m_compiles.size(); i++)
+		{
+			if (!m_in.incremental || Stale(m_compiles[i].source, m_compiles[i].object))
+				m_todo.push_back(i);
+		}
+		emit stage(m_todo.size() == m_compiles.size() ?
+					   tr("Compiling %1 files, %2 at a time").arg(m_todo.size()).arg(m_jobs) :
+					   tr("Compiling %1 of %2 files, the others as they were, %3 at a time").arg(m_todo.size()).arg(m_compiles.size()).arg(m_jobs));
+		emit progress(0, static_cast<int>(m_todo.size()));
 		startCompiles();
 	}
 
@@ -272,14 +387,14 @@ namespace ps2n::wizard
 	{
 		if (!m_running)
 			return;
-		if (m_compiles_done == static_cast<int>(m_compiles.size()))
+		if (m_compiles_done == static_cast<int>(m_todo.size()))
 		{
 			link();
 			return;
 		}
-		while (m_compiles_running < m_jobs && m_next_compile < m_compiles.size())
+		while (m_compiles_running < m_jobs && m_next_compile < m_todo.size())
 		{
-			const Compile c = m_compiles[m_next_compile++];
+			const Compile c = m_compiles[m_todo[m_next_compile++]];
 			QProcess* p = new QProcess(this);
 			m_compile_processes.push_back(p);
 			p->setProcessChannelMode(QProcess::MergedChannels);
@@ -310,7 +425,7 @@ namespace ps2n::wizard
 					return;
 				}
 				m_compiles_done++;
-				emit progress(m_compiles_done, static_cast<int>(m_compiles.size()));
+				emit progress(m_compiles_done, static_cast<int>(m_todo.size()));
 				startCompiles();
 			});
 			connect(p, &QProcess::errorOccurred, this, [this, p](QProcess::ProcessError error) {
@@ -325,6 +440,12 @@ namespace ps2n::wizard
 	{
 		emit stage(tr("Linking the game's four modules"));
 		const QString obj = QDir(m_in.folder).filePath(QStringLiteral("work/objects"));
+		const QString modules = m_in.modules.isEmpty() ? m_in.folder : m_in.modules;
+		if (!QDir().mkpath(modules))
+		{
+			fail(tr("Cannot make %1.").arg(QDir::toNativeSeparators(modules)));
+			return;
+		}
 		std::deque<Job> jobs;
 		for (const char* kind_name : {"game", "bios", "vu", "iop"})
 		{
@@ -345,13 +466,20 @@ namespace ps2n::wizard
 			jobs.push_back({tool("lld-link.exe"),
 				{QStringLiteral("/nologo"), QStringLiteral("/DLL"), QStringLiteral("/NOENTRY"), QStringLiteral("/NODEFAULTLIB"),
 					QStringLiteral("/MACHINE:X64"), QStringLiteral("/OPT:REF"), QStringLiteral("/OPT:ICF"),
-					QStringLiteral("/OUT:") + QDir::toNativeSeparators(QDir(m_in.folder).filePath(QStringLiteral("ps2n-%1.dll").arg(kind))),
+					QStringLiteral("/OUT:") + QDir::toNativeSeparators(QDir(modules).filePath(QStringLiteral("ps2n-%1.dll").arg(kind))),
 					QStringLiteral("/IMPLIB:") + QDir::toNativeSeparators(QDir(obj).filePath(QStringLiteral("ps2n-%1.lib").arg(kind))),
 					QStringLiteral("@") + QDir::toNativeSeparators(rsp),
 					QDir::toNativeSeparators(QDir(m_in.toolchain).filePath(QStringLiteral("lib/ps2n-host.lib")))},
 				tr("link ps2n-%1.dll").arg(kind)});
 		}
 		runInTurn(std::move(jobs), [this]() {
+			// What these modules were compiled from, for a recompile of the
+			// game's own to tell whether a session met anything new.
+			if (!WriteText(QDir(m_in.folder).filePath(QStringLiteral("work/compiled-from.txt")), m_fingerprint + QLatin1Char('\n')))
+			{
+				fail(tr("Cannot write %1.").arg(QDir(m_in.folder).filePath(QStringLiteral("work/compiled-from.txt"))));
+				return;
+			}
 			m_running = false;
 			emit finished(true, QString());
 		});

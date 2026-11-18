@@ -12,9 +12,10 @@ its date. Nothing here comes from a game or a BIOS but counts and times.
 | P4.2 Freestanding generated code | A game module compiled with nothing but `clang`, `lld` and PS2Native's own headers; every test passes; a game is still the stock run | **Done** (2026-11-17): the generated code compiled against PS2Native's description of PCSX2's structures, which the runtime checks against PCSX2's own (636 assertions when it is built, the settings' bits when it starts), with no system header and no standard library, into four modules (the programs' EE code, the BIOS's, the micro code, the IOP's code) linked with the host's import library and nothing else; every test passes (533) in the three build trees; Agent Under Fire's script is the stock run at every sync point from the modules, and the maintainer's sessions replayed are the sessions at every fingerprint; the modules take what P4.1's module took (the script 1.17 times stock PCSX2's time, built in 1.19) |
 | P4.3 The shipped toolchain | A game compiled and run on a computer with nothing else installed (a fresh Windows user, without Visual Studio) | **Done** (2026-11-17): the toolchain is LLVM's own 22.1.3 ([ADR 0030](adr/0030-the-wizards-compiler-is-llvms-own-release.md)), whose code is the code the development builds make, byte for byte; a folder of 254 MB (`scripts\windows\kit.ps1`) and one command in it (`make-game.ps1`) compile Agent Under Fire from its disc image and the BIOS (101 seconds here); on the maintainer's Windows 10 laptop, without Visual Studio, in about 8 minutes into the same code, byte for byte, and the game played there for 15 minutes within 3% of the console's pace, a run this computer replays at every fingerprint. The run found the session record missing two things (the patches as applied, the BIOS's ROM images), put right |
 | P4.4 The packaged game | Killzone and Agent Under Fire run from their folders, at the console's pace, the same runs as from the development host | **Done** (2026-11-17): a game is a folder that plays it (`make-game.ps1 -Title`), started from a launcher named after the game, which starts the runtime beside it with the folder's settings, without a console, and says why when it cannot play; the sessions written down in the folder. Killzone and Agent Under Fire, started from their launchers, played at the console's pace (50.00 frames a second in play), nothing of their code interpreted; the maintainer's four sessions of Agent Under Fire and three of Killzone's from the development host, run again from the folders, and the launchers' sessions run again by the development host, are the sessions at every fingerprint. Killzone's code needed a module to have its own stack probe (`__chkstk`), which a test of the module tree holds |
-| P4.5 The wizard | A game packaged from the disc image and the BIOS with every default accepted, without a command line | **Under way** (2026-11-17): the maintainer's word that it goes through all of PCSX2's settings, and how ([ADR 0032](adr/0032-the-wizard-goes-through-pcsx2s-settings.md)); PCSX2's own per-game settings pages work in `ps2n-wizard`, compiled unchanged, what PS2Native carries out in PCSX2's place fixed; a game's settings are a file in its folder that the runtime reads (`-packaged`), and a session played so is run again at every fingerprint; the five steps, from the disc image to a folder that plays the game, in `PS2Native.exe` at the root of the folder `kit.ps1` makes: Agent Under Fire made with every default accepted in 336 seconds, and played from its folder at the console's pace. The maintainer's own run is next |
-| P4.6 New code in play | A session that meets new code finds it compiled at its next start | |
+| P4.5 The wizard | A game packaged from the disc image and the BIOS with every default accepted, without a command line | **Under way** (2026-11-17): the maintainer's word that it goes through all of PCSX2's settings, and how ([ADR 0032](adr/0032-the-wizard-goes-through-pcsx2s-settings.md)); PCSX2's own per-game settings pages work in `ps2n-wizard`, compiled unchanged, what PS2Native carries out in PCSX2's place fixed; a game's settings are a file in its folder that the runtime reads (`-packaged`), and a session played so is run again at every fingerprint; the five steps, from the disc image to a folder that plays the game, in `PS2Native.exe` at the root of the folder `kit.ps1` makes: Agent Under Fire made with every default accepted in 336 seconds, and played from its folder at the console's pace. **Done** (2026-11-18): the maintainer made a game the project had never run, Gran Turismo 3, without a command line (three settings changed, the rest accepted), which counts for the criterion ([ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)); its code, loaded from its own data, was interpreted in its first session, which wrote it down, and the folder made again from that played at the console's pace. What was left of the step is P4.8's |
+| P4.6 New code in play | A session that meets new code finds it compiled at its next start | **Criterion met** (2026-11-18): a game's folder carries its own toolchain, and when a session ends its launcher starts `ps2n-remake`, which compiles what the session met, only what changed, in the background, with an icon and a notification, for the next start ([ADR 0034](adr/0034-a-game-compiles-new-code-with-its-own-toolchain-and-says-so.md)); a fresh folder of Gran Turismo 3: what its first session interpreted (5,871 blocks of its code, 7,846 of the IOP's, 15 of VU1's, the BIOS's kernel) all compiled at the next start, the third session interpreting nothing of it; the code met outside the executables compiled in 16 parts (that compile 151 s to 27 s) |
 | P4.7 Linux | On the maintainer's own Linux machine ([ADR 0004](adr/0004-proof-of-concept-environment.md)) | |
+| P4.8 The folder for others | On a computer without PCSX2, a game made with the wizard from a `.chd` image, its patches fetched at the user's word, and the folder carrying the licence of everything in it (the session's proposal, [ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)) | |
 
 ## How to run it
 
@@ -940,16 +941,29 @@ instructions), one block of IOP code and one of VU1's micro code, and 51
 instructions of the BIOS, at boot, and wrote them down for the next make,
 the BIOS's among them now (`bios-capture.toml`).
 
-### What is left of the step
+### The step done (2026-11-18)
 
-- **The criterion's run**: the maintainer's run (above) made a game
-  without a command line, with three settings changed; the criterion has
-  every default accepted.
+Asked what next, the session recommended counting the maintainer's run
+for the criterion, the rest of the list below a step of its own before the
+folder goes to anyone else, and then P4.6; the maintainer answered "Agree"
+([ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)).
+P4.5 is done.
+
+### What it leaves for the steps after
+
+For P4.6:
+
 - **Code a game loads from its data** (Gran Turismo 3's) is compiled only
   once a session has met it: such a game's first session is slow, and its
   folder has to be made again in the wizard; P4.6 is to compile it by
   itself. The recompiler could write that code in parts, as it does an
   executable's.
+- **A game's first session** interprets its micro code and IOP code, which
+  no session had met; compiling what it wrote down for the game's next
+  start, by itself, is P4.6.
+
+For P4.8, the folder for others:
+
 - **Disc images** other than `.iso` files of 2048-byte sectors (`.bin` and
   `.cue`, `.chd`, `.cso`): PCSX2 recognizes them, PS2Native's reader of a
   disc's files does not read them yet.
@@ -965,6 +979,88 @@ the BIOS's among them now (`bios-capture.toml`).
 - **Every executable on the disc is compiled**, a game's other languages
   among them (Agent Under Fire's module four times as large); a choice in
   the first step could leave some out.
-- **A game's first session** interprets its micro code and IOP code, which
-  no session had met; compiling what it wrote down for the game's next
-  start, by itself, is P4.6.
+
+## P4.6 New code in play
+
+Pass criterion: a session that meets new code finds it compiled at its
+next start. As ADR 0028 has it, the game compiles what a session had to
+interpret itself, in the background, with the toolchain the wizard brought,
+and uses it from its next start; nothing is compiled while the game runs
+(ADR 0003). Begun on 2026-11-18, at the maintainer's word (ADR 0033), with
+the compile that P4.6 would run after a session like Gran Turismo 3's
+first.
+
+### The code met outside the executables, in parts (2026-11-18)
+
+The code a game's sessions met outside its executables, which is all of a
+game's own code when its executable is a loader, was translated into one
+file. The recompiler now spreads it over parts as it does an executable's
+code (`ps2n-recomp compile --outside-parts`, with a unit test, an image
+that holds nothing among it), and the wizard and `make-game.ps1` ask for
+16, as for the micro code and the IOP code; the development build, whose
+games' outside code is small, keeps one file. Gran Turismo 3 made again
+from its first session's captures, the four kinds:
+
+| | The make | Of it, the compile | The session run again |
+|---|---:|---:|---:|
+| The outside code in one file | 151.4 s | 146.5 s (112 files, that one the last, at 146 s) | 28.5 s |
+| In 16 parts | 27.4 s | 21.1 s (128 files, 20 at a time) | 28.2 s |
+
+The session run again is the session at every one of its 173
+fingerprints from both, ending on the same picture and the same sound,
+nothing of the game's code interpreted. Every test passes: 533 in the
+usual tree, 534 in the module tree.
+
+### A game compiling what its sessions meet itself (2026-11-18)
+
+As the maintainer chose it (ADR 0034): every game's folder carries a copy
+of the toolchain (198.5 MB), and with it `ps2n-remake.exe`, the wizard's
+recompile without its window (`wizard/remake_main.cpp`, Qt alone, none of
+PCSX2's code), Qt, and `make.txt`, how its modules are made (the title, the
+disc image, the BIOS image, the executables), which the wizard and
+`make-game.ps1` write. Only the wizard itself stays out of a game's folder.
+
+- **When a session ends**, the launcher starts `ps2n-remake` at below-normal
+  priority (`host/launcher.cpp`). It merges what the folder's sessions met
+  into the folder's captures; when they are what the modules were compiled
+  from (a fingerprint of them, `work\compiled-from.txt`, which every compile
+  that ends well writes), it stops there and shows nothing. Otherwise it
+  shows PS2Native's icon in the notification area, translates again,
+  compiles only the files newer than their objects (the recompiler writes a
+  file only when it changes; the objects are kept with a stamp of the
+  toolchain that compiled them, and thrown away under another), links the
+  four modules into `work\next-<time>`, writes `ready` there last, and says
+  so in a notification. One runs at a time in a folder; a session that ends
+  while one compiles is taken by another round of it. `work\remake.log`
+  says what it did.
+- **At the next start** the launcher puts the newest ready modules in place
+  before the runtime loads them, and takes every ready folder away.
+
+Checked with a fresh folder of Gran Turismo 3 (`make-game.ps1`, nothing
+compiled from any session; 310 MB) and three sessions of 1,500 frames
+through its launcher, muted, in a window:
+
+| | First session | Second | Third |
+|---|---:|---:|---:|
+| The game's code interpreted | 5,871 blocks, 94.6 million instructions | 1,631 blocks met for the first time, 580 million instructions | none |
+| The IOP's blocks interpreted | 7,846, all of them | 477 met for the first time; 7,846 compiled | none; 7,846 compiled |
+| VU1's blocks interpreted | 15 | none | none |
+| The BIOS's kernel interpreted | 98.5 million instructions | 51 instructions, at boot | 51, at boot |
+| In the window | 57.13 frames a second | 55.46 | 57.66 |
+| The recompile after it | 128 files compiled (no stamp yet), 13 s | 34 of 128 files, 7 s | nothing new, 1 s, nothing shown |
+
+The second session's blocks are none of the first's but one: the code the
+game writes over the BIOS's program loader, at `00082000`, which no module
+compiles (the game's executable does not hold the address, and the BIOS's
+module is compiled from the ROM's own loader), about ten thousand
+instructions at boot in every session, Gran Turismo 3's from the first;
+left for later. A folder `make-game.ps1` made has no fingerprint and no
+stamp yet, so the first recompile after a session compiles everything; one
+the wizard made has both. The wizard's folder step checked on Killzone
+(`ps2n-wizard --auto`, 120 s, its folder from P4.4 made again): `make.txt`
+with both of its executables, the fingerprint and the stamp written, the
+toolchain copied with its files' times (the 328 files of a copy have the
+kit's sizes and times, so a game's first recompile keeps the objects the
+wizard compiled), Qt and `ps2n-remake.exe` beside the runtime, the wizard
+itself left out; `ps2n-remake` run then found nothing new in 0.6 s. Every
+test passes: 533 in the usual tree, 534 in the module tree.

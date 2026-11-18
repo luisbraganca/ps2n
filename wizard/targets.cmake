@@ -96,3 +96,20 @@ target_include_directories(ps2n-wizard PRIVATE
 )
 target_compile_definitions(ps2n-wizard PRIVATE QT_NO_EXCEPTIONS)
 target_link_libraries(ps2n-wizard PRIVATE PCSX2_FLAGS PCSX2 Qt6::Core Qt6::Gui Qt6::Widgets)
+
+# ps2n-remake: a game's folder compiling by itself what its sessions met for the
+# first time (step P4.6, docs/adr/0034): the wizard's recompile without its
+# window, with an icon in the notification area. Qt alone, none of PCSX2's code:
+# it goes into every game's folder.
+add_executable(ps2n-remake WIN32
+	"${PS2N_ROOT}/assets/ps2n.rc"
+	"${CMAKE_CURRENT_LIST_DIR}/pipeline.cpp"
+	"${CMAKE_CURRENT_LIST_DIR}/pipeline.h"
+	"${CMAKE_CURRENT_LIST_DIR}/remake_main.cpp"
+)
+set_target_properties(ps2n-remake PROPERTIES
+	AUTOMOC ON
+	RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin"
+)
+target_compile_features(ps2n-remake PRIVATE cxx_std_20)
+target_link_libraries(ps2n-remake PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)

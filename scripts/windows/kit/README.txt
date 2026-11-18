@@ -32,24 +32,29 @@ by itself, and the game's own patch file is copied into its folder. Without it
 the game plays as its disc has it, 4:3.
 
 The game's folder plays it: start <name>.exe there (double-click it, or make a
-shortcut to it). Beside it are its modules, a copy of the runtime, settings.txt
-(what the runtime is started with: the disc image and the BIOS image, read
-where they were when the folder was made, one option to a line), and the game's
-own settings and patch file in data\PCSX2. In the folder too are its memory
-cards and the console's settings (data), every session played, written down to
-be run again with what it had to interpret (sessions), which the next time the
-game is made is compiled too, and last-run.log, what the runtime said the last
-time; when it could not play the game, <name>.exe says why. The folder can be
-moved or copied whole; work\, the generated code, can be deleted. It holds code
-translated from your game and your BIOS: it is yours alone, not to be given to
-anyone.
+shortcut to it). Beside it are its modules, a copy of the runtime, a copy of
+the toolchain (toolchain, about 200 MB, which the game compiles new code with),
+settings.txt (what the runtime is started with: the disc image and the BIOS
+image, read where they were when the folder was made, one option to a line),
+make.txt (how its modules are made), and the game's own settings and patch file
+in data\PCSX2. In the folder too are its memory cards and the console's
+settings (data), every session played, written down to be run again with what
+it had to interpret (sessions), and last-run.log, what the runtime said the
+last time; when it could not play the game, <name>.exe says why. The folder can
+be moved or copied whole; work\, the generated code, can be deleted (the next
+compile then compiles everything again). It holds code translated from your
+game and your BIOS: it is yours alone, not to be given to anyone.
 
 A game's first session can be slower than the console wherever it meets code
 no compile has seen: the vector units' and the I/O processor's code, and the
 code a game loads from its own data rather than from an executable on the disc
-(Gran Turismo 3 does). The session writes that code down. Make the game again
-with PS2Native.exe, from the same disc image, and it is compiled; the folder
-keeps its settings, its memory cards and its sessions.
+(Gran Turismo 3 does). The session writes that code down, and when you close
+the game's window the game compiles it itself, in the background, with the
+toolchain in its folder: an icon in the notification area while it does, and a
+notification when it is done. From its next start the game has it. A session
+that met nothing new compiles nothing. Making the game again with PS2Native.exe
+from the same disc image compiles it too, and keeps the folder's settings, its
+memory cards and its sessions.
 
 In the window: the keyboard and the first controller play; F11 or Alt+Enter
 covers the screen; closing the window ends the session.
