@@ -8,12 +8,15 @@
 //
 //   ps2n-wizard [--kit <folder>] [--image <disc image>] [--bios <BIOS image>]
 //               [--shots <folder>] [--auto [--until <step>]]
+//               [--without-pcsx2 [--fetch-patches]]
 //
 // --kit names the folder kit.ps1 made, where this program is not in it (a
 // build tree). --image and --bios fill the first two steps in; --shots saves
 // each step as a picture once it is complete; --auto goes on to the next step
 // whenever one is complete, and closes at the end without playing, or after
-// the step --until names (1 to 5): for checks.
+// the step --until names (1 to 5); --without-pcsx2 does not look for an
+// installed PCSX2's archive of patches, as on a computer without PCSX2, and
+// --fetch-patches then fetches it as if the user had asked: for checks.
 
 #include "game_settings.h"
 #include "wizard_window.h"
@@ -50,6 +53,8 @@ int main(int argc, char* argv[])
 
 	QString kit_root, image, bios, shots;
 	bool automatic = false;
+	bool without_pcsx2 = false;
+	bool fetch_patches = false;
 	int until = 5;
 	const QStringList arguments = QCoreApplication::arguments();
 	for (qsizetype i = 1; i < arguments.size(); i++)
@@ -68,6 +73,10 @@ int main(int argc, char* argv[])
 			automatic = true;
 		else if (arg == QStringLiteral("--until") && has_value)
 			until = arguments[++i].toInt();
+		else if (arg == QStringLiteral("--without-pcsx2"))
+			without_pcsx2 = true;
+		else if (arg == QStringLiteral("--fetch-patches"))
+			fetch_patches = true;
 	}
 
 	// The core's resources (its databases of games and of patches) beside this
@@ -95,6 +104,8 @@ int main(int argc, char* argv[])
 	}
 
 	ps2n::wizard::WizardWindow window(kit);
+	if (without_pcsx2)
+		window.WithoutPcsx2(fetch_patches);
 	window.show();
 	window.Prepare(image, bios, shots, automatic, until);
 	return app.exec();

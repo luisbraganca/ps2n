@@ -257,10 +257,11 @@ namespace ps2n::wizard
 		emit stage(tr("Taking the game's executables from its disc image"));
 		const QString disc = QDir(m_in.folder).filePath(QStringLiteral("work/disc"));
 		QDir().mkpath(disc);
-		QStringList arguments = {QStringLiteral("extract"), m_in.image};
+		// The runtime reads the disc, through PCSX2's own readers (host/disc.h).
+		QStringList arguments = {QStringLiteral("-disc-extract"), QDir::toNativeSeparators(m_in.image), QDir::toNativeSeparators(disc)};
 		arguments += m_in.executables;
-		arguments += {QStringLiteral("--out-dir"), disc};
-		runInTurn({{tool("ps2n-recomp.exe"), arguments, tr("extract %1").arg(m_in.executables.join(QStringLiteral(", ")))}},
+		runInTurn({{QDir(m_in.runtime).filePath(QStringLiteral("ps2n-host.exe")), arguments,
+					  tr("extract %1").arg(m_in.executables.join(QStringLiteral(", ")))}},
 			[this]() { translate(); });
 	}
 

@@ -310,6 +310,51 @@ private:
         std::sort(fns.begin(), fns.end(), [](const Function& a, const Function& b) { return a.start < b.start; });
 
         prog_.functions = std::move(fns);
+        splitLongFunctions();
+    }
+
+    // A function longer than kMaxFunctionInstructions is cut into pieces of
+    // about that many, each a function of its own: clang takes the better part of an
+    // hour, and gigabytes, over one C++ function of hundreds of thousands of
+    // instructions. Silent Hill 3's executable is one segment, its data with
+    // its code and no section named, and nothing past its code starts a
+    // function: the last function took in a megabyte of data (187,835 words).
+    // No function of a game's own has come near the limit (Agent Under Fire's
+    // longest, 13,871 instructions). A piece begins after an unconditional
+    // jump or a return and its delay slot within kSplitSearch instructions of
+    // the limit, or else at the limit, never in a delay slot; one piece runs
+    // on into the next as any function whose end is not a jump does.
+    static constexpr uint32_t kMaxFunctionInstructions = 16384;
+    static constexpr uint32_t kSplitSearch = 1024;
+
+    void splitLongFunctions() {
+        std::vector<Function> out;
+        out.reserve(prog_.functions.size());
+        for (Function& f : prog_.functions) {
+            while ((f.end - f.start) / 4 > kMaxFunctionInstructions) {
+                const uint32_t limit = f.start + 4 * kMaxFunctionInstructions;
+                uint32_t cut = limit;
+                for (uint32_t a = limit; a < limit + 4 * kSplitSearch && a + 4 < f.end; a += 4) {
+                    if (Insn(word(a - 8), a - 8).endsBlock()) {
+                        cut = a;
+                        break;
+                    }
+                }
+                if (Insn(word(cut - 4), cut - 4).hasDelaySlot()) cut += 4;
+                if (cut >= f.end) break;
+                Function head;
+                head.start = f.start;
+                head.end = cut;
+                head.name = f.name;
+                head.source = f.source;
+                out.push_back(std::move(head));
+                f.start = cut;
+                f.name.clear();
+                f.source = Source::Gap;
+            }
+            out.push_back(std::move(f));
+        }
+        prog_.functions = std::move(out);
     }
 
     // Code an earlier run found in memory in a function's place becomes a

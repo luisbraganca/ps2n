@@ -15,7 +15,7 @@ its date. Nothing here comes from a game or a BIOS but counts and times.
 | P4.5 The wizard | A game packaged from the disc image and the BIOS with every default accepted, without a command line | **Under way** (2026-11-17): the maintainer's word that it goes through all of PCSX2's settings, and how ([ADR 0032](adr/0032-the-wizard-goes-through-pcsx2s-settings.md)); PCSX2's own per-game settings pages work in `ps2n-wizard`, compiled unchanged, what PS2Native carries out in PCSX2's place fixed; a game's settings are a file in its folder that the runtime reads (`-packaged`), and a session played so is run again at every fingerprint; the five steps, from the disc image to a folder that plays the game, in `PS2Native.exe` at the root of the folder `kit.ps1` makes: Agent Under Fire made with every default accepted in 336 seconds, and played from its folder at the console's pace. **Done** (2026-11-18): the maintainer made a game the project had never run, Gran Turismo 3, without a command line (three settings changed, the rest accepted), which counts for the criterion ([ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)); its code, loaded from its own data, was interpreted in its first session, which wrote it down, and the folder made again from that played at the console's pace. What was left of the step is P4.8's |
 | P4.6 New code in play | A session that meets new code finds it compiled at its next start | **Criterion met** (2026-11-18): a game's folder carries its own toolchain, and when a session ends its launcher starts `ps2n-remake`, which compiles what the session met, only what changed, in the background, with an icon and a notification, for the next start ([ADR 0034](adr/0034-a-game-compiles-new-code-with-its-own-toolchain-and-says-so.md)); a fresh folder of Gran Turismo 3: what its first session interpreted (5,871 blocks of its code, 7,846 of the IOP's, 15 of VU1's, the BIOS's kernel) all compiled at the next start, the third session interpreting nothing of it; the code met outside the executables compiled in 16 parts (that compile 151 s to 27 s); the maintainer's fourth game, Jak and Daxter, played from a folder the wizard made for 39 and then 23 minutes at the console's pace, 0.17% and then 0.04% of the EE's cycles interpreted, what each session met compiled about a minute after it |
 | P4.7 Linux | On the maintainer's own Linux machine ([ADR 0004](adr/0004-proof-of-concept-environment.md)) | |
-| P4.8 The folder for others | On a computer without PCSX2, a game made with the wizard from a `.chd` image, its patches fetched at the user's word, and the folder carrying the licence of everything in it (the session's proposal, [ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)) | **Next** (2026-11-18), before P4.7, at the maintainer's word |
+| P4.8 The folder for others | On a computer without PCSX2, a game made with the wizard from a `.chd` image, its patches fetched at the user's word, and the folder carrying the licence of everything in it (the session's proposal, [ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)) | **Under way** (2026-11-18), before P4.7, at the maintainer's word ([ADR 0036](adr/0036-the-folder-for-others-how-p4-8-is-done.md)): a disc in any format PCSX2 plays, read through PCSX2's own readers; the executables chosen; PCSX2's archive of patches fetched at the user's word or given; a fixed setting in a game's settings file refused; the licence of everything in the folder, Qt's made from Qt's own SBOMs. On this computer the wizard made Silent Hill 3, a game the project had never run, from the maintainer's `.chd`, as without PCSX2, its patches fetched, in 155 s, once a function the recompiler made of a megabyte of its data was cut into pieces. The criterion's run, on a computer without PCSX2, is the maintainer's |
 
 ## How to run it
 
@@ -1135,3 +1135,136 @@ second long session's; the second's wait, ready, for the game's next start.
 Asked what next, the session recommended P4.8, the folder for others,
 before P4.7, Linux, which needs the maintainer's Linux machine for every
 run; the maintainer answered "Yep".
+
+## P4.8 The folder for others
+
+Pass criterion: on a computer without PCSX2, a game made with the wizard
+from a `.chd` image, its patches fetched at the user's word, and the folder
+carrying the licence of everything in it. Begun on 2026-11-18 at the
+maintainer's word ("Yep"), with the maintainer's `.chd` of a game the
+project had never run, *Silent Hill 3* (`SLES-51434`, PAL; "I do, there's
+a chd file for silent hill 3"). How each part is done is the session's, for
+the maintainer to decide otherwise ([ADR 0036](adr/0036-the-folder-for-others-how-p4-8-is-done.md)).
+
+### What was built (2026-11-18)
+
+- **A disc in any format PCSX2 plays.** PS2Native's reader of a disc's
+  files read `.iso` images of 2048-byte sectors alone. The runtime now
+  reads a disc through PCSX2's own readers (`ps2n-host -disc-executables
+  <image>`, `-disc-extract <image> <folder> [<path>...]`,
+  `host/disc.cpp`): `.iso`, raw `.bin`, `.img` and `.mdf`, `.chd`, `.cso`
+  and `.zso`, `.gz`, each sector's 2048 bytes of data as PCSX2's own reader
+  of a disc's files asks for them. What is looked for on the disc is still
+  PS2Native's (`ps2n/iso9660.h`), made free of C++ exceptions so that the
+  runtime compiles it (PCSX2's build switches them off). They are modes of
+  their own, which load no module and run no machine, so that the runtime
+  in the wizard's folder, which has no game's modules beside it, reads a
+  disc too. The wizard, a game's own recompile and `make-game.ps1` use
+  them; `ps2n-recomp extract` stays for `.iso` files in development. A
+  `.cue` sheet stands for the image its first `FILE` line names, which
+  PCSX2 opens (PCSX2 opens no sheet itself). A test of its own,
+  `disc/formats`: a small disc of ours written as an `.iso`, a raw `.bin`
+  and a `.cso` (`tests/disc/make_images.cpp`), each listed and extracted
+  the same, a file the disc has not got and a file that is no disc refused.
+- **The executables chosen.** The first step lists the disc's executables,
+  each ticked; the one the disc boots cannot be left out. One left out runs
+  interpreted, captured, until the game's own recompile has compiled what a
+  session met of it (P4.6).
+- **PCSX2's archive of patches where PCSX2 is not installed.** The
+  settings step offers, at a button, to fetch it from the latest release of
+  PCSX2's patches project (the file PCSX2's own builds put among their
+  resources), with PCSX2's own downloader (WinHTTP; libcurl on Linux), or
+  to take a `patches.zip` the user chooses (`wizard/patches.cpp`). It is
+  checked to be a zip of patch files and kept in the wizard's folder,
+  `patches\patches.zip`, for the games made after; a game's folder gets the
+  game's own patch file from it, as from an installed PCSX2's.
+- **A fixed setting refused.** In a folder the wizard made (`-packaged`),
+  the runtime will not start when the game's settings file sets what
+  PS2Native fixes, and says which, before anything runs; the launcher shows
+  it, as any reason it could not play. The list is the one the wizard keeps
+  out of the file (`ps2n::game::kFixedSections`, `kFixedKeys`), now shared
+  by both. The settings files of the maintainer's four folders set none.
+- **The licences.** `kit.ps1` writes `licences\`: PS2Native's and PCSX2's
+  (GPL-3.0); PCSX2's own list of its third-party licences
+  (`ThirdPartyLicenses.html`), which covers PCSX2's dependency package and
+  what PCSX2 builds in, but not SDL and Qt; SDL's; LLVM's; `Qt-NOTICE.txt`;
+  where Microsoft's terms for its C++ runtime are, as Visual Studio's own
+  `Redist.txt` names them; and `README.txt`, which is which and where the
+  source of each is (PS2Native's commit, PCSX2's tag). Qt's notice is made
+  from Qt's own SBOMs in PCSX2's dependency package: the nine Qt files the
+  folder carries (four libraries, five plugins), the code of others built
+  into each (32 components: PCRE2, double-conversion, TinyCBOR, MD4C, the
+  memory allocators of Vulkan and Direct3D 12, ...), each with its licence
+  and copyright and its own licence file, and every licence text named (17),
+  from Qt's source of the same release, `qtbase-everywhere-src-6.12.0.zip`
+  (fetched into `deps\qt-6.12.0-licences` when not there, checked against
+  the SHA-256 in PCSX2's script for its dependency package). Qt is carried
+  under the LGPL, version 3, its libraries files of their own. `kit.ps1`
+  says when the tree has changes not committed: the folder for others is
+  made from a tree committed and pushed, into a folder of its own (`-Out`),
+  without `games\` or `patches\`.
+
+### Checked on this computer (2026-11-18)
+
+- **The formats.** Jak and Daxter's `.iso` written again as a `.cso` (998
+  MB, raw deflate blocks of 2048 bytes) and as a raw `.bin` of 2352-byte
+  sectors (1.68 GB, with a `.cue`), in the build tree for the check and
+  deleted after it: the runtime lists the same executable from all three
+  and extracts it byte for byte the same. Silent Hill 3's
+  `.chd` (2.2 GB, made for CDs: the codecs `cdlz`, `cdzl` and `cdfl`, units
+  of 2448 bytes): its executable, `SLES_514.34` (3.4 MB, 848,094
+  instructions), listed in 0.14 s and extracted whole.
+- **Silent Hill 3 from its `.chd`, as on a computer without PCSX2**
+  (`ps2n-wizard --auto --without-pcsx2 --fetch-patches`, from the folder
+  `kit.ps1` made, the wizard's folder without an archive of patches). The
+  first step recognized it (`SLES-51434`, CRC `5088CCDB`, PAL-M) and listed
+  its one executable; the settings step fetched PCSX2's archive of patches
+  (2.18 MB) into `patches\` and took the game's from it, "Widescreen 16:9"
+  and "50 FPS", which the wizard enables, with the EE overclock its note
+  asks for (130%).
+- **What it found.** The recompile did not end: one file, 16.9 MB of C++,
+  had not compiled after 29 minutes and 2.6 GB. Silent Hill 3's executable
+  is one segment (`00100000` to `0043C380`, read, write and execute), its
+  data with its code and none of its sections named, and its code ends near
+  `0034C000` (from `00350000` on, not one `jr $ra`): nothing after its last
+  function starts another, which took in the data, 187,835 words, as one
+  C++ function. The recompiler now cuts a function longer than 16,384
+  instructions into pieces (ADR 0036, 7): Silent Hill 3's 8,449 functions
+  became 8,462, and the analysis of every executable of the four games run
+  before (Killzone's two, Agent Under Fire's nine, Gran Turismo 3's, Jak
+  and Daxter's) is the same as before, word for word.
+- **Then.** The wizard made the game in 154.7 s (the recompile 149 s, 77
+  files; the game's module 57.5 MB), with no box of Windows' for a missing
+  library. Its `settings.txt` and `make.txt` name the `.chd`. Started from
+  its folder, muted, the runtime played 90 frames from the `.chd`; and the
+  game's own recompile after that session took the executable from the
+  `.chd` through the folder's runtime and compiled what the session met (40
+  of 111 files), ready 13 s after it began.
+- **A fixed setting by hand.** Two lines written into that folder's
+  settings file (`EnableEE` under `EmuCore/CPU/Recompiler`, `WaitLoop` under
+  `EmuCore/Speedhacks`): the runtime stopped after 0.23 s, before anything
+  ran, saying "the game's settings file ... sets what PS2Native fixes:
+  EmuCore/CPU/Recompiler/EnableEE, EmuCore/Speedhacks/WaitLoop"; with the
+  file as the wizard wrote it, it played.
+- **The command line with a `.cue`.** `make-game.ps1 -Image` the `.cue`
+  beside Jak and Daxter's raw `.bin`: the folder made in 9.5 s, its settings
+  naming the `.bin`, the executable read through the kit's runtime, which
+  has no game's modules beside it.
+- **The licences.** `licences\` as above, `Qt-NOTICE.txt` 198 KB: nine Qt
+  files, 32 components, 17 licence texts.
+- **Every test passes**: 534 in the usual tree, 535 in the module tree,
+  `disc/formats` among them, and the unit tests (the cut of a long function
+  among the recompiler's, the reader of a disc's files without exceptions
+  among the core's).
+
+### What is left for the criterion
+
+- **The run itself, on a computer without PCSX2**: the folder for others
+  made with `kit.ps1 -Out` from a tree committed and pushed, Silent Hill 3
+  made in it from the `.chd`, its patches fetched at the button, and
+  `licences\` looked over. The maintainer's to run, on the Windows 10
+  computer of P4.3's run, which has no PCSX2 ("It doesn't have PCSX2").
+- **Microsoft's terms** for its C++ runtime are online
+  (`https://aka.ms/vs/18/redistribution`, as Visual Studio's own
+  `Redist.txt` names them): what they ask of whoever gives the folder to
+  others is the maintainer's to read.

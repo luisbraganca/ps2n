@@ -525,6 +525,23 @@ if(EXISTS "${vu_elf}")
 		${frame_run} -DEE=ps2n -DIOP=ps2n -DVU=ps2n -DSTATIC=on -DRENDERER=vulkan -DUPSCALE=3 -DFRAME_SIZE=960x1344)
 endif()
 
+# ---- a disc's files, read by the runtime through PCSX2's readers -------------------
+# (host/disc.h; step P4.8, docs/adr/0036): a small disc of our own as an .iso, a
+# raw .bin and a .cso (tests/disc/make_images.cpp), each listed and its files
+# extracted (tests/disc_test.cmake). It needs no BIOS.
+add_executable(ps2n-disc-images "${PS2N_ROOT}/tests/disc/make_images.cpp")
+set_target_properties(ps2n-disc-images PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin")
+add_dependencies(ps2n-host ps2n-disc-images)
+add_test(NAME disc/formats
+	COMMAND "${CMAKE_COMMAND}"
+		"-DHOST=$<TARGET_FILE:ps2n-host>"
+		"-DMAKER=$<TARGET_FILE:ps2n-disc-images>"
+		"-DWORK_DIR=${PS2N_TEST_WORK}/disc/formats"
+		"-DDLL_DIR=${PS2N_TEST_DLL_DIR}"
+		-P "${PS2N_ROOT}/tests/disc_test.cmake"
+)
+set_tests_properties(disc/formats PROPERTIES TIMEOUT 60 LABELS "disc")
+
 # ---- a game (Phase 3) --------------------------------------------------------------
 # A game's boot executable, compiled into the host like the test programs. The
 # executable is the user's own file, outside the repository, and is read where

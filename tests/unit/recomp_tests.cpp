@@ -198,6 +198,44 @@ second: addiu $v0, $v0, 1          # 00100004
     CHECK_CONTAINS(code, "PS2N_BLOCK_END(acc, 27u, target);");
 }
 
+TEST_CASE(a_function_too_long_is_cut_into_pieces) {
+    // 40,000 instructions without another start in them (as Silent Hill 3's
+    // last function took in its data): a jump and its delay slot 30
+    // instructions past the limit of 16,384, nothing of the kind past the
+    // next. Three pieces: the second begins after the jump's delay slot, the
+    // third at the limit, and both are functions of their own.
+    std::string source = "        .text\n        .globl _start\n_start: addiu $sp, $sp, -16\n";
+    for (int i = 1; i < 40000 - 2; ++i) {
+        if (i == 16384 + 30)
+            source += "        j     _start\n";
+        else
+            source += "        addiu $v0, $v0, 1\n";
+    }
+    source += "        jr    $ra\n        nop\n";
+    const ElfFile elf = assemble(source.c_str());
+    const Program prog = analyze(elf);
+    CHECK_EQ(prog.functions.size(), size_t{3});
+    if (prog.functions.size() != 3) return;
+    CHECK_EQ(prog.functions[0].start, 0x00100000u);
+    CHECK_EQ(prog.functions[0].end, 0x00100000u + 4 * (16384 + 32));
+    CHECK_EQ(prog.functions[0].name, std::string("_start"));
+    CHECK_EQ(prog.functions[1].start, prog.functions[0].end);
+    CHECK_EQ(prog.functions[1].end, prog.functions[1].start + 4 * 16384);
+    CHECK(prog.functions[1].source == Source::Gap);
+    CHECK_EQ(prog.functions[2].start, prog.functions[1].end);
+    CHECK_EQ(prog.functions[2].end, 0x00100000u + 4 * 40000);
+    CHECK_EQ(prog.instructionCount, size_t{40000});
+
+    // The second piece is entered at its start, the third runs on from the
+    // second for the rest of its block, as far as a function is followed.
+    GenerateStats stats;
+    GenerateOptions options;
+    options.id = "test";
+    const std::string code = generate(prog, options, &stats);
+    CHECK_CONTAINS(code, "fn_00110080");
+    CHECK_EQ(stats.tails, size_t{1});
+}
+
 TEST_CASE(a_function_that_ends_between_blocks_jumps_to_the_next) {
     const ElfFile elf = assemble(R"(
         .text

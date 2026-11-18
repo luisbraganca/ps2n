@@ -49,6 +49,22 @@ namespace ps2n::game
 		si.ClearSection("Hotkeys");
 	}
 
+	std::vector<std::string> FixedSettingsIn(const SettingsInterface& si)
+	{
+		std::vector<std::string> set;
+		for (const char* section : kFixedSections)
+		{
+			for (const auto& [key, value] : si.GetKeyValueList(section))
+				set.push_back(fmt::format("{}/{}", section, key));
+		}
+		for (const auto& [section, key] : kFixedKeys)
+		{
+			if (si.ContainsValue(section, key))
+				set.push_back(fmt::format("{}/{}", section, key));
+		}
+		return set;
+	}
+
 	std::optional<PatchFile> ReadPatchFile(const std::string& archive, std::string_view serial, u32 crc, std::string* error)
 	{
 		const std::string names[2] = {fmt::format("{}_{:08X}.pnach", serial, crc), fmt::format("{:08X}.pnach", crc)};

@@ -16,11 +16,18 @@ The folder (build\kit unless -Out says otherwise) holds:
                the development builds use; fetched from LLVM's release into deps\llvm-22.1.3 when
                not there yet, its SHA-256 checked) with the compiler's headers; ps2n-recomp;
                PS2Native's headers the generated code includes; the runtime's import library
-  licences\    LLVM's, PCSX2's and PS2Native's
+  licences\    the licence of everything in it, and where the source of each is (licences\README.txt;
+               step P4.8): PS2Native's, PCSX2's and its dependencies' (PCSX2's own list), SDL's, LLVM's,
+               Qt's (Qt-NOTICE.txt, made from the SBOMs Qt's build wrote into PCSX2's dependency package,
+               with the licence texts of Qt's source, fetched into deps\qt-<version>-licences when not
+               there yet, its SHA-256 checked against PCSX2's script), and where Microsoft's terms for its
+               C++ runtime are
   make-game.ps1, README.txt   the one command (scripts\windows\kit\make-game.ps1) and how to use it
 
-Nothing in it comes from a game or a BIOS. Copied to another computer, make-game.ps1 compiles a game
-there from its disc image and the BIOS, and plays it.
+Nothing in it comes from a game or a BIOS, but what the folder's own use puts there: games\, the games made
+with it, and patches\, PCSX2's archive of patches when the wizard fetched it. Neither goes to anyone else.
+Copied to another computer, make-game.ps1 compiles a game there from its disc image and the BIOS, and plays
+it.
 
 .EXAMPLE
 scripts\windows\kit.ps1
@@ -180,10 +187,220 @@ foreach ($header in 'r3000a.h', 'vu_step.h', 'vu_steps.inc') {
 Copy-Item -LiteralPath (Join-Path $root 'runtime\game_module.h') -Destination (Join-Path $toolchain 'include\runtime')
 Copy-Item -LiteralPath (Join-Path $root 'runtime\module_entry.cpp') -Destination (Join-Path $toolchain 'src')
 
-# The licences, the command and how to use it.
-Copy-Item -LiteralPath $llvmLicence -Destination (Join-Path $kit 'licences\LLVM-LICENSE.TXT')
-Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $kit 'licences\PS2Native-LICENSE.txt')
-Copy-Item -LiteralPath (Join-Path $root 'third_party\pcsx2\COPYING.GPLv3') -Destination (Join-Path $kit 'licences\PCSX2-COPYING.GPLv3.txt')
+# ---- the licences (step P4.8, docs\adr\0033) --------------------------------------------------------
+# Of everything the folder carries: PS2Native's and PCSX2's (GPL-3.0); the libraries of PCSX2's dependency
+# package and what PCSX2 builds in, as PCSX2's own list has them (ThirdPartyLicenses.html); SDL's, which
+# that list leaves out; LLVM's; Qt's, made from Qt's own record of what each of its libraries and plugins
+# holds (the SBOMs Qt's build wrote into PCSX2's dependency package) with the licence texts of Qt's source;
+# and where Microsoft's C++ runtime's terms are. licences\README.txt says which is which, and where the
+# source of each is.
+$licences = Join-Path $kit 'licences'
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+Copy-Item -LiteralPath $llvmLicence -Destination (Join-Path $licences 'LLVM-LICENSE.TXT')
+Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $licences 'PS2Native-LICENSE.txt')
+Copy-Item -LiteralPath (Join-Path $root 'third_party\pcsx2\COPYING.GPLv3') -Destination (Join-Path $licences 'PCSX2-COPYING.GPLv3.txt')
+Copy-Item -LiteralPath (Join-Path $root 'third_party\pcsx2\bin\docs\ThirdPartyLicenses.html') -Destination (Join-Path $licences 'PCSX2-ThirdPartyLicenses.html')
+Copy-Item -LiteralPath (Join-Path $root 'deps\windows-x64\deps\licenses\SDL3\LICENSE.txt') -Destination (Join-Path $licences 'SDL3-LICENSE.txt')
+
+# Qt: its release and its source, as PCSX2's script for its dependency package names them.
+$depsScript = [IO.File]::ReadAllText((Join-Path $root 'third_party\pcsx2\.github\workflows\scripts\windows\build-dependencies.bat'))
+if ($depsScript -notmatch '(?m)^set QT=(\S+)') { throw "PCSX2's dependency script names no Qt release." }
+$qtVersion = $Matches[1]
+if ($depsScript -notmatch '(?m)^set QTMINOR=(\S+)') { throw "PCSX2's dependency script names no Qt release." }
+$qtMinor = $Matches[1]
+if ($depsScript -notmatch '"qtbase-everywhere-src-%QT%\.zip" "(\S+)" ([0-9a-f]{64})') { throw "PCSX2's dependency script names no qtbase source." }
+$qtbaseUrl = $Matches[1].Replace('%QTMINOR%', $qtMinor).Replace('%QT%', $qtVersion)
+$qtbaseSha256 = $Matches[2]
+if ($depsScript -notmatch '"qtsvg-everywhere-src-%QT%\.zip" "(\S+)"') { throw "PCSX2's dependency script names no qtsvg source." }
+$qtsvgUrl = $Matches[1].Replace('%QTMINOR%', $qtMinor).Replace('%QT%', $qtVersion)
+$sbomDir = Join-Path $root 'deps\windows-x64\deps\sbom'
+foreach ($module in 'qtbase', 'qtsvg') {
+    if (-not (Test-Path (Join-Path $sbomDir "$module-$qtVersion.spdx"))) { throw "PCSX2's dependency package has no SBOM of Qt $qtVersion's $module in $sbomDir." }
+}
+$qtSourceDir = Join-Path $root "deps\qt-$qtVersion-licences"
+$qtbaseZip = Join-Path $qtSourceDir "qtbase-everywhere-src-$qtVersion.zip"
+if (-not (Test-Path $qtbaseZip)) {
+    New-Item -ItemType Directory -Force $qtSourceDir | Out-Null
+    Write-Host "Fetching $qtbaseUrl"
+    $ProgressPreference = 'SilentlyContinue'
+    Invoke-WebRequest -Uri $qtbaseUrl -OutFile $qtbaseZip -UseBasicParsing
+}
+$hash = (Get-FileHash -LiteralPath $qtbaseZip -Algorithm SHA256).Hash.ToLower()
+if ($hash -ne $qtbaseSha256) { throw "$qtbaseZip is not Qt's source (SHA-256 $hash, not $qtbaseSha256)." }
+
+# The packages of an SPDX document (tag and value), each a table of its fields; a <text> value that
+# runs over several lines is put together.
+function Read-Spdx([string]$path) {
+    $packages = New-Object System.Collections.Generic.List[object]
+    $current = $null
+    $lines = [IO.File]::ReadAllLines($path)
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -notmatch '^([A-Za-z]+):\s?(.*)$') { continue }
+        $key = $Matches[1]; $value = $Matches[2]
+        if ($value.StartsWith('<text>')) {
+            $parts = @($value.Substring(6))
+            while (-not $parts[-1].Contains('</text>') -and $i + 1 -lt $lines.Count) { $i++; $parts += $lines[$i] }
+            $value = ($parts -join "`n")
+            $value = $value.Substring(0, $value.IndexOf('</text>'))
+        }
+        if ($key -eq 'PackageName') { $current = @{ PackageName = $value }; $packages.Add($current) }
+        elseif ($key -eq 'LicenseID') { $current = $null }
+        elseif ($current -and -not $current.ContainsKey($key)) { $current[$key] = $value }
+    }
+    return $packages
+}
+# Qt's files in the folder, and what Qt's build calls each: the module or plugin, and for Qt Core the
+# PCRE2 it holds.
+$qtFiles = [ordered]@{
+    'Qt6Core.dll' = @('qtbase', 'Core', 'BundledPcre2'); 'Qt6Gui.dll' = @('qtbase', 'Gui'); 'Qt6Widgets.dll' = @('qtbase', 'Widgets')
+    'Qt6Svg.dll' = @('qtsvg', 'Svg'); 'qt\plugins\platforms\qwindows.dll' = @('qtbase', 'QWindowsIntegrationPlugin')
+    'qt\plugins\styles\qmodernwindowsstyle.dll' = @('qtbase', 'QModernWindowsStylePlugin')
+    'qt\plugins\imageformats\qico.dll' = @('qtbase', 'QICOPlugin'); 'qt\plugins\imageformats\qsvg.dll' = @('qtsvg', 'QSvgPlugin')
+    'qt\plugins\iconengines\qsvgicon.dll' = @('qtsvg', 'QSvgIconPlugin')
+}
+foreach ($file in (Get-ChildItem $runtime -Recurse -File -Include 'Qt6*.dll', 'q*.dll')) {
+    $relative = $file.FullName.Substring($runtime.Length + 1)
+    if (-not $qtFiles.Contains($relative)) { throw "Qt's $relative is in the runtime, but not in the licences' list of Qt's files (kit.ps1, `$qtFiles)." }
+}
+$present = @($qtFiles.Keys | Where-Object { Test-Path (Join-Path $runtime $_) })
+if ($present) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $sbom = @{ qtbase = (Read-Spdx (Join-Path $sbomDir "qtbase-$qtVersion.spdx")); qtsvg = (Read-Spdx (Join-Path $sbomDir "qtsvg-$qtVersion.spdx")) }
+    $zip = [IO.Compression.ZipFile]::OpenRead($qtbaseZip)
+    $sourceRoot = "qtbase-everywhere-src-$qtVersion"
+    function Read-QtSource([string]$path) {
+        $parts = New-Object System.Collections.Generic.List[string]
+        foreach ($p in ("$sourceRoot/$path" -split '/')) {
+            if ($p -eq '..') { $parts.RemoveAt($parts.Count - 1) } elseif ($p -and $p -ne '.') { $parts.Add($p) }
+        }
+        $entry = $zip.GetEntry($parts -join '/')
+        if (-not $entry) { throw "$path is not in Qt's source ($qtbaseZip)." }
+        $reader = New-Object IO.StreamReader($entry.Open())
+        try { return $reader.ReadToEnd().TrimEnd() } finally { $reader.Dispose() }
+    }
+    $rule = '-' * 78
+    $generic = [ordered]@{ 'LGPL-3.0-only' = 1; 'GPL-3.0-only' = 1 }
+    $text = New-Object System.Collections.Generic.List[string]
+    $text.Add("Qt, in this folder and in every game's folder made with it")
+    $text.Add('=' * 58)
+    $text.Add('')
+    $text.Add("Qt $qtVersion (https://www.qt.io), in runtime\: $(($present | ForEach-Object { $_ }) -join ', ').")
+    $text.Add('')
+    $text.Add("Qt is The Qt Company's and its contributors', offered under the GNU Lesser General Public License, version 3")
+    $text.Add('(LGPL-3.0-only), the GNU General Public License, version 2 or 3, or a commercial licence. PS2Native carries it')
+    $text.Add('under the LGPL, version 3, whose text is at the end of this file with the GPL, version 3, which it builds on.')
+    $text.Add('Each of these libraries is a file of its own, which another build of the same Qt can replace.')
+    $text.Add('')
+    $text.Add("It is Qt $qtVersion as its source has it, unchanged: $qtbaseUrl and")
+    $text.Add("$qtsvgUrl, built for PCSX2's dependency package by PCSX2's script, which says how")
+    $text.Add("(.github/workflows/scripts/windows/build-dependencies.bat in PCSX2's source; see README.txt beside this).")
+    $text.Add('')
+    $text.Add("Below, from Qt's own record of what it built (its SBOMs), each of those files with the code of others")
+    $text.Add("built into it, and that code's licence and copyright: its own licence file from Qt's source where it has one,")
+    $text.Add('and otherwise the licence it names, whose text is at the end of this file.')
+    foreach ($file in $present) {
+        $doc, $targets = $qtFiles[$file][0], @($qtFiles[$file] | Select-Object -Skip 1)
+        $module = $sbom[$doc] | Where-Object { $_.PackageName -eq $targets[0] } | Select-Object -First 1
+        $text.Add('')
+        $text.Add($rule)
+        $text.Add("$file`: Qt's $($targets[0]) $($module.PackageVersion)")
+        $text.Add($module.PackageCopyrightText)
+        $text.Add('Licence: LGPL-3.0-only (at the end of this file)')
+        $parts = @($sbom[$doc] | Where-Object { $name = $_.PackageName; $targets | Where-Object { $name -eq $_ -or $name -like "$($_)_Attribution_*" } })
+        $parts = @($parts | Where-Object { $_.PackageName -ne $targets[0] })
+        if ($parts) { $text.Add(''); $text.Add('Built into it:') }
+        foreach ($part in $parts) {
+            $comment = [string]$part.PackageComment
+            $name = if ($comment -match '(?m)^\s*Name: (.+)$') { $Matches[1].Trim() } else { $part.PackageName }
+            $text.Add('')
+            $text.Add("* $name $(if ($part.PackageVersion -and $part.PackageVersion -ne 'unknown') { $part.PackageVersion })".TrimEnd())
+            if ($part.PackageDownloadLocation -and $part.PackageDownloadLocation -ne 'NOASSERTION') { $text.Add("  From: $($part.PackageDownloadLocation)") }
+            $text.Add("  Licence: $($part.PackageLicenseConcluded)")
+            if ($part.PackageCopyrightText -and $part.PackageCopyrightText -ne 'NOASSERTION') {
+                foreach ($line in ($part.PackageCopyrightText -split "`n")) { $text.Add("  $($line.Trim())") }
+            }
+            $licenceFiles = @([regex]::Matches($comment, '(?m)^\s*License file: (.+)$') | ForEach-Object { $_.Groups[1].Value.Trim() })
+            $where = if ($comment -match '(?m)^\s*/src_dir/qtbase/(.+)/qt_attribution\.json\s*$') { $Matches[1] } else { '' }
+            $ownFile = [bool]($licenceFiles -and $where)
+            foreach ($licenceFile in @(if ($ownFile) { $licenceFiles })) {
+                $text.Add('')
+                $text.Add("  Its licence ($where/$licenceFile in Qt's source):")
+                $text.Add('')
+                foreach ($line in ((Read-QtSource "$where/$licenceFile") -split "\r?\n")) { $text.Add("    $line".TrimEnd()) }
+            }
+            # Every licence it names, at the end too; one it has no file of its own for must be there.
+            foreach ($id in ($part.PackageLicenseConcluded -split '\s+(?:OR|AND|WITH)\s+|[()]')) {
+                $id = $id.Trim()
+                if (-not $id -or $id -eq 'NOASSERTION') { continue }
+                $generic[$id] = [bool]$generic[$id] -or -not $ownFile
+            }
+        }
+    }
+    $text.Add('')
+    $text.Add($rule)
+    $text.Add('The licences named above, as Qt''s source has them (its LICENSES folder)')
+    foreach ($id in $generic.Keys) {
+        $entry = $zip.GetEntry("$sourceRoot/LICENSES/$id.txt")
+        if (-not $entry) {
+            if ($generic[$id]) { throw "Qt's source has no text of the licence $id, which a part of Qt names without a file of its own." }
+            continue
+        }
+        $text.Add('')
+        $text.Add($rule)
+        $text.Add("$id")
+        $text.Add('')
+        foreach ($line in ((Read-QtSource "LICENSES/$id.txt") -split "\r?\n")) { $text.Add($line.TrimEnd()) }
+    }
+    $zip.Dispose()
+    [IO.File]::WriteAllLines((Join-Path $licences 'Qt-NOTICE.txt'), [string[]]$text, $utf8)
+}
+
+# Microsoft's C++ runtime: where its terms are, as Visual Studio's own Redist.txt points there.
+$redistNote = Get-Content -LiteralPath (Join-Path $vs 'Licenses\1033\Redist.txt') -ErrorAction SilentlyContinue
+$redistUrl = if ("$redistNote" -match '(https://\S+?)\.?(\s|$)') { $Matches[1] } else { 'https://visualstudio.microsoft.com/license-terms/' }
+$crtVersion = (Get-Item (Join-Path $crt.FullName 'msvcp140.dll')).VersionInfo.FileVersion
+[IO.File]::WriteAllLines((Join-Path $licences 'Microsoft-CPP-runtime.txt'), [string[]]@(
+        "msvcp140.dll, vcruntime140.dll and vcruntime140_1.dll (in runtime\, in toolchain\bin, and in every game's",
+        "folder) are Microsoft's Visual C++ runtime, version $crtVersion, taken from Visual Studio's redistributable files",
+        "($(Split-Path (Split-Path $crt.FullName) -Parent | Split-Path -Leaf)), which Visual Studio's licence terms allow to be distributed with a program",
+        '("Distributable Code"). Microsoft''s terms for them, as Visual Studio''s own Redist.txt names where they are:',
+        "$redistUrl"), $utf8)
+
+# Which is which, and where the source of each is. (What git says on stderr does not stop this.)
+$ErrorActionPreference = 'Continue'
+$ps2nRepo = ("$(& git -C $root remote get-url origin 2>&1)" -replace '\.git$', '').Trim()
+$ps2nCommit = "$(& git -C $root rev-parse HEAD 2>&1)".Trim()
+$ps2nChanged = [bool]("$(& git -C $root status --porcelain --untracked-files=no 2>&1)".Trim())
+$pcsx2Tag = "$(& git -C (Join-Path $root 'third_party\pcsx2') describe --tags --exact-match 2>&1)".Trim()
+$pcsx2Commit = "$(& git -C (Join-Path $root 'third_party\pcsx2') rev-parse HEAD 2>&1)".Trim()
+$ErrorActionPreference = 'Stop'
+if ($ps2nChanged) { Write-Host "Warning: the tree has changes not committed; licences\README.txt says so, and the folder is not for others." }
+$changedNote = if ($ps2nChanged) { ', with changes not committed when this folder was made' } else { '' }
+# (Each line one string: in an array, a comma binds before a +.)
+[IO.File]::WriteAllLines((Join-Path $licences 'README.txt'), [string[]]@(
+        'The licences of what this folder holds',
+        '======================================',
+        '',
+        "PS2Native: PS2Native-LICENSE.txt (GNU General Public License, version 3). Its source: $ps2nRepo,",
+        "commit $ps2nCommit$changedNote.",
+        '',
+        'PCSX2, whose core the runtime is built on: PCSX2-COPYING.GPLv3.txt (GNU General Public License, version 3).',
+        "Its source: https://github.com/PCSX2/pcsx2, $pcsx2Tag (commit $pcsx2Commit).",
+        '',
+        'The libraries in runtime\ that come from PCSX2''s dependency package, and what PCSX2 builds into its core:',
+        'PCSX2-ThirdPartyLicenses.html, PCSX2''s own list of them with their licences. The package is built by PCSX2''s',
+        'script .github/workflows/scripts/windows/build-dependencies.bat, in PCSX2''s source above, from the sources it',
+        'names. SDL 3, which that list leaves out: SDL3-LICENSE.txt.',
+        '',
+        "Qt $qtVersion (runtime\Qt6*.dll and runtime\qt): Qt-NOTICE.txt, made from Qt's own record of what each file holds,",
+        'with every licence text it names, Qt''s own LGPL, version 3, among them. Its source: Qt''s release, as Qt-NOTICE.txt says.',
+        '',
+        "LLVM's clang-cl and lld-link, and the compiler's headers (toolchain\): LLVM-LICENSE.TXT (Apache License 2.0 with",
+        "LLVM exceptions). Their source: https://github.com/llvm/llvm-project, llvmorg-$llvmVersion.",
+        '',
+        "Microsoft's C++ runtime: Microsoft-CPP-runtime.txt says where Microsoft's terms for it are."), $utf8)
+
+# The command and how to use it.
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'kit\make-game.ps1'), (Join-Path $PSScriptRoot 'kit\README.txt') -Destination $kit
 
 $size = (Get-ChildItem $kit -Recurse -File | Where-Object { $_.FullName -notlike (Join-Path $kit 'games*') } | Measure-Object Length -Sum).Sum

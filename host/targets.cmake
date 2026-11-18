@@ -7,6 +7,8 @@
 # own directory is CMAKE_CURRENT_LIST_DIR.
 
 add_executable(ps2n-host
+	"${CMAKE_CURRENT_LIST_DIR}/disc.cpp"
+	"${CMAKE_CURRENT_LIST_DIR}/disc.h"
 	"${CMAKE_CURRENT_LIST_DIR}/game_settings.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/game_settings.h"
 	"${CMAKE_CURRENT_LIST_DIR}/host_interface.cpp"

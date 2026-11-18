@@ -694,41 +694,59 @@ TEST_CASE(iso9660_files_and_boot_executable) {
         return true;
     };
 
-    const iso::Entry root = iso::root(read);
-    CHECK(root.directory);
-    CHECK_EQ(root.sector, 18u);
-    const std::vector<iso::Entry> top = iso::list(read, root);
-    CHECK_EQ(top.size(), size_t{3});
-    if (top.size() == 3) {
-        CHECK_EQ(top[0].name, std::string("SYSTEM.CNF"));
-        CHECK_EQ(top[1].name, std::string("SLES_000.00"));
-        CHECK_EQ(top[2].name, std::string("SUB"));
-        CHECK(top[2].directory);
+    std::string error;
+    const std::optional<iso::Entry> root = iso::root(read, &error);
+    CHECK(root.has_value());
+    if (!root) return;
+    CHECK(root->directory);
+    CHECK_EQ(root->sector, 18u);
+    const std::optional<std::vector<iso::Entry>> top = iso::list(read, *root, &error);
+    CHECK(top.has_value() && top->size() == 3);
+    if (top && top->size() == 3) {
+        CHECK_EQ((*top)[0].name, std::string("SYSTEM.CNF"));
+        CHECK_EQ((*top)[1].name, std::string("SLES_000.00"));
+        CHECK_EQ((*top)[2].name, std::string("SUB"));
+        CHECK((*top)[2].directory);
     }
 
-    const std::optional<iso::Entry> boot = iso::find(read, "sles_000.00");
+    const std::optional<iso::Entry> boot = iso::find(read, "sles_000.00", &error);
     CHECK(boot.has_value());
     if (boot) {
         CHECK_EQ(boot->sector, 21u);
-        const std::vector<uint8_t> bytes = iso::readFile(read, *boot);
-        CHECK(std::string(bytes.begin(), bytes.end()) == elf);
+        const std::optional<std::vector<uint8_t>> bytes = iso::readFile(read, *boot, &error);
+        CHECK(bytes && std::string(bytes->begin(), bytes->end()) == elf);
     }
-    const std::optional<iso::Entry> file = iso::find(read, "SUB\\big.bin");
+    const std::optional<iso::Entry> file = iso::find(read, "SUB\\big.bin", &error);
     CHECK(file.has_value());
-    if (file) CHECK(iso::readFile(read, *file) == big);
-    CHECK(!iso::find(read, "NOPE").has_value());
-    CHECK(!iso::find(read, "SYSTEM.CNF/X").has_value());
-    CHECK(iso::bootExecutable(read) == std::optional<std::string>("SLES_000.00"));
+    if (file) CHECK(iso::readFile(read, *file, &error) == std::optional<std::vector<uint8_t>>(big));
+    // A name the disc has not got is nothing, and no error.
+    CHECK(!iso::find(read, "NOPE", &error).has_value());
+    CHECK(error.empty());
+    CHECK(!iso::find(read, "SYSTEM.CNF/X", &error).has_value());
+    CHECK(error.empty());
+    CHECK(iso::bootExecutable(read, &error) == std::optional<std::string>("SLES_000.00"));
     // The executables: the one the disc boots first, then the EE's others; not
     // the IOP module, not the other files.
-    CHECK(iso::executables(read) == (std::vector<std::string>{"SLES_000.00", "SUB/GAME.ELF"}));
+    CHECK(iso::executables(read, &error) == std::optional<std::vector<std::string>>({"SLES_000.00", "SUB/GAME.ELF"}));
+    CHECK(error.empty());
 
-    // An image without a file system.
+    // An image without a file system: nothing, and why.
     const iso::SectorReader blank = [&](uint32_t, uint8_t* out) {
         std::memset(out, 0, S);
         return true;
     };
-    CHECK_THROWS(iso::root(blank));
+    CHECK(!iso::root(blank, &error).has_value());
+    CHECK(error.find("no ISO 9660 file system") != std::string::npos);
+    CHECK(!iso::executables(blank, &error).has_value());
+    CHECK(!error.empty());
+    // One that ends before its directories do.
+    const iso::SectorReader cut = [&](uint32_t n, uint8_t* out) {
+        if (n >= 19) return false;
+        std::memcpy(out, sector(n), S);
+        return true;
+    };
+    CHECK(!iso::executables(cut, &error).has_value());
+    CHECK(error.find("ends before sector 19") != std::string::npos);
 }
 
 int main(int argc, char** argv) { return ::testing::runAll(argc, argv); }

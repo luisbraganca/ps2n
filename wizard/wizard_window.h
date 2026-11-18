@@ -32,11 +32,12 @@ namespace ps2n::wizard
 		QString image;
 		GameList::Entry entry;
 		bool recognized = false;
-		QStringList executables; // on the disc: the one it boots first
+		QStringList executables; // those compiled: the one the disc boots first, then those it loads itself the user kept
 		QString bios;
 		QString title;
 		QString folder;
-		QString patch_archive; // PCSX2's archive of patches, an installed PCSX2's or one given
+		QString patch_archive; // PCSX2's archive of patches: an installed PCSX2's, or the one this folder keeps (patches.h)
+		bool fetch_patches_unasked = false; // for checks: fetched where there is none, as if the user had asked
 	};
 
 	class WizardWindow final : public QWizard
@@ -54,6 +55,11 @@ namespace ps2n::wizard
 		// for the user whenever a page is complete, and the wizard closed at
 		// the end without playing, or after the step `until` (1 to 5).
 		void Prepare(const QString& image, const QString& bios, const QString& shots, bool automatic, int until = 5);
+
+		// For checks: as on a computer without PCSX2, its installed archive of
+		// patches not looked for; and the archive fetched where there is none, as
+		// if the user had asked.
+		void WithoutPcsx2(bool fetch_patches);
 
 	private:
 		State m_state;

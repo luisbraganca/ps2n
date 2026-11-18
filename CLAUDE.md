@@ -107,7 +107,20 @@ first time. The maintainer then played a fourth game made with the
 wizard, *Jak and Daxter* (`SCES-50361`), from its folder: 39 minutes and
 then 23 at the console's pace, 0.17% and then 0.04% of the EE's cycles
 interpreted, what each session met compiled about a minute after it. P4.8,
-the folder for others, is next, before P4.7, at the maintainer's word.**
+the folder for others, is next, before P4.7, at the maintainer's word, and
+was begun the same day (ADR 0036): a disc in any format PCSX2 plays, read
+through PCSX2's own readers by the runtime (`ps2n-host -disc-executables`,
+`-disc-extract`); the executables compiled chosen in the wizard's first
+step; PCSX2's archive of patches fetched at the user's word where PCSX2 is
+not installed, or given; a fixed setting written into a game's settings
+file refused by the runtime; and the licence of everything in the folder
+(`licences\`, Qt's made from Qt's own SBOMs). On this computer the wizard
+made a fifth game the project had never run, *Silent Hill 3*
+(`SLES-51434`), from the maintainer's `.chd`, as on a computer without
+PCSX2, its patches fetched, in 155 seconds, once the recompiler cut into
+pieces a function it had made of a megabyte of the game's data (its
+executable one segment, data with code). The criterion's run, on a
+computer without PCSX2, is the maintainer's.**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -643,6 +656,22 @@ Decisions:
   second at least 1% of the EE's, the IOP's or the VUs' work was
   interpreted; five seconds; at most once a minute; top left; the brand's
   colours.
+- [ADR 0036](docs/adr/0036-the-folder-for-others-how-p4-8-is-done.md):
+  P4.8, the folder for others, is next, before P4.7 (the maintainer's
+  "Yep", 2026-11-18), its `.chd` the maintainer's Silent Hill 3 ("I do,
+  there's a chd file for silent hill 3"). The session's choices, for the
+  maintainer to decide otherwise: a disc read through PCSX2's own readers
+  by the runtime (`ps2n-host -disc-executables`, `-disc-extract`), what is
+  looked for on it PS2Native's (`ps2n/iso9660.h`, free of exceptions), a
+  `.cue` standing for the image it names; PCSX2's archive of patches
+  fetched at a button from the latest release of PCSX2's patches project
+  (the file PCSX2's own builds take), or a file given, kept in the folder's
+  `patches\`; a fixed setting in a game's settings file refused by the
+  runtime, naming it; every executable ticked, the boot one always; the
+  licences written by `kit.ps1`, Qt's from Qt's SBOMs and source, with
+  where each source is; and, found making Silent Hill 3 (one segment, data
+  with code, its last function a megabyte), a function cut into pieces of
+  about 16,384 instructions, which changes no other game's analysis.
 
 ## Layout, build and test
 
@@ -678,11 +707,14 @@ runtime/                  what PS2Native adds to the core at run time: the EE pr
 host/                     ps2n-host: console frontend for the PCSX2 core, the test bench (the self-test of the
                           instruction semantics, of the VU provider and of the IOP provider; the watches on the
                           core's providers: sync_trace, vu_report, iop_report); with -window, where a game
-                          is played (window.cpp: Windows only so far); and a game's launcher (launcher.cpp:
-                          the program a game's folder is started from, which starts the runtime beside it)
+                          is played (window.cpp: Windows only so far); a game's launcher (launcher.cpp:
+                          the program a game's folder is started from, which starts the runtime beside it);
+                          and a disc image's files read through PCSX2's own readers of every format it plays
+                          (disc.cpp: -disc-executables, -disc-extract; step P4.8, ADR 0036)
 wizard/                   ps2n-wizard, the application a game is made with (Phase 4, step P4.5; ADR 0032):
                           its five steps (wizard_window.cpp), the recompile (pipeline.cpp), the game's folder
-                          (package.cpp); and ps2n-remake (remake_main.cpp; step P4.6, ADR 0034), the same
+                          (package.cpp), PCSX2's archive of patches fetched or given where PCSX2 is not installed
+                          (patches.cpp; step P4.8); and ps2n-remake (remake_main.cpp; step P4.6, ADR 0034), the same
                           recompile without the window, with which a game's folder compiles what its sessions
                           met for the first time itself; PCSX2's own settings pages, compiled from the submodule unchanged, in
                           a window of its own (settings_window.cpp: PCSX2's SettingsWindow class with the pages a
@@ -690,6 +722,7 @@ wizard/                   ps2n-wizard, the application a game is made with (Phas
                           pcsx2-qt/MainWindow.h, found before PCSX2's) and of the core (host_interface.cpp)
 tests/unit/               unit tests of the build-time tools
 tests/module/             what a module defines for itself, tested (stack_probe.cpp: its __chkstk)
+tests/disc/               a small disc of our own in three formats, for the runtime's reading of a disc (disc/formats)
 tests/                    CTest registration for programs booted on the core, the driver script, the recorded
                           baselines; recompiles the test programs into the build tree and links them into the host
 tests/programs/           our own test programs, in assembly for core's assembler: selfmod (rewrites its code), bench,
@@ -800,7 +833,9 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   session down in the folder's `sessions` (`-sessions`) and names the
   window (`-title`); `last-run.log` has what the runtime said, and the
   launcher says why in a message box when it could not play. It takes the
-  game's executables from the disc image (`ps2n-recomp extract`), and the
+  game's executables from the disc image, in any format PCSX2 plays, through
+  the runtime (`ps2n-host -disc-extract`, PCSX2's own readers; a `.cue`
+  stands for the image it names; step P4.8), and the
   next time it runs compiles what the folder's sessions had to interpret
   too. `game.ps1 -Runtime <folder>\ps2n-host.exe` runs a packaged game as
   it is, a session again among them. Run it from the folder with nothing
@@ -811,11 +846,22 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   dependency package), it goes into the folder's `runtime` with Qt and its
   plugins (`runtime\wizard-files.txt` lists what a game's folder leaves
   out), and `PS2Native.exe` at the folder's root starts it. It finds a
-  disc's executables itself (`ps2n-recomp executables`), writes the game's
+  disc's executables itself (`ps2n-host -disc-executables`), each compiled
+  unless the user leaves it out, writes the game's
   own settings file and patch file into its folder's data, and makes the
   folder with `-packaged`: the runtime then takes the game's settings from
   that file, over the defaults the wizard showed, which are the runtime's
-  too (`host/game_settings.h`, `ps2n::game::SetDefaults`). A game's
+  too (`host/game_settings.h`, `ps2n::game::SetDefaults`), and refuses to
+  start when the file sets what PS2Native fixes (`kFixedSections`,
+  `kFixedKeys`, the list the wizard keeps out of it; step P4.8). Where
+  PCSX2 is not installed, its settings step offers to fetch PCSX2's archive
+  of patches, or to take one the user gives, kept in the folder's
+  `patches\` (ADR 0036). `kit.ps1` writes `licences\`, the licence of
+  everything the folder carries and where its source is
+  (`licences\README.txt`; Qt's notice made from the SBOMs in PCSX2's
+  dependency package, with the texts of Qt's source, fetched into
+  `deps\qt-<version>-licences`); the folder for others is made with
+  `-Out` into a folder of its own, from a tree committed and pushed. A game's
   folder, whichever made it, also has a copy of the toolchain, Qt and
   `ps2n-remake.exe`, and `make.txt`, how its modules are made (step P4.6,
   ADR 0034): when a session ends, its launcher starts `ps2n-remake` at low
@@ -827,8 +873,10 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   what it did); the launcher puts those modules in place at the next
   start. For checks,
   `ps2n-wizard --kit build\kit --image <iso> --bios <bin> --shots <folder>
-  --auto [--until <step>]` fills the first steps in, saves each step (the
-  settings, each category) as a picture, and presses Next itself; run from
+  --auto [--until <step>] [--without-pcsx2 [--fetch-patches]]` fills the
+  first steps in, saves each step (the settings, each category) as a
+  picture, and presses Next itself (`--without-pcsx2`: as on a computer
+  without PCSX2; `--fetch-patches`: the archive fetched unasked); run from
   the build tree it needs `deps\windows-x64\deps\bin` on `PATH` and
   `QT_PLUGIN_PATH` set to `deps\windows-x64\deps\plugins`.
 - The game: `scripts\windows\build.ps1 -Game <its boot executable>` compiles

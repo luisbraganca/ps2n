@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 class SettingsInterface;
@@ -26,6 +27,26 @@ namespace ps2n::game
 	// of what the core draws over the picture (ADR 0012); none of PCSX2's
 	// hotkeys, which open its own interface and save states.
 	void SetDefaults(SettingsInterface& si);
+
+	// What PS2Native carries out in PCSX2's place (the EE, its FPU, the vector
+	// units, the IOP, and the time they count) and what the runtime decides
+	// itself (the patches it applies, the clock, save states): fixed as PCSX2
+	// has them, which the game's code was checked against (docs/adr/0032,
+	// decision 2). The wizard keeps them out of a game's own settings file; the
+	// runtime refuses to play with a file that sets one (step P4.8). Whole
+	// sections, then single keys. The EE's cycle rate is not among them: it is
+	// checked at every rate (G17).
+	inline constexpr const char* kFixedSections[] = {"EmuCore/CPU", "EmuCore/CPU/Recompiler", "EmuCore/Gamefixes"};
+	inline constexpr std::pair<const char*, const char*> kFixedKeys[] = {{"EmuCore/Speedhacks", "EECycleSkip"},
+		{"EmuCore/Speedhacks", "IntcStat"}, {"EmuCore/Speedhacks", "WaitLoop"}, {"EmuCore/Speedhacks", "vuFlagHack"},
+		{"EmuCore/Speedhacks", "vuThread"}, {"EmuCore/Speedhacks", "vu1Instant"}, {"EmuCore", "EnablePatches"},
+		{"EmuCore", "EnablePINE"}, {"EmuCore", "EnableGameFixes"}, {"EmuCore", "SaveStateOnShutdown"},
+		{"EmuCore", "BackupSavestate"}, {"EmuCore", "ManuallySetRealTimeClock"}, {"EmuCore", "UseSystemLocaleFormat"},
+		{"EmuCore", "RtcYear"}, {"EmuCore", "RtcMonth"}, {"EmuCore", "RtcDay"}, {"EmuCore", "RtcHour"},
+		{"EmuCore", "RtcMinute"}, {"EmuCore", "RtcSecond"}};
+
+	// The fixed settings a game's own settings file sets, "section/key" each.
+	std::vector<std::string> FixedSettingsIn(const SettingsInterface& si);
 
 	// A game's patch file, as PCSX2's archive of them has it (ADR 0025).
 	struct PatchFile

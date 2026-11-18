@@ -69,6 +69,8 @@ add_executable(ps2n-wizard WIN32
 	"${CMAKE_CURRENT_LIST_DIR}/main.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/package.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/package.h"
+	"${CMAKE_CURRENT_LIST_DIR}/patches.cpp"
+	"${CMAKE_CURRENT_LIST_DIR}/patches.h"
 	"${CMAKE_CURRENT_LIST_DIR}/pipeline.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/pipeline.h"
 	"${CMAKE_CURRENT_LIST_DIR}/settings_window.cpp"

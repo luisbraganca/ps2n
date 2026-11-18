@@ -16,8 +16,12 @@ up to about 0.6 GB of memory for each processor.
 
 Make a game: start PS2Native.exe, and follow its five steps.
 
-  1. The game: its disc image, an .iso file of your own disc. PS2Native
-     recognizes it with PCSX2's database, and finds the executables on it.
+  1. The game: the disc image of your own disc, in any format PCSX2 plays
+     (.iso, .chd, .cso or .zso, .bin, .img or .mdf, .gz; for a .bin, its .cue
+     sheet does too). PS2Native recognizes it with PCSX2's database, and finds
+     the executables on it; each is compiled, but those you leave out (a
+     game's other languages): one left out runs interpreted, slower, until the
+     game has compiled what a session met of it.
   2. The BIOS: an image dumped from your own console.
   3. The settings: PCSX2's own settings for the game, each at PCSX2's default
      but for PS2Native's (Vulkan, three times the console's resolution, a 16:9
@@ -28,8 +32,11 @@ Make a game: start PS2Native.exe, and follow its five steps.
 
 A game's widescreen and frame-rate patches come from PCSX2's own archive of
 them, patches.zip, which PS2Native does not ship: an installed PCSX2's is taken
-by itself, and the game's own patch file is copied into its folder. Without it
-the game plays as its disc has it, 4:3.
+by itself. Where PCSX2 is not installed, the settings step offers to fetch it,
+at your word, from PCSX2's patches project on GitHub (the file PCSX2 itself
+comes with), or to take a patches.zip you have; it is kept in this folder
+(patches\) for the games made after. The game's own patch file is copied into
+its folder. Without it the game plays as its disc has it, 4:3.
 
 The game's folder plays it: start <name>.exe there (double-click it, or make a
 shortcut to it). Beside it are its modules, a copy of the runtime, a copy of
@@ -37,7 +44,8 @@ the toolchain (toolchain, about 200 MB, which the game compiles new code with),
 settings.txt (what the runtime is started with: the disc image and the BIOS
 image, read where they were when the folder was made, one option to a line),
 make.txt (how its modules are made), and the game's own settings and patch file
-in data\PCSX2. In the folder too are its memory cards and the console's
+in data\PCSX2 (what PS2Native fixes, set there by hand, makes the game refuse to
+start and say which it is). In the folder too are its memory cards and the console's
 settings (data), every session played, written down to be run again with what
 it had to interpret (sessions), and last-run.log, what the runtime said the
 last time; when it could not play the game, <name>.exe says why. The folder can
@@ -70,7 +78,9 @@ name them, and give what earlier sessions had to interpret, if you have it:
     powershell -ExecutionPolicy Bypass -File .\make-game.ps1 -Image <disc image> -Bios <BIOS image> `
         -Title 'Agent Under Fire' -More MOVIE.ELF,ACTION.UK,DRIVING.ELF -Captures <folder> -Play
 
-Licences: licences\ (PS2Native and PCSX2: GPL-3.0; LLVM: Apache-2.0 with LLVM
-exceptions). The other libraries in runtime\ are PCSX2's dependencies and Qt,
-under their own licences. Microsoft's C++ runtime libraries in runtime\ and
-toolchain\bin come from Visual Studio's redistributable files.
+Licences: licences\ has the licence of everything in this folder, and
+licences\README.txt says which is which and where the source of each is
+(PS2Native and PCSX2: GPL-3.0; Qt: LGPL-3.0; LLVM: Apache-2.0 with LLVM
+exceptions; the other libraries in runtime\, PCSX2's dependencies, under their
+own). Microsoft's C++ runtime libraries in runtime\ and toolchain\bin come from
+Visual Studio's redistributable files, under Microsoft's terms.

@@ -11,6 +11,7 @@
 // The start-up sequence follows pcsx2-gsrunner/Main.cpp of PCSX2 v2.9.170,
 // Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+.
 
+#include "disc.h"
 #include "host_state.h"
 #include "profile.h"
 #include "selftest.h"
@@ -69,6 +70,7 @@
 #include "pcsx2/Config.h"
 #include "pcsx2/Counters.h"
 #include "pcsx2/Host.h"
+#include "pcsx2/INISettingsInterface.h"
 #include "pcsx2/ImGui/ImGuiManager.h"
 #include "pcsx2/Input/InputManager.h"
 #include "pcsx2/MTGS.h"
@@ -577,6 +579,14 @@ namespace
 			"                     host code each compiled image this host holds became,\n"
 			"                     by the kind of generated line, from the host's own\n"
 			"                     debugging information. Needs nothing else. Windows only.\n"
+			"\n"
+			"A disc image's files, read through PCSX2's own readers of every format it\n"
+			"plays (.iso, .bin, .img, .mdf, .chd, .cso, .zso, .gz), each a mode of its own:\n"
+			"  -disc-executables <image>  The EE's executables on the disc: \"boot <path>\"\n"
+			"                     for the one SYSTEM.CNF boots, \"loads <path>\" for each\n"
+			"                     other.\n"
+			"  -disc-extract <image> <folder> [<path>...]  The files named (the boot\n"
+			"                     executable when none is) written into the folder.\n"
 			"\n"
 			"Exit code: 0 marker seen, 1 error, 2 frame limit, 3 time limit, 4 usage.\n",
 			stderr);
@@ -1287,6 +1297,37 @@ namespace
 				FileSystem::FindFiles(Path::Combine(pcsx2, folder).c_str(), pattern, FILESYSTEM_FIND_FILES, &found);
 				for (const FILESYSTEM_FIND_DATA& file : found)
 					FileSystem::CopyFilePath(file.FileName.c_str(), Path::Combine(o.record_dir, Path::GetFileName(file.FileName)).c_str(), false);
+			}
+		}
+		return true;
+	}
+
+	// A game's folder the wizard made (-packaged): its own settings file sets
+	// nothing PS2Native fixes (game_settings.h; docs/adr/0033, step P4.8). The
+	// wizard keeps those out; one edited in by hand is refused, with what it
+	// sets, before anything runs.
+	bool CheckGameSettingsFiles()
+	{
+		FileSystem::FindResultsArray found;
+		FileSystem::FindFiles(Path::Combine(Path::Combine(s_options.data_dir, "PCSX2"), "gamesettings").c_str(), "*.ini",
+			FILESYSTEM_FIND_FILES, &found);
+		for (const FILESYSTEM_FIND_DATA& file : found)
+		{
+			INISettingsInterface ini(file.FileName);
+			if (!ini.Load())
+			{
+				std::fprintf(stderr, "ps2n-host: cannot read the game's settings file %s\n", file.FileName.c_str());
+				return false;
+			}
+			const std::vector<std::string> fixed = ps2n::game::FixedSettingsIn(ini);
+			if (!fixed.empty())
+			{
+				std::fprintf(stderr,
+					"ps2n-host: the game's settings file %s sets what PS2Native fixes: %s. PS2Native carries it out in "
+					"PCSX2's place as PCSX2 has it by default, which the game's code was checked against; take it out of "
+					"the file, or make the game again with PS2Native.exe\n",
+					file.FileName.c_str(), StringUtil::JoinString(fixed.begin(), fixed.end(), ", ").c_str());
+				return false;
 			}
 		}
 		return true;
@@ -2901,6 +2942,8 @@ namespace
 		if (s_options.fast_cores)
 			UseFastCores();
 
+		if (s_options.packaged && !CheckGameSettingsFiles())
+			return EXIT_ERROR;
 		if (!InitializeConfig())
 			return EXIT_ERROR;
 		if (s_options.make_session_folder && !MakeSessionFolder())
@@ -3380,15 +3423,20 @@ static bool LoadGameModules()
 // File names are only handled correctly on Windows when they arrive as UTF-16.
 int wmain(int argc, wchar_t** argv)
 {
-#if defined(PS2N_GAME_MODULE)
-	if (!LoadGameModules())
-		return EXIT_ERROR;
-#endif
-
 	std::vector<std::string> u8_args;
 	u8_args.reserve(static_cast<size_t>(argc));
 	for (int i = 0; i < argc; i++)
 		u8_args.push_back(StringUtil::WideStringToUTF8String(argv[i]));
+
+	// A disc image's files (host/disc.h): no module of compiled code, which the
+	// wizard's folder has none of, and no machine.
+	if (const std::optional<int> code = ps2n::host::disc::Run(u8_args))
+		return *code;
+
+#if defined(PS2N_GAME_MODULE)
+	if (!LoadGameModules())
+		return EXIT_ERROR;
+#endif
 
 	std::vector<char*> u8_argptrs;
 	u8_argptrs.reserve(u8_args.size() + 1);
@@ -3403,6 +3451,9 @@ int wmain(int argc, wchar_t** argv)
 
 int main(int argc, char* argv[])
 {
+	// A disc image's files (host/disc.h): no machine.
+	if (const std::optional<int> code = ps2n::host::disc::Run(std::vector<std::string>(argv, argv + argc)))
+		return *code;
 	return Run(argc, argv);
 }
 

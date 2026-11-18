@@ -37,12 +37,14 @@ add_library(ps2n-runtime STATIC
 	"${CMAKE_CURRENT_LIST_DIR}/vu_interp.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/vu_interp.h"
 
-	# The instruction decoder and the reader of a BIOS image's directory,
-	# shared with the build-time tools (core/). Only the parts that use no C++
-	# exceptions are compiled here: PCSX2's build switches exceptions off.
+	# The instruction decoder, the reader of a BIOS image's directory and the
+	# reader of a disc's files, shared with the build-time tools (core/). Only
+	# the parts that use no C++ exceptions are compiled here: PCSX2's build
+	# switches exceptions off.
 	"${PS2N_ROOT}/core/src/cycles.cpp"
 	"${PS2N_ROOT}/core/src/decoder.cpp"
 	"${PS2N_ROOT}/core/src/disasm.cpp"
+	"${PS2N_ROOT}/core/src/iso9660.cpp"
 	"${PS2N_ROOT}/core/src/romdir.cpp"
 	"${PS2N_ROOT}/core/src/strings.cpp"
 	"${PS2N_ROOT}/core/src/vu_mvu.cpp"

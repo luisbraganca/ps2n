@@ -15,6 +15,8 @@
 // opened from its game list, which the wizard has not got. What PS2Native
 // carries out in PCSX2's place is shown but fixed (setupUi).
 
+#include "game_settings.h"
+
 #include "QtHost.h"
 #include "QtUtils.h"
 #include "Settings/AdvancedSettingsWidget.h"
@@ -206,10 +208,11 @@ void SettingsWindow::setupUi(const GameList::Entry* game)
 				fix(box);
 		}
 
+		// The same list the runtime refuses a game's file by (game_settings.h).
 		if (m_sif)
 		{
 			bool changed = false;
-			for (const char* section : {"EmuCore/CPU", "EmuCore/CPU/Recompiler", "EmuCore/Gamefixes"})
+			for (const char* section : ps2n::game::kFixedSections)
 			{
 				if (!m_sif->GetKeyValueList(section).empty())
 				{
@@ -217,14 +220,7 @@ void SettingsWindow::setupUi(const GameList::Entry* game)
 					changed = true;
 				}
 			}
-			static constexpr std::pair<const char*, const char*> kFixedKeys[] = {
-				{"EmuCore/Speedhacks", "EECycleSkip"}, {"EmuCore/Speedhacks", "IntcStat"}, {"EmuCore/Speedhacks", "WaitLoop"},
-				{"EmuCore/Speedhacks", "vuFlagHack"}, {"EmuCore/Speedhacks", "vuThread"}, {"EmuCore/Speedhacks", "vu1Instant"},
-				{"EmuCore", "EnablePatches"}, {"EmuCore", "EnablePINE"}, {"EmuCore", "EnableGameFixes"}, {"EmuCore", "SaveStateOnShutdown"},
-				{"EmuCore", "BackupSavestate"}, {"EmuCore", "ManuallySetRealTimeClock"}, {"EmuCore", "UseSystemLocaleFormat"},
-				{"EmuCore", "RtcYear"}, {"EmuCore", "RtcMonth"}, {"EmuCore", "RtcDay"}, {"EmuCore", "RtcHour"}, {"EmuCore", "RtcMinute"},
-				{"EmuCore", "RtcSecond"}};
-			for (const auto& [section, key] : kFixedKeys)
+			for (const auto& [section, key] : ps2n::game::kFixedKeys)
 			{
 				if (m_sif->ContainsValue(section, key))
 				{

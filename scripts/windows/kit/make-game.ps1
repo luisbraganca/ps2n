@@ -7,8 +7,9 @@ installed (docs\phase4-proposal.md, steps P4.3 and P4.4).
 Part of the folder scripts\windows\kit.ps1 puts together; run it from there. From the disc image and the
 BIOS image, both the user's own and read where they are, it writes the game's compiled code with the
 toolchain beside it (LLVM's clang and lld, PS2Native's headers and recompiler): the game's executables
-taken from the disc image, translated to C++ (ps2n-recomp), compiled and linked into four modules (the
-game's EE code, the BIOS's, the micro code, the IOP's code).
+taken from the disc image (by the runtime, through PCSX2's own readers of every format PCSX2 plays),
+translated to C++ (ps2n-recomp), compiled and linked into four modules (the game's EE code, the BIOS's,
+the micro code, the IOP's code).
 
 They go into games\<name>, the game's folder, with the runtime and a launcher named after the game
 (<title>.exe): started, it plays the game as settings.txt beside it says (the disc image, the BIOS, the
@@ -27,7 +28,8 @@ cannot be linked into the folder.
 .\make-game.ps1 -Image 'D:\games\Agent Under Fire.iso' -Bios 'D:\bios\SCPH-70004.BIN' -Title 'Agent Under Fire' -More MOVIE.ELF,ACTION.UK,DRIVING.ELF -Captures .\captures -Play
 #>
 param(
-    # The game's disc image (an .iso), read where it is.
+    # The game's disc image, read where it is: any format PCSX2 plays (.iso; a raw .bin, .img or .mdf;
+    # .chd; .cso or .zso; .gz), or a .cue sheet, for the image its first FILE line names.
     [Parameter(Mandatory = $true)][string]$Image,
     # The BIOS image, read where it is.
     [Parameter(Mandatory = $true)][string]$Bios,
@@ -70,10 +72,26 @@ $runtime = Join-Path $kit 'runtime'
 $recomp = Join-Path $toolchain 'bin\ps2n-recomp.exe'
 $clang = Join-Path $toolchain 'bin\clang-cl.exe'
 $lld = Join-Path $toolchain 'bin\lld-link.exe'
-foreach ($needed in $recomp, $clang, $lld, (Join-Path $runtime 'ps2n-host.exe'), (Join-Path $runtime 'ps2n-launcher.exe')) {
+# The runtime reads the disc's files (ps2n-host -disc-extract), through PCSX2's own readers.
+$discReader = Join-Path $runtime 'ps2n-host.exe'
+foreach ($needed in $recomp, $clang, $lld, $discReader, (Join-Path $runtime 'ps2n-launcher.exe')) {
     if (-not (Test-Path -LiteralPath $needed)) { throw "This folder is not whole: $needed is missing." }
 }
-$imagePath = (Resolve-Path -LiteralPath $Image).Path
+# A .cue sheet stands for the image its first FILE line names, beside it (the data track's): PCSX2 reads
+# the image, not the sheet.
+function Resolve-Cue([string]$path) {
+    if ([IO.Path]::GetExtension($path) -ne '.cue') { return $path }
+    foreach ($line in [IO.File]::ReadAllLines($path)) {
+        if ($line -match '^\s*FILE\s+"([^"]+)"' -or $line -match '^\s*FILE\s+(\S+)') {
+            $named = $Matches[1]
+            $file = Join-Path (Split-Path $path -Parent) $named
+            if (-not (Test-Path -LiteralPath $file)) { throw "The .cue sheet $path names $named, which is not beside it." }
+            return (Resolve-Path -LiteralPath $file).Path
+        }
+    }
+    throw "The .cue sheet $path names no file."
+}
+$imagePath = Resolve-Cue (Resolve-Path -LiteralPath $Image).Path
 $biosPath = (Resolve-Path -LiteralPath $Bios).Path
 if ($Jobs -le 0) { $Jobs = [Environment]::ProcessorCount }
 $started = Get-Date
@@ -96,10 +114,10 @@ function Run([string]$exe, [string[]]$arguments) {
 }
 
 # ---- the game, and its folder -----------------------------------------------------------------------
-$probe = Join-Path ([IO.Path]::GetTempPath()) ("ps2n-" + [Guid]::NewGuid().ToString('N'))
-$bootLine = Run $recomp @('extract', $imagePath, '--out-dir', $probe) | Select-Object -First 1
-$boot = ($bootLine -split ' ', 2)[0]
-Remove-Item -LiteralPath $probe -Recurse -Force -ErrorAction SilentlyContinue
+$onDisc = Run $discReader @('-disc-executables', $imagePath)
+$bootLine = @($onDisc | Where-Object { $_ -match '^boot ' }) | Select-Object -First 1
+if (-not $bootLine) { throw "The disc image names no executable to boot: $($onDisc -join '; ')" }
+$boot = ($bootLine -split ' ', 2)[1].Trim()
 # A name Windows takes for a file or a folder.
 function Plain([string]$text) { ($text -replace '[\\/:*?"<>|]', ' ').Trim() }
 if (-not $Name) { $Name = if ($Title) { Plain $Title } else { $boot -replace '[^A-Za-z0-9._-]', '_' } }
@@ -130,7 +148,7 @@ if (-not $PlayOnly) {
     Say "the game boots $boot; its folder: $game"
     New-Item -ItemType Directory -Force $disc, $gen, $obj | Out-Null
     $moreNames = @($More -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    Run $recomp (@('extract', $imagePath, $boot) + $moreNames + @('--out-dir', $disc)) | Out-Null
+    Run $discReader (@('-disc-extract', $imagePath, $disc, $boot) + $moreNames) | Out-Null
     $bootElf = Join-Path $disc (Split-Path $boot -Leaf)
     Say "taken from the disc image: $(@($boot) + $moreNames -join ', ')"
 

@@ -487,23 +487,35 @@ int capture(const Args& a) {
     return 0;
 }
 
+// A disc image of 2048-byte sectors (an .iso); the runtime reads every format
+// PCSX2 plays (ps2n-host -disc-extract, -disc-executables).
+iso::SectorReader openDiscImage(const std::string& path) {
+    iso::SectorReader read = iso::openImage(path);
+    if (!read) throw Error("cannot open the disc image " + path);
+    return read;
+}
+
 int extract(const Args& a) {
     if (a.positional.empty()) throw Error("extract needs a disc image");
     if (a.outDir.empty()) throw Error("extract needs --out-dir <dir>");
-    const iso::SectorReader read = iso::openImage(a.positional[0]);
+    const iso::SectorReader read = openDiscImage(a.positional[0]);
+    std::string error;
     std::vector<std::string> names(a.positional.begin() + 1, a.positional.end());
     if (names.empty()) {
-        const std::optional<std::string> boot = iso::bootExecutable(read);
+        const std::optional<std::string> boot = iso::bootExecutable(read, &error);
+        if (!error.empty()) throw Error(error);
         if (!boot) throw Error("the disc names no executable to boot (SYSTEM.CNF's BOOT2)");
         names.push_back(*boot);
     }
     std::filesystem::create_directories(a.outDir);
     for (const std::string& name : names) {
-        const std::optional<iso::Entry> entry = iso::find(read, name);
+        const std::optional<iso::Entry> entry = iso::find(read, name, &error);
+        if (!error.empty()) throw Error(error);
         if (!entry || entry->directory) throw Error("the disc image has no file " + name);
-        const std::vector<uint8_t> data = iso::readFile(read, *entry);
+        const std::optional<std::vector<uint8_t>> data = iso::readFile(read, *entry, &error);
+        if (!data) throw Error(error);
         const std::filesystem::path to = a.outDir / entry->name;
-        writeFileIfChanged(to, std::string_view(reinterpret_cast<const char*>(data.data()), data.size()));
+        writeFileIfChanged(to, std::string_view(reinterpret_cast<const char*>(data->data()), data->size()));
         std::printf("%s %s\n", name.c_str(), to.string().c_str());
     }
     return 0;
@@ -514,9 +526,13 @@ int extract(const Args& a) {
 // several executables loads itself (docs/adr/0026).
 int executables(const Args& a) {
     if (a.positional.size() != 1) throw Error("executables needs a disc image");
-    const iso::SectorReader read = iso::openImage(a.positional[0]);
-    const std::optional<std::string> boot = iso::bootExecutable(read);
-    for (const std::string& path : iso::executables(read))
+    const iso::SectorReader read = openDiscImage(a.positional[0]);
+    std::string error;
+    const std::optional<std::string> boot = iso::bootExecutable(read, &error);
+    if (!error.empty()) throw Error(error);
+    const std::optional<std::vector<std::string>> paths = iso::executables(read, &error);
+    if (!paths) throw Error(error);
+    for (const std::string& path : *paths)
         std::printf("%s %s\n", boot && path == *boot ? "boot" : "loads", path.c_str());
     return 0;
 }

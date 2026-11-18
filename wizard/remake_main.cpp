@@ -179,6 +179,7 @@ int main(int argc, char* argv[])
 		modules = work.filePath(QStringLiteral("next-") + round_started.toString(QStringLiteral("yyyyMMdd-HHmmss-zzz")));
 		ps2n::wizard::PipelineInput input;
 		input.toolchain = folder.filePath(QStringLiteral("toolchain"));
+		input.runtime = folder.path();
 		input.image = recipe.image;
 		input.bios = recipe.bios;
 		input.executables = recipe.executables;

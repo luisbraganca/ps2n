@@ -3,7 +3,9 @@
 // What the wizard's recompile step does (docs/phase4-proposal.md, step P4.5),
 // as scripts/windows/kit/make-game.ps1 does it: what the game's folder's
 // sessions had to interpret put into its captures; the game's executables
-// taken from its disc image; them, the BIOS's code and the captured micro code
+// taken from its disc image (by the runtime, ps2n-host -disc-extract, through
+// PCSX2's own readers of every format PCSX2 plays; step P4.8); them, the
+// BIOS's code and the captured micro code
 // and IOP code translated to C++ (ps2n-recomp); the files compiled with the
 // toolchain's clang-cl, as many at once as the computer has processors, and
 // linked with its lld-link into the game's four modules. Each program is run
@@ -32,7 +34,8 @@ namespace ps2n::wizard
 	struct PipelineInput
 	{
 		QString toolchain; // the toolchain folder: bin, include, lib, src
-		QString image; // the disc image
+		QString runtime; // the folder of the runtime that reads the disc (ps2n-host.exe): the kit's, or the game's folder
+		QString image; // the disc image, in any format PCSX2 plays
 		QString bios; // the BIOS image
 		QStringList executables; // on the disc: the one it boots first, then those it loads itself
 		QString folder; // the game's folder: its work in work, its captures in captures

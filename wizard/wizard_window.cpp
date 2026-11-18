@@ -4,6 +4,7 @@
 
 #include "game_settings.h"
 #include "package.h"
+#include "patches.h"
 #include "pipeline.h"
 
 #include "Settings/SettingsWindow.h"
@@ -22,6 +23,7 @@
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QProcess>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QSettings>
 #include <QtCore/QTimer>
 #include <QtWidgets/QCheckBox>
@@ -106,8 +108,8 @@ namespace ps2n::wizard
 			}
 			else
 			{
-				*note = QObject::tr("No archive of PCSX2's patches was found (an installed PCSX2 has one): the game plays as its "
-									"disc has it.");
+				*note = QObject::tr("PCSX2 is not installed here, and PS2Native comes without PCSX2's patches: without them the "
+									"game plays as its disc has it, 4:3. Fetch them, or choose PCSX2's patches.zip.");
 			}
 
 			const std::string path = VMManager::GetGameSettingsPath(s.entry.serial, s.entry.crc);
@@ -136,6 +138,39 @@ namespace ps2n::wizard
 			return sif;
 		}
 
+		// A .cue sheet stands for the image its first FILE line names, beside it
+		// (the data track's): PCSX2 reads the image, not the sheet. Any other file
+		// stands for itself. Empty, with *error, when the sheet names none there.
+		QString ImageOf(const QString& path, QString* error)
+		{
+			if (!path.endsWith(QStringLiteral(".cue"), Qt::CaseInsensitive))
+				return path;
+			QFile sheet(path);
+			if (!sheet.open(QIODevice::ReadOnly | QIODevice::Text))
+			{
+				*error = QObject::tr("The .cue sheet %1 cannot be read.").arg(QDir::toNativeSeparators(path));
+				return QString();
+			}
+			static const QRegularExpression file_line(QStringLiteral("^\\s*FILE\\s+(?:\"([^\"]+)\"|(\\S+))"),
+				QRegularExpression::CaseInsensitiveOption);
+			while (!sheet.atEnd())
+			{
+				const QRegularExpressionMatch m = file_line.match(QString::fromUtf8(sheet.readLine()));
+				if (!m.hasMatch())
+					continue;
+				const QString named = m.captured(1).isEmpty() ? m.captured(2) : m.captured(1);
+				const QString image = QFileInfo(path).dir().filePath(named);
+				if (!QFileInfo::exists(image))
+				{
+					*error = QObject::tr("The .cue sheet names %1, which is not beside it.").arg(named);
+					return QString();
+				}
+				return QDir::toNativeSeparators(QFileInfo(image).absoluteFilePath());
+			}
+			*error = QObject::tr("The .cue sheet names no file.");
+			return QString();
+		}
+
 		class Page : public QWizardPage
 		{
 		public:
@@ -157,8 +192,9 @@ namespace ps2n::wizard
 				: Page(window)
 			{
 				setTitle(tr("The game"));
-				setSubTitle(tr("Choose the game's disc image, an .iso file of your own disc. PS2Native recognizes it with "
-							   "PCSX2's own database, and reads it where it is."));
+				setSubTitle(tr("Choose the game's disc image, of your own disc: an .iso, .chd, .cso or .bin file (or the .cue "
+							   "beside a .bin), any that PCSX2 plays. PS2Native recognizes it with PCSX2's own database, and "
+							   "reads it where it is."));
 				auto* layout = new QVBoxLayout(this);
 				QPushButton* browse;
 				layout->addLayout(PathRow(this, &m_path, &browse));
@@ -166,6 +202,17 @@ namespace ps2n::wizard
 				m_found->setTextFormat(Qt::RichText);
 				m_found->setWordWrap(true);
 				layout->addWidget(m_found);
+				// Its executables, each compiled unless left out (docs/adr/0033): the
+				// one the disc boots always.
+				m_executables_label = new QLabel(tr("Its executables, each compiled for this computer. One you leave out runs "
+													"interpreted, slower, until the game has compiled what a session met of it."),
+					this);
+				m_executables_label->setWordWrap(true);
+				layout->addWidget(m_executables_label);
+				m_executables = new QListWidget(this);
+				m_executables->setSelectionMode(QAbstractItemView::NoSelection);
+				layout->addWidget(m_executables);
+				ShowExecutables(false);
 				auto* form = new QFormLayout;
 				m_title = new QLineEdit(this);
 				form->addRow(tr("Its name:"), m_title);
@@ -177,7 +224,7 @@ namespace ps2n::wizard
 
 				connect(browse, &QPushButton::clicked, this, [this]() {
 					const QString file = QFileDialog::getOpenFileName(this, tr("The game's disc image"), QString(),
-						tr("Disc images (*.iso);;All files (*.*)"));
+						tr("Disc images (*.iso *.chd *.cso *.zso *.bin *.img *.mdf *.gz *.cue);;All files (*.*)"));
 					if (!file.isEmpty())
 					{
 						m_path->setText(QDir::toNativeSeparators(file));
@@ -186,6 +233,7 @@ namespace ps2n::wizard
 				});
 				connect(m_path, &QLineEdit::editingFinished, this, [this]() { Recognize(); });
 				connect(m_title, &QLineEdit::textChanged, this, [this]() { UpdateFolder(); });
+				connect(m_executables, &QListWidget::itemChanged, this, [this]() { TakeExecutables(); });
 			}
 
 			void SetImage(const QString& image)
@@ -199,12 +247,24 @@ namespace ps2n::wizard
 		private:
 			void Recognize()
 			{
-				const QString path = m_path->text().trimmed();
-				if (path == s().image && s().recognized)
+				const QString chosen = m_path->text().trimmed();
+				if (chosen == m_chosen && s().recognized)
 					return;
+				m_chosen = chosen;
 				s().recognized = false;
-				s().image = path;
 				s().executables.clear();
+				ShowExecutables(false);
+
+				// The image itself, for a .cue sheet the one it names.
+				QString error;
+				const QString path = ImageOf(chosen, &error);
+				s().image = path;
+				if (!error.isEmpty())
+				{
+					m_found->setText(QStringLiteral("<b>%1</b>").arg(Html(error)));
+					emit completeChanged();
+					return;
+				}
 
 				GameList::Entry entry;
 				if (path.isEmpty() || !GameList::PopulateEntryFromPath(path.toStdString(), &entry) ||
@@ -215,46 +275,79 @@ namespace ps2n::wizard
 					return;
 				}
 
-				// Its executables: the one it boots, and those it loads itself
-				// (ps2n-recomp executables), each compiled.
-				QProcess recomp;
-				recomp.setProcessChannelMode(QProcess::MergedChannels);
-				recomp.start(QDir(s().kit.toolchain).filePath(QStringLiteral("bin/ps2n-recomp.exe")), {QStringLiteral("executables"), path});
-				const bool ran = recomp.waitForFinished(60000) && recomp.exitStatus() == QProcess::NormalExit && recomp.exitCode() == 0;
-				const QString listed = QString::fromLocal8Bit(recomp.readAll());
-				QStringList executables;
+				// Its executables: the one it boots, and those it loads itself, read by
+				// the runtime through PCSX2's own readers (ps2n-host -disc-executables).
+				QProcess reader;
+				reader.setProcessChannelMode(QProcess::MergedChannels);
+				reader.start(QDir(s().kit.runtime).filePath(QStringLiteral("ps2n-host.exe")),
+					{QStringLiteral("-disc-executables"), QDir::toNativeSeparators(path)});
+				const bool ran = reader.waitForFinished(60000) && reader.exitStatus() == QProcess::NormalExit && reader.exitCode() == 0;
+				const QString listed = QString::fromUtf8(reader.readAll());
+				QString boot;
+				QStringList loaded;
 				for (const QString& line : listed.split(QLatin1Char('\n'), Qt::SkipEmptyParts))
 				{
 					const QString l = line.trimmed();
-					const qsizetype space = l.indexOf(QLatin1Char(' '));
-					if (space > 0 && (l.startsWith(QStringLiteral("boot ")) || l.startsWith(QStringLiteral("loads "))))
-						executables.push_back(l.mid(space + 1));
+					if (l.startsWith(QStringLiteral("boot ")))
+						boot = l.mid(5);
+					else if (l.startsWith(QStringLiteral("loads ")))
+						loaded.push_back(l.mid(6));
 				}
-				if (!ran || executables.isEmpty() || !listed.startsWith(QStringLiteral("boot ")))
+				if (!ran || boot.isEmpty())
 				{
-					m_found->setText(tr("<b>%1 is recognized, but its executables could not be read from the image.</b> PS2Native "
-										"reads .iso images of 2048-byte sectors so far.<br>%2")
+					m_found->setText(tr("<b>%1 is recognized, but its executables could not be read from the image.</b><br>%2")
 										 .arg(Html(QString::fromStdString(entry.title)), Html(listed.trimmed())));
 					emit completeChanged();
 					return;
 				}
 
 				s().entry = entry;
-				s().executables = executables;
+				m_executables->blockSignals(true);
+				m_executables->clear();
+				const QStringList executables = QStringList{boot} + loaded;
+				for (qsizetype i = 0; i < executables.size(); i++)
+				{
+					auto* item = new QListWidgetItem(i == 0 ? tr("%1, which the disc boots").arg(executables[i]) :
+															  tr("%1, which the game loads itself").arg(executables[i]),
+						m_executables);
+					item->setData(Qt::UserRole, executables[i]);
+					item->setCheckState(Qt::Checked);
+					// The one the disc boots is always compiled.
+					item->setFlags(i == 0 ? Qt::ItemIsEnabled : (Qt::ItemIsEnabled | Qt::ItemIsUserCheckable));
+				}
+				m_executables->blockSignals(false);
+				const int rows = static_cast<int>(std::min<qsizetype>(executables.size(), 6));
+				m_executables->setFixedHeight(m_executables->sizeHintForRow(0) * rows + 2 * m_executables->frameWidth() + 2);
+				ShowExecutables(true);
+				TakeExecutables();
 				s().recognized = true;
-				m_found->setText(
-					tr("<p><b>%1</b><br>Serial %2, CRC %3, %4.<br>PCSX2's compatibility: %5.</p>"
-					   "<p>Its executables: %6%7.</p>")
-						.arg(Html(QString::fromStdString(entry.title)), Html(QString::fromStdString(entry.serial)),
-							QStringLiteral("%1").arg(entry.crc, 8, 16, QLatin1Char('0')).toUpper(),
-							Html(QString::fromUtf8(GameList::RegionToString(entry.region, true))),
-							Html(QString::fromUtf8(GameList::EntryCompatibilityRatingToString(entry.compatibility_rating, true))),
-							Html(executables.front()),
-							executables.size() > 1 ?
-								tr(", and %1 it loads itself: %2").arg(executables.size() - 1).arg(Html(executables.mid(1).join(QStringLiteral(", ")))) :
-								QString()));
+				m_found->setText(tr("<p><b>%1</b><br>Serial %2, CRC %3, %4.<br>PCSX2's compatibility: %5.</p>")
+									 .arg(Html(QString::fromStdString(entry.title)), Html(QString::fromStdString(entry.serial)),
+										 QStringLiteral("%1").arg(entry.crc, 8, 16, QLatin1Char('0')).toUpper(),
+										 Html(QString::fromUtf8(GameList::RegionToString(entry.region, true))),
+										 Html(QString::fromUtf8(GameList::EntryCompatibilityRatingToString(entry.compatibility_rating, true)))) +
+								 (path != chosen ? tr("<p>Its image, as the .cue sheet names it: %1</p>").arg(Html(path)) : QString()));
 				m_title->setText(QString::fromStdString(entry.title));
 				UpdateFolder();
+			}
+
+			// Those kept in the list, the one the disc boots first.
+			void TakeExecutables()
+			{
+				QStringList kept;
+				for (int i = 0; i < m_executables->count(); i++)
+				{
+					const QListWidgetItem* item = m_executables->item(i);
+					if (item->checkState() == Qt::Checked)
+						kept.push_back(item->data(Qt::UserRole).toString());
+				}
+				s().executables = kept;
+			}
+
+			void ShowExecutables(bool shown)
+			{
+				m_executables_label->setVisible(shown);
+				m_executables->setVisible(shown);
 			}
 
 			void UpdateFolder()
@@ -266,7 +359,10 @@ namespace ps2n::wizard
 			}
 
 			QLineEdit* m_path;
+			QString m_chosen; // what m_path had when it was last recognized
 			QLabel* m_found;
+			QLabel* m_executables_label;
+			QListWidget* m_executables;
 			QLineEdit* m_title;
 			QLabel* m_folder;
 		};
@@ -356,6 +452,16 @@ namespace ps2n::wizard
 				m_note = new QLabel(this);
 				m_note->setWordWrap(true);
 				row->addWidget(m_note, 1);
+				// PCSX2's archive of patches where PCSX2 is not installed, fetched
+				// at the user's word or given (patches.h).
+				m_fetch = new QPushButton(tr("Fetch PCSX2's patches"), this);
+				m_fetch->setToolTip(tr("From PCSX2's patches project on GitHub (%1): the archive PCSX2 itself comes with, kept in "
+									   "PS2Native's folder for the games you make after.")
+										.arg(QString::fromLatin1(patches::kUrl)));
+				row->addWidget(m_fetch);
+				m_give = new QPushButton(tr("Choose patches.zip..."), this);
+				m_give->setToolTip(tr("PCSX2's archive of patches from elsewhere (PCSX2 keeps it in its resources folder)."));
+				row->addWidget(m_give);
 				auto* defaults = new QPushButton(tr("Back to the defaults"), this);
 				row->addWidget(defaults);
 				m_layout->addLayout(row);
@@ -363,9 +469,30 @@ namespace ps2n::wizard
 					QFile::remove(QString::fromStdString(VMManager::GetGameSettingsPath(s().entry.serial, s().entry.crc)));
 					Build();
 				});
+				connect(m_fetch, &QPushButton::clicked, this, [this]() { FetchPatches(); });
+				connect(m_give, &QPushButton::clicked, this, [this]() {
+					const QString file = QFileDialog::getOpenFileName(this, tr("PCSX2's archive of patches"), QString(),
+						tr("PCSX2's archive of patches (patches.zip);;Zip archives (*.zip)"));
+					if (file.isEmpty())
+						return;
+					QString error;
+					if (!patches::Keep(file, KeptArchive(), &error))
+					{
+						m_note->setText(QStringLiteral("<b>%1</b>").arg(Html(error)));
+						return;
+					}
+					s().patch_archive = KeptArchive();
+					Build();
+				});
 			}
 
-			void initializePage() override { Build(); }
+			void initializePage() override
+			{
+				Build();
+				// For checks: as if the user had pressed Fetch.
+				if (s().fetch_patches_unasked && !QFileInfo::exists(s().patch_archive))
+					FetchPatches();
+			}
 
 			void cleanupPage() override
 			{
@@ -373,7 +500,35 @@ namespace ps2n::wizard
 				m_pages = nullptr;
 			}
 
+			bool isComplete() const override { return !m_fetching; }
+
 		private:
+			QString KeptArchive() const { return QDir(s().kit.root).filePath(QStringLiteral("patches/patches.zip")); }
+
+			void FetchPatches()
+			{
+				m_fetching = true;
+				m_fetch->setEnabled(false);
+				m_give->setEnabled(false);
+				m_note->setText(tr("Fetching PCSX2's archive of patches from %1 ...").arg(QString::fromLatin1(patches::kUrl)));
+				emit completeChanged();
+				patches::Fetch(this, KeptArchive(), [this](bool ok, const QString& error) {
+					m_fetching = false;
+					m_fetch->setEnabled(true);
+					m_give->setEnabled(true);
+					if (ok)
+					{
+						s().patch_archive = KeptArchive();
+						Build();
+					}
+					else
+					{
+						m_note->setText(QStringLiteral("<b>%1</b>").arg(Html(error)));
+					}
+					emit completeChanged();
+				});
+			}
+
 			void Build()
 			{
 				delete m_pages;
@@ -381,6 +536,9 @@ namespace ps2n::wizard
 				QString note;
 				std::unique_ptr<INISettingsInterface> sif = SetUpGameSettings(s(), &note);
 				m_note->setText(note);
+				const bool have_archive = QFileInfo::exists(s().patch_archive);
+				m_fetch->setVisible(!have_archive);
+				m_give->setVisible(!have_archive);
 				const QString file = QString::fromStdString(std::string(Path::GetFileName(sif->GetFileName())));
 				m_pages = new SettingsWindow(std::move(sif), &s().entry, s().entry.serial, s().entry.crc, file);
 				// The wizard's own buttons lead on: PCSX2's close the window,
@@ -395,6 +553,9 @@ namespace ps2n::wizard
 
 			QVBoxLayout* m_layout;
 			QLabel* m_note;
+			QPushButton* m_fetch;
+			QPushButton* m_give;
+			bool m_fetching = false;
 			SettingsWindow* m_pages = nullptr;
 		};
 
@@ -430,6 +591,7 @@ namespace ps2n::wizard
 				connect(m_pipeline, &Pipeline::line, this, [this](const QString& text) { m_log->appendPlainText(text); });
 				connect(m_pipeline, &Pipeline::finished, this, [this](bool ok, const QString& error) {
 					m_ok = ok;
+					m_failed = !ok;
 					const QString took = tr("%1 seconds").arg(m_started.secsTo(QDateTime::currentDateTime()));
 					m_stage->setText(ok ? tr("<b>Done</b>, in %1.").arg(took) : tr("<b>It did not work:</b> %1").arg(Html(error)));
 					m_log->appendPlainText(ok ? tr("Done, in %1.").arg(took) : error);
@@ -437,13 +599,24 @@ namespace ps2n::wizard
 				});
 			}
 
+			// For checks (--auto): the recompile ended, and not well.
+			bool Failed() const { return m_failed; }
+
 			void initializePage() override
 			{
 				m_ok = false;
+				m_failed = false;
 				m_log->clear();
 				m_bar->setValue(0);
 				m_started = QDateTime::currentDateTime();
-				m_pipeline->start({s().kit.toolchain, s().image, s().bios, s().executables, s().folder});
+				PipelineInput input;
+				input.toolchain = s().kit.toolchain;
+				input.runtime = s().kit.runtime;
+				input.image = s().image;
+				input.bios = s().bios;
+				input.executables = s().executables;
+				input.folder = s().folder;
+				m_pipeline->start(input);
 			}
 
 			void cleanupPage() override
@@ -461,6 +634,7 @@ namespace ps2n::wizard
 			Pipeline* m_pipeline;
 			QDateTime m_started;
 			bool m_ok = false;
+			bool m_failed = false;
 		};
 
 		// 5. The game's folder.
@@ -527,9 +701,13 @@ namespace ps2n::wizard
 		: QWizard(parent)
 	{
 		m_state.kit = std::move(kit);
+		// PCSX2's archive of patches: an installed PCSX2's, or else the one this
+		// folder keeps once fetched or given (patches.h).
 		const char* program_files = std::getenv("ProgramFiles");
-		m_state.patch_archive =
+		const QString installed =
 			QDir(QString::fromLocal8Bit(program_files ? program_files : "C:\\Program Files")).filePath(QStringLiteral("PCSX2/resources/patches.zip"));
+		m_state.patch_archive =
+			QFileInfo::exists(installed) ? installed : QDir(m_state.kit.root).filePath(QStringLiteral("patches/patches.zip"));
 		setWindowTitle(QStringLiteral("PS2Native"));
 		setWizardStyle(QWizard::ModernStyle);
 		setOption(QWizard::NoBackButtonOnLastPage, true);
@@ -540,6 +718,12 @@ namespace ps2n::wizard
 		setPage(kCompilePage, new CompilePage(this));
 		setPage(kPackagePage, new PackagePage(this));
 		resize(1100, 820);
+	}
+
+	void WizardWindow::WithoutPcsx2(bool fetch_patches)
+	{
+		m_state.patch_archive = QDir(m_state.kit.root).filePath(QStringLiteral("patches/patches.zip"));
+		m_state.fetch_patches_unasked = fetch_patches;
 	}
 
 	void WizardWindow::Prepare(const QString& image, const QString& bios, const QString& shots, bool automatic, int until)
@@ -559,6 +743,15 @@ namespace ps2n::wizard
 		auto shot_taken = std::make_shared<int>(-1);
 		connect(timer, &QTimer::timeout, this, [this, timer, shots, automatic, until, shot_taken]() {
 			QWizardPage* page = currentPage();
+			// A recompile that failed ends a check, its page saved, with exit code 1.
+			if (automatic && currentId() == kCompilePage && static_cast<CompilePage*>(page)->Failed())
+			{
+				timer->stop();
+				if (!shots.isEmpty())
+					grab().save(QDir(shots).filePath(QStringLiteral("step-4-failed.png")));
+				QApplication::exit(1);
+				return;
+			}
 			if (!page || !page->isComplete())
 				return;
 			if (*shot_taken != currentId())
