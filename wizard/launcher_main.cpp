@@ -13,33 +13,24 @@
 // it, it starts the wizard (step P4.5).
 //
 // A game compiles what its sessions meet for the first time itself (step
-// P4.6, docs/adr/0034): when a session has ended, the launcher starts the
-// folder's ps2n-remake (wizard/remake_main.cpp) at low priority, which compiles
-// it, when there is anything new, into work/next-<time>; at the game's next
-// start, before the runtime loads them, the launcher puts those modules in
-// place. And a game does not play while it compiles (docs/adr/0037): started
-// while the folder's ps2n-remake compiles, the launcher waits for it, in a
-// window that says so, and then plays, with what it compiled put in place;
-// that window closed, the game is not started, and the compile goes on.
+// P4.6, docs/adr/0034), in a window of its own, in front (docs/adr/0040): when
+// a session has ended, the launcher starts the folder's ps2n-remake
+// (wizard/remake_main.cpp), which, when there is anything new, compiles it into
+// work/next-<time>, saying so, unless it is left for later. The game never
+// starts with anything left to compile: before the runtime, the launcher has
+// ps2n-remake compile what is left, in the same window, and starts the game
+// only when that is done, with those modules put in place; left for later
+// there, the game does not start.
 //
-// Its windows are Qt's, which every game's folder carries for ps2n-remake: an
-// application of Qt's is made only when one is shown.
+// Its message boxes are Qt's, which every game's folder carries for
+// ps2n-remake: an application of Qt's is made only when one is shown.
 
-#include <QtCore/QTimer>
-#include <QtGui/QFont>
 #include <QtGui/QIcon>
 #include <QtWidgets/QApplication>
-#include <QtWidgets/QDialog>
-#include <QtWidgets/QDialogButtonBox>
-#include <QtWidgets/QLabel>
 #include <QtWidgets/QMessageBox>
-#include <QtWidgets/QProgressBar>
-#include <QtWidgets/QVBoxLayout>
 
 #include <dirent.h>
 #include <fcntl.h>
-#include <sys/file.h>
-#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -170,167 +161,56 @@ namespace
 			RemoveFolder(work + name);
 	}
 
-	// What the session met for the first time, compiled in the background for
-	// the game's next start, at low priority; ps2n-remake does nothing, and
-	// shows nothing, when the session met nothing new. Started apart from this
-	// program, which ends at once, so that it is nobody's child to wait for.
-	void StartRemake(const std::string& folder)
+	// The folder's own recompile, ps2n-remake (wizard/remake_main.cpp), which
+	// compiles what the game's sessions met for the first time in a window of
+	// its own, in front, and shows nothing when there is nothing to compile
+	// (docs/adr/0040). After a session it is started apart from this program,
+	// which ends at once, so that it is nobody's child to wait for. Before the
+	// game starts (before_play) it is waited for, and what it ends with is
+	// returned: 0 when nothing is left to compile, 3 when it was left for
+	// later, 1 when it could not compile (its window said why); -1 when it did
+	// not start. A folder without one (older than its own recompile) has
+	// nothing to compile: 0.
+	int Remake(const std::string& folder, bool before_play)
 	{
 		const std::string remake = folder + "ps2n-remake";
 		if (!Exists(remake))
-			return;
+			return 0;
 		const pid_t child = fork();
 		if (child == 0)
 		{
-			setsid();
-			if (fork() == 0)
+			if (!before_play)
 			{
-				setpriority(PRIO_PROCESS, 0, 10); // as Windows' "below normal"
-				if (chdir(folder.c_str()) != 0)
-					_exit(127);
-				const int none = open("/dev/null", O_RDWR);
-				if (none >= 0)
-				{
-					dup2(none, 0);
-					dup2(none, 1);
-					dup2(none, 2);
-				}
-				execl(remake.c_str(), remake.c_str(), static_cast<char*>(nullptr));
+				setsid();
+				if (fork() != 0)
+					_exit(0);
+			}
+			if (chdir(folder.c_str()) != 0)
 				_exit(127);
-			}
-			_exit(0);
-		}
-		if (child > 0)
-			waitpid(child, nullptr, 0);
-	}
-
-	// How long a ps2n-remake just started is given to take its lock, which it
-	// takes as it starts, once its libraries are loaded.
-	constexpr double kTakingItsLock = 20.0;
-
-	// Whether a ps2n-remake of this folder's was started less than that ago and
-	// runs still. The launcher that started it has ended by then: it is found
-	// among the programs running by its file, this folder's ps2n-remake,
-	// whatever path it was started by.
-	bool JustStarted(const std::string& folder)
-	{
-		struct stat remake;
-		if (stat((folder + "ps2n-remake").c_str(), &remake) != 0)
-			return false;
-		double uptime = 0.0;
-		if (FILE* file = std::fopen("/proc/uptime", "r"))
-		{
-			if (std::fscanf(file, "%lf", &uptime) != 1)
-				uptime = 0.0;
-			std::fclose(file);
-		}
-		const long ticks = sysconf(_SC_CLK_TCK);
-		bool found = false;
-		if (DIR* proc = opendir("/proc"))
-		{
-			while (const dirent* entry = readdir(proc))
+			const int none = open("/dev/null", O_RDWR);
+			if (none >= 0)
 			{
-				if (found)
-					break;
-				const std::string pid = entry->d_name;
-				if (pid.empty() || pid.find_first_not_of("0123456789") != std::string::npos)
-					continue;
-				struct stat program;
-				if (stat(("/proc/" + pid + "/exe").c_str(), &program) != 0 || program.st_dev != remake.st_dev ||
-					program.st_ino != remake.st_ino)
-					continue;
-				// Its start, in ticks after the system's: the 22nd field of its
-				// stat, counted after its name, which is in parentheses.
-				FILE* file = std::fopen(("/proc/" + pid + "/stat").c_str(), "r");
-				if (!file)
-					continue;
-				char line[4096] = {};
-				const size_t length = std::fread(line, 1, sizeof(line) - 1, file);
-				std::fclose(file);
-				const char* rest = std::strrchr(line, ')');
-				if (!rest || length == 0)
-					continue;
-				char state = 0;
-				unsigned long long started = 0;
-				if (std::sscanf(rest + 1, " %c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %*u %*u %*d %*d %*d %*d %*d %*d %llu", &state,
-						&started) == 2 &&
-					state != 'Z' && ticks > 0 && uptime - static_cast<double>(started) / static_cast<double>(ticks) < kTakingItsLock)
-					found = true;
+				dup2(none, 0);
+				dup2(none, 1);
+				dup2(none, 2);
 			}
-			closedir(proc);
+			if (before_play)
+				execl(remake.c_str(), remake.c_str(), "--before-play", static_cast<char*>(nullptr));
+			else
+				execl(remake.c_str(), remake.c_str(), static_cast<char*>(nullptr));
+			_exit(127);
 		}
-		return found;
-	}
-
-	// Whether the folder's own recompile is compiling: ps2n-remake holds
-	// work/remake.lock, locked for itself (Qt's QLockFile, flock), from its
-	// start until its modules are ready (wizard/remake_main.cpp); and one started
-	// a moment ago may not have taken it yet.
-	bool Compiling(const std::string& folder)
-	{
-		const int lock = open((folder + "work/remake.lock").c_str(), O_RDONLY | O_CLOEXEC);
-		if (lock >= 0)
+		if (child < 0)
+			return -1;
+		int status = 0;
+		while (waitpid(child, &status, 0) < 0 && errno == EINTR)
 		{
-			const bool held = flock(lock, LOCK_SH | LOCK_NB) != 0 && errno == EWOULDBLOCK;
-			close(lock); // (a lock file left by one that did not end as it should have is not held)
-			if (held)
-				return true;
 		}
-		return JustStarted(folder);
-	}
-
-	// Waits while the folder's own recompile compiles: a moment without a
-	// window (one that finds nothing new is done at once), then in a window that
-	// says so, which, closed, leaves the game unstarted. Whether the compile is
-	// done.
-	bool WaitForTheCompile(const std::string& folder)
-	{
-		for (int i = 0; i < 15; i++)
-		{
-			usleep(100000);
-			if (!Compiling(folder))
-				return true;
-		}
-		const QString game = QString::fromStdString(GameName());
-		if (!Application())
-		{
-			std::fprintf(stderr, "%s is compiling what your last session met for the first time. Start it again when it says it is done.\n",
-				GameName().c_str());
-			return false;
-		}
-		QDialog dialog;
-		dialog.setWindowTitle(game);
-		QVBoxLayout* layout = new QVBoxLayout(&dialog);
-		QLabel* instruction = new QLabel(QStringLiteral("Compiling what your last session met for the first time"));
-		QFont larger = instruction->font();
-		larger.setPointSizeF(larger.pointSizeF() * 1.3);
-		instruction->setFont(larger);
-		instruction->setWordWrap(true);
-		QLabel* content = new QLabel(game + QStringLiteral(" starts by itself when that is done.\n\nCancel to play later instead: the compile goes "
-														   "on, and a notification says when it is done."));
-		content->setWordWrap(true);
-		QProgressBar* bar = new QProgressBar();
-		bar->setRange(0, 0); // moving: how long it takes is not known
-		bar->setTextVisible(false);
-		QDialogButtonBox* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel);
-		QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-		layout->addWidget(instruction);
-		layout->addWidget(content);
-		layout->addWidget(bar);
-		layout->addWidget(buttons);
-		dialog.setMinimumWidth(420);
-		bool done = false;
-		QTimer timer;
-		QObject::connect(&timer, &QTimer::timeout, &dialog, [&]() {
-			if (!Compiling(folder))
-			{
-				done = true;
-				dialog.accept();
-			}
-		});
-		timer.start(250);
-		dialog.exec();
-		return done;
+		if (!before_play)
+			return 0;
+		if (!WIFEXITED(status) || WEXITSTATUS(status) == 127)
+			return WIFEXITED(status) ? -1 : 1;
+		return WEXITSTATUS(status);
 	}
 
 	// What the runtime said of itself: its last few lines that begin with
@@ -440,9 +320,20 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	// Not while the game compiles (docs/adr/0037): it waits, and plays what was
-	// compiled; or, the window closed, it is not started.
-	if (Compiling(folder) && !WaitForTheCompile(folder))
+	// Nothing left to compile when the game starts (docs/adr/0040): what its
+	// sessions met for the first time is compiled first, in ps2n-remake's
+	// window, which says so, and the game starts when that is done; left for
+	// later there, or not compiled, the game does not start. A ps2n-remake
+	// compiling already, after a session, is waited for by this one.
+	const int compiled = Remake(folder, true);
+	if (compiled < 0)
+	{
+		Say(GameName(), "The game could not be started: " + folder +
+							"ps2n-remake, which compiles first what its sessions met for the first time, did not start. Is the game's "
+							"folder whole?");
+		return 1;
+	}
+	if (compiled != 0)
 		return 0;
 
 	TakeNewModules(folder);
@@ -471,7 +362,8 @@ int main(int argc, char* argv[])
 	}
 	else if (code == 0 || code == 2 || code == 3)
 	{
-		StartRemake(folder);
+		// What the session met for the first time, compiled now, in its window.
+		Remake(folder, false);
 	}
 	return code;
 }

@@ -18,33 +18,28 @@
 // beside it, it starts the wizard (docs/phase4-proposal.md, step P4.5).
 //
 // And a game compiles what its sessions meet for the first time itself (step
-// P4.6, docs/adr/0034): when a session has ended, the launcher starts the
-// folder's ps2n-remake.exe (wizard/remake_main.cpp) at low priority, which
-// compiles it, when there is anything new, into work\next-<time>; and at the
-// game's next start, before the runtime loads them, it puts those modules in
-// place.
-//
-// A game does not play while it compiles (docs/adr/0037): started while the
-// folder's ps2n-remake compiles, the launcher waits for it, in a window that
-// says so, and then plays, with what it compiled put in place; that window
-// closed, the game is not started, and the compile goes on.
+// P4.6, docs/adr/0034), in a window of its own, in front (docs/adr/0040): when
+// a session has ended, the launcher starts the folder's ps2n-remake.exe
+// (wizard/remake_main.cpp), which, when there is anything new, compiles it into
+// work\next-<time>, saying so, unless it is left for later. The game never
+// starts with anything left to compile: before the runtime, the launcher has
+// ps2n-remake compile what is left, in the same window, and starts the game
+// only when that is done, with those modules put in place; left for later
+// there, the game does not start.
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-#include <commctrl.h>
 #include <shellapi.h>
-#include <tlhelp32.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
 
-// Windows' common controls of version 6, which have the window a game waits
-// for its compile in (TaskDialogIndirect, looked up when it is needed): named
-// in the program's manifest.
+// Windows' common controls of version 6, which give its message boxes
+// Windows' own look: named in the program's manifest.
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 namespace
@@ -72,15 +67,6 @@ namespace
 	{
 		const std::wstring path = OwnPath();
 		return path.substr(0, path.find_last_of(L"\\/") + 1);
-	}
-
-	// The game's name: this program's, which is named after it.
-	std::wstring GameName()
-	{
-		std::wstring name = OwnPath();
-		name.erase(0, name.find_last_of(L"\\/") + 1);
-		const size_t dot = name.find_last_of(L'.');
-		return dot == std::wstring::npos || dot == 0 ? name : name.substr(0, dot);
 	}
 
 	// Its windows drawn at the screen's scale rather than stretched to it
@@ -188,175 +174,45 @@ namespace
 			RemoveFolder(work + name);
 	}
 
-	// What the session met for the first time, compiled in the background
-	// for the game's next start; ps2n-remake does nothing, and shows nothing,
-	// when the session met nothing new.
-	void StartRemake(const std::wstring& folder)
+	// The folder's own recompile, ps2n-remake.exe (wizard/remake_main.cpp), at
+	// normal priority, which compiles what the game's sessions met for the
+	// first time in a window of its own, in front, and shows nothing when
+	// there is nothing to compile (docs/adr/0040). Before the game starts
+	// (before_play) it is waited for, and what it ends with is returned: 0 when
+	// nothing is left to compile, 3 when it was left for later, 1 when it could
+	// not compile (its window said why); kNotStarted, with Windows' error in
+	// *error, when it did not start. A folder without one (older than its own
+	// recompile) has nothing to compile: 0.
+	constexpr DWORD kNotStarted = 0xFFFFFFFF;
+
+	DWORD Remake(const std::wstring& folder, bool before_play, DWORD* error)
 	{
 		const std::wstring remake = folder + L"ps2n-remake.exe";
 		if (GetFileAttributesW(remake.c_str()) == INVALID_FILE_ATTRIBUTES)
-			return;
+			return 0;
 		std::wstring command = Quoted(remake);
+		if (before_play)
+			command += L" --before-play";
+		// Its window in front, where this program may give it the right to be:
+		// a program started a moment ago by the user's double-click may; after
+		// a session the game's runtime gave that right as its window closed
+		// (host/window.cpp).
+		AllowSetForegroundWindow(ASFW_ANY);
 		STARTUPINFOW startup = {};
 		startup.cb = sizeof(startup);
 		PROCESS_INFORMATION process = {};
-		if (CreateProcessW(remake.c_str(), command.data(), nullptr, nullptr, FALSE, BELOW_NORMAL_PRIORITY_CLASS, nullptr,
-				folder.c_str(), &startup, &process))
+		if (!CreateProcessW(remake.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr, folder.c_str(), &startup, &process))
 		{
-			CloseHandle(process.hThread);
-			CloseHandle(process.hProcess);
+			*error = GetLastError();
+			return kNotStarted;
 		}
-	}
-
-	// A file's identity, the same whatever path names it: its volume and its
-	// number there.
-	struct FileId
-	{
-		DWORD volume = 0;
-		DWORD high = 0;
-		DWORD low = 0;
-
-		bool operator==(const FileId& other) const
-		{
-			return volume == other.volume && high == other.high && low == other.low;
-		}
-	};
-
-	bool IdOf(const std::wstring& path, FileId* id)
-	{
-		const HANDLE file = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-			nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-		if (file == INVALID_HANDLE_VALUE)
-			return false;
-		BY_HANDLE_FILE_INFORMATION info = {};
-		const bool known = GetFileInformationByHandle(file, &info) != FALSE;
-		CloseHandle(file);
-		*id = {info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow};
-		return known;
-	}
-
-	// How long a ps2n-remake just started is given to take its lock, which it
-	// takes as it starts, once its libraries are loaded: 20 s, in Windows'
-	// units of 100 ns.
-	constexpr ULONGLONG kTakingItsLock = 20ull * 10000000;
-
-	// Whether a ps2n-remake of this folder's was started less than that ago
-	// and runs still. The launcher that started it has ended by then: it is
-	// found among the programs running by its file, this folder's
-	// ps2n-remake.exe, whatever path it was started by.
-	bool JustStarted(const std::wstring& folder)
-	{
-		FileId remake;
-		if (!IdOf(folder + L"ps2n-remake.exe", &remake))
-			return false;
-		const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-		if (snapshot == INVALID_HANDLE_VALUE)
-			return false;
-		const auto ticks = [](const FILETIME& time) {
-			return (static_cast<ULONGLONG>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
-		};
-		FILETIME now = {};
-		GetSystemTimeAsFileTime(&now);
-		bool found = false;
-		PROCESSENTRY32W entry = {};
-		entry.dwSize = sizeof(entry);
-		for (BOOL more = Process32FirstW(snapshot, &entry); more && !found; more = Process32NextW(snapshot, &entry))
-		{
-			if (CompareStringOrdinal(entry.szExeFile, -1, L"ps2n-remake.exe", -1, TRUE) != CSTR_EQUAL)
-				continue;
-			const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID);
-			if (!process)
-				continue;
-			FILETIME created = {}, exited = {}, kernel = {}, user = {};
-			DWORD code = 0;
-			std::wstring image(32768, L'\0');
-			DWORD length = static_cast<DWORD>(image.size());
-			FileId id;
-			found = GetProcessTimes(process, &created, &exited, &kernel, &user) && ticks(now) - ticks(created) < kTakingItsLock &&
-					GetExitCodeProcess(process, &code) && code == STILL_ACTIVE &&
-					QueryFullProcessImageNameW(process, 0, image.data(), &length) && IdOf(image.substr(0, length), &id) && id == remake;
-			CloseHandle(process);
-		}
-		CloseHandle(snapshot);
-		return found;
-	}
-
-	// Whether the folder's own recompile is compiling: ps2n-remake holds
-	// work\remake.lock, open for nobody else to write, from its start until
-	// its modules are ready (wizard/remake_main.cpp); and one started a moment
-	// ago may not have taken it yet.
-	bool Compiling(const std::wstring& folder)
-	{
-		const HANDLE lock = CreateFileW((folder + L"work\\remake.lock").c_str(), GENERIC_WRITE,
-			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-		if (lock != INVALID_HANDLE_VALUE)
-			CloseHandle(lock); // left by one that did not end as it should have
-		else if (GetLastError() == ERROR_SHARING_VIOLATION)
-			return true;
-		return JustStarted(folder);
-	}
-
-	struct Waiting
-	{
-		std::wstring folder;
-		bool done = false;
-	};
-
-	HRESULT CALLBACK WhileWaiting(HWND window, UINT notification, WPARAM, LPARAM, LONG_PTR data)
-	{
-		Waiting& waiting = *reinterpret_cast<Waiting*>(data);
-		if (notification == TDN_CREATED)
-		{
-			SendMessageW(window, TDM_SET_PROGRESS_BAR_MARQUEE, TRUE, 0);
-		}
-		else if (notification == TDN_TIMER && !waiting.done && !Compiling(waiting.folder))
-		{
-			waiting.done = true;
-			SendMessageW(window, TDM_CLICK_BUTTON, IDCANCEL, 0);
-		}
-		return S_OK;
-	}
-
-	// Waits while the folder's own recompile compiles: a moment without a
-	// window (one that finds nothing new is done at once), then in a window
-	// that says so, which, closed, leaves the game unstarted. Whether the
-	// compile is done.
-	bool WaitForTheCompile(const std::wstring& folder)
-	{
-		for (int i = 0; i < 15; i++)
-		{
-			Sleep(100);
-			if (!Compiling(folder))
-				return true;
-		}
-		const std::wstring game = GameName();
-		const std::wstring content = game + L" starts by itself when that is done.\n\nCancel to play later instead: the compile goes "
-										   L"on, and a notification says when it is done.";
-		using Show = HRESULT(WINAPI*)(const TASKDIALOGCONFIG*, int*, int*, BOOL*);
-		const HMODULE controls = LoadLibraryW(L"comctl32.dll");
-		const Show show =
-			controls ? reinterpret_cast<Show>(reinterpret_cast<void*>(GetProcAddress(controls, "TaskDialogIndirect"))) : nullptr;
-		Waiting waiting;
-		waiting.folder = folder;
-		TASKDIALOGCONFIG config = {};
-		config.cbSize = sizeof(config);
-		config.hInstance = GetModuleHandleW(nullptr);
-		config.dwFlags = TDF_SHOW_MARQUEE_PROGRESS_BAR | TDF_CALLBACK_TIMER | TDF_ALLOW_DIALOG_CANCELLATION;
-		config.dwCommonButtons = TDCBF_CANCEL_BUTTON;
-		config.pszWindowTitle = game.c_str();
-		config.pszMainIcon = MAKEINTRESOURCEW(1); // PS2Native's (assets/ps2n.rc)
-		config.pszMainInstruction = L"Compiling what your last session met for the first time";
-		config.pszContent = content.c_str();
-		config.pfCallback = WhileWaiting;
-		config.lpCallbackData = reinterpret_cast<LONG_PTR>(&waiting);
-		if (!show || FAILED(show(&config, nullptr, nullptr, nullptr)))
-		{
-			MessageBoxW(nullptr,
-				(game + L" is compiling what your last session met for the first time. Start it again when it says it is done.").c_str(),
-				game.c_str(), MB_OK | MB_ICONINFORMATION);
-			return false;
-		}
-		return waiting.done;
+		CloseHandle(process.hThread);
+		DWORD code = 0;
+		if (before_play && (WaitForSingleObject(process.hProcess, INFINITE) != WAIT_OBJECT_0 ||
+							   !GetExitCodeProcess(process.hProcess, &code)))
+			code = 1;
+		CloseHandle(process.hProcess);
+		return code;
 	}
 
 	// What the runtime said of itself: its last few lines that begin with
@@ -416,9 +272,20 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 		return 0;
 	}
 
-	// Not while the game compiles (docs/adr/0037): it waits, and plays what was
-	// compiled; or, the window closed, it is not started.
-	if (Compiling(folder) && !WaitForTheCompile(folder))
+	// Nothing left to compile when the game starts (docs/adr/0040): what its
+	// sessions met for the first time is compiled first, in ps2n-remake's
+	// window, which says so, and the game starts when that is done; left for
+	// later there, or not compiled, the game does not start. A ps2n-remake
+	// compiling already, after a session, is waited for by this one.
+	DWORD error = 0;
+	const DWORD compiled = Remake(folder, true, &error);
+	if (compiled == kNotStarted)
+	{
+		Say(L"The game could not be started: " + folder + L"ps2n-remake.exe, which compiles first what its sessions met for the first "
+			L"time, did not start (Windows error " + std::to_wstring(error) + L"). Is the game's folder whole?");
+		return 1;
+	}
+	if (compiled != 0)
 		return 0;
 
 	TakeNewModules(folder);
@@ -493,7 +360,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 	}
 	else if (code == 0 || code == 2 || code == 3)
 	{
-		StartRemake(folder);
+		// What the session met for the first time, compiled now, in its window.
+		DWORD not_started = 0;
+		Remake(folder, false, &not_started);
 	}
 	return static_cast<int>(code);
 }

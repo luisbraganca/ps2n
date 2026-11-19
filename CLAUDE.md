@@ -143,7 +143,12 @@ launcher waited for that compile when started during it. The maintainer's
 run on their own Linux machine is next. Found with it:
 the notice over a game covering the screen on Windows showed only at a
 session's start, which disallowing exclusive full screen put right (ADR
-0039).**
+0039). Then, at the maintainer's word (ADR 0040), a game no longer compiles
+in the background: what a session met is compiled at once in a window of
+its own, in front, with Later, which closing it is too; and the game never
+starts with anything left to compile: before it starts, it compiles what is
+left in the same window, Later there leaving it unstarted. Checked on
+Windows and inside the Linux.**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -733,6 +738,21 @@ Decisions:
   on this computer got the line in their settings files; and the runtime's
   report says how near the notice's line a run came and how often it was
   shown.
+- [ADR 0040](docs/adr/0040-a-game-compiles-in-a-window-of-its-own-and-never-starts-with-anything-left-to-compile.md):
+  at the maintainer's word on 2026-11-19 ("Compiling shouldn't be done on
+  the background, but yes on a foreground modal/window ... the user is able
+  to click 'Later' or close the modal/window (which is the same thing) ...
+  next time the game runs, it will first compile pending compilations before
+  actually running"; "It shouldn't be possible to run the game without
+  compiling pending compilations first"), what a session met is compiled at
+  once, at normal priority, in a window of its own, in front (how far it has
+  got, Later); Later stops it, what was compiled kept; the game never starts
+  with anything left to compile: before it starts, `ps2n-remake
+  --before-play` compiles what is left in the same window, and Later there,
+  or a compile that fails, leaves the game unstarted. It replaces ADR 0034's
+  background compile, ADR 0035's icon and notifications (its notice over the
+  picture stays) and ADR 0037's wait. The session's choices are listed there,
+  for the maintainer to decide otherwise.
 
 ## Layout, build and test
 
@@ -772,15 +792,16 @@ host/                     ps2n-host: console frontend for the PCSX2 core, the te
                           shm_names.cpp gives PCSX2's one shared memory name for every process the process's
                           number); a game's launcher on Windows (launcher.cpp:
                           the program a game's folder is started from, which starts the runtime beside it,
-                          never while the game's own recompile compiles: ADR 0037);
+                          never with anything left to compile: ADR 0040);
                           and a disc image's files read through PCSX2's own readers of every format it plays
                           (disc.cpp: -disc-executables, -disc-extract; step P4.8, ADR 0036)
 wizard/                   ps2n-wizard, the application a game is made with (Phase 4, step P4.5; ADR 0032):
                           its five steps (wizard_window.cpp), the recompile (pipeline.cpp), the game's folder
                           (package.cpp), PCSX2's archive of patches fetched or given where PCSX2 is not installed
                           (patches.cpp; step P4.8); and ps2n-remake (remake_main.cpp; step P4.6, ADR 0034), the same
-                          recompile without the window, with which a game's folder compiles what its sessions
-                          met for the first time itself; a game's launcher on Linux (launcher_main.cpp, Qt's
+                          recompile in a small window of its own, with which a game's folder compiles what its
+                          sessions met for the first time itself, after a session and before the game starts (ADR
+                          0040); a game's launcher on Linux (launcher_main.cpp, Qt's
                           windows; step P4.7), and what differs between the two systems for the wizard, the
                           recompile and a game's folder (platform.h: the files' names, the toolchain's compiler and
                           linker and what they are given); PCSX2's own settings pages, compiled from the submodule unchanged, in
@@ -931,15 +952,18 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   `-Out` into a folder of its own, from a tree committed and pushed. A game's
   folder, whichever made it, also has a copy of the toolchain, Qt and
   `ps2n-remake.exe`, and `make.txt`, how its modules are made (step P4.6,
-  ADR 0034): when a session ends, its launcher starts `ps2n-remake` at low
-  priority, which merges what the sessions met into the folder's captures
-  and, when that is more than the modules were compiled from
-  (`work\compiled-from.txt`), compiles only what changed (objects newer than
-  their sources stay) into `work\next-<time>`, with an icon in the
-  notification area and a notification at the end (`work\remake.log` says
-  what it did); the launcher puts those modules in place at the next
-  start. Started while the recompile compiles, the launcher waits for it,
-  in a window that says so, and then plays (ADR 0037). For checks,
+  ADR 0034): when a session ends, its launcher starts `ps2n-remake`, which
+  merges what the sessions met into the folder's captures and, when that is
+  more than the modules were compiled from (`work\compiled-from.txt`),
+  compiles only what changed (objects newer than their sources stay) into
+  `work\next-<time>`, in a window of its own in front, with how far it has
+  got and Later, which closing it is too (ADR 0040; `work\remake.log` says
+  what each run did); the launcher puts those modules in place at the next
+  start. The game never starts with anything left to compile: before the
+  runtime, the launcher runs `ps2n-remake --before-play`, which compiles
+  what is left in the same window (and waits for a compile already
+  running), and starts the game only when it ends with 0; Later there
+  leaves the game unstarted. For checks,
   `ps2n-wizard --kit build\kit --image <iso> --bios <bin> --shots <folder>
   --auto [--until <step>] [--without-pcsx2 [--fetch-patches]]` fills the
   first steps in, saves each step (the settings, each category) as a

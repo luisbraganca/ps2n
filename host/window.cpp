@@ -321,6 +321,11 @@ namespace ps2n::host::window
 			{
 				case WM_CLOSE:
 					// The runner stops the machine; the window goes when that is done.
+					// The right to bring a window to the front goes with this one's,
+					// for the window a game's folder compiles what the session met in
+					// when it has ended (wizard/remake_main.cpp, docs/adr/0040), which
+					// Windows would otherwise leave behind another.
+					AllowSetForegroundWindow(ASFW_ANY);
 					if (s_listener.close_requested)
 						s_listener.close_requested();
 					return 0;

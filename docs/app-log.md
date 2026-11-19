@@ -1569,3 +1569,63 @@ Found ([ADR 0039](adr/0039-the-notice-over-a-full-screen-game-exclusive-full-scr
   `~QGuiApplication` from the exit handlers). It goes before `main` returns
   now (`wizard/launcher_main.cpp`), and the same start ends as a session
   does.
+
+### Compiled in a window of its own (2026-11-19)
+
+At the maintainer's word ([ADR 0040](adr/0040-a-game-compiles-in-a-window-of-its-own-and-never-starts-with-anything-left-to-compile.md)):
+"Compiling shouldn't be done on the background, but yes on a foreground
+modal/window (whatever you recommend). Also, the user is able to click
+"Later" or close the modal/window (which is the same thing). What this does
+is, next time the game runs, it will first compile pending compilations
+before actually running." And: "It shouldn't be possible to run the game
+without compiling pending compilations first."
+
+- **`ps2n-remake` compiles in a window of its own** (`wizard/remake_main.cpp`),
+  shown only when there is something to compile, at normal priority on
+  every processor: what it compiles and for what ("Compiling what this
+  session met for the first time", "So that Silent Hill 3 runs it at full
+  speed from its next start"), how many of the files it has compiled, what
+  it is doing, and Later, which closing the window is too. Later stops it;
+  the objects compiled are kept. Done after a session, it says "Compiled"
+  for three seconds. A compile that fails says why, with where its log is.
+  The icon in the notification area and the notifications are gone.
+- **The game never starts with anything left to compile**: before the
+  runtime, the launcher (`host/launcher.cpp`, `wizard/launcher_main.cpp`)
+  runs `ps2n-remake --before-play`, which compiles what is left in the same
+  window ("Silent Hill 3 starts when it is done") and, a compile already
+  running after a session, waits for it first; the game starts only when it
+  ends with 0. Later there, or a compile that fails, leaves the game
+  unstarted. The launcher's own wait (ADR 0037) is gone with it.
+- **In front**: on Windows the game's window gives, as it closes, the right
+  to bring a window to the front, and `ps2n-remake` asks Qt to activate its
+  window whatever started it (Qt's `AlwaysActivateWindow`): without that, a
+  window started by another program stayed behind the one in front.
+- **`work/remake.log`** keeps every run, one before each start and one
+  after each session, started again past a megabyte.
+
+Checked on Windows, in a scratch folder of Silent Hill 3 with the new
+launcher, recompile and runtime, each start muted in a small window without
+a renderer: with nothing left to compile, the game started at once and no
+window showed; with the game module's 84 objects to compile again, the
+window, in front, and then the game; Later 40 seconds into that compile,
+the game not started and 30 objects kept, the next start compiling the
+other 54 and then playing; after a session that met what was not compiled,
+the window, and Later there, the next start compiling it first; after a
+session with only a link left, "Compiled" for three seconds. Inside the
+Linux, the same folder of the Linux one: the window before the game and the
+game after it; Later (the window asked to close as a window manager's close
+button asks) leaving the game unstarted and 37 objects kept, the next start
+compiling the other 47 and then playing; and "Compiled" after a session.
+The window's secondary lines, first drawn as disabled text, which Qt's
+Linux style draws nearly white, have a colour between the text's and the
+window's. Every test passes on Windows, 534 in the usual tree and 535 in
+the module tree.
+
+The maintainer's answers: "1. Yes 2. Yes to all games 3. Yes" (committed
+and pushed; the game folders on this computer given the new programs; the
+Linux folder for their laptop made again from the commit). Jak and Daxter's,
+Killzone's and Silent Hill 3's folders got the launcher, the recompile and
+the runtime; Agent Under Fire's two and Gran Turismo 3's, made before a
+game's folder compiled anything itself, the launcher and the runtime, and
+compile nothing until they are made again with the wizard. Each folder's
+runtime loads its modules.

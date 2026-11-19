@@ -64,14 +64,16 @@ no compile has seen: the vector units' and the I/O processor's code, and the
 code a game loads from its own data rather than from an executable on the disc
 (Gran Turismo 3 does). While the game runs such code, a notice in the top left
 corner of its picture says so for a few seconds. The session writes that code
-down, and when you close the game's window the game compiles it itself, in the
-background, with the toolchain in its folder: a notification says so at once,
-and another when it is done. From its next start the game has it. Started
-again before then, the game does not play beside the compile: it says so, and
-starts by itself when the compile is done. A session that met nothing new
-compiles nothing and shows nothing. Making the game again with PS2Native from
-the same disc image compiles it too, and keeps the folder's settings, its
-memory cards and its sessions.
+down, and when you close the game's window the game compiles it itself, with
+the toolchain in its folder, in a small window that says how far it has got: a
+few minutes, every processor at work. From its next start the game has it.
+"Later", or closing that window, stops the compile, what it compiled kept; the
+game never starts with anything left to compile, so its next start compiles
+the rest first, in the same window, and the game starts when that is done
+(Later there leaves it unstarted). A session that met nothing new compiles
+nothing and shows nothing. Making the game again with PS2Native from the same
+disc image compiles it too, and keeps the folder's settings, its memory cards
+and its sessions.
 
 In the window: the keyboard and the first controller play; F11 or Alt+Enter
 covers the screen; closing the window ends the session.

@@ -126,6 +126,12 @@ set_target_properties(ps2n-remake PROPERTIES
 )
 target_compile_features(ps2n-remake PRIVATE cxx_std_20)
 target_link_libraries(ps2n-remake PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+# On Windows, Qt's private interface that brings its window in front
+# (docs/adr/0040).
+if(WIN32)
+	find_package(Qt6 COMPONENTS GuiPrivate REQUIRED)
+	target_link_libraries(ps2n-remake PRIVATE Qt6::GuiPrivate)
+endif()
 
 # On Linux (step P4.7): PS2Native's icon, which Windows' executables carry as
 # a resource of theirs (assets/ps2n.rc), as a resource of Qt's
