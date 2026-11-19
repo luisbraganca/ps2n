@@ -368,6 +368,7 @@ $crtVersion = (Get-Item (Join-Path $crt.FullName 'msvcp140.dll')).VersionInfo.Fi
 
 # Which is which, and where the source of each is. (What git says on stderr does not stop this.)
 $ErrorActionPreference = 'Continue'
+$ps2nVersion = (Get-Content -LiteralPath (Join-Path $root 'version.txt') -TotalCount 1).Trim()
 $ps2nRepo = ("$(& git -C $root remote get-url origin 2>&1)" -replace '\.git$', '').Trim()
 $ps2nCommit = "$(& git -C $root rev-parse HEAD 2>&1)".Trim()
 $ps2nChanged = [bool]("$(& git -C $root status --porcelain --untracked-files=no 2>&1)".Trim())
@@ -381,7 +382,7 @@ $changedNote = if ($ps2nChanged) { ', with changes not committed when this folde
         'The licences of what this folder holds',
         '======================================',
         '',
-        "PS2Native: PS2Native-LICENSE.txt (GNU General Public License, version 3). Its source: $ps2nRepo,",
+        "PS2Native $ps2nVersion`: PS2Native-LICENSE.txt (GNU General Public License, version 3). Its source: $ps2nRepo,",
         "commit $ps2nCommit$changedNote.",
         '',
         'PCSX2, whose core the runtime is built on: PCSX2-COPYING.GPLv3.txt (GNU General Public License, version 3).',

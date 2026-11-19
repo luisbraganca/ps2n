@@ -104,6 +104,8 @@ target_include_directories(ps2n-wizard PRIVATE
 	"${CMAKE_SOURCE_DIR}/pcsx2"
 )
 target_compile_definitions(ps2n-wizard PRIVATE QT_NO_EXCEPTIONS)
+# PS2Native's version, in the wizard's title (ps2n_version.h, cmake/ps2n-inject.cmake).
+target_include_directories(ps2n-wizard PRIVATE "${PS2N_VERSION_DIR}")
 target_link_libraries(ps2n-wizard PRIVATE PCSX2_FLAGS PCSX2 Qt6::Core Qt6::Gui Qt6::Widgets)
 if(NOT WIN32 AND NOT APPLE)
 	target_link_libraries(ps2n-wizard PRIVATE Qt6::GuiPrivate)

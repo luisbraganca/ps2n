@@ -148,7 +148,18 @@ in the background: what a session met is compiled at once in a window of
 its own, in front, with Later, which closing it is too; and the game never
 starts with anything left to compile: before it starts, it compiles what is
 left in the same window, Later there leaving it unstarted. Checked on
-Windows and inside the Linux.**
+Windows and inside the Linux. The Linux laptop not being the maintainer's
+to use, their own run inside this computer's WSL counts for P4.7 (ADR
+0041), on OpenGL there (the RTX through Mesa's D3D12 driver: Silent Hill 3
+at the console's pace), Linux then described as tested under WSL 2; a
+desktop shortcut starts the Linux `PS2Native` for it. The maintainer made
+Jak and Daxter with it and played five sessions, what each met compiled in
+its window, the later ones on compiled code alone at about 90% of the
+console's pace inside WSL; WSL's OpenGL leaves parts of characters
+transparent, which PCSX2's software renderer does not. At their words ("I
+guess it's good"; "Let's create releases on Github") P4.7 is done, and with
+it every step of Phase 4; releases go on GitHub, the first 0.1 (ADR 0042),
+the version the file `version.txt`.**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -753,6 +764,31 @@ Decisions:
   background compile, ADR 0035's icon and notifications (its notice over the
   picture stays) and ADR 0037's wait. The session's choices are listed there,
   for the maintainer to decide otherwise.
+- [ADR 0041](docs/adr/0041-p4-7s-run-inside-wsl-on-the-development-computer.md):
+  P4.7's criterion is met by the maintainer's own run inside the Ubuntu
+  22.04 of WSL 2 on the development computer, the Linux laptop not being
+  theirs to use (their "Yes", 2026-11-19): a game made with the Linux
+  wizard from its disc image plays from its folder at the console's pace,
+  and what a session meets is compiled for its next start. There the
+  renderer is OpenGL (Mesa's D3D12 driver on the RTX 4070 SUPER; Vulkan
+  inside WSL is the CPU's), the keyboard plays, and a desktop shortcut
+  starts the Linux `PS2Native` through `wslg.exe`. Until a Linux machine of
+  its own runs PS2Native, Linux is described everywhere as tested under WSL
+  2 (Ubuntu 22.04) on the development computer. The maintainer's run, Jak
+  and Daxter made with the Linux wizard and played for five sessions, about
+  90% of the console's pace inside WSL, counted ("I guess it's good").
+- [ADR 0042](docs/adr/0042-releases-on-github-beginning-with-0-1.md):
+  PS2Native is released on GitHub, beginning with 0.1 (tag `v0.1`), at the
+  maintainer's word ("Let's create releases on Github"): both folders as
+  downloads (`PS2Native-<version>-windows-x64.zip` from `kit.ps1 -Out`,
+  `PS2Native-<version>-linux-x64.tar.xz` from `kit.sh --archive`), made from
+  the tagged, committed and pushed tree, with their licences and nothing of
+  a game, a BIOS or PCSX2's patches; 0.1 a pre-release (five games, two
+  Windows computers, Linux under WSL only); the version the file
+  `version.txt`, shown by the wizard's title, the runtime's `-help` and the
+  licences. GitHub
+  CLI (`gh`, installed with winget at the maintainer's choice) creates a
+  release as a draft, published at the maintainer's word.
 
 ## Layout, build and test
 
@@ -826,6 +862,8 @@ docs/                     brief, assessment, decisions (adr/), proof-of-concept 
                           proposal and log (app-log.md); and the website,
                           which GitHub Pages serves from this folder: index.html, 404.html, .nojekyll, site/
                           (site/README.md says what belongs to it and where each of its numbers comes from)
+version.txt               PS2Native's version (0.1), which the build gives the programs as ps2n_version.h (ADR 0042;
+                          not VERSION: the root is on the include path, and Windows would find it for <version>)
 build/, deps/             build trees and downloaded dependency packages; git-ignored
 ```
 
@@ -1185,7 +1223,10 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   those AppImages leave to the system, as PCSX2's own Linux release), each
   finding the others beside it (`$ORIGIN`), and their licences
   (`licences/Ubuntu`); `patchelf` does the run paths. Linux is reported as working only after
-  the maintainer's run on their own machine (ADR 0004). A game the
+  the maintainer's run on their own machine (ADR 0004); their run inside
+  this computer's WSL counts for P4.7, Linux then described as tested under
+  WSL 2 (ADR 0041). Inside WSL, Vulkan is the CPU's (llvmpipe) and OpenGL
+  the RTX through Mesa's D3D12 driver: a game played there takes OpenGL. A game the
   maintainer may be playing on this computer keeps its pace: Linux builds and
   tests on half the processors, Windows ones at below-normal priority.
 - Never run stock `pcsx2-gsrunner` here: it writes into the maintainer's own

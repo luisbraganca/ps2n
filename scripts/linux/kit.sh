@@ -445,6 +445,7 @@ for package in $(printf '%s\n' "${!by_package[@]}" | sort); do
 done
 
 # Which is which, and where the source of each is.
+version="$(head -1 "$root/version.txt" | tr -d '\r ')"
 repository="$(git -C "$root" remote get-url origin 2>/dev/null | sed 's/\.git$//')"
 commit="$(git -C "$root" rev-parse HEAD 2>/dev/null)"
 changed=""
@@ -459,7 +460,7 @@ cat > "$licences/README.txt" <<EOF
 The licences of what this folder holds
 ======================================
 
-PS2Native: PS2Native-LICENSE.txt (GNU General Public License, version 3). Its source: $repository,
+PS2Native $version: PS2Native-LICENSE.txt (GNU General Public License, version 3). Its source: $repository,
 commit $commit$changed.
 
 PCSX2, whose core the runtime is built on: PCSX2-COPYING.GPLv3.txt (GNU General Public License, version 3).

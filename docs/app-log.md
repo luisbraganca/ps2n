@@ -14,7 +14,7 @@ its date. Nothing here comes from a game or a BIOS but counts and times.
 | P4.4 The packaged game | Killzone and Agent Under Fire run from their folders, at the console's pace, the same runs as from the development host | **Done** (2026-11-17): a game is a folder that plays it (`make-game.ps1 -Title`), started from a launcher named after the game, which starts the runtime beside it with the folder's settings, without a console, and says why when it cannot play; the sessions written down in the folder. Killzone and Agent Under Fire, started from their launchers, played at the console's pace (50.00 frames a second in play), nothing of their code interpreted; the maintainer's four sessions of Agent Under Fire and three of Killzone's from the development host, run again from the folders, and the launchers' sessions run again by the development host, are the sessions at every fingerprint. Killzone's code needed a module to have its own stack probe (`__chkstk`), which a test of the module tree holds |
 | P4.5 The wizard | A game packaged from the disc image and the BIOS with every default accepted, without a command line | **Under way** (2026-11-17): the maintainer's word that it goes through all of PCSX2's settings, and how ([ADR 0032](adr/0032-the-wizard-goes-through-pcsx2s-settings.md)); PCSX2's own per-game settings pages work in `ps2n-wizard`, compiled unchanged, what PS2Native carries out in PCSX2's place fixed; a game's settings are a file in its folder that the runtime reads (`-packaged`), and a session played so is run again at every fingerprint; the five steps, from the disc image to a folder that plays the game, in `PS2Native.exe` at the root of the folder `kit.ps1` makes: Agent Under Fire made with every default accepted in 336 seconds, and played from its folder at the console's pace. **Done** (2026-11-18): the maintainer made a game the project had never run, Gran Turismo 3, without a command line (three settings changed, the rest accepted), which counts for the criterion ([ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)); its code, loaded from its own data, was interpreted in its first session, which wrote it down, and the folder made again from that played at the console's pace. What was left of the step is P4.8's |
 | P4.6 New code in play | A session that meets new code finds it compiled at its next start | **Criterion met** (2026-11-18): a game's folder carries its own toolchain, and when a session ends its launcher starts `ps2n-remake`, which compiles what the session met, only what changed, in the background, with an icon and a notification, for the next start ([ADR 0034](adr/0034-a-game-compiles-new-code-with-its-own-toolchain-and-says-so.md)); a fresh folder of Gran Turismo 3: what its first session interpreted (5,871 blocks of its code, 7,846 of the IOP's, 15 of VU1's, the BIOS's kernel) all compiled at the next start, the third session interpreting nothing of it; the code met outside the executables compiled in 16 parts (that compile 151 s to 27 s); the maintainer's fourth game, Jak and Daxter, played from a folder the wizard made for 39 and then 23 minutes at the console's pace, 0.17% and then 0.04% of the EE's cycles interpreted, what each session met compiled about a minute after it |
-| P4.7 Linux | On the maintainer's Linux machine, a laptop with Linux Mint ([ADR 0004](adr/0004-proof-of-concept-environment.md)): a game made with the wizard from its disc image plays from its folder at the console's pace, and what a session meets for the first time is compiled in the background for its next start (the session's proposal, accepted: [ADR 0038](adr/0038-p4-7-built-and-tested-on-a-linux-inside-the-development-computer-first.md)) | **Under way** (2026-11-19), at the maintainer's word ([ADR 0037](adr/0037-p4-8-done-a-game-does-not-play-while-it-compiles.md)), built and tested first on a Linux inside this computer, WSL 2 with Ubuntu 22.04 ([ADR 0038](adr/0038-p4-7-built-and-tested-on-a-linux-inside-the-development-computer-first.md)): every test passes on Linux (534), the compiled code in the host and in shared objects of its own; the game's window an X11 one, with the notice over its picture; the launcher, the wizard and the recompile working there, and the folder for Linux put together (`scripts/linux/kit.sh`): with it, inside that Linux, Silent Hill 3 made from the maintainer's `.chd` as without PCSX2 in 123 s, played from its folder by its own launcher at the console's pace (49.72 frames a second of 50), what its first session met compiled in the background, and the next session interpreting none of the IOP's code and 0.00% of the EE's cycles |
+| P4.7 Linux | The maintainer's own run inside the Ubuntu 22.04 of WSL 2 on this computer ([ADR 0041](adr/0041-p4-7s-run-inside-wsl-on-the-development-computer.md); at first their Linux laptop, [ADR 0038](adr/0038-p4-7-built-and-tested-on-a-linux-inside-the-development-computer-first.md), which is not theirs to use; [ADR 0004](adr/0004-proof-of-concept-environment.md)): a game made with the wizard from its disc image plays from its folder at the console's pace, and what a session meets for the first time is compiled for its next start (the session's proposal, accepted). Linux is then described as tested under WSL 2 until a Linux machine of its own runs it | **Under way** (2026-11-19), at the maintainer's word ([ADR 0037](adr/0037-p4-8-done-a-game-does-not-play-while-it-compiles.md)), built and tested first on a Linux inside this computer, WSL 2 with Ubuntu 22.04 ([ADR 0038](adr/0038-p4-7-built-and-tested-on-a-linux-inside-the-development-computer-first.md)): every test passes on Linux (534), the compiled code in the host and in shared objects of its own; the game's window an X11 one, with the notice over its picture; the launcher, the wizard and the recompile working there, and the folder for Linux put together (`scripts/linux/kit.sh`): with it, inside that Linux, Silent Hill 3 made from the maintainer's `.chd` as without PCSX2 in 123 s, played from its folder by its own launcher at the console's pace (49.72 frames a second of 50), what its first session met compiled in the background, and the next session interpreting none of the IOP's code and 0.00% of the EE's cycles. **Done** (2026-11-19), with the maintainer's run inside WSL ([ADR 0041](adr/0041-p4-7s-run-inside-wsl-on-the-development-computer.md)): Jak and Daxter made with the Linux wizard from its `.iso` and played from its folder for five sessions, what each met compiled in its window when it ended, the later ones on compiled code alone at about 90% of the console's pace there (Silent Hill 3 99.3%); the transparent parts of characters on WSL's OpenGL are not there on PCSX2's software renderer. The maintainer's words: "I guess it's good", then "Let's create releases on Github" ([ADR 0042](adr/0042-releases-on-github-beginning-with-0-1.md)) |
 | P4.8 The folder for others | On a computer without PCSX2, a game made with the wizard from a `.chd` image, its patches fetched at the user's word, and the folder carrying the licence of everything in it (the session's proposal, [ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)) | **Under way** (2026-11-18), before P4.7, at the maintainer's word ([ADR 0036](adr/0036-the-folder-for-others-how-p4-8-is-done.md)): a disc in any format PCSX2 plays, read through PCSX2's own readers; the executables chosen; PCSX2's archive of patches fetched at the user's word or given; a fixed setting in a game's settings file refused; the licence of everything in the folder, Qt's made from Qt's own SBOMs. On this computer the wizard made Silent Hill 3, a game the project had never run, from the maintainer's `.chd`, as without PCSX2, its patches fetched, in 155 s, once a function the recompiler made of a megabyte of its data was cut into pieces. **Done** (2026-11-18): on the maintainer's Windows 10 computer, which has no PCSX2, Silent Hill 3 made with the wizard from its `.chd`, PCSX2's patches fetched at the button, and played from its folder for four sessions: "Everything went flawlessly" ([ADR 0037](adr/0037-p4-8-done-a-game-does-not-play-while-it-compiles.md)). At the maintainer's word with it, a game does not play while it compiles: started while its own recompile compiles, its launcher waits for it, in a window that says so, and then plays with what it compiled |
 
 ## How to run it
@@ -1629,3 +1629,50 @@ the runtime; Agent Under Fire's two and Gran Turismo 3's, made before a
 game's folder compiled anything itself, the launcher and the runtime, and
 compile nothing until they are made again with the wizard. Each folder's
 runtime loads its modules.
+
+### The run inside WSL (2026-11-19)
+
+The Linux laptop is not the maintainer's to use. Asked whether the tests
+could be made inside this computer's Ubuntu, the session ran Silent Hill 3
+from the Linux folder there on PCSX2's OpenGL renderer, which inside WSL is
+Mesa's D3D12 driver on this computer's RTX 4070 SUPER: 1,799 frames at
+49.67 a second, the console's 50, at three times the console's resolution,
+0.00% of the EE's cycles interpreted. Vulkan inside WSL is the CPU's
+(llvmpipe), and the first controller does not reach WSL. At the
+maintainer's "Yes" (ADR 0041) their own run there counts for the
+criterion, and Linux is described as tested under WSL 2 until a Linux
+machine of its own runs it.
+
+For the run: the Linux folder made from the committed tree (`f30e7cc`,
+`build/PS2Native` inside the Ubuntu); a shortcut on the maintainer's
+desktop, "PS2Native (Linux)", which starts its `PS2Native` through
+`wslg.exe`, without a console window (checked: it starts the wizard; Qt
+says it has no Wayland plugin and takes X11's); in the wizard's settings
+OpenGL, PCSX2's patches fetched at the button; the keyboard.
+
+### The maintainer's run (2026-11-19)
+
+Jak and Daxter (`SCES-50361`), made by the maintainer with the Linux wizard
+from its `.iso` (OpenGL), played from its folder for five sessions, each
+started by its launcher (a second desktop shortcut, "Jak and Daxter
+(Linux)"):
+
+| Session | Frames | Renderer | Frames a second (the console's 59.94) | Interpreted |
+|---|---|---|---|---|
+| 1 | 1,971 | OpenGL | 47.18 | 19.73% of the EE's cycles (Jak's code, loaded from its data); the IOP's and the VUs' code all |
+| 3 | 1,133 | OpenGL | 55.39 | 0.00% of the EE's cycles; 176 of the IOP's 7,929 blocks |
+| 5 | 3,380 | software | 54.13 | 0.00% of the EE's cycles; none of the IOP's code; 3 blocks of VU1's, 8 times |
+
+(The second and fourth sessions, 4,085 and 4,004 frames, are written down in
+the folder; `last-run.log` keeps only the last session's report.) After the
+first, its compile window compiled what it met, 128 files on 20 processors,
+in 18 seconds; after each later one, what it added. Inside WSL, on compiled
+code, Jak and Daxter keeps about 90% of the console's pace, where it keeps
+the console's pace on Windows and Silent Hill 3 kept 99.3% inside WSL.
+
+The maintainer: "I guess it's good. Some characters have transparent parts
+but I guess it's just OpenGL." OpenGL inside WSL is Mesa's translation to
+Direct3D 12; on PCSX2's software renderer, which draws on the processor,
+the characters are whole ("Yep software render seems to fix it"). Then:
+"Let's create releases on Github." P4.7 is done (ADR 0041), and with it
+every step of Phase 4; the first release, 0.1, follows (ADR 0042).

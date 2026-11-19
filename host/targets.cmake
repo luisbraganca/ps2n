@@ -49,6 +49,9 @@ set_target_properties(ps2n-host PROPERTIES
 	RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin"
 )
 
+# PS2Native's version, which -help shows (ps2n_version.h, cmake/ps2n-inject.cmake).
+target_include_directories(ps2n-host PRIVATE "${PS2N_VERSION_DIR}")
+
 # The game's window on Linux (host/window.cpp): X11, and XRandR for the screen
 # it comes up on, which PCSX2's own build finds and links; Xft, for the
 # notice's text, is loaded when the first notice is shown, and so are the

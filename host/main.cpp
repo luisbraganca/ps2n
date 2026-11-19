@@ -14,6 +14,10 @@
 #include "disc.h"
 #include "host_state.h"
 #include "profile.h"
+
+// PS2Native's version: version.txt at the repository's root, which the build
+// writes into this header (cmake/ps2n-inject.cmake).
+#include "ps2n_version.h"
 #include "selftest.h"
 #include "game_settings.h"
 #include "session_record.h"
@@ -361,6 +365,8 @@ namespace
 	void PrintUsage()
 	{
 		std::fputs(
+			"ps2n-host, the runtime of PS2Native " PS2N_VERSION "\n"
+			"\n"
 			"Usage: ps2n-host -bios <file> -data <dir> [options] <file.elf | disc image>\n"
 			"\n"
 			"  -bios <file>       PS2 BIOS image. It is opened read-only.\n"

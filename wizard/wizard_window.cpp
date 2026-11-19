@@ -10,6 +10,10 @@
 
 #include "Settings/SettingsWindow.h"
 
+// PS2Native's version: version.txt at the repository's root, which the build
+// writes into this header (cmake/ps2n-inject.cmake).
+#include "ps2n_version.h"
+
 #include "common/FileSystem.h"
 #include "common/Path.h"
 
@@ -725,7 +729,7 @@ namespace ps2n::wizard
 				break;
 			}
 		}
-		setWindowTitle(QStringLiteral("PS2Native"));
+		setWindowTitle(QStringLiteral("PS2Native " PS2N_VERSION));
 		setWizardStyle(QWizard::ModernStyle);
 		setOption(QWizard::NoBackButtonOnLastPage, true);
 		setOption(QWizard::NoCancelButtonOnLastPage, true);
