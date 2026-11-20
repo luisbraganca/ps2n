@@ -165,6 +165,11 @@ namespace
 	std::unordered_map<u32, u64> s_left_at;
 	std::unordered_map<u32, u64> s_interpreted_at;
 
+	// The compiled functions whose code ran, a bit for each of an image's
+	// functions, and in the order they first did (GetFunctionsRan).
+	std::map<const ImageInfo*, std::vector<u64>> s_ran_bits;
+	std::vector<ps2n::ee::FunctionRan> s_ran_order;
+
 	// ---- the BIOS ----------------------------------------------------------------
 	// Whether the executable has reached its entry point: what ran before it
 	// is the boot.
@@ -331,28 +336,16 @@ namespace
 	}
 
 	// A block of a page that is not write-protected, in a function's own code:
-	// the image's table names it by the number of its record here
-	// (ps2n::ee::kCheckedLimit), and compiled code compares the block's words
-	// with memory at every execution itself (ps2n::ee::checkedAnswer), as
-	// PCSX2's code for the block does, without the runtime looking the block up
-	// or deciding about it again. A record is in use for as long as the place
-	// in the table it was given to still holds its number: the place is zeroed
-	// when the block is thrown away (Block::cache), and when its image is put
-	// in use again (Use()).
-	struct Checked
-	{
-		const u8* memory; // where the block's words are in the host's memory
-		const u32* words; // what they were when it was formed (Block::words)
-		u32 count; // how many
-		u32 size; // what an execution adds to its page's count
-		u16* page; // that count, when the block counts towards protecting its page again; else null
-		u32 answer; // what PS2N_BLOCK_START needs
-		u32 index; // the leader of `image` it was asked about at
-		const ImageInfo* image;
-		u32* place; // the place in the table that holds its number
-		Block* block;
-	};
-	Checked s_checked[ps2n::ee::kCheckedLimit];
+	// the image's table names it by the number of its record
+	// (ps2n::ee::checkedRecords, ps2n::ee::kCheckedLimit), and compiled code
+	// compares the block's words with memory at every execution itself
+	// (ps2n::ee::askAbout), as PCSX2's code for the block does, without the
+	// runtime looking the block up or deciding about it again. A record is in
+	// use for as long as the place in the table it was given to still holds its
+	// number: the place is zeroed when the block is thrown away (Block::cache),
+	// and when its image is put in use again (Use()).
+	using Checked = ps2n::ee::Checked;
+	Checked (&s_checked)[ps2n::ee::kCheckedLimit] = ps2n::ee::checkedRecords;
 	u32 s_checked_next = 1;
 
 	// The number of a record that is not in use, or zero when all are.
@@ -394,8 +387,14 @@ namespace
 			site = {0xFFFFFFFFu, &CallThroughDispatch};
 	}
 
+	// Counts up whenever what Lookup() answers may change, which is also when
+	// the images in use may: what the interpreter noted of a block for its
+	// report (Block::noted, Block::missing_noted) holds while it stays the same.
+	u64 s_images_epoch = 1;
+
 	void FlushCache()
 	{
+		s_images_epoch++;
 		for (CacheEntry& e : s_cache)
 			e = {0xFFFFFFFFu, -1, nullptr};
 		for (Known& k : s_known)
@@ -606,6 +605,23 @@ namespace
 			   place == ps2n::ee::kBiosLoader;
 	}
 
+	// Notes that compiled code ran a block of the function of `image` that
+	// holds `pc` (asked once for each block it runs, by blockStart()).
+	void MarkRan(const ImageInfo& image, u32 pc)
+	{
+		const FunctionInfo* f = FunctionOf(image, pc);
+		if (!f)
+			return;
+		const size_t i = static_cast<size_t>(f - image.functions);
+		std::vector<u64>& bits = s_ran_bits[&image];
+		if (bits.empty())
+			bits.resize((image.function_count + 63) / 64, 0);
+		if (bits[i / 64] & (1ull << (i % 64)))
+			return;
+		bits[i / 64] |= 1ull << (i % 64);
+		s_ran_order.push_back({image.id, f->start});
+	}
+
 	// Whether an image in use has a function that holds `pc`.
 	bool HeldByImage(u32 pc)
 	{
@@ -615,6 +631,20 @@ namespace
 				return true;
 		}
 		return false;
+	}
+
+	void RecordMissing(u32 pc);
+
+	// RecordMissing() for the block about to be interpreted at `pc`, `block`
+	// when it has been formed already: once for as long as the images in use
+	// stay what they are, since marking it again changes nothing.
+	__fi void NoteMissing(Block* block, u32 pc)
+	{
+		if (block && block->missing_noted == s_images_epoch && block->start == pc) [[likely]]
+			return;
+		RecordMissing(pc);
+		if (block && s_dispatching && block->start == pc)
+			block->missing_noted = s_images_epoch;
 	}
 
 	void RecordMissing(u32 pc)
@@ -885,12 +915,14 @@ namespace
 	}
 
 	// Carries out `in` with PS2Native's own semantics. False when it has none
-	// for this instruction.
-	bool ExecuteOwn(const Insn& in)
+	// for this instruction. Inlined where the interpreter carries a block's
+	// plain steps out (RunRecSteps), a call less for each instruction.
+	__fi bool ExecuteOwn(const Insn& in)
 	{
 		using namespace ps2n::ee::ops;
 
-		if (in.is(ps2n::r5900::F_FPU) && FullFpuClampMode()) [[unlikely]]
+		// The setting first: what the instruction is takes a call (r5900::info()).
+		if (FullFpuClampMode() && in.is(ps2n::r5900::F_FPU)) [[unlikely]]
 			return false;
 
 #define RD in.rd()
@@ -1178,6 +1210,34 @@ namespace
 		blocks::MemoryFault((step.info & blocks::kDelaySlot) ? step.insn.addr : step.insn.addr + 4);
 	}
 
+	// A plain step that is a load or store the recompiler compiled as a direct
+	// access to host memory (kFastmem): the first time it hits memory that is
+	// not plain, its block is thrown away as the recompiler's code is patched
+	// (RunRecStep does the same for the others).
+	__fi void PlainFastmem(Step& step)
+	{
+		if ((step.info & blocks::kFastmem) && EmuConfig.Cpu.Recompiler.EnableFastmem)
+		{
+			const Insn& in = step.insn;
+			if (ps2n::ee::notPlainMemory(cpuRegs.GPR.r[in.rs()].UL[0] + static_cast<u32>(in.simm())))
+				FastmemFault(step);
+		}
+	}
+
+	// An instruction PS2Native has no semantics of its own for, carried out by
+	// PCSX2's interpreter function for it.
+	[[gnu::noinline]] void Delegate(const Insn& in)
+	{
+		s_stats.delegated++;
+		s_stats.delegated_by_op[static_cast<size_t>(in.op)]++;
+		if (in.op == Op::SYSCALL)
+			CountSyscall();
+		cpuRegs.code = in.raw;
+		cpuRegs.pc = in.addr + 4;
+		cpuRegs.branch = 0;
+		R5900::GetInstruction(in.raw).interpret();
+	}
+
 	// Carries out a step that is not a branch. `eighths`: the cost of the
 	// block so far.
 	void RunRecStep(Step& step, u32& eighths)
@@ -1189,6 +1249,17 @@ namespace
 		s_interpreted_eighths += step.eighths;
 		if (s_interpreting_image)
 			s_interpreted_eighths_in_image += step.eighths;
+
+		// Most instructions: nothing but the instruction itself (blocks::kPlain).
+		if (info & blocks::kPlain) [[likely]]
+		{
+			PlainFastmem(step);
+			if (ExecuteOwn(in)) [[likely]]
+				return;
+			Delegate(in);
+			return;
+		}
+
 		if (info & blocks::kCostOnly)
 			return;
 
@@ -1240,15 +1311,7 @@ namespace
 
 		if (ExecuteOwn(in))
 			return;
-
-		s_stats.delegated++;
-		s_stats.delegated_by_op[static_cast<size_t>(in.op)]++;
-		if (in.op == Op::SYSCALL)
-			CountSyscall();
-		cpuRegs.code = in.raw;
-		cpuRegs.pc = in.addr + 4;
-		cpuRegs.branch = 0;
-		R5900::GetInstruction(in.raw).interpret();
+		Delegate(in);
 	}
 
 	// iBranchTest(): the end of a block. The idle loop's way of ending is in
@@ -1262,7 +1325,7 @@ namespace
 
 	// Carries out the branch or jump that ends a block, with its delay slot
 	// (`delay`, or null when the recompiler dropped it), and ends the block.
-	void RunRecBranch(const Block& block, Step& step, Step* delay, u32 eighths)
+	__fi void RunRecBranch(const Block& block, Step& step, Step* delay, u32 eighths)
 	{
 		const Insn& in = step.insn;
 		const u32 next = in.addr + 8;
@@ -1351,25 +1414,48 @@ namespace
 		}
 	}
 
-	// Counts `steps` interpreted instructions of a block that starts at `pc`.
-	__fi void CountRecSteps(u32 pc, u64 steps)
+	// Where a block lies, for the report (Block::where).
+	enum Where : u8
 	{
-		s_stats.interpreted += steps;
-		if (InImage(pc))
-		{
-			s_stats.interpreted_in_image += steps;
-			return;
-		}
-		if (pc >= 0x80000000u)
-			s_stats.interpreted_kernel += steps;
-		else if (pc < 0x00100000u)
-			s_stats.interpreted_loader += steps;
-		else
-			s_stats.interpreted_elsewhere += steps;
+		kWhereImage, // inside the executable's code
+		kWhereKernel, // from 80000000
+		kWhereLoader, // below 00100000
+		kWhereElsewhere,
+	};
 
-		const u8 place = BiosPlaceOf(pc);
-		if (place < ps2n::ee::kBiosPlaces)
-			s_stats.bios_interpreted[s_after_entry][place] += steps;
+	// Notes where `block` lies, for as long as the images in use stay what they
+	// are: what CountRecSteps() would otherwise work out at every execution.
+	[[gnu::noinline]] void NoteBlock(Block& block)
+	{
+		const u32 pc = block.start;
+		block.where = InImage(pc) ? kWhereImage : pc >= 0x80000000u ? kWhereKernel : pc < 0x00100000u ? kWhereLoader : kWhereElsewhere;
+		block.bios_place = block.where == kWhereImage ? ps2n::ee::kBiosPlaces : BiosPlaceOf(pc);
+		block.noted = s_images_epoch;
+	}
+
+	// Counts `steps` interpreted instructions of `block`.
+	__fi void CountRecSteps(Block& block, u64 steps)
+	{
+		if (block.noted != s_images_epoch) [[unlikely]]
+			NoteBlock(block);
+		s_stats.interpreted += steps;
+		switch (block.where)
+		{
+			case kWhereImage:
+				s_stats.interpreted_in_image += steps;
+				return;
+			case kWhereKernel:
+				s_stats.interpreted_kernel += steps;
+				break;
+			case kWhereLoader:
+				s_stats.interpreted_loader += steps;
+				break;
+			default:
+				s_stats.interpreted_elsewhere += steps;
+				break;
+		}
+		if (block.bios_place < ps2n::ee::kBiosPlaces)
+			s_stats.bios_interpreted[s_after_entry][block.bios_place] += steps;
 	}
 
 	// Carries out the steps of `block` from step `first` on, with `eighths`
@@ -1378,14 +1464,31 @@ namespace
 	{
 		bool ended = false; // by an instruction that ends a block without being a branch
 		const size_t count = block.steps.size();
-		CountRecSteps(block.start, count - first);
+		CountRecSteps(block, count - first);
 		if (block.factor != 1) [[unlikely]]
 			s_stats.interpreted_doubled += count - first;
-		s_interpreting_image = InImage(block.start);
+		s_interpreting_image = block.where == kWhereImage;
 
 		for (size_t i = first; i < count; i++)
 		{
 			Step& step = block.steps[i];
+
+			// Most instructions: nothing but the instruction itself
+			// (blocks::kPlain), carried out here rather than through
+			// RunRecStep(), a call less for each. A plain step does not end the
+			// block.
+			if (step.info & blocks::kPlain) [[likely]]
+			{
+				eighths += step.eighths;
+				s_interpreted_eighths += step.eighths;
+				if (s_interpreting_image)
+					s_interpreted_eighths_in_image += step.eighths;
+				PlainFastmem(step);
+				if (!ExecuteOwn(step.insn)) [[unlikely]]
+					Delegate(step.insn);
+				continue;
+			}
+
 			if (step.info & blocks::kBranch)
 			{
 				Step* delay = (i + 1 < count && (block.steps[i + 1].info & blocks::kDelaySlot)) ? &block.steps[i + 1] : nullptr;
@@ -1461,15 +1564,6 @@ namespace
 		}
 
 		RunRecSteps(block, 0, 0);
-	}
-
-	// The block at cpuRegs.pc, formed if there is none yet, carried out.
-	void InterpretRecBlock()
-	{
-		Block* block = blocks::Find(cpuRegs.pc);
-		if (!block)
-			block = FormRecBlock(cpuRegs.pc);
-		RunRecBlock(*block);
 	}
 
 	// ---- compiled code and the recompiler's blocks ---------------------------------
@@ -1698,7 +1792,7 @@ namespace
 				if (Lookup(pc))
 					continue;
 			}
-			RecordMissing(pc);
+			NoteMissing(block, pc);
 			RunRecBlock(*block);
 		}
 	}
@@ -1828,6 +1922,14 @@ uint64_t ps2n::ee::ops::fpu::console_followed[2] = {0, 0};
 
 const ps2n::ee::Stats& ps2n::ee::GetStats()
 {
+	// What compiled code counted itself (askAbout()) since the last time.
+	static u64 s_checked_runs_counted = 0;
+	const u64 checked = checkedRuns - s_checked_runs_counted;
+	s_checked_runs_counted = checkedRuns;
+	s_stats.blocks_compiled += checked;
+	s_stats.blocks_compiled_known += checked;
+	s_stats.checked_runs += checked;
+
 	s_stats.interpreted_cycles = s_interpreted_eighths / 8;
 	s_stats.interpreted_cycles_in_image = s_interpreted_eighths_in_image / 8;
 	s_stats.console_followed_abs_neg = ops::fpu::console_followed[0];
@@ -1912,6 +2014,11 @@ const std::vector<ps2n::ee::CapturedCode>& ps2n::ee::GetCapturedCode()
 	return s_captured;
 }
 
+std::vector<ps2n::ee::FunctionRan> ps2n::ee::GetFunctionsRan()
+{
+	return s_ran_order;
+}
+
 std::vector<ps2n::ee::Handover> ps2n::ee::GetHandovers()
 {
 	std::vector<Handover> handovers;
@@ -1948,6 +2055,9 @@ uint32_t ps2n::ee::blockAsk(const ImageInfo& image, uint32_t index)
 	return block;
 }
 
+ps2n::ee::Checked ps2n::ee::checkedRecords[ps2n::ee::kCheckedLimit];
+uint64_t ps2n::ee::checkedRuns = 0;
+
 namespace
 {
 	// What follows when a record no longer holds, out of checkedAnswer()'s
@@ -1956,16 +2066,28 @@ namespace
 	// about.
 	[[gnu::noinline]] u32 CheckedChanged(Checked& c)
 	{
-		blocks::DiscardManual(*c.block);
+		blocks::DiscardManual(*static_cast<Block*>(c.block));
 		return ps2n::ee::blockAsk(*c.image, c.index);
 	}
 	[[gnu::noinline]] u32 CheckedPageProtected(Checked& c)
 	{
-		blocks::ResetManualPage(*c.block);
+		blocks::ResetManualPage(*static_cast<Block*>(c.block));
 		return ps2n::ee::blockAsk(*c.image, c.index);
 	}
 } // namespace
 
+uint32_t ps2n::ee::checkedChanged(uint32_t id)
+{
+	return CheckedChanged(s_checked[id]);
+}
+
+uint32_t ps2n::ee::checkedPageProtected(uint32_t id)
+{
+	return CheckedPageProtected(s_checked[id]);
+}
+
+// What a module compiled before askAbout() compared the words itself calls
+// (2026-11-20).
 uint32_t ps2n::ee::checkedAnswer(uint32_t id)
 {
 	Checked& c = s_checked[id];
@@ -1988,6 +2110,7 @@ uint32_t ps2n::ee::checkedAnswer(uint32_t id)
 	}
 	s_stats.blocks_compiled++;
 	s_stats.blocks_compiled_known++;
+	s_stats.checked_runs++;
 	return c.answer;
 }
 
@@ -1995,6 +2118,8 @@ uint32_t ps2n::ee::blockStart(const ImageInfo& image, uint32_t index, uint32_t b
 {
 	*out = 0;
 	const u32 addr = image.leaders[index];
+	if (body != kBodyFunction)
+		s_stats.variant_asks++;
 
 	// Asked about before, with nothing changed since: the same block, the same
 	// body, compiled code still able to run it. What is left to do is what the
@@ -2110,6 +2235,7 @@ uint32_t ps2n::ee::blockStart(const ImageInfo& image, uint32_t index, uint32_t b
 				// it holds.
 				known = {&image, blocks::epoch, block, index, body, *out};
 			}
+			MarkRan(image, addr);
 			s_stats.blocks_compiled++;
 			return addr;
 		}
@@ -2335,12 +2461,44 @@ uint64_t ps2n::ee::skipFixedLoop(uint64_t cycle, uint32_t cycles)
 	return cycle;
 }
 
+namespace
+{
+	// The steps of the loads and stores compiled code last reached memory that
+	// is not plain with, as cop2Sites keeps the COP2 instructions' (apart from
+	// them, which a game of many VU0 instructions keeps busy): good for as long
+	// as no block has been formed or thrown away (blocks::epoch).
+	struct FaultSite
+	{
+		u32 pc;
+		u32 start;
+		u64 epoch;
+		Step* step;
+	};
+	constexpr u32 kFaultSites = 4096;
+	FaultSite s_fault_sites[kFaultSites];
+
+	__fi Step& FaultStepAt(u32 start, u32 pc)
+	{
+		FaultSite& site = s_fault_sites[(pc >> 2) & (kFaultSites - 1)];
+		if (site.pc == pc && site.start == start && site.epoch == blocks::epoch) [[likely]]
+			return *site.step;
+		const StepRef ref = FindStep(start, pc);
+		if (ref.index < 0) [[unlikely]]
+			NoSuchStep(start, pc);
+		Step& step = ref.block->steps[ref.index];
+		site = {pc, start, blocks::epoch, &step};
+		return step;
+	}
+} // namespace
+
 bool ps2n::ee::memoryFault(uint32_t pc, uint32_t start)
 {
-	const StepRef ref = FindStep(start, pc);
-	if (ref.index < 0) [[unlikely]]
-		NoSuchStep(start, pc);
-	Step& step = ref.block->steps[ref.index];
+	// Every access of compiled code to memory that is not plain comes here, and
+	// only the first of each instruction's changes anything: the step is found
+	// where the last few thousand are kept, not looked up in its block every
+	// time (in a replay of Jak and Daxter, 2026-11-20, the lookups took 1.7% of
+	// the run, 8.0% of Agent Under Fire's).
+	Step& step = FaultStepAt(start, pc);
 
 	if ((step.info & blocks::kFastmem) && EmuConfig.Cpu.Recompiler.EnableFastmem)
 		FastmemFault(step);
@@ -2465,8 +2623,14 @@ uint32_t ps2n::ee::dispatch(uint32_t pc)
 	cpuRegs.pc = pc;
 	do
 	{
-		RecordMissing(cpuRegs.pc);
-		InterpretRecBlock();
+		// Noted before the block is formed, as before: forming it may change
+		// the images in use.
+		const u32 at = cpuRegs.pc;
+		Block* block = blocks::Find(at);
+		NoteMissing(block, at);
+		if (!block)
+			block = FormRecBlock(at);
+		RunRecBlock(*block);
 
 		if (MustUnwind())
 			return kUnwind;

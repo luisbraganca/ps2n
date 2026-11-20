@@ -17,39 +17,11 @@ namespace ps2n::ee::vu0
 {
 	namespace detail
 	{
-		// The four bits reversed: lanes (lane 0 is x) to flag positions (x is the
-		// highest bit).
-		constexpr uint8_t kFlip[16] = {0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15};
-
-		// mVUupdateFlags (microVU_Upper.inl): the zero and sign flags of the
-		// components of `dest` in `result`, to the registers `flags` says; and
-		// with PCSX2's VU overflow game fix, the overflow flags of those whose
-		// magnitude is the largest float or more.
+		// The flags (mVUupdateFlags) are inline in ps2n/ops_vu0.h (WriteFlags);
+		// this is for modules compiled before they were, which call it.
 		void Flags(__m128 result, uint32_t dest, uint32_t flags)
 		{
-			const uint32_t sign = kFlip[_mm_movemask_ps(result)] & dest;
-			const uint32_t zero = kFlip[_mm_movemask_ps(CMPEQPS(_mm_setzero_ps(), result))] & dest;
-			uint32_t mac = (sign << 4) | zero;
-
-			uint32_t overflow = 0;
-			if ((flags & kStatus) && EmuConfig.Gamefixes.VUOverflowHack) [[unlikely]]
-			{
-				const __m128 magnitude = _mm_and_ps(result, All(0x7FFFFFFFu));
-				overflow = kFlip[_mm_movemask_ps(CMPNLTPS(magnitude, All(0x7F7FFFFFu)))] & dest;
-				if (flags & kMac)
-					mac |= overflow << 12;
-			}
-
-			if (flags & kMac)
-				VU0.VI[REG_MAC_FLAG].UL = mac;
-			if (flags & kStatus)
-			{
-				uint32_t d = Denormalize(VU0.VI[REG_STATUS_FLAG].UL) & 0xFFFC00FFu; // clears O, U, S and Z
-				if (overflow)
-					d |= 0x820000u; // O and OS
-				d |= (mac & 0xFFu) | ((mac & 0xFFu) << 8);
-				VU0.VI[REG_STATUS_FLAG].UL = Normalize(d);
-			}
+			WriteFlags(result, dest, flags);
 		}
 
 		// ADD_SS_TriAceHack: of the two, the one whose exponent is smaller by 25

@@ -1675,4 +1675,388 @@ but I guess it's just OpenGL." OpenGL inside WSL is Mesa's translation to
 Direct3D 12; on PCSX2's software renderer, which draws on the processor,
 the characters are whole ("Yep software render seems to fix it"). Then:
 "Let's create releases on Github." P4.7 is done (ADR 0041), and with it
-every step of Phase 4; the first release, 0.1, follows (ADR 0042).
+every step of Phase 4; the first release, 0.1, follows (ADR 0042). The
+maintainer published it on 2026-11-19 (tag `v0.1`, a pre-release).
+
+## The speed step (ADR 0043)
+
+At the maintainer's word on 2026-11-20 ("How come our compiled games are
+running slower than PCSX2's ...? We need to check why and fix it"; "How
+come when our games are running in interpreted mode ... they're far slower
+than when running in PCSX2?"), a step of its own: first measure, in the
+configuration users get, then make what the profiles show smaller, one
+change at a time ([ADR 0043](adr/0043-a-speed-step-compiled-code-against-pcsx2-and-faster-interpreters.md)).
+
+### How it is measured
+
+A copy of each game's folder is made by `make-game.ps1` from the disc image
+and the folder's own captures, into `build\measure\kit\games` (never the
+maintainer's own folders), its modules compiled exactly as a game's folder
+compiles them, without a profile, but with line tables beside them
+(`make-game.ps1 -LineTables`, for measurements only), so that a profile
+names their functions and lines (`ps2n-host -profile` now tells the four
+modules apart). A session the maintainer played in that game's folder is
+run again from the copy (`game.ps1 -Runtime <copy>\ps2n-host.exe -Replay
+<session>`), without a window, under stock PCSX2 (`stock-jit`, the same
+runtime with PCSX2's recompilers) and as compiled (`ps2n-static`), in turns,
+three rounds each on the fast cores, the time taken from frame 1 to the
+session's last (`-Marks 1`), and a fourth round of each profiled. Every
+run is the session at every fingerprint. Jak and Daxter is run with
+nothing drawn; the others on Vulkan at the console's resolution, since
+PCSX2's null renderer stops at an assertion when Gran Turismo 3 draws (a
+box that came up on the maintainer's screen once; the runs have since been
+made on a desktop of their own that nobody sees, `build\measure\hidden.ps1`).
+
+### Compiled code against PCSX2's recompilers (2026-11-20)
+
+| Game, session | Frames | Stock PCSX2 | Compiled | Ratio |
+|---|---:|---|---|---:|
+| Jak and Daxter, `20261119-110909` (nothing drawn) | 8,357 | 58.94, 58.16, 57.49 s | 72.56, 71.68, 72.18 s | 1.24 |
+| Gran Turismo 3, `20261118-102727` | 13,582 | 50.69, 50.90, 50.08 s | 58.98, 58.37, 58.90 s | 1.16 |
+| Agent Under Fire, `20261117-185759` | 9,000 | 27.54, 27.53, 27.41 s | 32.38, 31.66, 31.86 s | 1.16 |
+| Killzone, `20261117-221825` | 9,300 | 44.93, 45.28, 45.14 s | 48.21, 48.11, 48.32 s | 1.07 |
+
+(Silent Hill 3's sessions are a few seconds each; from boot, without one,
+its first 3,000 frames took 3.19 to 3.23 s under stock PCSX2 and 4.32 to
+4.33 s compiled: start-up, the IOP's code met there interpreted.)
+
+Where the difference is, by the profiles (seconds of the CPU thread):
+
+| | Jak and Daxter | Gran Turismo 3 | Agent Under Fire | Killzone |
+|---|---|---|---|---|
+| The game's EE code: PCSX2's recompiler's, compiled | 8.6, 16.0 | 11.6, 13.5 | 10.9, 12.7 | 15.7, 18.1 |
+| The IOP's code: PCSX2's recompiler's, compiled | 2.5, 4.4 | 3.9, 6.3 | 1.3, 1.8 | 2.7, 4.6 |
+| The micro code: PCSX2's recompiler's, compiled | 16.2, 16.6 | 6.9, 6.7 | 2.7, 2.3 | 6.6, 6.8 |
+| Where compiled code reaches memory that is not plain (`memoryFault`, `FindStep`, `FindRunning`) | 1.2 | 2.2 | 2.6 | 0.6 |
+
+- **Every access of compiled code to memory that is not plain** (a device's
+  registers) looked its instruction up in its block (`memoryFault` →
+  `FindStep` → `FindRunning`), although only the first access of each
+  instruction changes anything: 8.0% of Agent Under Fire's run (a loop that
+  waits on a GS register), 3.7% of Gran Turismo 3's, 1.7% of Jak and
+  Daxter's, 1.2% of Killzone's.
+- **The IOP's compiled code takes 1.4 to 1.7 times the time of the code
+  PCSX2's IOP recompiler makes**, in every game, and its provider's
+  `ExecuteBlock` 0.9 to 1.7% of the run more.
+- **Jak and Daxter's own code**: the multimedia instructions (128 bits)
+  carried out on the core's copy of the registers (`PMADDH`, `PAND`,
+  `PEXTUB`, `PSRAW`, `PADDW`, ... about 15% of its compiled code's samples),
+  where PCSX2's recompiler keeps the registers in host registers; and the
+  VU0 instructions (17%), with their flags computed by a call
+  (`vu0::detail::Flags`, 1.2% of the run).
+- **The six loops of `bench.s`** (the site's chart), timed in the module
+  tree before the changes, `bench.ps1 -Repeat 3`, the best of three, in
+  milliseconds: under stock PCSX2's recompilers, compiled, under PCSX2's
+  interpreters, under PS2Native's:
+
+  | Loop | Stock PCSX2 | Compiled | Ratio | PCSX2's interpreters | PS2Native's |
+  |---|---:|---:|---:|---:|---:|
+  | sum | 70.6 | 65.2 | 0.92 | 1,363.1 | 1,020.6 |
+  | mem | 18.9 | 18.1 | 0.96 | 369.9 | 291.4 |
+  | call | 29.4 | 28.3 | 0.96 | 608.3 | 493.9 |
+  | fpu | 49.6 | 49.4 | 1.00 | 441.2 | 311.8 |
+  | mmi | 8.7 | 10.1 | 1.16 | 208.1 | 163.0 |
+  | jump | 49.0 | 49.9 | 1.02 | 1,314.5 | 857.0 |
+
+  On the loops compiled code is at stock PCSX2's time or below it, but for
+  the 128-bit instructions; and PS2Native's interpreter is faster than
+  PCSX2's on every one (it was slower at the proof of concept, before the
+  record of blocks: it decodes a block's instructions once now). What a
+  game does that the loops do not (devices, the IOP, VU0) is where the gap
+  in the games is.
+- **What compiled code asks the runtime about at every execution**: a block
+  of a page that is not write-protected compares its words through two
+  calls (`askAbout`, `checkedAnswer`): 80 million times in Gran Turismo 3's
+  run, 40 million in Jak and Daxter's, 23 million in Killzone's. A
+  variant's label asks too (counted apart now): 13,366 times in Jak and
+  Daxter's, about none in the others: nothing to gain there.
+
+### Code met for the first time (2026-11-20)
+
+The first session of each, run again from a folder made from the disc alone,
+so that what it met for the first time is interpreted again, as it was:
+
+| First session | Frames | Stock PCSX2 | PS2Native | Ratio | Interpreted |
+|---|---:|---|---|---:|---|
+| Gran Turismo 3, `20261118-095532` | 8,678 | 21.48, 21.74, 21.49 s | 108.54, 111.61, 108.66 s | 5.0 | 31.84% of the EE's cycles; the IOP's and VU1's code |
+| Jak and Daxter, `20261118-120020` | 2,564 | 14.01, 13.98, 14.03 s | 60.49, 59.64, 60.18 s | 4.3 | 31.83% of the EE's cycles; the IOP's and the VUs' code |
+
+The interpreters alone, against PCSX2's own (`ps2n-ee` and `stock-interp`,
+every processor interpreted), on Gran Turismo 3's first 3,000 frames:
+PS2Native 7.56 s, PCSX2 16.66 s. **PS2Native's interpreters are 2.2 times
+as fast as PCSX2's**; what PCSX2 does with new code is compile it at once,
+which no build of PS2Native's ships (ADR 0003). PCSX2's interpreters fetch
+every instruction from memory each time (`iopMemRead32`, 21% of that run)
+and test for events at every branch; PS2Native's decode a block once and
+follow the record of blocks.
+
+Where Gran Turismo 3's first session spends its time (88% of it in
+PS2Native's interpreters): the EE's about 62% (`RunRecStep`, `RunRecSteps`,
+`ExecuteOwn`, `ProviderExecute`, of which 6.0% in `r5900::info`, an
+out-of-line lookup made for every instruction, and 1.3% in `Bios` and
+`Physical`, made for every block); the VUs' 14%; the IOP's 9% (2.2% in
+`r3000a::decode`, an out-of-line decode made for every instruction, every
+time).
+
+### The changes, each timed against the runtime before it (2026-11-20)
+
+Each set of changes built into both trees, every test passing in each (535
+and 534); then a copy of each measurement folder with the new runtime in the
+place of the old (the same modules, `build\measure\variant.ps1`), the two
+run in turns on the same session, two rounds; every run the session at every
+fingerprint.
+
+The first set:
+
+- **Compiled code's accesses to memory that is not plain** find their
+  instruction's step in a table of the last few thousand, as a COP2
+  instruction's is found (`memoryFault`), and look it up in its block only
+  when it is not there.
+- **The EE's interpreter**: what an instruction is (`r5900::info`) inlined,
+  and asked only where it decides something; what the report notes of a
+  block (where it lies, the BIOS's place, the start compiled code lacks)
+  worked out once for as long as the images in use are the same
+  (`NoteBlock`, `NoteMissing`), not at every execution; the steps that
+  are only carried out (`kPlain`, decided when the block is formed) taken
+  straight to their instruction.
+- **The IOP's interpreter**: each instruction decoded once, when its block
+  is formed, kept after the block's words (`OpsOf`), where it was decoded at
+  every execution.
+
+| Run | Before | After |
+|---|---|---|
+| Agent Under Fire | 32.15, 32.00 s | 30.65, 31.09 s |
+| Gran Turismo 3 | 58.69, 58.68 s | 57.28, 58.28 s |
+| Killzone | 48.01, 48.46 s | 47.65, 48.03 s |
+| Jak and Daxter | 71.08, 70.60 s | 71.19, 70.76 s |
+| Gran Turismo 3's first session | 109.04, 108.51 s | 92.37, 91.98 s |
+| Jak and Daxter's first session | 59.57, 60.02 s | 55.26, 54.99 s |
+
+In Jak and Daxter, whose code has many VU0 instructions, the steps of
+those and of the accesses took each other's places in the one table; the
+second set gives the accesses a table of their own.
+
+The second set: that table; and in the EE's interpreter the plain steps
+carried out in the loop over a block's steps, `ExecuteOwn` inlined there (a
+call less for each instruction).
+
+| Run | First set | Second set |
+|---|---|---|
+| Agent Under Fire | 30.96, 31.06 s | 30.71, 31.12 s |
+| Gran Turismo 3 | 57.35, 57.30 s | 57.26, 56.98 s |
+| Killzone | 47.80, 47.75 s | 47.83, 47.96 s |
+| Jak and Daxter | 70.18, 71.23 s | 70.45, 71.71 s |
+| Gran Turismo 3's first session | 92.40, 92.36 s | 85.42, 85.78 s |
+| Jak and Daxter's first session | 55.17, 54.78 s | 53.83, 53.28 s |
+
+Gran Turismo 3's first session now takes 85.6 s, where it took 108.8 s (21%
+less), Jak and Daxter's 53.6 s, where 59.8 s (10% less). The compiled games
+gained 1 to 4% (Agent Under Fire most, the loop that waits on a GS register):
+less than the profiles had put in `memoryFault` and the lookups under it,
+which was not looked into further.
+
+The second set also changed what modules are compiled with: the flags of
+VU0's instructions computed inline (`WriteFlags`, where they were a call of
+the runtime's, 1.2% of Jak and Daxter's run), and a block of a page that is
+not write-protected compared with memory by compiled code itself
+(`askAbout` reads the runtime's records, `checkedRecords`), with one call
+where there were two. (The runtime still has both functions, for modules
+compiled before.) Timed with the folders' modules compiled again from the
+same captures (`build\measure\kit2`), against the same runtime on the
+modules before (two rounds each):
+
+| Run | Modules before | Modules after |
+|---|---|---|
+| Agent Under Fire | 30.81, 31.19 s | 30.69, 31.05 s |
+| Gran Turismo 3 | 57.23, 57.66 s | 57.45, 57.11 s |
+| Killzone | 47.80, 48.22 s | 47.75, 48.08 s |
+| Jak and Daxter | 71.15, 71.59 s | 70.78, 71.71 s |
+
+No difference that shows: the flags' work is now on the lines of the VU0
+instructions in the profile (21% of the game's compiled code, from 17%).
+
+The third set, in the EE's interpreter: a load or store that may fault
+(`kFastmem`) among the plain steps, its memory looked at in the loop
+(`PlainFastmem`), where it went through `RunRecStep`; the branch that ends a
+block (`RunRecBranch`) inlined; the record's `Find` and `Physical` inlined
+(in `rec_blocks.h`), where each was a call for every block. And the host
+writes, when asked, the compiled functions whose code a run ran
+(`-functions-ran`, `game.ps1 -FunctionsRan`), to place a module's functions
+by. Every test passing in both trees (535, 534):
+
+| Run | Second set | Third set |
+|---|---|---|
+| Gran Turismo 3's first session | 84.90, 85.12 s | 77.27, 77.71 s |
+| Jak and Daxter's first session | 54.00, 54.37 s | 52.30, 52.66 s |
+
+Gran Turismo 3's first session takes 77.5 s now, where it took 108.8 s (29%
+less); Jak and Daxter's 52.5 s, where it took 59.8 s (12% less). Where the
+first takes its time now: the EE's interpreter about 51%, the loop over a
+block's steps (`RunRecSteps`) 37% of it all, with the instructions carried
+out in it; the VUs' 20%; the IOP's 9%.
+
+The third set also changed what modules are compiled with: the parallel
+instructions that only move lanes about (`PEXTLH`, `PCPYLD`, `PAND`,
+`PMFHI`, ...) and `PMULTH`, `PMADDH` and `PMSUBH` written with SSE on a
+register's sixteen bytes at once (`ops_mmi.h`), where compilers had made
+their loops into partial loads of registers just stored whole, and the
+other way round. Jak and Daxter's folder compiled again with it
+(`build\measure\kit3`), against the folder before (`kit2`), and the
+folder before run by the new runtime (`kit2\games\jak-rt3`), to tell the
+two apart:
+
+| Jak and Daxter, two rounds each, in turns | Before | After |
+|---|---|---|
+| Modules and runtime | 71.10, 71.30 s | 69.01, 69.81 s |
+| Modules, the runtime after both times | 70.32, 71.13 s | 68.67, 69.55 s |
+
+The modules gave most of it, 2.3%.
+
+### Two ways of compiling the same code (2026-11-20)
+
+Each timed on Jak and Daxter's session, two rounds, the folder's modules
+compiled again from the same captures (`build\measure\flags.ps1`,
+`relink.ps1`):
+
+- **For this computer's processor** (`-march=native`, with
+  `-ffp-contract=off` so that no multiplication and addition become one):
+  231.51 and 231.91 s, against 69.76 and 69.35 s, 3.3 times as long, every
+  run still the session at every fingerprint. Not looked into further (the
+  processor's AVX instructions next to PCSX2's code, compiled without them,
+  would be the first thing to look at). Not used.
+- **A module's functions in the order a session ran them** (`lld-link
+  /ORDER`), from the list the runtime writes of the compiled functions a
+  run ran (`ps2n-host -functions-ran`, `game.ps1 -FunctionsRan`), taken from
+  another of the maintainer's sessions than the one timed (the first 9,000
+  frames of `20261118-120316`: 3,685 of the game's functions; the BIOS's 230
+  are in a module of their own and were left out): 68.68 and 68.93 s,
+  against 69.86 and 70.60 s, 2.0% less, every run the session at every
+  fingerprint. A folder that did this would place its functions by its
+  user's own sessions: a profile of their play (ADR 0043, decision 4).
+
+### Stores of sixteen bytes, tried and taken out (2026-11-20)
+
+Jak and Daxter's hottest compiled function showed a QMTC2 writing VU0's
+register in two stores of eight bytes and the next VU0 instruction reading
+it whole, which waits until both stores have left the processor; the
+parallel instructions read a register whole just after compiled code put
+its bits 0 to 63 back in a store of eight. A fourth set wrote those in one
+store of sixteen bytes (QMTC2, QMFC2, SQ, the registers put back before a
+parallel instruction) and had the parallel instructions that read only half
+of a register read that half alone. Every test passed in both trees (535,
+534); Jak and Daxter's folder compiled with it (`build\measure\kit4`),
+against the one before (`kit3`), three rounds:
+
+| Run | Round 1 | Round 2 | Round 3 |
+|---|---|---|---|
+| Before (kit3) | 69.18 s | 69.57 s | 69.37 s |
+| With the fourth set (kit4) | 69.70 s | 70.62 s | 69.77 s |
+
+Its profile said why: the instructions that now read the upper half of a
+register alone (`PEXTUB`, `PCPYUD`, `PEXTUH`, `PEXTUW`) took ten to twenty
+times the samples they took before. On this processor a load of eight bytes
+from the upper half of a store of sixteen waits for the store as well; the
+lower half does not. Nothing else in the set gained (the VU0 instructions
+took 2,491 samples where they took 2,506). Taken out whole.
+
+### Profile-guided optimization from another of the maintainer's sessions (2026-11-20)
+
+Jak and Daxter's four modules compiled to count what of their code runs
+(clang's `-fprofile-instr-generate`, linked with LLVM's profile runtime; a
+module is loaded without its C runtime's start, so the host has it write its
+counts when the run is over, `WriteGameModuleProfiles` in `host/main.cpp`),
+the first 9,000 frames of another of the maintainer's sessions run with
+them (`20261118-120316`: 146.93 s, about 2.7 times as long as without the
+counting), the counts merged (`llvm-profdata`), and the modules compiled
+again with them (`-fprofile-instr-use`); timed against the same build
+without the profile on the session timed throughout, three rounds
+(`build\measure\batch7.ps1`):
+
+| Run | Round 1 | Round 2 | Round 3 |
+|---|---|---|---|
+| Without the profile | 69.70 s | 70.62 s | 69.77 s |
+| With it | 65.51 s | 64.13 s | 64.75 s |
+
+7.5% less, every run the session at every fingerprint: Jak and Daxter at
+1.11 times stock PCSX2's time (58.2 s), where the same build without the
+profile was at 1.20. A session
+played with the counting would take 2.7 times as long, which no one could
+play; a folder would take its profile another way (sampled while the game
+plays, as `ps2n-host -profile` samples), and whether a folder uses its
+user's own play for this is the maintainer's to decide (ADR 0043, decision
+4).
+
+### The BIOS's kernel compiled for a game's first session (2026-11-20)
+
+A game's folder compiles the BIOS's code from the dump as far as the
+analysis finds it, and what its own sessions met of it (its
+`captures\bios-capture.toml`): a new game's first session meets much of the
+kernel's code only by running it, interpreted (Gran Turismo 3's interpreted
+1.27 billion of the kernel's instructions). The wizard now begins a new
+game's captures with the BIOS's captures of the other games' folders in the
+same games folder whose BIOS is the same image, byte for byte
+(`BiosCapturesBeside` in `wizard/pipeline.cpp`): addresses in the BIOS,
+which stay on the computer, as everything made from a BIOS does (ADR 0007).
+A game's own recompile does not take them again, so that a session of one
+game never has another compile before it plays. Of the 646 block starts in
+the BIOS that Gran Turismo 3's own sessions met, the other four games'
+folders had 600; of Jak and Daxter's 519, 515.
+
+The two first sessions run again from folders made from the disc alone
+(`build\measure\kit4`), without and with the other games' capture
+(`make-game.ps1 -Captures`, given that capture alone):
+
+| First session | Without | With |
+|---|---|---|
+| Gran Turismo 3 | 77.99, 77.70 s | 73.57, 73.17, 73.17 s |
+| Jak and Daxter | 54.67, 54.96 s | 55.01, 54.80 s |
+
+(A first round of Gran Turismo 3's without it was stopped at 19 s by the
+batch before, whose last check stops any runtime still running; another
+was run in its place.)
+
+Gran Turismo 3's first session takes 6% less (27.43% of the EE's cycles
+interpreted, where 31.84%); Jak and Daxter's, which met little of the
+kernel, the same. (kit4's runtime had the fourth set in its interpreter,
+which made Jak and Daxter's first session take 54.8 s, where the third set's
+took 52.5 s.)
+
+### Where the step stands (2026-11-20)
+
+Compiled games, in the configuration users get (a folder's modules, no
+profile), against stock PCSX2's recompilers on the same session:
+
+| Game | Before the step | Now | With a profile of another session |
+|---|---:|---:|---:|
+| Jak and Daxter | 1.24 | 1.19 | 1.11 |
+| Gran Turismo 3 | 1.16 | 1.13 | (not measured) |
+| Agent Under Fire | 1.16 | 1.12 | (not measured) |
+| Killzone | 1.07 | 1.06 | (not measured) |
+
+(Now: Jak and Daxter from kit3's three rounds, 69.4 s; the others from the
+second set, `kit2`, not timed again since the third.)
+
+What is left between compiled code and PCSX2's recompilers, by the
+profiles: the game's EE code (Jak and Daxter 15.4 s against 8.6 s; its VU0
+instructions each ask the runtime's record of their block what to do,
+`cop2Info`, where PCSX2's recompiler knows it when it compiles), the IOP's
+compiled code (1.4 to 1.7 times the time of PCSX2's in every game, about 2
+s of each session), the VU provider's work around each micro program
+(about 1.7 s of Jak and Daxter's), and a profile, which these modules lack
+(7.5% of Jak and Daxter's time) and the placing of their functions (2.0%).
+
+First sessions: Gran Turismo 3's 77.5 s where 108.8 s (29% less), and 6%
+less again where other games' folders have met the BIOS's kernel; Jak and
+Daxter's 52.5 s where 59.8 s (12% less). Stock PCSX2 runs them in 21.6 s
+and 14.0 s, compiling what it meets at once: no build of PS2Native's
+compiles PS2 code while a game plays (ADR 0003), and PS2Native's
+interpreters are 2.2 times as fast as PCSX2's.
+
+### The maintainer's answer (2026-11-20)
+
+Asked whether a game's folder should learn from its user's own play to
+compile its code better, with the session's recommendation (the order of
+its functions first, then a profile sampled while the game plays, built and
+measured before it ships), the maintainer answered "1. Yes."
+([ADR 0044](adr/0044-a-games-folder-learns-from-its-users-own-play.md)),
+and "2. Commit and push." to committing what the step had done so far.

@@ -159,7 +159,22 @@ console's pace inside WSL; WSL's OpenGL leaves parts of characters
 transparent, which PCSX2's software renderer does not. At their words ("I
 guess it's good"; "Let's create releases on Github") P4.7 is done, and with
 it every step of Phase 4; releases go on GitHub, the first 0.1 (ADR 0042),
-the version the file `version.txt`.**
+the version the file `version.txt`, which the maintainer published on
+2026-11-19. On 2026-11-20, at the maintainer's word, a speed step (ADR
+0043), measured in the configuration users get, a game's folder (copies in
+`build\measure`, never the maintainer's own): compiled games took 1.07 to
+1.24 times stock PCSX2's time on the maintainer's sessions run again, and
+take 1.06 to 1.19 after the changes kept (compiled code's accesses to
+devices, the parallel instructions in SSE); with the EE's and the IOP's
+interpreters made faster, Gran Turismo 3's first session takes 77.5 s
+where 108.8 s, and 6% less again
+where other games' folders give a new game the BIOS's kernel they met (the
+wizard, `BiosCapturesBeside`). A profile of another session gave Jak and
+Daxter 7.5% more and the placing of its functions 2.0%; at the
+maintainer's word a game's folder will learn from its user's own play, the
+order of its functions first, then a profile sampled while the game plays,
+each measured before it goes into a folder (ADR 0044). The docs/app-log.md
+section "The speed step" has every number.**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -788,7 +803,31 @@ Decisions:
   `version.txt`, shown by the wizard's title, the runtime's `-help` and the
   licences. GitHub
   CLI (`gh`, installed with winget at the maintainer's choice) creates a
-  release as a draft, published at the maintainer's word.
+  release as a draft, published at the maintainer's word. The maintainer
+  published 0.1 on 2026-11-19.
+- [ADR 0043](docs/adr/0043-a-speed-step-compiled-code-against-pcsx2-and-faster-interpreters.md):
+  a speed step, at the maintainer's word on 2026-11-20 ("How come our
+  compiled games are running slower than PCSX2's ...? We need to check why
+  and fix it"; and why first sessions are so much slower than on PCSX2):
+  first measured in the configuration users get (a game's folder, its
+  modules without a profile) against stock PCSX2 on the maintainer's own
+  sessions run again, then the costs the profiles show made smaller one
+  change at a time, each kept only if it gains, time counted as before.
+  First sessions get faster within today's rules ("Faster interpreters
+  (Recommended)"): PS2Native's interpreters, and the BIOS's kernel compiled
+  for a new game's first session; a profile of the user's own play given to
+  the compiler is put to the maintainer first, with its cost. What was
+  measured and changed: [docs/app-log.md](docs/app-log.md), "The speed
+  step".
+- [ADR 0044](docs/adr/0044-a-games-folder-learns-from-its-users-own-play.md):
+  a game's folder learns from its user's own play, at the maintainer's word
+  on 2026-11-20 ("1. Yes.", to the session's recommendation): first the
+  order of the game's functions, as its sessions ran them, given to the
+  linker when the folder compiles after a session (2.0% on Jak and Daxter);
+  then a profile sampled while the game plays, given to the compiler (the
+  counted profile gave 7.5%), built and measured before it goes into a
+  folder. Each measured on the maintainer's sessions first; what a folder
+  learns stays in it.
 
 ## Layout, build and test
 
@@ -920,6 +959,21 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   `/Fp`) and an include directory searched first, into a scratch folder
   outside the build, and read `llvm-size -A` of the object. `game.ps1 -CallSites off` times one
   build with calls through a register sent to the runtime's dispatcher.
+  A game's folder as users get it (the speed step, ADR 0043): copies made
+  with `make-game.ps1` into `build\measure\<kit>\games` (`-LineTables`
+  compiles the modules with line tables, for `-TimeProfile` to name their
+  functions and lines; `-ExtraFlags` and `-ExtraLink` try other compiler and
+  linker options; all three for measurements only), a session of the
+  maintainer's run again from a copy with `game.ps1 -Runtime
+  <copy>\ps2n-host.exe -Replay <session> -Marks 1`, in turns with
+  `-Config stock-jit`; `build\measure` keeps the scripts (`replay.ps1`,
+  `variant.ps1`, `flags.ps1`, `relink.ps1`, the batches) and
+  `results.txt`. Batches run on a desktop of their own
+  (`build\measure\hidden.ps1`), one at a time. `game.ps1 -FunctionsRan`
+  (`ps2n-host -functions-ran`) writes the compiled functions a run ran, for
+  `lld-link /ORDER`; a module compiled with `-fprofile-instr-generate` and
+  linked with LLVM's profile runtime has its counts written by the host at
+  the run's end (`LLVM_PROFILE_FILE`).
 - The compiled code in modules of its own (Phase 4, steps P4.1 and P4.2):
   `scripts\windows\build.ps1 -BuildDir build\windows-clang-module -Module on`
   with the main tree's game settings builds everything the host would hold

@@ -27,6 +27,8 @@
 #include "ps2n/module.h"
 #include "ps2n/r5900.h"
 
+#include "pcsx2/MemoryTypes.h"
+
 #include <cstdint>
 #include <vector>
 
@@ -51,6 +53,9 @@ namespace ps2n::ee::blocks
 		                    // if the memory turns out not to be plain; cleared when that has happened
 		kCop2Status = 1 << 13, // a VU0 instruction that writes VU0's status flags: here they reach the register
 		kCop2Mac = 1 << 14, // one that writes its MAC flags: here they reach the register
+		kPlain = 1 << 15, // none of the above that the interpreter acts on but kFastmem, and no COP2 instruction: it
+		                  // only carries it out, a load or store's memory looked at first (set when the block is formed;
+		                  // ee_provider.cpp, RunRecSteps)
 	};
 
 	// Which of VU0's flag registers the recompiler's code for a COP2 instruction
@@ -105,6 +110,15 @@ namespace ps2n::ee::blocks
 		std::vector<uint32_t> words; // of a manual block: [start, nominal_end) as it was when formed
 		const uint8_t* host = nullptr; // of a manual block: where those words are in the host's memory, which does
 		                               // not move while the machine runs (PSM() of its physical address)
+		// What the provider notes of a block the interpreter carries out, for its
+		// report, worked out once for as long as the images in use stay what they
+		// were (ee_provider.cpp, NoteBlock): their epoch then (0: never), where
+		// the block lies, and which of the BIOS's places; and the epoch at which
+		// it last marked the block's start as one compiled code lacks.
+		uint64_t noted = 0;
+		uint64_t missing_noted = 0;
+		uint8_t where = 0;
+		uint8_t bios_place = 0;
 	};
 
 	// What became of the blocks, for the host's report.
@@ -124,15 +138,59 @@ namespace ps2n::ee::blocks
 	};
 	const Stats& GetStats();
 
-	// The physical address the recompiler files `pc` under, or ~0 when it has
-	// no table for it (neither RAM nor ROM).
-	uint32_t Physical(uint32_t pc);
+	// The table of blocks by physical address (rec_blocks.cpp): a place for
+	// every instruction of RAM and of the ROMs (the recompiler's recLUT).
+	// Here so that Find() and Physical() are inlined: the interpreter asks
+	// them for every block it carries out.
+	namespace detail
+	{
+		extern Block** ram_slots;
+		extern Block** rom_slots; // 1FC00000-1FFFFFFF
+		extern Block** rom12_slots; // 1E000000-1E7FFFFF
+		extern uint32_t ram_size;
+	} // namespace detail
+	inline constexpr uint32_t kNowhere = ~0u;
+
+	// The physical address the recompiler files `pc` under, or kNowhere when
+	// it has no table for it (neither RAM nor ROM): its hwLUT, RAM through its
+	// eight mirrors, the ROMs in useg, kseg0 and kseg1.
+	inline uint32_t Physical(uint32_t pc)
+	{
+		constexpr bool kRamMirror[16] = {true, false, true, true, false, false, false, false, true, false, true, true, true, true, false, false};
+		const uint32_t top = pc >> 28;
+		const uint32_t rest = pc & 0x0FFFFFFFu;
+		if (kRamMirror[top] && rest < Ps2MemSize::ExposedRam)
+			return rest;
+		if (top == 0x1 || top == 0x9 || top == 0xB)
+		{
+			const uint32_t hw = 0x10000000u | rest;
+			if (hw >= 0x1FC00000u || (hw >= 0x1E000000u && hw < 0x1E800000u))
+				return hw;
+		}
+		return kNowhere;
+	}
+
+	// The slot for physical address `hw`, which Physical() gave.
+	inline Block** Slot(uint32_t hw)
+	{
+		if (hw < detail::ram_size)
+			return &detail::ram_slots[hw >> 2];
+		if (hw >= 0x1FC00000u)
+			return &detail::rom_slots[(hw - 0x1FC00000u) >> 2];
+		return &detail::rom12_slots[(hw - 0x1E000000u) >> 2];
+	}
 
 	// Throws every block away (recResetRaw).
 	void Reset();
 
 	// The block at `pc`, or null.
-	Block* Find(uint32_t pc);
+	inline Block* Find(uint32_t pc)
+	{
+		const uint32_t hw = Physical(pc);
+		if (hw == kNowhere || !detail::ram_slots) [[unlikely]]
+			return nullptr;
+		return *Slot(hw);
+	}
 
 	// Forms the block at `pc`, where there is none yet (recRecompile). Null
 	// when `pc` is neither in RAM nor in ROM.

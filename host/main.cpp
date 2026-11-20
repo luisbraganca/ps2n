@@ -232,6 +232,7 @@ namespace
 		bool call_sites = true; // compiled code makes a call through a register itself where dispatch() found its target before
 		std::string capture_path; // where the block starts that had to be interpreted are written
 		std::string bios_capture_path; // where the block starts formed in the BIOS are written
+		std::string functions_ran_path; // where the compiled functions whose code ran are written, as the linker names them
 		std::string trace_path; // where the record of event tests is written
 		std::string trace_against_path; // an earlier run's record, to compare this run with
 		std::optional<u64> trace_detail_from; // the event test from which the record includes the registers
@@ -471,6 +472,9 @@ namespace
 			"  -bios-capture <file>  With -ee ps2n: write the addresses in the BIOS at which\n"
 			"                     the interpreter formed a block, in the form of a capture\n"
 			"                     file's entries.\n"
+			"  -functions-ran <file>  With -ee ps2n: write the compiled functions whose code\n"
+			"                     ran, in the order they first did, one to a line by the\n"
+			"                     name the linker knows them by (lld-link /order).\n"
 			"  -bios-static on|off  With -ee ps2n and -static on: run the BIOS's code\n"
 			"                     compiled ahead of time, when this host has it for the\n"
 			"                     machine's ROM (default on). Off, the interpreter runs the\n"
@@ -688,6 +692,8 @@ namespace
 				o.capture_path = argv[++i];
 			else if (is("-bios-capture") && has_value)
 				o.bios_capture_path = argv[++i];
+			else if (is("-functions-ran") && has_value)
+				o.functions_ran_path = argv[++i];
 			else if (is("-times") && has_value)
 				o.times_path = argv[++i];
 			else if (is("-pad") && has_value)
@@ -1152,7 +1158,8 @@ namespace
 		// (FileSystem::GetWin32Path in common/FileSystem.cpp). Build tools pass
 		// forward slashes, so every path is put in the platform's form here.
 		for (std::string* path : {&o.boot_path, &o.bios_path, &o.data_dir, &o.out_path, &o.times_path, &o.log_path, &o.capture_path,
-				 &o.bios_capture_path, &o.trace_path, &o.trace_against_path, &o.sync_path, &o.sync_against_path, &o.frame_path, &o.pad_path,
+				 &o.bios_capture_path, &o.functions_ran_path, &o.trace_path, &o.trace_against_path, &o.sync_path, &o.sync_against_path,
+				 &o.frame_path, &o.pad_path,
 				 &o.profile_path, &o.vu_report_path, &o.iop_report_path, &o.vu_programs_path, &o.vu_capture_path, &o.iop_capture_path,
 				 &o.record_dir, &o.sessions_dir, &o.input_path, &o.memcards_dir, &o.patch_archive})
 			Path::ToNativePath(path);
@@ -2059,12 +2066,13 @@ namespace
 			std::fprintf(stderr,
 				"ps2n-host: compiled code of %s: %s; %llu dispatcher entries; blocks compared with what was compiled %llu, found to be"
 				" code nothing was compiled from %llu; times compiled code was told to run a block %llu (%llu of them with an answer"
-				" kept from the time before), times the interpreter carried one out at a label instead %llu, times it was a timeout"
+				" kept from the time before; asked by the record of a block of a page that is not write-protected %llu, by a"
+				" variant's label %llu), times the interpreter carried one out at a label instead %llu, times it was a timeout"
 				" loop's turn %llu; calls passed on to a variant %llu; frames abandoned: %llu for another executable, %llu for stack"
 				" depth; blocks finished by the interpreter %llu\n",
 				stats.image->name, s_options.static_code ? "in use" : "switched off", static_cast<ull>(stats.static_entries),
 				static_cast<ull>(stats.blocks_checked), static_cast<ull>(stats.blocks_unknown), static_cast<ull>(stats.blocks_compiled),
-				static_cast<ull>(stats.blocks_compiled_known),
+				static_cast<ull>(stats.blocks_compiled_known), static_cast<ull>(stats.checked_runs), static_cast<ull>(stats.variant_asks),
 				static_cast<ull>(stats.blocks_interpreted_at_labels), static_cast<ull>(stats.timeout_loop_entries),
 				static_cast<ull>(stats.redirected), static_cast<ull>(stats.forced_unwinds), static_cast<ull>(stats.stack_unwinds),
 				static_cast<ull>(stats.left));
@@ -2375,6 +2383,31 @@ namespace
 			else
 			{
 				std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.bios_capture_path.c_str());
+			}
+		}
+		if (!s_options.functions_ran_path.empty())
+		{
+			// The compiled functions whose code ran, in the order they first did,
+			// by the names the linker knows them by: what a module's functions can
+			// be placed by (lld-link /order, ld.lld --symbol-ordering-file).
+			if (std::FILE* fp = FileSystem::OpenCFile(s_options.functions_ran_path.c_str(), "wb"))
+			{
+				const std::vector<ps2n::ee::FunctionRan> ran = ps2n::ee::GetFunctionsRan();
+				for (const ps2n::ee::FunctionRan& f : ran)
+				{
+#if defined(_WIN32)
+					std::fprintf(fp, "?fn_%08X@ps2n_image_%s@@YVII@Z\n", f.start, f.image);
+#else
+					const std::string space = std::string("ps2n_image_") + f.image;
+					std::fprintf(fp, "_ZN%zu%s11fn_%08XEj\n", space.size(), space.c_str(), f.start);
+#endif
+				}
+				std::fclose(fp);
+				std::fprintf(stderr, "ps2n-host: the %zu compiled functions whose code ran: %s\n", ran.size(), s_options.functions_ran_path.c_str());
+			}
+			else
+			{
+				std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.functions_ran_path.c_str());
 			}
 		}
 	}
@@ -3522,6 +3555,28 @@ static void PublishGameModules()
 #ifdef _WIN32
 
 #if defined(PS2N_GAME_MODULE)
+// The modules of compiled code, as loaded.
+static std::vector<HMODULE> s_game_modules;
+
+// A module compiled to count what of its code runs, for a profile of it
+// (clang's -fprofile-instr-generate, linked with the profile runtime: for
+// measurements, build\measure): loaded without its C runtime's start
+// (/NOENTRY), it cannot write its counts at exit itself, so the host has it
+// write them when the run is over, to where LLVM_PROFILE_FILE says.
+static void WriteGameModuleProfiles()
+{
+	for (const HMODULE module : s_game_modules)
+	{
+		const auto write = reinterpret_cast<int (*)()>(GetProcAddress(module, "__llvm_profile_write_file"));
+		if (!write)
+			continue;
+		if (const auto initialize = reinterpret_cast<void (*)()>(GetProcAddress(module, "__llvm_profile_initialize_file")))
+			initialize();
+		const int result = write();
+		std::fprintf(stderr, "ps2n-host: a module's profile written: %s\n", result == 0 ? "done" : "failed");
+	}
+}
+
 // Loads the modules of compiled code beside the host's executable and puts
 // their lists together. False, with what went wrong on stderr, when one is
 // missing or was not built for this host.
@@ -3566,6 +3621,7 @@ static bool LoadGameModules()
 		}
 		if (!TakeGameModule(entry, shown))
 			return false;
+		s_game_modules.push_back(module);
 	}
 	PublishGameModules();
 	return true;
@@ -3596,7 +3652,11 @@ int wmain(int argc, wchar_t** argv)
 		u8_argptrs.push_back(u8_args[i].data());
 	u8_argptrs.push_back(nullptr);
 
-	return Run(argc, u8_argptrs.data());
+	const int code = Run(argc, u8_argptrs.data());
+#if defined(PS2N_GAME_MODULE)
+	WriteGameModuleProfiles();
+#endif
+	return code;
 }
 
 #else

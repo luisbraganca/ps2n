@@ -22,7 +22,9 @@
 #include "ps2n/ee_state.h"
 #include "ps2n/ops_int.h"
 
+#include <emmintrin.h>
 #include <stdint.h>
+#include <tmmintrin.h>
 
 namespace ps2n::ee::ops
 {
@@ -53,6 +55,17 @@ namespace ps2n::ee::ops
 	template <typename T>
 	inline void sl(uint32_t rd, const Lanes<T>& q) {
 		if (rd) __builtin_memcpy(cpuRegs.GPR.r[rd].UD, q.v, 16);
+	}
+
+	// A register's 128 bits, and HI's and LO's, as one SSE value; and a result
+	// written to rd whole. The instructions that only move lanes about are
+	// written with these: compilers turned their loops into partial loads and
+	// stores of the registers (2026-11-20).
+	inline __m128i gq(uint32_t r) { return _mm_loadu_si128(reinterpret_cast<const __m128i*>(cpuRegs.GPR.r[r].UD)); }
+	inline __m128i hiq() { return _mm_loadu_si128(reinterpret_cast<const __m128i*>(cpuRegs.HI.UD)); }
+	inline __m128i loq() { return _mm_loadu_si128(reinterpret_cast<const __m128i*>(cpuRegs.LO.UD)); }
+	inline void sq(uint32_t rd, __m128i v) {
+		if (rd) _mm_storeu_si128(reinterpret_cast<__m128i*>(cpuRegs.GPR.r[rd].UD), v);
 	}
 
 	template <typename T, typename F>
@@ -137,10 +150,14 @@ namespace ps2n::ee::ops
 	}
 
 	// ---- logical ----------------------------------------------------------------
-	inline void PAND(uint32_t rd, uint32_t rs, uint32_t rt) { set128(rd, ru64(rs) & ru64(rt), rhi64(rs) & rhi64(rt)); }
-	inline void POR(uint32_t rd, uint32_t rs, uint32_t rt) { set128(rd, ru64(rs) | ru64(rt), rhi64(rs) | rhi64(rt)); }
-	inline void PXOR(uint32_t rd, uint32_t rs, uint32_t rt) { set128(rd, ru64(rs) ^ ru64(rt), rhi64(rs) ^ rhi64(rt)); }
-	inline void PNOR(uint32_t rd, uint32_t rs, uint32_t rt) { set128(rd, ~(ru64(rs) | ru64(rt)), ~(rhi64(rs) | rhi64(rt))); }
+	// Whole: written as two halves, a register read whole right after (SQ, the
+	// next of these) waited for the two stores to reach memory.
+	inline void PAND(uint32_t rd, uint32_t rs, uint32_t rt) { sq(rd, _mm_and_si128(gq(rs), gq(rt))); }
+	inline void POR(uint32_t rd, uint32_t rs, uint32_t rt) { sq(rd, _mm_or_si128(gq(rs), gq(rt))); }
+	inline void PXOR(uint32_t rd, uint32_t rs, uint32_t rt) { sq(rd, _mm_xor_si128(gq(rs), gq(rt))); }
+	inline void PNOR(uint32_t rd, uint32_t rs, uint32_t rt) {
+		sq(rd, _mm_xor_si128(_mm_or_si128(gq(rs), gq(rt)), _mm_set1_epi32(-1)));
+	}
 
 	// ---- shifts -----------------------------------------------------------------
 	inline void PSLLH(uint32_t rd, uint32_t rt, uint32_t sa) { lanewise1<uint16_t>(rd, rt, [sa](uint16_t a) { return a << (sa & 15); }); }
@@ -176,50 +193,14 @@ namespace ps2n::ee::ops
 	}
 
 	// ---- pack / extend / interleave ---------------------------------------------
-	inline void PEXTLW(uint32_t rd, uint32_t rs, uint32_t rt) {
-		const auto s = gl<uint32_t>(rs), t = gl<uint32_t>(rt);
-		sl(rd, Lanes<uint32_t>{{t.v[0], s.v[0], t.v[1], s.v[1]}});
-	}
-	inline void PEXTUW(uint32_t rd, uint32_t rs, uint32_t rt) {
-		const auto s = gl<uint32_t>(rs), t = gl<uint32_t>(rt);
-		sl(rd, Lanes<uint32_t>{{t.v[2], s.v[2], t.v[3], s.v[3]}});
-	}
-	inline void PEXTLH(uint32_t rd, uint32_t rs, uint32_t rt) {
-		const auto s = gl<uint16_t>(rs), t = gl<uint16_t>(rt);
-		Lanes<uint16_t> r;
-		for (int i = 0; i < 4; ++i) {
-			r.v[2 * i] = t.v[i];
-			r.v[2 * i + 1] = s.v[i];
-		}
-		sl(rd, r);
-	}
-	inline void PEXTUH(uint32_t rd, uint32_t rs, uint32_t rt) {
-		const auto s = gl<uint16_t>(rs), t = gl<uint16_t>(rt);
-		Lanes<uint16_t> r;
-		for (int i = 0; i < 4; ++i) {
-			r.v[2 * i] = t.v[4 + i];
-			r.v[2 * i + 1] = s.v[4 + i];
-		}
-		sl(rd, r);
-	}
-	inline void PEXTLB(uint32_t rd, uint32_t rs, uint32_t rt) {
-		const auto s = gl<uint8_t>(rs), t = gl<uint8_t>(rt);
-		Lanes<uint8_t> r;
-		for (int i = 0; i < 8; ++i) {
-			r.v[2 * i] = t.v[i];
-			r.v[2 * i + 1] = s.v[i];
-		}
-		sl(rd, r);
-	}
-	inline void PEXTUB(uint32_t rd, uint32_t rs, uint32_t rt) {
-		const auto s = gl<uint8_t>(rs), t = gl<uint8_t>(rt);
-		Lanes<uint8_t> r;
-		for (int i = 0; i < 8; ++i) {
-			r.v[2 * i] = t.v[8 + i];
-			r.v[2 * i + 1] = s.v[8 + i];
-		}
-		sl(rd, r);
-	}
+	// rd's lanes alternate rt's and rs's, rt's first: the low or the high half
+	// of each (PUNPCKL, PUNPCKH).
+	inline void PEXTLW(uint32_t rd, uint32_t rs, uint32_t rt) { sq(rd, _mm_unpacklo_epi32(gq(rt), gq(rs))); }
+	inline void PEXTUW(uint32_t rd, uint32_t rs, uint32_t rt) { sq(rd, _mm_unpackhi_epi32(gq(rt), gq(rs))); }
+	inline void PEXTLH(uint32_t rd, uint32_t rs, uint32_t rt) { sq(rd, _mm_unpacklo_epi16(gq(rt), gq(rs))); }
+	inline void PEXTUH(uint32_t rd, uint32_t rs, uint32_t rt) { sq(rd, _mm_unpackhi_epi16(gq(rt), gq(rs))); }
+	inline void PEXTLB(uint32_t rd, uint32_t rs, uint32_t rt) { sq(rd, _mm_unpacklo_epi8(gq(rt), gq(rs))); }
+	inline void PEXTUB(uint32_t rd, uint32_t rs, uint32_t rt) { sq(rd, _mm_unpackhi_epi8(gq(rt), gq(rs))); }
 	inline void PPACW(uint32_t rd, uint32_t rs, uint32_t rt) {
 		const auto s = gl<uint32_t>(rs), t = gl<uint32_t>(rt);
 		sl(rd, Lanes<uint32_t>{{t.v[0], t.v[2], s.v[0], s.v[2]}});
@@ -261,8 +242,8 @@ namespace ps2n::ee::ops
 		const auto s = gl<uint16_t>(rs), t = gl<uint16_t>(rt);
 		sl(rd, Lanes<uint16_t>{{t.v[0], s.v[0], t.v[2], s.v[2], t.v[4], s.v[4], t.v[6], s.v[6]}});
 	}
-	inline void PCPYLD(uint32_t rd, uint32_t rs, uint32_t rt) { set128(rd, ru64(rt), ru64(rs)); }
-	inline void PCPYUD(uint32_t rd, uint32_t rs, uint32_t rt) { set128(rd, rhi64(rs), rhi64(rt)); }
+	inline void PCPYLD(uint32_t rd, uint32_t rs, uint32_t rt) { sq(rd, _mm_unpacklo_epi64(gq(rt), gq(rs))); }
+	inline void PCPYUD(uint32_t rd, uint32_t rs, uint32_t rt) { sq(rd, _mm_unpackhi_epi64(gq(rs), gq(rt))); }
 	inline void PCPYH(uint32_t rd, uint32_t rt) {
 		const auto t = gl<uint16_t>(rt);
 		sl(rd, Lanes<uint16_t>{{t.v[0], t.v[0], t.v[0], t.v[0], t.v[4], t.v[4], t.v[4], t.v[4]}});
@@ -304,8 +285,8 @@ namespace ps2n::ee::ops
 	}
 
 	// ---- HI/LO transfers --------------------------------------------------------
-	inline void PMFHI(uint32_t rd) { set128(rd, cpuRegs.HI.UD[0], cpuRegs.HI.UD[1]); }
-	inline void PMFLO(uint32_t rd) { set128(rd, cpuRegs.LO.UD[0], cpuRegs.LO.UD[1]); }
+	inline void PMFHI(uint32_t rd) { sq(rd, hiq()); }
+	inline void PMFLO(uint32_t rd) { sq(rd, loq()); }
 	inline void PMTHI(uint32_t rs) {
 		cpuRegs.HI.UD[0] = ru64(rs);
 		cpuRegs.HI.UD[1] = rhi64(rs);
@@ -314,13 +295,14 @@ namespace ps2n::ee::ops
 		cpuRegs.LO.UD[0] = ru64(rs);
 		cpuRegs.LO.UD[1] = rhi64(rs);
 	}
+	// LO0 HI0 LO2 HI2, and LO1 HI1 LO3 HI3.
 	inline void PMFHL_LW(uint32_t rd) {
-		const auto h = hiLanes<uint32_t>(), l = loLanes<uint32_t>();
-		sl(rd, Lanes<uint32_t>{{l.v[0], h.v[0], l.v[2], h.v[2]}});
+		const __m128i l = _mm_shuffle_epi32(loq(), _MM_SHUFFLE(2, 0, 2, 0)), h = _mm_shuffle_epi32(hiq(), _MM_SHUFFLE(2, 0, 2, 0));
+		sq(rd, _mm_unpacklo_epi32(l, h));
 	}
 	inline void PMFHL_UW(uint32_t rd) {
-		const auto h = hiLanes<uint32_t>(), l = loLanes<uint32_t>();
-		sl(rd, Lanes<uint32_t>{{l.v[1], h.v[1], l.v[3], h.v[3]}});
+		const __m128i l = _mm_shuffle_epi32(loq(), _MM_SHUFFLE(3, 1, 3, 1)), h = _mm_shuffle_epi32(hiq(), _MM_SHUFFLE(3, 1, 3, 1));
+		sq(rd, _mm_unpacklo_epi32(l, h));
 	}
 	inline void PMFHL_SLW(uint32_t rd) {
 		const auto h = hiLanes<uint32_t>(), l = loLanes<uint32_t>();
@@ -332,9 +314,12 @@ namespace ps2n::ee::ops
 		};
 		set128(rd, sat(h.v[0], l.v[0]), sat(h.v[2], l.v[2]));
 	}
+	// The low halfword of each word: LO's 0 and 2, HI's 0 and 2, LO's 4 and 6,
+	// HI's 4 and 6 (halfword lanes).
 	inline void PMFHL_LH(uint32_t rd) {
-		const auto h = hiLanes<uint16_t>(), l = loLanes<uint16_t>();
-		sl(rd, Lanes<uint16_t>{{l.v[0], l.v[2], h.v[0], h.v[2], l.v[4], l.v[6], h.v[4], h.v[6]}});
+		const __m128i even = _mm_setr_epi8(0, 1, 4, 5, 8, 9, 12, 13, -1, -1, -1, -1, -1, -1, -1, -1);
+		const __m128i l = _mm_shuffle_epi8(loq(), even), h = _mm_shuffle_epi8(hiq(), even);
+		sq(rd, _mm_unpacklo_epi32(l, h));
 	}
 	inline void PMFHL_SH(uint32_t rd) {
 		const auto h = hiLanes<int32_t>(), l = loLanes<int32_t>();
@@ -433,26 +418,40 @@ namespace ps2n::ee::ops
 		const int32_t a[8] = {lo.v[0], lo.v[1], hi.v[0], hi.v[1], lo.v[2], lo.v[3], hi.v[2], hi.v[3]};
 		__builtin_memcpy(acc, a, sizeof(a));
 	}
-	inline void PMULTH(uint32_t rd, uint32_t rs, uint32_t rt) {
-		const auto s = gl<int16_t>(rs), t = gl<int16_t>(rt);
-		int32_t r[8];
-		for (int i = 0; i < 8; ++i) r[i] = int32_t(s.v[i]) * t.v[i];
-		phResult(rd, r);
+	// PMULTH, PMADDH and PMSUBH with SSE, as PCSX2's recompiler does them: the
+	// eight products from the low and high halves of the 16-bit products
+	// (PMULLW, PMULHW), then LO and HI and the result read and written whole.
+	// The loops above, which compilers vectorised into partial loads of HI and
+	// LO just after whole stores of them, were among the hottest instructions
+	// of Jak and Daxter's code (2026-11-20). phSse: 0 products, 1 added to LO
+	// and HI, 2 taken from them.
+	template <int Accumulate>
+	inline void phSse(uint32_t rd, uint32_t rs, uint32_t rt) {
+		const __m128i s = _mm_loadu_si128(reinterpret_cast<const __m128i*>(cpuRegs.GPR.r[rs].UD));
+		const __m128i t = _mm_loadu_si128(reinterpret_cast<const __m128i*>(cpuRegs.GPR.r[rt].UD));
+		const __m128i low = _mm_mullo_epi16(s, t), high = _mm_mulhi_epi16(s, t);
+		const __m128i p03 = _mm_unpacklo_epi16(low, high); // products 0 to 3
+		const __m128i p47 = _mm_unpackhi_epi16(low, high); // products 4 to 7
+		__m128i lo = _mm_unpacklo_epi64(p03, p47); // 0 1 4 5: LO's words
+		__m128i hi = _mm_unpackhi_epi64(p03, p47); // 2 3 6 7: HI's words
+		if constexpr (Accumulate != 0) {
+			const __m128i lo_old = _mm_loadu_si128(reinterpret_cast<const __m128i*>(cpuRegs.LO.UD));
+			const __m128i hi_old = _mm_loadu_si128(reinterpret_cast<const __m128i*>(cpuRegs.HI.UD));
+			lo = Accumulate == 1 ? _mm_add_epi32(lo_old, lo) : _mm_sub_epi32(lo_old, lo);
+			hi = Accumulate == 1 ? _mm_add_epi32(hi_old, hi) : _mm_sub_epi32(hi_old, hi);
+		}
+		_mm_storeu_si128(reinterpret_cast<__m128i*>(cpuRegs.LO.UD), lo);
+		_mm_storeu_si128(reinterpret_cast<__m128i*>(cpuRegs.HI.UD), hi);
+		if (rd) {
+			// rd: LO0 HI0 LO2 HI2.
+			const __m128i lo02 = _mm_shuffle_epi32(lo, _MM_SHUFFLE(2, 0, 2, 0));
+			const __m128i hi02 = _mm_shuffle_epi32(hi, _MM_SHUFFLE(2, 0, 2, 0));
+			_mm_storeu_si128(reinterpret_cast<__m128i*>(cpuRegs.GPR.r[rd].UD), _mm_unpacklo_epi32(lo02, hi02));
+		}
 	}
-	inline void PMADDH(uint32_t rd, uint32_t rs, uint32_t rt) {
-		const auto s = gl<int16_t>(rs), t = gl<int16_t>(rt);
-		int32_t r[8];
-		phAccumulators(r);
-		for (int i = 0; i < 8; ++i) r[i] = static_cast<int32_t>(static_cast<uint32_t>(r[i]) + static_cast<uint32_t>(int32_t(s.v[i]) * t.v[i]));
-		phResult(rd, r);
-	}
-	inline void PMSUBH(uint32_t rd, uint32_t rs, uint32_t rt) {
-		const auto s = gl<int16_t>(rs), t = gl<int16_t>(rt);
-		int32_t r[8];
-		phAccumulators(r);
-		for (int i = 0; i < 8; ++i) r[i] = static_cast<int32_t>(static_cast<uint32_t>(r[i]) - static_cast<uint32_t>(int32_t(s.v[i]) * t.v[i]));
-		phResult(rd, r);
-	}
+	inline void PMULTH(uint32_t rd, uint32_t rs, uint32_t rt) { phSse<0>(rd, rs, rt); }
+	inline void PMADDH(uint32_t rd, uint32_t rs, uint32_t rt) { phSse<1>(rd, rs, rt); }
+	inline void PMSUBH(uint32_t rd, uint32_t rs, uint32_t rt) { phSse<2>(rd, rs, rt); }
 	// Horizontal: each word gets s[2i+1]*t[2i+1] +/- s[2i]*t[2i]; the odd words of
 	// HI/LO keep the first product (inverted for PHMSBH), as observed on hardware.
 	inline void PHMADH(uint32_t rd, uint32_t rs, uint32_t rt) {

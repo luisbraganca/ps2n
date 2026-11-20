@@ -52,6 +52,17 @@ param(
     [switch]$PlayOnly,
     # How many files to compile at once: by default as many as the computer has processors.
     [int]$Jobs = 0,
+    # For measurements only: the modules compiled with line tables and linked with their debugging information
+    # beside them (ps2n-game.pdb and the others), so that a profile of a session run again (ps2n-host -profile,
+    # game.ps1 -TimeProfile) names the game's functions and generated lines. The code is the same; a folder
+    # made to be played has no use for it.
+    [switch]$LineTables,
+    # For measurements only: more options for the compiler, separated by spaces (/clang:-march=native, ...), to
+    # time what they make of the same generated code.
+    [string]$ExtraFlags = '',
+    # For measurements only: more inputs and options for the linker, separated by spaces (a profile runtime and the
+    # libraries it needs, /EXPORT:...), for modules compiled with -ExtraFlags that need them.
+    [string]$ExtraLink = '',
     # The renderer the game is played on: vulkan by default; dx11, dx12, opengl, sw (PCSX2's software
     # renderer) or auto (the one PCSX2 chooses for this computer) where Vulkan does not work.
     [ValidateSet('', 'vulkan', 'dx11', 'dx12', 'opengl', 'sw', 'auto')][string]$Renderer = '',
@@ -220,6 +231,8 @@ if (-not $PlayOnly) {
     # system header, nothing but PS2Native's headers and the compiler's own.
     $flags = @('/nologo', '/c', '/X', '/clang:-ffreestanding', '/Zl', '/GS-', '/O2', '/Ob2', '-std:c++20', '-msse4.1',
         '/DNDEBUG', '/DPS2N_MODULE', "-I$(Join-Path $toolchain 'include')", '-Werror=global-constructors', '-Werror=exit-time-destructors')
+    if ($LineTables) { $flags += @('/Z7', '-gline-tables-only') }
+    if ($ExtraFlags) { $flags += @($ExtraFlags -split ' ' | Where-Object { $_ }) }
     $todo = New-Object System.Collections.Generic.List[object]
     foreach ($kind in 'game', 'bios', 'vu', 'iop') {
         New-Item -ItemType Directory -Force (Join-Path $obj $kind) | Out-Null
@@ -266,9 +279,11 @@ if (-not $PlayOnly) {
         $rsp = Join-Path $obj "$kind.rsp"
         [IO.File]::WriteAllLines($rsp, [string[]]($objects | ForEach-Object { '"' + $_ + '"' }))
         # (The import library the linker writes for a DLL goes with the objects: nothing in the folder uses it.)
-        Run $lld @('/nologo', '/DLL', '/NOENTRY', '/NODEFAULTLIB', '/MACHINE:X64', '/OPT:REF', '/OPT:ICF',
-            "/OUT:$(Join-Path $game "ps2n-$kind.dll")", "/IMPLIB:$(Join-Path $obj "ps2n-$kind.lib")", "@$rsp",
-            (Join-Path $toolchain 'lib\ps2n-host.lib')) | Out-Null
+        $linkFlags = @('/nologo', '/DLL', '/NOENTRY', '/NODEFAULTLIB', '/MACHINE:X64', '/OPT:REF', '/OPT:ICF')
+        if ($LineTables) { $linkFlags += '/DEBUG' }
+        if ($ExtraLink) { $linkFlags += @($ExtraLink -split ' ' | Where-Object { $_ }) }
+        Run $lld ($linkFlags + @("/OUT:$(Join-Path $game "ps2n-$kind.dll")", "/IMPLIB:$(Join-Path $obj "ps2n-$kind.lib")", "@$rsp",
+            (Join-Path $toolchain 'lib\ps2n-host.lib'))) | Out-Null
     }
     Say "linked: $((Get-ChildItem -LiteralPath $game -Filter 'ps2n-*.dll' | ForEach-Object { '{0} ({1:N0} bytes)' -f $_.Name, $_.Length }) -join ', ')"
 

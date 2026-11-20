@@ -37,11 +37,11 @@ namespace
 	std::map<u32, Block> s_blocks;
 
 	// The same, to find one quickly: a slot for every instruction of RAM and
-	// of the ROMs (the recompiler's recLUT).
-	Block** s_ram_slots = nullptr;
-	Block** s_rom_slots = nullptr; // 1FC00000-1FFFFFFF
-	Block** s_rom12_slots = nullptr; // 1E000000-1E7FFFFF
-	u32 s_ram_size = 0;
+	// of the ROMs (the recompiler's recLUT; blocks::detail, for Find()).
+	Block**& s_ram_slots = ps2n::ee::blocks::detail::ram_slots;
+	Block**& s_rom_slots = ps2n::ee::blocks::detail::rom_slots; // 1FC00000-1FFFFFFF
+	Block**& s_rom12_slots = ps2n::ee::blocks::detail::rom12_slots; // 1E000000-1E7FFFFF
+	u32& s_ram_size = ps2n::ee::blocks::detail::ram_size;
 
 	// The highest address a block has ended at, as the recompiler keeps it
 	// (maxrecmem): a request to clear from there up is ignored.
@@ -68,8 +68,6 @@ namespace
 	// being carried out.
 	std::vector<std::map<u32, Block>::node_type> s_retired;
 
-	constexpr u32 kNowhere = ~0u;
-
 	void Allocate()
 	{
 		if (s_ram_slots && s_ram_size == Ps2MemSize::ExposedRam)
@@ -92,16 +90,6 @@ namespace
 		s_ram_copy = static_cast<u8*>(std::calloc(s_ram_size, 1));
 		pxAssertRel(s_ram_slots && s_rom_slots && s_rom12_slots && s_manual_page && s_manual_counter && s_ram_copy,
 			"ps2n: no memory for the table of blocks");
-	}
-
-	// The slot for physical address `hw`, which Physical() gave.
-	__fi Block** Slot(u32 hw)
-	{
-		if (hw < s_ram_size)
-			return &s_ram_slots[hw >> 2];
-		if (hw >= 0x1FC00000u)
-			return &s_rom_slots[(hw - 0x1FC00000u) >> 2];
-		return &s_rom12_slots[(hw - 0x1E000000u) >> 2];
 	}
 
 	// The word at `addr`, read as the recompiler reads code: straight from
@@ -660,24 +648,11 @@ int ps2n::ee::blocks::Cop2Flags(u32 code)
 	return kWritesStatus | kWritesMac;
 }
 
-u32 ps2n::ee::blocks::Physical(u32 pc)
-{
-	// The recompiler's hwLUT: RAM through its eight mirrors, the ROMs in useg,
-	// kseg0 and kseg1.
-	static constexpr bool kRamMirror[16] = {true, false, true, true, false, false, false, false, true, false, true, true, true, true, false, false};
-	const u32 top = pc >> 28;
-	const u32 rest = pc & 0x0FFFFFFFu;
-
-	if (kRamMirror[top] && rest < Ps2MemSize::ExposedRam)
-		return rest;
-	if (top == 0x1 || top == 0x9 || top == 0xB)
-	{
-		const u32 hw = 0x10000000u | rest;
-		if (hw >= 0x1FC00000u || (hw >= 0x1E000000u && hw < 0x1E800000u))
-			return hw;
-	}
-	return kNowhere;
-}
+// The table of blocks by physical address (rec_blocks.h, blocks::detail).
+Block** ps2n::ee::blocks::detail::ram_slots = nullptr;
+Block** ps2n::ee::blocks::detail::rom_slots = nullptr;
+Block** ps2n::ee::blocks::detail::rom12_slots = nullptr;
+uint32_t ps2n::ee::blocks::detail::ram_size = 0;
 
 void ps2n::ee::blocks::Reset()
 {
@@ -699,14 +674,6 @@ void ps2n::ee::blocks::Reset()
 	std::memset(s_manual_counter, 0, (Ps2MemSize::TotalRam >> 12) * sizeof(u8));
 	std::memset(s_ram_copy, 0, s_ram_size);
 	s_stats.resets++;
-}
-
-Block* ps2n::ee::blocks::Find(u32 pc)
-{
-	const u32 hw = Physical(pc);
-	if (hw == kNowhere || !s_ram_slots) [[unlikely]]
-		return nullptr;
-	return *Slot(hw);
 }
 
 Block* ps2n::ee::blocks::Form(u32 startpc)
@@ -906,6 +873,20 @@ Block* ps2n::ee::blocks::Form(u32 startpc)
 			block.flags |= kCutShort;
 	}
 	block.size = (pc - startpc) >> 2;
+
+	// The steps the interpreter only has to carry out, decided once here and
+	// not at every execution (kPlain; ee_provider.cpp, RunRecSteps): a load or
+	// store that may fault (kFastmem) among them, whose memory is looked at
+	// there. A step's flags only lose kFastmem afterwards.
+	for (Step& step : block.steps)
+	{
+		const u32 opcode = step.insn.raw >> 26;
+		const bool cop2 = opcode == 022 || opcode == 066 || opcode == 076;
+		constexpr u32 acted_on = kCostOnly | kDisableInterrupts | kSkippedSyscall | kFlush | kEndsBlock | kForcesEventTest | kCop2Sync |
+								 kCop2Finish | kBranch;
+		if (!cop2 && !(step.info & acted_on))
+			step.info |= kPlain;
+	}
 
 	// ---- older blocks over the same code ------------------------------------
 	const u32 hw_end = hw_start + (pc - startpc);

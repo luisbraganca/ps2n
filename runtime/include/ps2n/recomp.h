@@ -231,6 +231,34 @@ namespace ps2n::ee
 	// thrown away and what is formed there now answers.
 	PS2N_API uint32_t checkedAnswer(uint32_t id);
 
+	// The runtime's record of such a block, which compiled code reads to
+	// compare the words itself (askAbout()), calling the runtime only when they
+	// have changed or the page is to be protected again: checkedAnswer() did
+	// the same through a second call, 80 million times in a replay of Gran
+	// Turismo 3 (2026-11-20).
+	struct Checked
+	{
+		const uint8_t* memory; // where the block's words are in the host's memory
+		const uint32_t* words; // what they were when it was formed
+		uint32_t count; // how many
+		uint32_t size; // what an execution adds to its page's count
+		uint16_t* page; // that count, when the block counts towards protecting its page again; else null
+		uint32_t answer; // what PS2N_BLOCK_START needs
+		uint32_t index; // the leader of `image` it was asked about at
+		const ImageInfo* image;
+		uint32_t* place; // the place in the table that holds its number
+		void* block; // the runtime's record of the block itself
+	};
+	extern PS2N_API Checked checkedRecords[kCheckedLimit];
+	// Times compiled code found a block's words unchanged itself, for the
+	// runtime's report.
+	extern PS2N_API uint64_t checkedRuns;
+	// The block's words have changed, or its page is to be protected again
+	// (the page's count has run over): the block is thrown away as PCSX2's code
+	// throws it away, and what is formed there now answers, as blockAsk().
+	PS2N_API uint32_t checkedChanged(uint32_t id);
+	PS2N_API uint32_t checkedPageProtected(uint32_t id);
+
 	// What PS2N_BLOCK_START calls when the image's table holds no answer:
 	// `entry` is what it holds, zero or the number of a record. One function
 	// for one image, called in two arguments from one place at each label, so
@@ -240,7 +268,27 @@ namespace ps2n::ee
 	[[gnu::noinline, gnu::cold]] uint32_t askAbout(uint32_t index, uint32_t entry)
 	{
 		if (entry != 0)
-			return checkedAnswer(entry);
+		{
+			// As blocks::EnterManual() does: the words, against what the block
+			// was formed from; then the execution counted.
+			const Checked& c = checkedRecords[entry];
+			for (uint32_t i = 0; i < c.count; i++)
+			{
+				uint32_t word;
+				__builtin_memcpy(&word, c.memory + i * 4, 4);
+				if (word != c.words[i]) [[unlikely]]
+					return checkedChanged(entry);
+			}
+			if (c.page)
+			{
+				const uint32_t sum = static_cast<uint32_t>(*c.page) + c.size;
+				*c.page = static_cast<uint16_t>(sum);
+				if (sum > 0xFFFFu) [[unlikely]]
+					return checkedPageProtected(entry);
+			}
+			checkedRuns++;
+			return c.answer;
+		}
 		return blockAsk(Image, index);
 	}
 

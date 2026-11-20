@@ -7,6 +7,7 @@
 // operand syntax listed in the table.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -56,7 +57,20 @@ struct OpInfo {
     uint8_t memSize;     // bytes accessed by loads / stores
 };
 
-const OpInfo& info(Op op);
+// What each instruction is, by Op. In the header, so that info() is inlined:
+// the interpreter asks it at every block's end (runtime/ee_provider.cpp).
+inline constexpr OpInfo kOpInfo[] = {
+    {Op::Invalid, "(invalid)", 0, "", 0, 0},
+#define X(op, mn, match, ops, flags, mem) {Op::op, mn, match, ops, flags, mem},
+#include "ps2n/r5900_ops.inc"
+#undef X
+};
+static_assert(sizeof(kOpInfo) / sizeof(kOpInfo[0]) == static_cast<size_t>(Op::Count));
+
+inline const OpInfo& info(Op op) {
+    const auto i = static_cast<size_t>(op);
+    return i < static_cast<size_t>(Op::Count) ? kOpInfo[i] : kOpInfo[0];
+}
 inline const char* mnemonic(Op op) { return info(op).mnemonic; }
 inline bool has(Op op, uint32_t f) { return (info(op).flags & f) != 0; }
 

@@ -168,6 +168,12 @@ namespace ps2n::ee
 		/// compared with memory first (checkedAnswer(), or blockStart() where
 		/// no record was free), and for a block of a variant.
 		uint64_t blocks_compiled_known = 0;
+		/// Where the asks come from, for the time they cost: times a label's
+		/// record had a block of a page that is not write-protected compare its
+		/// words (checkedAnswer()), and times a label of a variant asked, which
+		/// it does at every execution (PS2N_BLOCK_START_VARIANT).
+		uint64_t checked_runs = 0;
+		uint64_t variant_asks = 0;
 		uint64_t blocks_interpreted_at_labels = 0;
 		uint64_t timeout_loop_entries = 0;
 		/// Times a function was entered while one of its variants was the code
@@ -299,6 +305,16 @@ namespace ps2n::ee
 		bool whole_block;
 	};
 	std::vector<Handover> GetHandovers();
+
+	/// The compiled functions whose code ran, by image (its id) and start,
+	/// in the order they first ran: what a module's functions are placed by,
+	/// those that ran together (ps2n-host -functions-ran).
+	struct FunctionRan
+	{
+		const char* image;
+		uint32_t start;
+	};
+	std::vector<FunctionRan> GetFunctionsRan();
 
 	/// Carries out one instruction with PS2Native's own semantics, on the
 	/// core's registers and memory. Returns false, having done nothing, when

@@ -647,6 +647,12 @@ if(EE STREQUAL "ps2n")
 	if(NOT STATIC STREQUAL "off")
 		list(APPEND static -bios-capture "${WORK_DIR}/bios-capture.toml")
 	endif()
+	# The compiled functions whose code ran, by the names the linker knows them
+	# by, when asked (game.ps1 -FunctionsRan): what a module's functions can be
+	# placed by.
+	if(DEFINED FUNCTIONS_RAN AND FUNCTIONS_RAN)
+		list(APPEND static -functions-ran "${WORK_DIR}/functions-ran.txt")
+	endif()
 	if(DEFINED BIOS_STATIC AND BIOS_STATIC STREQUAL "off")
 		list(APPEND static -bios-static off)
 	endif()

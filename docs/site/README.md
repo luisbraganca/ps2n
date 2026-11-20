@@ -75,6 +75,8 @@ page.
 | 463 places, 5,079 instructions, then none | game-log.md, "G3", "One rebuild is enough" |
 | 38,478,822 moments, 3 GB, 4,199 frames, 47,705,744 event tests, 1.11% | game-log.md, "G3", "4,200 frames, with the button press" |
 | The first chart: 22.7 s and 23.4 s, 11.3 s and 12.3 s, the three runs of each, 1.03 and 1.09 | game-log.md, "G10", "Where it stands (main tree, 2026-11-13)" |
+| The first chart's note, 2026-11-20: the development build with profile-guided optimization; a game's folder, four games' sessions run again, 1.07 to 1.24 and then 1.06 to 1.19 times stock PCSX2's time; a profile of another session, Jak and Daxter 1.19 to 1.11 | [app-log.md](../app-log.md), "The speed step (ADR 0043)", "Where the step stands (2026-11-20)" |
+| Phase 4: 0.1 published on GitHub by the maintainer on 2026-11-19, a pre-release for Windows and Linux; the speed step, 1.06 to 1.19 from 1.07 to 1.24, Gran Turismo 3's first session 29% faster and 6% more with the BIOS's code other games' folders met | app-log.md, the line on 0.1 under "P4.7" and "The speed step (ADR 0043)"; [ADR 0042](../adr/0042-releases-on-github-beginning-with-0-1.md), [ADR 0043](../adr/0043-a-speed-step-compiled-code-against-pcsx2-and-faster-interpreters.md) |
 | 25.7 s and 15.1 s, 1.12 and 1.35 for the first 4,200 frames on 2026-11-11 | game-log.md, "G3", "4,200 frames, with the button press" |
 | 1.35 and 0.97 for the run into the first level, its play 0.95 times stock PCSX2's; the changes named in the first chart's note | game-log.md, the table at the top: G5, G6 ("seven changes"), G7, G8, G9, G10, G11, G12 |
 | 1.21 to 1.23 times for the run into the first level | game-log.md, "G6", "What each change gave" |

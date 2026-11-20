@@ -313,13 +313,18 @@ namespace ps2n::iop
 				break;
 			}
 
+			// The words, and after them each one's instruction, decoded once here
+			// for the interpreter (OpsOf), in the same allocation: Block is
+			// shared with compiled code and keeps its layout.
 			const uint32_t count = (end - startpc) / 4;
-			uint32_t* const words = new uint32_t[count];
+			uint32_t* const words = new uint32_t[count + (count + 3) / 4];
+			Op* const ops = reinterpret_cast<Op*>(words + count);
 			uint32_t imports = 0;
 			for (uint32_t i = 0; i < count; i++)
 			{
 				words[i] = iopMemRead32(startpc + i * 4);
 				const Op op = r3::decode(words[i]);
+				ops[i] = op;
 				imports += op == Op::IMPORT ? 1 : 0;
 				s_stats.unknown += op == Op::Unknown ? 1 : 0;
 			}
@@ -424,12 +429,19 @@ namespace ps2n::iop
 
 		// ---- the interpreter ----------------------------------------------------------------
 
-		// One instruction that is not a branch or jump. True: the block is
-		// left here (an exception, or an import the core's function did).
-		PS2N_IOP_OP bool Step(Block* b, uint32_t code, uint32_t pc, uint32_t& so_far, uint32_t& import)
+		// The instructions of a block's words, decoded when it was formed: after
+		// the words, in the same allocation (Form).
+		PS2N_IOP_OP const Op* OpsOf(const Block* b)
+		{
+			return reinterpret_cast<const Op*>(b->words + b->count);
+		}
+
+		// One instruction that is not a branch or jump, `op` its word `code`
+		// decoded. True: the block is left here (an exception, or an import the
+		// core's function did).
+		PS2N_IOP_OP bool Step(Block* b, Op op, uint32_t code, uint32_t pc, uint32_t& so_far, uint32_t& import)
 		{
 			uint32_t* const r = psxRegs.GPR.r;
-			const Op op = r3::decode(code);
 			const uint32_t s = r3::rs(code), t = r3::rt(code), d = r3::rd(code);
 			so_far += r3::cycles(op);
 			switch (op)
@@ -637,9 +649,9 @@ namespace ps2n::iop
 
 		// The same for a delay slot's instruction, not put in the place of each
 		// of its calls.
-		[[gnu::noinline]] bool Slot(Block* b, uint32_t code, uint32_t pc, uint32_t& so_far, uint32_t& import)
+		[[gnu::noinline]] bool Slot(Block* b, Op op, uint32_t code, uint32_t pc, uint32_t& so_far, uint32_t& import)
 		{
-			return Step(b, code, pc, so_far, import);
+			return Step(b, op, code, pc, so_far, import);
 		}
 
 
@@ -648,6 +660,7 @@ namespace ps2n::iop
 			b->runs++;
 			uint32_t* const r = psxRegs.GPR.r;
 			const uint32_t* const w = b->words;
+			const Op* const ops = OpsOf(b);
 			const bool branch = (b->flags & kBranch) != 0;
 			const uint32_t body = branch ? b->count - 2 : b->count;
 			uint32_t pc = b->pc;
@@ -656,7 +669,7 @@ namespace ps2n::iop
 
 			for (uint32_t i = 0; i < body; i++, pc += 4)
 			{
-				if (Step(b, w[i], pc, so_far, import)) [[unlikely]]
+				if (Step(b, ops[i], w[i], pc, so_far, import)) [[unlikely]]
 					return true;
 			}
 
@@ -670,7 +683,7 @@ namespace ps2n::iop
 
 			const uint32_t code = w[body];
 			const uint32_t slot = w[body + 1];
-			const Op op = r3::decode(code);
+			const Op op = ops[body];
 			const uint32_t s = r3::rs(code), t = r3::rt(code), d = r3::rd(code);
 			uint32_t target = 0;
 			uint32_t way = 1;
@@ -678,31 +691,31 @@ namespace ps2n::iop
 			switch (op)
 			{
 				case Op::J:
-					left = Slot(b, slot, pc + 4, so_far, import);
+					left = Slot(b, ops[body + 1], slot, pc + 4, so_far, import);
 					target = r3::jumpTarget(pc, code);
 					break;
 				case Op::JAL:
 					r[31] = pc + 8;
-					left = Slot(b, slot, pc + 4, so_far, import);
+					left = Slot(b, ops[body + 1], slot, pc + 4, so_far, import);
 					target = r3::jumpTarget(pc, code);
 					break;
 				case Op::JR:
 					if (r3::swapsDelaySlot(s, 0, 0, slot))
 					{
-						left = Slot(b, slot, pc + 4, so_far, import);
+						left = Slot(b, ops[body + 1], slot, pc + 4, so_far, import);
 						target = r[s];
 					}
 					else
 					{
 						target = r[s];
-						left = Slot(b, slot, pc + 4, so_far, import);
+						left = Slot(b, ops[body + 1], slot, pc + 4, so_far, import);
 					}
 					break;
 				case Op::JALR:
 					// The order PCSX2's recompiler keeps (r3000a::swapsDelaySlot).
 					if (d != s && r3::swapsDelaySlot(s, 0, d, slot))
 					{
-						left = Slot(b, slot, pc + 4, so_far, import);
+						left = Slot(b, ops[body + 1], slot, pc + 4, so_far, import);
 						if (d)
 							r[d] = pc + 8;
 						target = r[s];
@@ -712,7 +725,7 @@ namespace ps2n::iop
 						target = r[s];
 						if (d)
 							r[d] = pc + 8;
-						left = Slot(b, slot, pc + 4, so_far, import);
+						left = Slot(b, ops[body + 1], slot, pc + 4, so_far, import);
 					}
 					break;
 				default:
@@ -721,7 +734,7 @@ namespace ps2n::iop
 					if (op == Op::BLTZAL || op == Op::BGEZAL)
 						r[31] = pc + 8;
 					const bool taken = val::Taken(op, r[s], r[t]);
-					left = Slot(b, slot, pc + 4, so_far, import);
+					left = Slot(b, ops[body + 1], slot, pc + 4, so_far, import);
 					target = taken ? r3::branchTarget(pc, code) : pc + 8;
 					way = taken ? 1 : 0;
 					break;

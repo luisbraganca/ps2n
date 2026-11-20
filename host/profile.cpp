@@ -293,6 +293,57 @@ namespace ps2n::host::profile
 			DWORD64 displacement = 0;
 			const bool named = SymFromAddr(process, address, &displacement, symbol) != FALSE;
 
+			// With the compiled code in modules of its own (runtime/game_module.h;
+			// a game's folder), each holds one kind of it, the game's and the
+			// BIOS's EE code, the micro code or the IOP's code, and what of the
+			// runtime's headers it was not compiled into. Where a module has its
+			// debugging information beside it, its functions are told apart by
+			// name as the host's are; where it has none, as in a game's folder,
+			// the symbol handler knows only what it exports, and its code is filed
+			// under the module's kind.
+			Kind module_kind = kKindCount;
+			if (_stricmp(module.ModuleName, "ps2n-game") == 0 || _stricmp(module.ModuleName, "ps2n-bios") == 0)
+				module_kind = kGame;
+			else if (_stricmp(module.ModuleName, "ps2n-vu") == 0)
+				module_kind = kMicro;
+			else if (_stricmp(module.ModuleName, "ps2n-iop") == 0)
+				module_kind = kIop;
+			if (module_kind != kKindCount)
+			{
+				IMAGEHLP_MODULE64 loaded = {};
+				loaded.SizeOfStruct = sizeof(loaded);
+				const bool debugging = named && SymGetModuleInfo64(process, address, &loaded) && loaded.SymType != SymExport &&
+									   loaded.SymType != SymNone && loaded.SymType != SymDeferred;
+				if (!debugging)
+					return {module_kind, std::string(module.ModuleName) + " (no debugging information)"};
+				const std::string name(symbol->Name);
+				const bool micro = name.find("ps2n_vu_image_") != std::string::npos;
+				const bool iop = name.find("ps2n_iop_image_") != std::string::npos;
+				if (micro || iop)
+				{
+					// With the line, for the list of the hottest instructions of
+					// the micro code and the IOP's code.
+					IMAGEHLP_LINE64 line = {};
+					line.SizeOfStruct = sizeof(line);
+					DWORD column = 0;
+					const bool located = SymGetLineFromAddr64(process, address, &column, &line) && line.FileName;
+					return {micro ? kMicro : kIop, name, located ? std::string(line.FileName) : std::string(),
+						located ? static_cast<u32>(line.LineNumber) : 0, static_cast<u64>(displacement)};
+				}
+				if (name.find("ps2n_image_") != std::string::npos)
+				{
+					IMAGEHLP_LINE64 line = {};
+					line.SizeOfStruct = sizeof(line);
+					DWORD column = 0;
+					const bool located = SymGetLineFromAddr64(process, address, &column, &line) && line.FileName;
+					return {kGame, name, located ? std::string(line.FileName) : std::string(), located ? static_cast<u32>(line.LineNumber) : 0,
+						static_cast<u64>(displacement)};
+				}
+				// What of the runtime's headers a module's code calls and was
+				// not compiled into it: askAbout<>(), the semantics left out of line.
+				return {kRuntime, std::string(module.ModuleName) + "!" + name};
+			}
+
 			// The host itself holds three kinds of code. The game's compiled
 			// functions say so in their names. The rest is told apart by the
 			// source file the instruction came from: PS2Native's own directories,
@@ -544,6 +595,9 @@ namespace ps2n::host::profile
 			std::string text;
 		};
 		std::vector<Hot> hot;
+		// The same for the micro code's and the IOP's compiled code, where their
+		// module has line tables (a game's folder made with -LineTables).
+		std::vector<Hot> hot_micro, hot_iop;
 		for (const auto& [address, count] : by_address)
 		{
 			const Place place = symbols ? Identify(process, address) : Place{kUnknown, "(no symbols)"};
@@ -551,6 +605,18 @@ namespace ps2n::host::profile
 			auto& entry = by_name[place.name];
 			entry.first = place.kind;
 			entry.second += count;
+			if ((place.kind == kMicro || place.kind == kIop) && !place.file.empty())
+			{
+				const std::string* text = SourceLine(place.file, place.line);
+				char where[256];
+				std::snprintf(where, sizeof(where), "%s+0x%llx", place.name.c_str(), static_cast<unsigned long long>(place.offset));
+				std::string line = text ? *text : std::string();
+				const size_t first = line.find_first_not_of(" \t");
+				line = (first == std::string::npos) ? std::string() : line.substr(first);
+				if (line.size() > 110)
+					line = line.substr(0, 110) + "...";
+				(place.kind == kMicro ? hot_micro : hot_iop).push_back({count, where, std::to_string(place.line), line});
+			}
 			if (place.kind == kGame)
 			{
 				const std::string* text = place.file.empty() ? nullptr : SourceLine(place.file, place.line);
@@ -637,6 +703,22 @@ namespace ps2n::host::profile
 					static_cast<unsigned long long>(hot[i].count), hot[i].where.c_str(), hot[i].kind.c_str(), hot[i].text.c_str());
 			}
 		}
+
+		// The same for the micro code and the IOP's code, by line of their
+		// generated files.
+		const auto list_hot = [&](std::vector<Hot>& list, const char* what) {
+			if (list.empty())
+				return;
+			std::sort(list.begin(), list.end(), [](const Hot& a, const Hot& b) { return a.count > b.count; });
+			std::fprintf(fp, "\nThe instructions of %s with most of the samples (share of the run, samples, where, line):\n", what);
+			for (size_t i = 0; i < list.size() && i < 40; i++)
+			{
+				std::fprintf(fp, "  %6.2f%%  %7llu  %-60s  %5s  %s\n", 100.0 * static_cast<double>(list[i].count) / total,
+					static_cast<unsigned long long>(list[i].count), list[i].where.c_str(), list[i].kind.c_str(), list[i].text.c_str());
+			}
+		};
+		list_hot(hot_iop, "the IOP's compiled code");
+		list_hot(hot_micro, "the compiled micro code");
 
 		// Within each kind, the functions that had most of the samples.
 		std::vector<std::pair<std::string, std::pair<Kind, u64>>> names(by_name.begin(), by_name.end());

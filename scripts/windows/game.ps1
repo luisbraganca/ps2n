@@ -147,6 +147,9 @@ param(
     [ValidateSet('on', 'off')][string]$BiosStatic = 'on',
     # off: every call through a register goes through the runtime's dispatcher (ps2n-host -call-sites off), to time the two.
     [ValidateSet('on', 'off')][string]$CallSites = 'on',
+    # Also write functions-ran.txt among the run's files: the compiled functions whose code ran, in the order they first
+    # did, by the names the linker knows them by (ps2n-host -functions-ran), which a module's functions can be placed by.
+    [switch]$FunctionsRan,
     [string]$BuildDir = 'build\windows-clang',
     # The runtime of a game's folder (scripts\windows\kit\make-game.ps1: games\<name>\ps2n-host.exe, the
     # game's modules beside it) in the place of the build tree's, to run a packaged game as it is, a session
@@ -345,6 +348,7 @@ if ($Replay) {
     }
 }
 if ($TimeProfile) { $arguments += '-DPROFILE=1' }
+if ($FunctionsRan) { $arguments += '-DFUNCTIONS_RAN=1' }
 if ($TimeProfile -and $ProfileFrom -gt 0) { $arguments += "-DPROFILE_FROM=$ProfileFrom" }
 if ($VuReport) { $arguments += '-DVU_REPORT=1' }
 if ($IopReport) { $arguments += '-DIOP_REPORT=1' }

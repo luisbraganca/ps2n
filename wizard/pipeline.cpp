@@ -82,6 +82,53 @@ namespace ps2n::wizard
 			QFile file(path);
 			return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
 		}
+
+		QByteArray Sha256(const QString& path)
+		{
+			QFile file(path);
+			if (!file.open(QIODevice::ReadOnly))
+				return {};
+			QCryptographicHash hash(QCryptographicHash::Sha256);
+			hash.addData(&file);
+			return hash.result();
+		}
+
+		// The BIOS's captures of the other games' folders beside `folder` (the
+		// folders the wizard made into the same games folder) whose BIOS is the
+		// image `bios`, byte for byte: what of the BIOS's code their sessions
+		// met, as addresses in it (ADR 0043). They stay on this computer, as
+		// everything made from a BIOS does.
+		QStringList BiosCapturesBeside(const QString& folder, const QString& bios)
+		{
+			QStringList out;
+			const QFileInfo image(bios);
+			const QByteArray mine = Sha256(bios);
+			if (mine.isEmpty())
+				return out;
+			QDir games(folder);
+			if (!games.cdUp())
+				return out;
+			const QString self = QDir::cleanPath(QDir(folder).absolutePath());
+			for (const QString& name : games.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name))
+			{
+				const QDir other(games.filePath(name));
+				if (QDir::cleanPath(other.absolutePath()) == self)
+					continue;
+				const QString capture = other.filePath(QStringLiteral("captures/bios-capture.toml"));
+				if (!QFileInfo::exists(capture))
+					continue;
+				const QDir their_bios(other.filePath(QStringLiteral("bios")));
+				for (const QFileInfo& file : their_bios.entryInfoList(QDir::Files))
+				{
+					if (file.size() == image.size() && Sha256(file.absoluteFilePath()) == mine)
+					{
+						out.push_back(capture);
+						break;
+					}
+				}
+			}
+			return out;
+		}
 	} // namespace
 
 	Pipeline::Pipeline(QObject* parent)
@@ -186,6 +233,26 @@ namespace ps2n::wizard
 			{"capture", "capture"}, {"vu-capture", "vu-capture"}, {"iop-capture", "iop-capture"}, {"bios-capture", "capture"}};
 		std::deque<Job> jobs;
 		std::set<QString> will_exist;
+		// A game's first compile, the wizard's: the BIOS's code the other games'
+		// sessions met as well (BiosCapturesBeside), so that its first session
+		// finds what of the BIOS's kernel they have in common compiled (ADR
+		// 0043). A game's own recompile does not take them again: a session of
+		// another game would then have this one compile before it plays.
+		if (!m_in.incremental)
+		{
+			const QString mine = QDir(own).filePath(QStringLiteral("bios-capture.toml"));
+			for (const QString& from : BiosCapturesBeside(m_in.folder, m_in.bios))
+			{
+				QStringList arguments = {QStringLiteral("capture"), QStringLiteral("--out"), mine};
+				if (QFileInfo::exists(mine) || will_exist.count(mine))
+					arguments.push_back(mine);
+				arguments.push_back(from);
+				const QString game = QFileInfo(QFileInfo(from).absolutePath()).dir().dirName();
+				jobs.push_back({tool(platform::Program(QStringLiteral("ps2n-recomp"))), arguments,
+					tr("adding the BIOS's code %1 met").arg(game)});
+				will_exist.insert(mine);
+			}
+		}
 		// The sessions merged before (merged.txt among the captures), which the
 		// captures hold already, are not merged again: a recompile of the game's
 		// own knows within moments whether the last session met anything new.

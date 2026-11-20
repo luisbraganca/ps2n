@@ -11,14 +11,6 @@ namespace ps2n::r5900 {
 
 namespace {
 
-constexpr OpInfo kInfo[] = {
-    {Op::Invalid, "(invalid)", 0, "", 0, 0},
-#define X(op, mn, match, ops, flags, mem) {Op::op, mn, match, ops, flags, mem},
-#include "ps2n/r5900_ops.inc"
-#undef X
-};
-static_assert(sizeof(kInfo) / sizeof(kInfo[0]) == static_cast<size_t>(Op::Count));
-
 Op decodeSpecial(uint32_t raw) {
     switch (raw & 63) {
     case 0x00: return Op::SLL;
@@ -377,11 +369,6 @@ Op decodeCop2(uint32_t raw) {
 }
 
 } // namespace
-
-const OpInfo& info(Op op) {
-    const auto i = static_cast<size_t>(op);
-    return i < static_cast<size_t>(Op::Count) ? kInfo[i] : kInfo[0];
-}
 
 Op decodeOp(uint32_t raw) {
     switch (raw >> 26) {
