@@ -2060,3 +2060,34 @@ its functions first, then a profile sampled while the game plays, built and
 measured before it ships), the maintainer answered "1. Yes."
 ([ADR 0044](adr/0044-a-games-folder-learns-from-its-users-own-play.md)),
 and "2. Commit and push." to committing what the step had done so far.
+
+### The order of a folder's functions, built (2026-11-21)
+
+ADR 0044's first part, through a game's folder's own path:
+
+- **A session writes what ran.** A session in a game's folder (`ps2n-host
+  -sessions`) writes, beside what it had to interpret, the compiled
+  functions whose code ran, in the order they first did
+  (`sessions\<time>\functions-ran.txt`, as `-functions-ran` writes it).
+- **The folder's compile places them.** The compile after a session and
+  before a start (`ps2n-remake`, and the wizard's, `wizard/pipeline.cpp`)
+  adds each session's list to the folder's (`captures\functions-ran.txt`),
+  every function once, in the order they first ran, and links the game's
+  module and the BIOS's with their functions in that order: `lld-link
+  /ORDER` on Windows (a name a module does not define passed over,
+  `/ignore:4037`), `ld.lld --symbol-ordering-file` on Linux, where a
+  module's functions are now compiled each in a section of its own
+  (`-ffunction-sections`; clang-cl's `/O2` does it on Windows). The list is
+  part of what tells a compile whether anything is new: a session that ran
+  functions no session had run has the modules linked again, its objects as
+  they were (only where a folder has a list, so that one without is as it
+  was).
+- **`make-game.ps1` the same:** a `functions-ran.txt` among `-Captures` or
+  in a session of the folder goes into the folder's list, and the game's and
+  the BIOS's modules are linked with it.
+
+Every test passes in both trees on Windows (535, 534). Not done yet, the
+maintainer playing on the development computer: the Linux build with it, the
+time of a folder made with a list against one made without (the 2.0% of
+"Two ways of compiling the same code" was measured by linking by hand), and
+a session played from a folder followed by its own compile.

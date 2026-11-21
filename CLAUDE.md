@@ -827,7 +827,9 @@ Decisions:
   then a profile sampled while the game plays, given to the compiler (the
   counted profile gave 7.5%), built and measured before it goes into a
   folder. Each measured on the maintainer's sessions first; what a folder
-  learns stays in it.
+  learns stays in it. The order was built on 2026-11-21 (docs/app-log.md,
+  "The order of a folder's functions, built"); its Linux build and its time
+  through a folder are still to be done.
 
 ## Layout, build and test
 
@@ -1051,7 +1053,12 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   `work\next-<time>`, in a window of its own in front, with how far it has
   got and Later, which closing it is too (ADR 0040; `work\remake.log` says
   what each run did); the launcher puts those modules in place at the next
-  start. The game never starts with anything left to compile: before the
+  start. A session also writes the compiled functions it ran
+  (`functions-ran.txt`), which the compile adds to the folder's
+  (`captures\functions-ran.txt`) and links the game's and the BIOS's
+  modules in that order (ADR 0044: `/ORDER` on Windows,
+  `--symbol-ordering-file` on Linux), a session that ran new ones having
+  the modules linked again. The game never starts with anything left to compile: before the
   runtime, the launcher runs `ps2n-remake --before-play`, which compiles
   what is left in the same window (and waits for a compile already
   running), and starts the game only when it ends with 0; Later there

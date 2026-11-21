@@ -83,6 +83,26 @@ namespace ps2n::wizard
 			return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
 		}
 
+		// The compiled functions a session ran (`from`, the runtime's
+		// functions-ran.txt) added to the folder's list (`mine`), each once, in
+		// the order they first ran: the list's own first, then the session's
+		// new ones (ADR 0044). False when the list cannot be written.
+		bool MergeOrder(const QString& mine, const QString& from)
+		{
+			QStringList list;
+			std::set<QString> seen;
+			for (const QString& file : {mine, from})
+			{
+				for (const QString& line : ReadText(file).split(QLatin1Char('\n'), Qt::SkipEmptyParts))
+				{
+					const QString name = line.trimmed();
+					if (!name.isEmpty() && seen.insert(name).second)
+						list.push_back(name);
+				}
+			}
+			return WriteText(mine, list.join(QLatin1Char('\n')) + QLatin1Char('\n'));
+		}
+
 		QByteArray Sha256(const QString& path)
 		{
 			QFile file(path);
@@ -151,6 +171,16 @@ namespace ps2n::wizard
 			QFile file(own.filePath(QString::fromLatin1(kind) + QStringLiteral(".toml")));
 			if (file.open(QIODevice::ReadOnly))
 				hash.addData(file.readAll());
+			hash.addData(QByteArrayView("\n--\n"));
+		}
+		// The order the game's functions are placed in (ADR 0044): a session
+		// that ran functions no session ran before has the modules linked again.
+		// Only where there is one, so that a folder without it is as it was.
+		QFile order(own.filePath(QStringLiteral("functions-ran.txt")));
+		if (order.open(QIODevice::ReadOnly))
+		{
+			hash.addData(QByteArrayView("functions-ran\n"));
+			hash.addData(order.readAll());
 			hash.addData(QByteArrayView("\n--\n"));
 		}
 		hash.addData(m_in.executables.join(QLatin1Char('\n')).toUtf8());
@@ -262,6 +292,7 @@ namespace ps2n::wizard
 		for (const QString& line : ReadText(merged_list).split(QLatin1Char('\n'), Qt::SkipEmptyParts))
 			merged.insert(line.trimmed());
 		const QDir sessions(QDir(m_in.folder).filePath(QStringLiteral("sessions")));
+		const QString order = QDir(own).filePath(QStringLiteral("functions-ran.txt"));
 		for (const QString& session : sessions.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name))
 		{
 			bool held = merged.count(session) != 0;
@@ -271,9 +302,20 @@ namespace ps2n::wizard
 				if (QFileInfo::exists(QDir(sessions.filePath(session)).filePath(name)) && !QFileInfo::exists(QDir(own).filePath(name)))
 					held = false;
 			}
+			const QString ran = QDir(sessions.filePath(session)).filePath(QStringLiteral("functions-ran.txt"));
+			if (QFileInfo::exists(ran) && !QFileInfo::exists(order))
+				held = false;
 			if (held)
 				continue;
 			merged.insert(session);
+			// The functions it ran, in the order they first ran, after those of
+			// the sessions before it (ADR 0044): the order the next link places
+			// the game's functions in.
+			if (QFileInfo::exists(ran) && !MergeOrder(order, ran))
+			{
+				fail(tr("Cannot write %1.").arg(QDir::toNativeSeparators(order)));
+				return;
+			}
 			for (const auto& [kind, command] : kinds)
 			{
 				const QString name = QString::fromLatin1(kind) + QStringLiteral(".toml");
@@ -524,6 +566,11 @@ namespace ps2n::wizard
 			return;
 		}
 		std::deque<Job> jobs;
+		// The game's functions, and the BIOS's, placed in the order its sessions
+		// ran them (ADR 0044): the functions that run together near one another.
+		// The micro code and the IOP's code are blocks no session lists.
+		const QString order = QDir(m_in.folder).filePath(QStringLiteral("captures/functions-ran.txt"));
+		const bool ordered = QFileInfo::exists(order);
 		for (const char* kind_name : {"game", "bios", "vu", "iop"})
 		{
 			const QString kind = QString::fromLatin1(kind_name);
@@ -540,10 +587,12 @@ namespace ps2n::wizard
 					file.write((QStringLiteral("\"") + QDir::toNativeSeparators(c.object) + QStringLiteral("\"\n")).toUtf8());
 			}
 			file.close();
+			const bool placed = ordered && (kind == QStringLiteral("game") || kind == QStringLiteral("bios"));
 			jobs.push_back({tool(platform::LinkProgram()),
 				platform::LinkArguments(m_in.toolchain, kind, QDir(modules).filePath(platform::Module(kind)), rsp,
-					QDir(obj).filePath(QStringLiteral("ps2n-%1.lib").arg(kind))),
-				tr("link %1").arg(platform::Module(kind))});
+					QDir(obj).filePath(QStringLiteral("ps2n-%1.lib").arg(kind)), placed ? order : QString()),
+				placed ? tr("link %1, its functions in the order the sessions ran them").arg(platform::Module(kind)) :
+						 tr("link %1").arg(platform::Module(kind))});
 		}
 		runInTurn(std::move(jobs), [this]() {
 			// What these modules were compiled from, for a recompile of the

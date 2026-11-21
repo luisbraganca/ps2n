@@ -398,8 +398,9 @@ namespace
 			"                     there), with the memory cards and the NVRAM it began with\n"
 			"                     beside it, and what it had to interpret (-capture,\n"
 			"                     -bios-capture, -vu-capture, -iop-capture there, for the\n"
-			"                     providers that are PS2Native's): what a game's folder\n"
-			"                     does.\n"
+			"                     providers that are PS2Native's) and the compiled\n"
+			"                     functions that ran (-functions-ran): what a game's\n"
+			"                     folder does.\n"
 			"  -title <text>      With -window: the window's title, whatever the game is.\n"
 			"  -settings <file>   Read options from <file>, one to a line (a line beginning\n"
 			"                     with # is left out), in the place of this one; %GAME% in\n"
@@ -1288,6 +1289,11 @@ namespace
 				o.vu_capture_path = Path::Combine(o.record_dir, "vu-capture.toml");
 			if (o.iop_capture_path.empty() && o.iop_ps2n)
 				o.iop_capture_path = Path::Combine(o.record_dir, "iop-capture.toml");
+			// And the compiled functions whose code ran, in the order they first
+			// did, by which the folder's next compile places the game's functions
+			// in its modules (ADR 0044).
+			if (o.functions_ran_path.empty() && o.ee == EEProvider::Ps2n)
+				o.functions_ran_path = Path::Combine(o.record_dir, "functions-ran.txt");
 		}
 		return true;
 	}

@@ -40,7 +40,8 @@ param(
     [string]$More = '',
     # A folder with what earlier runs had to interpret, from elsewhere (the development tree, another
     # computer): capture.toml (the game's EE code), vu-capture.toml (micro code), iop-capture.toml (the
-    # IOP's code), bios-capture.toml (the BIOS's code). Each that is there is added to the game's own
+    # IOP's code), bios-capture.toml (the BIOS's code), and functions-ran.txt (the compiled functions runs
+    # ran, the order the modules' functions are placed in). Each that is there is added to the game's own
     # (games\<name>\captures), all of which is compiled, with what the sessions in the game's folder had to
     # interpret.
     [string]$Captures = '',
@@ -152,6 +153,22 @@ function Add-Captures([string]$from) {
         $mine = Join-Path $own "$kind.toml"
         if (Test-Path -LiteralPath $mine) { Run $recomp @($captureKinds[$kind], '--out', $mine, $mine, $new) | Out-Null }
         else { Copy-Item -LiteralPath $new -Destination $mine }
+    }
+    # The compiled functions a run ran (functions-ran.txt), each once, in the order they first ran, after those of
+    # the runs before: the order the game's functions are placed in its modules (docs\adr\0044), as the wizard does.
+    $ran = Join-Path $from 'functions-ran.txt'
+    if (Test-Path -LiteralPath $ran) {
+        $mine = Join-Path $own 'functions-ran.txt'
+        $list = New-Object 'System.Collections.Generic.List[string]'
+        $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+        foreach ($file in @($mine, $ran)) {
+            if (-not (Test-Path -LiteralPath $file)) { continue }
+            foreach ($line in [IO.File]::ReadAllLines($file)) {
+                $name = $line.Trim()
+                if ($name -and $seen.Add($name)) { $list.Add($name) }
+            }
+        }
+        [IO.File]::WriteAllLines($mine, [string[]]$list)
     }
 }
 
@@ -274,12 +291,16 @@ if (-not $PlayOnly) {
 
     # ---- linked ------------------------------------------------------------------------------------
     New-Item -ItemType Directory -Force $game | Out-Null
+    $order = Join-Path $own 'functions-ran.txt'
     foreach ($kind in 'game', 'bios', 'vu', 'iop') {
         $objects = @($todo | Where-Object { $_.Kind -eq $kind } | ForEach-Object { $_.Object })
         $rsp = Join-Path $obj "$kind.rsp"
         [IO.File]::WriteAllLines($rsp, [string[]]($objects | ForEach-Object { '"' + $_ + '"' }))
         # (The import library the linker writes for a DLL goes with the objects: nothing in the folder uses it.)
         $linkFlags = @('/nologo', '/DLL', '/NOENTRY', '/NODEFAULTLIB', '/MACHINE:X64', '/OPT:REF', '/OPT:ICF')
+        # The game's functions and the BIOS's in the order runs ran them (docs\adr\0044); a name the module does not
+        # define is passed over (/ignore:4037), the list being the runs' for all the modules.
+        if (($kind -eq 'game' -or $kind -eq 'bios') -and (Test-Path -LiteralPath $order)) { $linkFlags += @("/ORDER:@$order", '/ignore:4037') }
         if ($LineTables) { $linkFlags += '/DEBUG' }
         if ($ExtraLink) { $linkFlags += @($ExtraLink -split ' ' | Where-Object { $_ }) }
         Run $lld ($linkFlags + @("/OUT:$(Join-Path $game "ps2n-$kind.dll")", "/IMPLIB:$(Join-Path $obj "ps2n-$kind.lib")", "@$rsp",

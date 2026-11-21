@@ -61,30 +61,45 @@ namespace ps2n::wizard::platform
 			QStringLiteral("-Werror=global-constructors"), QStringLiteral("-Werror=exit-time-destructors"),
 			QStringLiteral("/Fo") + QDir::toNativeSeparators(object), QDir::toNativeSeparators(source)};
 #else
+		// Each function in a section of its own, which the linker can place
+		// (LinkArguments, `order`); clang-cl's /O2 does it on Windows (/Gy).
 		return {QStringLiteral("-c"), QStringLiteral("-O3"), QStringLiteral("-DNDEBUG"), QStringLiteral("-std=gnu++20"),
 			QStringLiteral("-fPIC"), QStringLiteral("-msse"), QStringLiteral("-msse2"), QStringLiteral("-msse4.1"),
 			QStringLiteral("-mfxsr"), QStringLiteral("-fvisibility=hidden"), QStringLiteral("-fno-exceptions"),
 			QStringLiteral("-nostdlibinc"), QStringLiteral("-ffreestanding"), QStringLiteral("-fno-stack-protector"),
-			QStringLiteral("-DPS2N_MODULE"), QStringLiteral("-I") + include, QStringLiteral("-Werror=global-constructors"),
-			QStringLiteral("-Werror=exit-time-destructors"), QStringLiteral("-o"), object, source};
+			QStringLiteral("-ffunction-sections"), QStringLiteral("-DPS2N_MODULE"), QStringLiteral("-I") + include,
+			QStringLiteral("-Werror=global-constructors"), QStringLiteral("-Werror=exit-time-destructors"), QStringLiteral("-o"), object,
+			source};
 #endif
 	}
 
-	// What a module is linked with: its objects listed in a response file.
+	// What a module is linked with: its objects listed in a response file;
+	// with `order`, a file of function names one to a line, its functions
+	// placed first, in that order (ADR 0044). A name the module does not
+	// define is passed over without a word: the list is the game's sessions'
+	// for all of its modules.
 	inline QStringList LinkArguments(const QString& toolchain, const QString& kind, const QString& module, const QString& objects,
-		const QString& import_library)
+		const QString& import_library, const QString& order = QString())
 	{
 #if defined(_WIN32)
-		return {QStringLiteral("/nologo"), QStringLiteral("/DLL"), QStringLiteral("/NOENTRY"), QStringLiteral("/NODEFAULTLIB"),
+		QStringList arguments = {QStringLiteral("/nologo"), QStringLiteral("/DLL"), QStringLiteral("/NOENTRY"), QStringLiteral("/NODEFAULTLIB"),
 			QStringLiteral("/MACHINE:X64"), QStringLiteral("/OPT:REF"), QStringLiteral("/OPT:ICF"),
 			QStringLiteral("/OUT:") + QDir::toNativeSeparators(module), QStringLiteral("/IMPLIB:") + QDir::toNativeSeparators(import_library),
 			QStringLiteral("@") + QDir::toNativeSeparators(objects),
 			QDir::toNativeSeparators(QDir(toolchain).filePath(QStringLiteral("lib/ps2n-host.lib")))};
+		if (!order.isEmpty())
+			arguments += {QStringLiteral("/ORDER:@") + QDir::toNativeSeparators(order), QStringLiteral("/ignore:4037")};
+		return arguments;
 #else
 		(void)toolchain;
 		(void)import_library;
-		return {QStringLiteral("-shared"), QStringLiteral("-nostdlib"), QStringLiteral("-fuse-ld=lld"),
+		QStringList arguments = {QStringLiteral("-shared"), QStringLiteral("-nostdlib"), QStringLiteral("-fuse-ld=lld"),
 			QStringLiteral("-Wl,-soname,") + Module(kind), QStringLiteral("-o"), module, QStringLiteral("@") + objects};
+		// (-Xlinker: -Wl, would cut a path with a comma in it.)
+		if (!order.isEmpty())
+			arguments += {QStringLiteral("-Xlinker"), QStringLiteral("--symbol-ordering-file"), QStringLiteral("-Xlinker"), order,
+				QStringLiteral("-Xlinker"), QStringLiteral("--no-warn-symbol-ordering")};
+		return arguments;
 #endif
 	}
 
