@@ -185,7 +185,25 @@ folder. Measured and built the same day, counted at clang's IR level
 folder's own path, after a session of the maintainer's, Jak and Daxter's
 round took 174 s and the game 8.0% less time, Gran Turismo 3's 95 s and
 3.6%; the same path runs on Linux under WSL 2, every test passing there and
-on Windows. The docs/app-log.md section "The speed step" has every number.**
+on Windows. The docs/app-log.md section "The speed step" has every number.
+Then, at the maintainer's word ("Speed: match PCSX2", ADR 0046), compiled
+games as users get them (a folder with its own counts) were measured against
+stock PCSX2: 1.06 to 1.11 times its time (Silent Hill 3's start-up 1.25).
+Kept since: what PCSX2's recompiler decides of a COP2 instruction decided by
+the recompiler where every block compiled code can run it in agrees, the
+runtime comparing before a block runs (`core/include/ps2n/rec_cop2.h`; Jak
+and Daxter 8.2% less without counts); and a micro program's run entered at
+less cost (Jak and Daxter 1.5 to 2%). Tried and taken out: accesses to
+devices asking only where they may fault, and an IOP block's way out at less
+cost. As users get them now: Jak and Daxter 1.04, Gran Turismo 3 1.06, Agent
+Under Fire 1.08, Killzone 1.05 (not counted). A folder's compile now counts
+its toolchain in what it compiled from, so a folder brought up to date
+compiles itself again. The maintainer's answers the same day ("1. Yes",
+"2. Yes", "3. Ok"): committed and pushed, the new programs into their game
+folders, and next the runtime itself (PS2Native's runtime and PCSX2's core,
+34% to 50% of a run's processor thread) built with a profile of play,
+measured first, against stock PCSX2 built without one.
+docs/app-log.md, "Compiled games against PCSX2, as users get them".**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -856,6 +874,24 @@ Decisions:
   clang's IR level (the session's choice, listed in the ADR with the others):
   Jak and Daxter 8.0% less time after its folder's own round, Gran Turismo 3
   3.6%.
+- [ADR 0046](docs/adr/0046-compiled-games-at-least-as-fast-as-stock-pcsx2-as-users-get-them.md):
+  at the maintainer's word on 2026-11-21 ("Speed: match PCSX2", asked what
+  to work on next), compiled games are to take no more than stock PCSX2's
+  time in the configuration users get, a folder with the profile it counts
+  itself: first measured so, each game counted on one session of the
+  maintainer's and timed on another; then the costs the profiles show, one
+  change at a time, each kept only if it gains, time counted as before. The
+  session's expected order: the IOP's block entry and exit, the COP2
+  information decided when the code is generated (checked against the
+  runtime's record before a block runs it), the VU provider's entry and exit
+  of a micro program, accesses to devices, the 128-bit instructions, block
+  starts and ends, the IOP's jump to the next block. The same day, from 1.06
+  to 1.11 times stock PCSX2's time to 1.04 to 1.08, the goal not reached,
+  the maintainer's answers ("1. Yes", "2. Yes", "3. Ok"):
+  committed and pushed; the new programs into their game folders; next the
+  runtime itself built with a profile of play, measured first, against stock
+  PCSX2 built without one. What becomes of a folder's counts after an update
+  is still to be put to them.
 
 ## Layout, build and test
 

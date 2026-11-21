@@ -32,10 +32,14 @@ ElfFile assemble(const char* source) {
     return ElfFile::parse(as.buildElf(), "test.elf");
 }
 
-std::string generateFor(const ElfFile& elf, GenerateStats* stats = nullptr) {
+// The tests of the code written for COP2 instructions that ask the runtime
+// leave the recompiler's deciding off (ADR 0046); those of what it decides
+// turn it on.
+std::string generateFor(const ElfFile& elf, GenerateStats* stats = nullptr, bool decideCop2 = false) {
     const Program prog = analyze(elf);
     GenerateOptions options;
     options.id = "test";
+    options.cop2Decide = decideCop2;
     return generate(prog, options, stats);
 }
 
@@ -598,6 +602,58 @@ _start: addiu $v0, $v0, 1            # 00100000
     const size_t vcallms = code.find("PS2N_VCALLMS(");
     const size_t put = code.find("PS2N_PUT(2);");
     CHECK(vcallms != std::string::npos && put != std::string::npos && put > vcallms);
+}
+
+TEST_CASE(cop2_instructions_have_what_their_one_block_decides_written_in) {
+    // One block, from _start to the jump's delay slot: what PCSX2's recompiler
+    // decides of each COP2 instruction is the same wherever compiled code runs
+    // it, so the recompiler writes it in (ps2n/rec_cop2.h). CFC2: the VU0
+    // instruction after it has VU0's micro program finished first
+    // (COP2MicroFinishPass). VMUL: nothing, its flags overwritten before the
+    // block ends. VADDx: its flags reach the registers (COP2FlagHackPass).
+    const ElfFile elf = assemble(R"(
+        .text
+        .globl _start
+_start: cfc2  $v0, $vi16             # 00100000
+        vmul.xyz $vf1, $vf2, $vf3    # 00100004
+        vaddx.xyzw $vf3, $vf1, $vf2x # 00100008
+        jr    $ra                    # 0010000C
+        nop                          # 00100010
+)");
+    GenerateStats stats;
+    const std::string code = generateFor(elf, &stats, true);
+    CHECK_CONTAINS(code, "PS2N_COP2_MOVE_DECIDED(acc, 9u, 0x00100000u, 0x0100u, (void)0, PS2N_GET(2), "
+                         "g2 = static_cast<uint64_t>(static_cast<int64_t>(VU0.VI[16].SL)));");
+    CHECK_CONTAINS(code, "PS2N_VU0_DECIDED(acc, 9u, 0x00100004u, 0x0000u, VMUL(PS2N_VU0_FLAGS, 14, 1, 2, 3));");
+    CHECK_CONTAINS(code, "PS2N_VU0_DECIDED(acc, 9u, 0x00100008u, 0x6000u, VADDbc(PS2N_VU0_FLAGS, 15, 3, 1, 2, 0));");
+    // The image's table, which the runtime compares with its record.
+    CHECK_CONTAINS(code, "static const Cop2Decided cop2_decided[] = {\n\t{0x00100000u, 0x0100u}, {0x00100004u, 0x0000u}, {0x00100008u, 0x6000u},\n};");
+    CHECK_CONTAINS(code, "\tcop2_decided, 3, 1,\n");
+    CHECK_EQ(stats.cop2Decided.size(), size_t{3});
+}
+
+TEST_CASE(cop2_instructions_ask_where_their_blocks_decide_differently) {
+    // `mid` is a leader (the branch at `other` goes there). From _start the
+    // block may end before it, where a block exists there already, or run on
+    // to the jump's delay slot: VMUL's flags reach the registers in the first
+    // and not in the second. VADDx is in the second, and in the block that
+    // begins at `mid`, where it is the first VU0 instruction. So both ask.
+    const ElfFile elf = assemble(R"(
+        .text
+        .globl _start
+_start: vmul.xyz $vf1, $vf2, $vf3    # 00100000
+mid:    vaddx.xyzw $vf3, $vf1, $vf2x # 00100004
+        jr    $ra                    # 00100008
+        nop                          # 0010000C
+other:  beq   $zero, $zero, mid      # 00100010
+        nop                          # 00100014
+)");
+    GenerateStats stats;
+    const std::string code = generateFor(elf, &stats, true);
+    CHECK_CONTAINS(code, "PS2N_VU0(acc, 9u, 0x00100000u, VMUL(PS2N_VU0_FLAGS, 14, 1, 2, 3));");
+    CHECK_CONTAINS(code, "PS2N_VU0(acc, 9u, 0x00100004u, VADDbc(PS2N_VU0_FLAGS, 15, 3, 1, 2, 0));");
+    CHECK(code.find("_DECIDED") == std::string::npos);
+    CHECK_CONTAINS(code, "\tcop2_decided, 0, 1,\n");
 }
 
 TEST_CASE(loads_and_stores_tell_the_runtime_when_memory_is_not_plain) {

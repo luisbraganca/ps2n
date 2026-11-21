@@ -289,6 +289,25 @@ struct Vu
 	int isSame = -1;
 	int total = 0;
 	PipeState lpState;
+	// What SearchProg found for the start of a run (Runner::Run): the program
+	// at the start address and its block at `startPC` for a state that needs no
+	// exact match, `quick` the part of the state its block manager's search
+	// compares. While nothing has been written into micro memory since
+	// (quickGen), a run from the same start, address and state would find the
+	// same by SearchProg's quick path: the program found there last, and the
+	// first block of the manager's list, which is only added to, whose state
+	// fits. gen 0: none (quickGen begins at 1).
+	struct StartMemo
+	{
+		uint64_t gen = 0;
+		uint64_t quick = 0;
+		uint32_t startPair = 0;
+		uint32_t startPC = 0;
+		bool flagHack = false;
+		Program* prog = nullptr;
+		ShadowBlock* block = nullptr;
+	};
+	StartMemo startMemo;
 	std::vector<std::unique_ptr<Program>> owned;
 	mvu::InfoArray infos;
 	mvu::Settings settings;
@@ -322,6 +341,8 @@ bool s_useCompiled = true;
 
 constexpr uint32_t kWriteChunk = 128; // sixteen pairs
 
+void ReadSettings(Vu& V);
+
 void ResetVu(Vu& V) // mVUreset
 {
 	V.R = V.index ? &VU1 : &VU0;
@@ -343,6 +364,12 @@ void ResetVu(Vu& V) // mVUreset
 	V.c.micro = reinterpret_cast<const uint32_t*>(V.R->Micro);
 	V.c.memMask = V.memSize - 8;
 	V.c.index = static_cast<uint32_t>(V.index);
+	V.startMemo = {};
+	// The settings a plan is made with, read when they can have changed: the
+	// core resets both VUs' providers whenever a setting of the CPUs, a game
+	// fix or a speed hack changes; and when a block is compiled (CompileBlock),
+	// for the self-test, which changes them between its programs itself.
+	ReadSettings(V);
 }
 
 void ClearVu(Vu& V) // mVUclear
@@ -786,6 +813,7 @@ void PlanBlock(Vu& V, ShadowBlock& b);
 // does to the record: the ranges, and the blocks a branch leads to.
 ShadowBlock* CompileBlock(Vu& V, uint32_t startPC, const PipeState& pState, bool fromLp)
 {
+	ReadSettings(V);
 	V.stats.compiles++;
 	SetupRange(V, static_cast<int32_t>(startPC), true);
 	if (!fromLp)
@@ -2984,7 +3012,30 @@ void Runner::Run(uint32_t startPC, uint32_t cycles)
 	c.cycles = static_cast<int32_t>(cycles);
 	V.totalCycles = cycles;
 	const uint32_t vuLimit = vu1 ? 0x3ff8 : 0xff8;
-	const Link* b = SearchProg(V, startPC & vuLimit, V.lpState, true);
+	// The program and the block it begins at: found again where nothing was
+	// written into micro memory since the last search for the same start,
+	// address and state (Vu::StartMemo), with what SearchProg's quick path
+	// does besides; searched for otherwise. (ADR 0046)
+	const uint32_t startAt = startPC & vuLimit;
+	const uint32_t startPair = R.start_pc / 8;
+	const bool flagHack = V.settings.flagHack;
+	const uint64_t quick = V.lpState.quick64() & (flagHack ? ~uint64_t{0x3002} : ~uint64_t{0});
+	Vu::StartMemo& memo = V.startMemo;
+	const Link* b;
+	if (!V.lpState.needExactMatch && memo.gen == V.quickGen && memo.startPC == startAt && memo.startPair == startPair && memo.quick == quick &&
+		memo.flagHack == flagHack) [[likely]]
+	{
+		V.isSame = -1;
+		V.cur = memo.prog;
+		b = memo.block;
+	}
+	else
+	{
+		ShadowBlock* found = SearchProg(V, startAt, V.lpState, true);
+		b = found;
+		if (found && !V.lpState.needExactMatch)
+			memo = {V.quickGen, quick, startPair, startAt, flagHack, V.cur, found};
+	}
 
 	// mVUdispatcherAB: the control register, P and Q, the flags.
 	const uint32_t vuFPCR = vu1 ? EmuConfig.Cpu.VU1FPCR.bitmask : EmuConfig.Cpu.VU0FPCR.bitmask;
@@ -3111,7 +3162,6 @@ public:
 			return;
 		if (!V.unsupported.empty())
 			return; // stopped at what it does not carry out
-		ReadSettings(V);
 		R.VI[REG_TPC].UL <<= 3;
 		Runner(V).Run(R.VI[REG_TPC].UL, cycles);
 		R.VI[REG_TPC].UL >>= 3;
@@ -3134,7 +3184,7 @@ public:
 			const u32 first = (addr & (V.memSize - 1)) / kWriteChunk;
 			const u32 count = std::min(chunks, ((addr & (kWriteChunk - 1)) + size + kWriteChunk - 1) / kWriteChunk);
 			for (u32 i = 0; i < count; i++)
-				V.chunkWrite[(first + i) % chunks] = V.writeGen;
+				V.chunkWrite[(first + i) & (chunks - 1)] = V.writeGen; // 32 or 128 of them
 		}
 		ClearVu(V);
 	}

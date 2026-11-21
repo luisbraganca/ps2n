@@ -236,6 +236,10 @@ namespace ps2n::wizard
 			QStringLiteral("bios=") + bios_used};
 		for (const QString& executable : input.executables)
 			make.push_back(QStringLiteral("executable=") + executable);
+		// PCSX2's GameDB has the game played with FullVU0SyncHack: what the
+		// recompiler decides COP2 instructions with (ADR 0046).
+		if (input.cop2_full_sync)
+			make.push_back(QStringLiteral("cop2-full-sync=on"));
 		QSaveFile recipe(folder.filePath(QStringLiteral("make.txt")));
 		if (!recipe.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
 			recipe.write((make.join(kNewline) + kNewline).toUtf8()) < 0 || !recipe.commit())

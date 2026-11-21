@@ -184,6 +184,14 @@ namespace ps2n::wizard
 			hash.addData(QByteArrayView("\n--\n"));
 		}
 		hash.addData(m_in.executables.join(QLatin1Char('\n')).toUtf8());
+		// What the C++ is translated and compiled with: a folder whose programs
+		// were brought up to date compiles itself again whole before its next
+		// start, the modules of an older recompiler and runtime being no longer
+		// the ones its runtime loads (ADR 0046).
+		hash.addData(QByteArrayView("\n--toolchain\n"));
+		hash.addData(toolchainStamp().toUtf8());
+		if (m_in.cop2_full_sync)
+			hash.addData(QByteArrayView("cop2 full sync\n"));
 		return QString::fromLatin1(hash.result().toHex());
 	}
 
@@ -444,8 +452,12 @@ namespace ps2n::wizard
 		// sessions met outside the executable in 16 as well, which is all of a
 		// game's own code when its executable is a loader (Gran Turismo 3's).
 		m_program_ids = {QStringLiteral("game")};
+		// What the recompiler decides COP2 instructions with (ADR 0046).
+		const QStringList cop2 =
+			m_in.cop2_full_sync ? QStringList{QStringLiteral("--cop2-full-sync"), QStringLiteral("on")} : QStringList{};
 		QStringList arguments = {QStringLiteral("compile"), boot, QStringLiteral("--id"), QStringLiteral("game"), QStringLiteral("--out"),
 			QDir(gen).filePath(QStringLiteral("game.cpp")), QStringLiteral("--parts"), QStringLiteral("64")};
+		arguments += cop2;
 		if (!capture.isEmpty())
 		{
 			arguments += {QStringLiteral("--capture"), capture, QStringLiteral("--outside"), QDir(gen).filePath(QStringLiteral("game_outside.cpp")),
@@ -460,6 +472,7 @@ namespace ps2n::wizard
 			const qint64 parts = std::min<qint64>(64, QFileInfo(file).size() / 65536 + 1);
 			arguments = {QStringLiteral("compile"), file, QStringLiteral("--id"), id, QStringLiteral("--out"), QDir(gen).filePath(id + QStringLiteral(".cpp")),
 				QStringLiteral("--loaded-by"), boot};
+			arguments += cop2;
 			if (parts > 1)
 				arguments += {QStringLiteral("--parts"), QString::number(parts)};
 			if (!capture.isEmpty())
@@ -468,6 +481,7 @@ namespace ps2n::wizard
 			m_program_ids.push_back(id);
 		}
 		arguments = {QStringLiteral("bios"), m_in.bios, QStringLiteral("--out-dir"), QDir(gen).filePath(QStringLiteral("bios"))};
+		arguments += cop2;
 		if (!bios_capture.isEmpty())
 			arguments += {QStringLiteral("--capture"), bios_capture};
 		jobs.push_back({recomp, arguments, tr("translate the BIOS")});

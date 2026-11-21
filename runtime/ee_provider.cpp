@@ -30,6 +30,7 @@
 #include "ps2n/ops_int.h"
 #include "ps2n/ops_vu0.h"
 #include "ps2n/r5900.h"
+#include "ps2n/rec_cop2.h"
 #include "ps2n/rec_rules.h"
 #include "ps2n/recomp.h"
 #include "ps2n/romdir.h"
@@ -1644,6 +1645,26 @@ namespace
 		{
 			if ((step.info & blocks::kEndsBlock) && ps2n::r5900::isNarrowLoad(step.insn) && LeaderIndex(image, step.insn.addr + 4) < 0)
 				return false;
+		}
+		// What the recompiler decided of the block's COP2 instructions, where it
+		// wrote that into the function's code (ImageInfo::cop2; ADR 0046), has
+		// to be what the record says of them here.
+		if (image.cop2_count && block.body == kBodyFunction)
+		{
+			const ps2n::ee::Cop2Decided* const first = image.cop2;
+			const ps2n::ee::Cop2Decided* const last = image.cop2 + image.cop2_count;
+			for (const Step& step : block.steps)
+			{
+				if (!ps2n::r5900::cop2::decided(step.insn.raw))
+					continue;
+				const ps2n::ee::Cop2Decided* const it = std::lower_bound(first, last, step.insn.addr,
+					[](const ps2n::ee::Cop2Decided& d, u32 pc) { return d.pc < pc; });
+				if (it != last && it->pc == step.insn.addr && (step.info & ps2n::r5900::cop2::kDecided) != it->info)
+				{
+					s_stats.cop2_differs++;
+					return false;
+				}
+			}
 		}
 		return true;
 	}

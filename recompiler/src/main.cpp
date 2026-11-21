@@ -55,6 +55,14 @@ void usage() {
         "                         game made of several executables): the image is\n"
         "                         used while memory holds its code, and takes from\n"
         "                         the captures what they hold for it, by its CRC\n"
+        "      --cop2-decide on|off  decide what PCSX2's recompiler decides of a COP2\n"
+        "                         instruction (whether VU0 is brought up to date first,\n"
+        "                         where its flags go) where that is the same in every\n"
+        "                         block compiled code can run it in, and write it into\n"
+        "                         the code, for the runtime to compare (default on;\n"
+        "                         docs/adr/0046). Also for bios\n"
+        "      --cop2-full-sync on|off  decide it with PCSX2's FullVU0SyncHack, a gamefix\n"
+        "                         its GameDB sets for a few games (default off)\n"
         "\n"
         "  ps2n-recomp info <elf> [--capture <file>] [--no-symbols]\n"
         "      Prints what the analysis finds, without writing anything.\n"
@@ -149,6 +157,8 @@ struct Args {
     std::vector<std::string> iopIds;
     bool symbols = true;
     bool comments = true;
+    bool cop2Decide = true;
+    bool cop2FullSync = false;
     unsigned parts = 1;
     unsigned outsideParts = 1;
     std::optional<uint32_t> at, base;
@@ -175,6 +185,11 @@ Args parse(int argc, char** argv) {
         else if (arg == "--iop") a.iopIds.push_back(value());
         else if (arg == "--no-symbols") a.symbols = false;
         else if (arg == "--no-comments") a.comments = false;
+        else if (arg == "--cop2-decide" || arg == "--cop2-full-sync") {
+            const std::string text = value();
+            if (text != "on" && text != "off") throw Error(arg + " takes on or off, not '" + text + "'");
+            (arg == "--cop2-decide" ? a.cop2Decide : a.cop2FullSync) = text == "on";
+        }
         else if (arg == "--parts" || arg == "--outside-parts") {
             const std::string text = value();
             const auto n = parseInt(text);
@@ -235,6 +250,8 @@ int compile(const Args& a) {
     GenerateOptions go;
     go.id = a.id.empty() ? identifierFor(path.stem().string()) : a.id;
     go.comments = a.comments;
+    go.cop2Decide = a.cop2Decide;
+    go.cop2FullSync = a.cop2FullSync;
     go.parts = a.parts;
     if (go.parts > 1) go.headerName = a.out.stem().string() + ".h";
     if (!a.loadedBy.empty()) {
@@ -287,6 +304,8 @@ int compile(const Args& a) {
         GenerateOptions og;
         og.id = go.id + "_outside";
         og.comments = a.comments;
+        og.cop2Decide = a.cop2Decide;
+        og.cop2FullSync = a.cop2FullSync;
         og.kind = 2;
         og.name = pieces.name();
         og.crc = pcsx2Crc(elf);
@@ -409,6 +428,8 @@ int bios(const Args& a) {
         GenerateOptions go;
         go.id = image.id;
         go.comments = a.comments;
+        go.cop2Decide = a.cop2Decide;
+        go.cop2FullSync = a.cop2FullSync;
         go.kind = 1;
         go.name = b.name + ", " + image.what;
         go.crc = b.crc;

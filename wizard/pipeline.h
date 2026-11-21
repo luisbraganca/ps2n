@@ -57,6 +57,10 @@ namespace ps2n::wizard
 		// Only compiled and linked, from the C++ the last compile left, which
 		// has what the captures hold: no captures merged, nothing translated.
 		bool compile_only = false;
+		// PCSX2's FullVU0SyncHack, a gamefix its GameDB sets for a few games:
+		// what the recompiler decides COP2 instructions with (ADR 0046), as the
+		// runtime will play the game.
+		bool cop2_full_sync = false;
 	};
 
 	class Pipeline : public QObject

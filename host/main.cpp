@@ -2105,6 +2105,13 @@ namespace
 				static_cast<ull>(stats.blocks_interpreted_at_labels), static_cast<ull>(stats.timeout_loop_entries),
 				static_cast<ull>(stats.redirected), static_cast<ull>(stats.forced_unwinds), static_cast<ull>(stats.stack_unwinds),
 				static_cast<ull>(stats.left));
+			if (stats.cop2_differs)
+			{
+				std::fprintf(stderr,
+					"ps2n-host: blocks compiled code could not run because what the recompiler decided of a COP2 instruction in them is not"
+					" what the runtime's record says (they were interpreted): %llu times\n",
+					static_cast<ull>(stats.cop2_differs));
+			}
 
 			// Where compiled code handed over to the interpreter most often.
 			const std::vector<ps2n::ee::Handover> handovers = ps2n::ee::GetHandovers();

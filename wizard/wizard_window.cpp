@@ -18,6 +18,7 @@
 #include "common/Path.h"
 
 #include "pcsx2/Config.h"
+#include "pcsx2/GameDatabase.h"
 #include "pcsx2/Host.h"
 #include "pcsx2/INISettingsInterface.h"
 #include "pcsx2/VMManager.h"
@@ -65,6 +66,15 @@ namespace ps2n::wizard
 		QString Html(const QString& text)
 		{
 			return text.toHtmlEscaped();
+		}
+
+		// Whether PCSX2's GameDB has the game played with FullVU0SyncHack (a
+		// gamefix, which PS2Native fixes at what the GameDB says), which the
+		// recompiler decides the game's COP2 instructions with (ADR 0046).
+		bool FullVu0Sync(const std::string& serial)
+		{
+			const GameDatabaseSchema::GameEntry* game = GameDatabase::findGame(serial);
+			return game && std::find(game->gameFixes.begin(), game->gameFixes.end(), Fix_FullVU0Sync) != game->gameFixes.end();
 		}
 
 		// A path chooser: a line to type or paste a path into, and Browse.
@@ -621,6 +631,7 @@ namespace ps2n::wizard
 				input.bios = s().bios;
 				input.executables = s().executables;
 				input.folder = s().folder;
+				input.cop2_full_sync = FullVu0Sync(s().entry.serial);
 				m_pipeline->start(input);
 			}
 
@@ -671,7 +682,8 @@ namespace ps2n::wizard
 
 			void initializePage() override
 			{
-				PackageInput input{s().kit.runtime, s().folder, s().title, s().image, s().bios, s().kit.toolchain, s().executables};
+				PackageInput input{
+					s().kit.runtime, s().folder, s().title, s().image, s().bios, s().kit.toolchain, s().executables, FullVu0Sync(s().entry.serial)};
 				QString error;
 				m_ok = Package(input, &error);
 				m_launcher = LauncherPath(input);

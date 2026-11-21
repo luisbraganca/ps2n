@@ -64,6 +64,9 @@ param(
     # For measurements only: more inputs and options for the linker, separated by spaces (a profile runtime and the
     # libraries it needs, /EXPORT:...), for modules compiled with -ExtraFlags that need them.
     [string]$ExtraLink = '',
+    # For measurements only: more options for the recompiler's compile and bios commands, separated by spaces
+    # (--cop2-decide off, ...), to time what they make of the same game.
+    [string]$RecompFlags = '',
     # The renderer the game is played on: vulkan by default; dx11, dx12, opengl, sw (PCSX2's software
     # renderer) or auto (the one PCSX2 chooses for this computer) where Vulkan does not work.
     [ValidateSet('', 'vulkan', 'dx11', 'dx12', 'opengl', 'sw', 'auto')][string]$Renderer = '',
@@ -194,7 +197,8 @@ if (-not $PlayOnly) {
     # As the development build does (tests\tests.cmake): the boot executable in 64 files, an executable
     # it loads itself in one file for each 64 KB of it, at most 64, the micro code and IOP code in 16.
     $programIds = @('game')
-    $arguments = @('compile', $bootElf, '--id', 'game', '--out', (Join-Path $gen 'game.cpp'), '--parts', '64')
+    $recompMore = @($RecompFlags -split ' ' | Where-Object { $_ })
+    $arguments = @('compile', $bootElf, '--id', 'game', '--out', (Join-Path $gen 'game.cpp'), '--parts', '64') + $recompMore
     if ($capture['capture']) {
         # The code runs met outside the executable, in 16 files as the micro code and IOP code are: all of
         # a game's own code when its executable is a loader (Gran Turismo 3's).
@@ -206,13 +210,13 @@ if (-not $PlayOnly) {
         $file = Join-Path $disc (Split-Path $m -Leaf)
         $id = 'game_loads_' + ((Split-Path $m -Leaf) -replace '[^A-Za-z0-9]', '_').ToLower()
         $parts = [Math]::Min(64, [int][Math]::Floor((Get-Item -LiteralPath $file).Length / 65536) + 1)
-        $arguments = @('compile', $file, '--id', $id, '--out', (Join-Path $gen "$id.cpp"), '--loaded-by', $bootElf)
+        $arguments = @('compile', $file, '--id', $id, '--out', (Join-Path $gen "$id.cpp"), '--loaded-by', $bootElf) + $recompMore
         if ($parts -gt 1) { $arguments += @('--parts', "$parts") }
         if ($capture['capture']) { $arguments += @('--capture', $capture['capture']) }
         Run $recomp $arguments | Out-Null
         $programIds += $id
     }
-    $arguments = @('bios', $biosPath, '--out-dir', (Join-Path $gen 'bios'))
+    $arguments = @('bios', $biosPath, '--out-dir', (Join-Path $gen 'bios')) + $recompMore
     if ($capture['bios-capture']) { $arguments += @('--capture', $capture['bios-capture']) }
     Run $recomp $arguments | Out-Null
     $vuList = @()

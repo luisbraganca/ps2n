@@ -80,13 +80,15 @@ namespace
 {
 	// How the folder's modules are made (make.txt, which the wizard and
 	// make-game.ps1 write): the game's title, its disc image and the BIOS image,
-	// and the executables compiled, the one the disc boots first.
+	// the executables compiled, the one the disc boots first; and whether PCSX2's
+	// GameDB has the game played with FullVU0SyncHack (ADR 0046).
 	struct Recipe
 	{
 		QString title;
 		QString image;
 		QString bios;
 		QStringList executables;
+		bool cop2FullSync = false;
 	};
 
 	bool ReadRecipe(const QDir& folder, Recipe* recipe, QString* error)
@@ -115,6 +117,8 @@ namespace
 				recipe->bios = value;
 			else if (key == QStringLiteral("executable"))
 				recipe->executables.push_back(value);
+			else if (key == QStringLiteral("cop2-full-sync"))
+				recipe->cop2FullSync = value == QStringLiteral("on");
 		}
 		if (recipe->image.isEmpty() || recipe->bios.isEmpty() || recipe->executables.isEmpty())
 		{
@@ -579,6 +583,7 @@ int main(int argc, char* argv[])
 		input.folder = folder.path();
 		input.modules = into;
 		input.incremental = true;
+		input.cop2_full_sync = recipe.cop2FullSync;
 		return input;
 	};
 	// The folder a round links the modules into, work/next-<time>; what a round

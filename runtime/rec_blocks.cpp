@@ -6,6 +6,7 @@
 
 #include "rec_blocks.h"
 
+#include "ps2n/rec_cop2.h"
 #include "ps2n/rec_rules.h"
 #include "ps2n/waitloop.h"
 
@@ -103,189 +104,14 @@ namespace
 		return true;
 	}
 
-	// ---- COP2: when VU0 has to be brought up to date --------------------------------
-	// COP2MicroFinishPass::Run (x86/iR5900Analysis.cpp), over the words of
-	// [start, nominal end). One entry per instruction: kCop2Sync, kCop2Finish
-	// or neither.
-	void Cop2Pass(const std::vector<u32>& words, std::vector<u16>& out)
-	{
-		const size_t n = words.size();
-		out.assign(n, 0);
-
-		bool needs_vu0_sync = true;
-		bool needs_vu0_finish = true;
-		bool block_interlocked = EmuConfig.Gamefixes.FullVU0SyncHack;
-
-		for (size_t i = 0; i < n && !block_interlocked; i++)
-		{
-			const u32 code = words[i];
-			const u32 rs = (code >> 21) & 31;
-			if ((code >> 26) == 022 && (rs == 001 || rs == 002 || rs == 005 || rs == 006) && (code & 1))
-				block_interlocked = true;
-		}
-
-		for (size_t i = 0; i < n; i++)
-		{
-			const u32 code = words[i];
-			const u32 opcode = code >> 26, rs = (code >> 21) & 31, rt = (code >> 16) & 31, funct = code & 63;
-
-			// SB, SH, SW, SD may start VU0 through VIF0; VCALLMS and VCALLMSR do.
-			if (opcode == 050 || opcode == 051 || opcode == 053 || opcode == 077 ||
-				(opcode == 022 && rs >= 020 && (funct == 070 || funct == 071)))
-			{
-				needs_vu0_sync = true;
-				needs_vu0_finish = true;
-				continue;
-			}
-
-			const bool is_lqc_sqc = (opcode == 066 || opcode == 076);
-			const bool is_non_interlocked_move = (opcode == 022 && rs < 020 && ((code & 1) == 0));
-			const bool likely_clear = opcode == 022 && rs < 020 && rs > 004 && rt == 000;
-			if ((needs_vu0_sync && (is_lqc_sqc || is_non_interlocked_move)) || likely_clear)
-			{
-				bool following_needs_finish = false;
-				for (size_t j = i + 1; j < n; j++)
-				{
-					const u32 code2 = words[j];
-					if ((code2 >> 26) != 022)
-						continue;
-					const u32 rs2 = (code2 >> 21) & 31, funct2 = code2 & 63;
-					if (rs2 >= 020 && (funct2 == 070 || funct2 == 071))
-						break;
-					following_needs_finish = rs2 >= 020;
-					if (following_needs_finish)
-						break;
-				}
-				if (following_needs_finish && !block_interlocked)
-				{
-					out[i] |= kCop2Finish;
-					needs_vu0_sync = false;
-					needs_vu0_finish = false;
-				}
-				else
-				{
-					out[i] |= kCop2Sync;
-					needs_vu0_sync = block_interlocked || (is_non_interlocked_move && likely_clear);
-					needs_vu0_finish = true;
-				}
-				continue;
-			}
-
-			if (opcode != 022)
-				continue;
-
-			if (rs >= 020 && needs_vu0_finish)
-			{
-				out[i] |= kCop2Finish;
-				needs_vu0_finish = false;
-				needs_vu0_sync = false;
-			}
-			else if (needs_vu0_sync)
-			{
-				out[i] |= kCop2Sync;
-				needs_vu0_sync = block_interlocked;
-			}
-		}
-	}
-
-	// ---- COP2: where VU0's flags reach their registers -------------------------------
-	// COP2FlagHackPass::Run (x86/iR5900Analysis.cpp), over the words of
-	// [start, nominal end): PCSX2's "mVU flag hack", which is on unless
-	// switched off. The recompiler's code for a VU0 instruction that writes
-	// the status or the MAC flags only brings the register up to date where
-	// something may read it afterwards: before a transfer of that register,
-	// before a micro program is called, before a store that may start one, and
-	// at the block's end. So of a run of such instructions only the last
-	// counts, and the sticky flags only ever collect from those. One entry per
-	// instruction: kCop2Status, kCop2Mac or neither. (The clip flags are written
-	// by every instruction that writes them. Where in the block microVU keeps
-	// the status register in a layout of its own is not reproduced: the
-	// execution model, "What is not reproduced".)
-	void Cop2FlagPass(const std::vector<u32>& words, std::vector<u16>& out)
-	{
-		const size_t n = words.size();
-		constexpr size_t kNone = ~size_t{0};
-		size_t last_status = kNone, last_mac = kNone;
-		size_t cfc2 = 0; // the CFC2 of the status register that a CTC2 to it is paired with
-
-		const auto commit_status = [&]() {
-			if (last_status != kNone)
-				out[last_status] |= kCop2Status;
-		};
-		const auto commit_mac = [&]() {
-			if (last_mac != kNone)
-				out[last_mac] |= kCop2Mac;
-		};
-
-		for (size_t i = 0; i < n; i++)
-		{
-			const u32 code = words[i];
-			const u32 opcode = code >> 26, rs = (code >> 21) & 31, rd = (code >> 11) & 31, funct = code & 63;
-
-			// SB, SH, SW: may start VU0 through VIF0.
-			if (opcode == 050 || opcode == 051 || opcode == 053)
-			{
-				commit_status();
-				commit_mac();
-				continue;
-			}
-			if (opcode != 022)
-				continue;
-
-			// CTC2 to the status register, then CFC2 of it: every instruction
-			// in between has to have its sticky flags right.
-			if (rs == 006 && rd == REG_STATUS_FLAG)
-			{
-				cfc2 = i;
-				for (size_t j = i; j < n; j++)
-				{
-					const u32 other = words[j];
-					if ((other >> 26) == 022 && ((other >> 21) & 31) == 002 && ((other >> 11) & 31) == REG_STATUS_FLAG)
-					{
-						cfc2 = j;
-						break;
-					}
-				}
-			}
-
-			// CFC2 and CTC2 of a flag register. (For FBRST the pass tests for
-			// CFC2 where its comment says CTC2; as it is written.)
-			if (rs == 006 || rs == 002)
-			{
-				if (rd == REG_STATUS_FLAG)
-					commit_status();
-				else if (rd == REG_MAC_FLAG)
-					commit_mac();
-				else if (rd == REG_FBRST && rs == 002)
-				{
-					commit_status();
-					commit_mac();
-				}
-			}
-
-			// VCALLMS, VCALLMSR.
-			if (((code >> 25) & 1) == 1 && ((code >> 2) & 15) == 14)
-			{
-				commit_status();
-				commit_mac();
-			}
-
-			const int writes = Cop2Flags(code);
-			if (writes & kWritesStatus)
-			{
-				// Between a CTC2 and its CFC2, and always for VDIV, VSQRT and VRSQRT.
-				const u32 sub_opcode = (code & 3) | ((code >> 4) & 0x7c);
-				if (i < cfc2 || (rs >= 020 && funct >= 074 && sub_opcode >= 070 && sub_opcode <= 072))
-					out[i] |= kCop2Status;
-				last_status = i;
-			}
-			if (writes & kWritesMac)
-				last_mac = i;
-		}
-
-		commit_status();
-		commit_mac();
-	}
+	// ---- COP2 ------------------------------------------------------------------------
+	// What VU0's instructions in a block need first, and where their flags go:
+	// the two passes of PCSX2's recompiler over the words of [start, nominal
+	// end), shared with the recompiler, which decides the same for compiled code
+	// (ps2n/rec_cop2.h).
+	namespace cop2 = ps2n::r5900::cop2;
+	static_assert(cop2::kFlush == kFlush && cop2::kSync == kCop2Sync && cop2::kFinish == kCop2Finish && cop2::kStatus == kCop2Status &&
+				  cop2::kMac == kCop2Mac);
 
 	// ---- forming a block --------------------------------------------------------
 	// The part of recRecompile() that compiles instructions, carried out on
@@ -299,12 +125,12 @@ namespace
 		u32 factor; // 2 while the EE issues one instruction a cycle (COP0 Config, bit 18, clear), else 1
 		int branch = 0; // g_branch
 		bool interlocked = false; // s_nBlockInterlocked
-		const std::vector<u16>& cop2; // Cop2Pass, by instruction of [start, nominal end)
+		const std::vector<u16>& passes; // the COP2 passes, by instruction of [start, nominal end)
 
 		u16 Cop2Info(u32 addr) const
 		{
 			const u32 index = (addr - block.start) / 4;
-			return (addr >= block.start && index < cop2.size()) ? cop2[index] : 0;
+			return (addr >= block.start && index < passes.size()) ? passes[index] : 0;
 		}
 
 		void Add(const Insn& in, u32 eighths, u32 info, bool delay_slot)
@@ -353,7 +179,7 @@ namespace
 		{
 			using namespace ps2n::r5900;
 			const u32 code = in.raw;
-			const u32 opcode = code >> 26, rs = in.rs(), rt = in.rt(), rd = in.rd();
+			const u32 opcode = code >> 26, rs = in.rs();
 
 			// Branches and jumps: the delay slot, then the end of the block.
 			if (in.isControlFlow())
@@ -449,62 +275,15 @@ namespace
 				}
 			}
 
-			// COP2 (microVU_Macro.inl).
-			const bool cop2 = (opcode == 022);
-			if (cop2 || opcode == 066 || opcode == 076)
+			// COP2 (microVU_Macro.inl): what follows from the passes for it
+			// (ps2n/rec_cop2.h, which the recompiler decides the same with).
+			// An interlocked transfer marks the rest of the block
+			// (s_nBlockInterlocked: COP2_Interlock).
+			if (cop2::decided(code))
 			{
-				const u16 flags = Cop2Info(in.addr);
-				info |= flags & (kCop2Sync | kCop2Finish);
-
-				if (cop2 && rs < 020)
-				{
-					// The four transfers.
-					if (code & 1)
-					{
-						// COP2_Interlock, which comes before anything else and acts
-						// only where the instruction is marked for a sync.
-						interlocked = true;
-						if (flags & kCop2Sync)
-							info |= kFlush;
-						else
-							info &= ~kCop2Finish;
-					}
-					else
-					{
-						// mVUSyncVU0 or mVUFinishVU0, which CFC2 and QMFC2 to $zero
-						// and CTC2 and QMTC2 to register 0 return before.
-						const bool to_nothing = (rs == 002 || rs == 001) ? (rt == 0) : (rd == 0);
-						if (to_nothing)
-							info &= ~(kCop2Sync | kCop2Finish);
-						else if (flags & kCop2Sync)
-							info |= kFlush;
-					}
-				}
-				else if (!cop2)
-				{
-					// LQC2, SQC2.
-					if (flags & kCop2Sync)
-						info |= kFlush;
-				}
-				else
-				{
-					// The VU0 instructions: recCOP2_SPEC1 runs VU0's micro program
-					// to its end for either flag, and adds no cycles.
-					if (flags & (kCop2Sync | kCop2Finish))
-						info = (info & ~kCop2Sync) | kCop2Finish;
-
-					// Whether its flags reach the registers (setupMacroOp): where
-					// the pass says so, or always with the flag hack off.
-					if (!EmuConfig.Speedhacks.vuFlagHack)
-						info |= kCop2Status | kCop2Mac;
-					else
-						info |= flags & (kCop2Status | kCop2Mac);
-
-					// VCALLMS, VCALLMSR: INTERPRETATE_COP2_FUNC.
-					const u32 funct = code & 63;
-					if (funct == 070 || funct == 071)
-						info |= kFlush;
-				}
+				if (opcode == 022 && rs < 020 && (code & 1))
+					interlocked = true;
+				info |= cop2::stepInfo(code, Cop2Info(in.addr), EmuConfig.Speedhacks.vuFlagHack);
 				if (interlocked)
 					info |= kCop2Interlocked;
 			}
@@ -586,68 +365,6 @@ const Stats& ps2n::ee::blocks::GetStats()
 	return s_stats;
 }
 
-int ps2n::ee::blocks::Cop2Flags(u32 code)
-{
-	// cop2flags(), as it is written.
-	if ((code >> 26) != 022)
-		return 0; // not COP2
-	if (((code >> 25) & 1) == 0)
-		return 0; // a branch or a transfer
-
-	switch ((code >> 2) & 15)
-	{
-		case 15:
-			switch ((code >> 6) & 0x1f)
-			{
-				case 4: // ITOF
-				case 5: // FTOI
-				case 12: // MOVE, MR32
-				case 13: // LQI, SQI, LQD, SQD
-				case 15: // MTIR, MFIR, ILWR, ISWR
-				case 16: // RNEXT, RGET, RINIT, RXOR
-					return 0;
-				case 7: // MULAq, ABS, MULAi, CLIP
-					if ((code & 3) == 1) // ABS
-						return 0;
-					if ((code & 3) == 3) // CLIP
-						return kWritesClip;
-					return kWritesStatus | kWritesMac;
-				case 11: // SUBA, MSUBA, OPMULA, NOP
-					if ((code & 3) == 3) // NOP
-						return 0;
-					return kWritesStatus | kWritesMac;
-				case 14: // DIV, SQRT, RSQRT, WAITQ
-					if ((code & 3) == 3) // WAITQ
-						return 0;
-					return kWritesStatus;
-				default:
-					break;
-			}
-			break;
-		case 4: // MAXbc
-		case 5: // MINIbc
-		case 12: // IADD, ISUB, IADDI
-		case 13: // IAND, IOR
-		case 14: // VCALLMS, VCALLMSR
-			return 0;
-		case 7:
-			if ((code & 1) == 1) // MAXi, MINIi
-				return 0;
-			return kWritesStatus | kWritesMac;
-		case 10:
-			if ((code & 3) == 3) // MAX
-				return 0;
-			return kWritesStatus | kWritesMac;
-		case 11:
-			if ((code & 3) == 3) // MINI
-				return 0;
-			return kWritesStatus | kWritesMac;
-		default:
-			break;
-	}
-	return kWritesStatus | kWritesMac;
-}
-
 // The table of blocks by physical address (rec_blocks.h, blocks::detail).
 Block** ps2n::ee::blocks::detail::ram_slots = nullptr;
 Block** ps2n::ee::blocks::detail::rom_slots = nullptr;
@@ -723,94 +440,15 @@ Block* ps2n::ee::blocks::Form(u32 startpc)
 		block.flags |= kHookExec;
 
 	// ---- where the block ends ---------------------------------------------
-	u32 i = startpc;
-	u32 end = 0xffffffffu;
-	u32 branch_to = 0xffffffffu;
+	// The scan the recompiler shares (ps2n/rec_cop2.h): it stops never across a
+	// 4 KB page boundary and never into a block that exists already. The
+	// timeout loop's scan sees each word it reads.
 	ps2n::r5900::TimeoutLoopScan timeout;
-
-	for (;;)
-	{
-		if (i != startpc)
-		{
-			// Never across a 4 KB page boundary, and never into a block that
-			// exists already.
-			if ((i & 0xffc) == 0 || Find(i) != nullptr)
-			{
-				end = i;
-				break;
-			}
-		}
-
-		u32 code = 0;
-		if (!ReadCode(i, &code))
-		{
-			end = i;
-			break;
-		}
-		const u32 opcode = code >> 26, rs = (code >> 21) & 31, rt = (code >> 16) & 31, funct = code & 63;
-		const s32 imm = static_cast<s16>(code);
-
-		timeout.add(code, opcode == 5 ? memRead32(i + 4) : 0);
-
-		bool found = false;
-		const auto branch = [&]() {
-			branch_to = static_cast<u32>(imm * 4) + i + 4;
-			end = (branch_to > startpc && branch_to < i) ? branch_to : i + 8;
-			found = true;
-		};
-		switch (opcode)
-		{
-			case 0: // special
-				if (funct == 8 || funct == 9) // JR, JALR
-				{
-					end = i + 8;
-					found = true;
-				}
-				else if (funct == 12 || funct == 13) // SYSCALL, BREAK
-				{
-					end = i + 4;
-					found = true;
-				}
-				break;
-
-			case 1: // regimm
-				if (rt < 4 || (rt >= 16 && rt < 20))
-					branch();
-				break;
-
-			case 2: // J
-			case 3: // JAL
-				branch_to = ((code & 0x03FFFFFFu) << 2) | ((i + 4) & 0xf0000000u);
-				end = i + 8;
-				found = true;
-				break;
-
-			case 4: case 5: case 6: case 7:
-			case 20: case 21: case 22: case 23:
-				branch();
-				break;
-
-			case 16: // cp0
-				if (rs == 16 && funct == 24) // eret
-				{
-					end = i + 4;
-					found = true;
-					break;
-				}
-				[[fallthrough]];
-			case 17: // cp1
-			case 18: // cp2
-				if (rs == 8)
-					branch();
-				break;
-
-			default:
-				break;
-		}
-		if (found)
-			break;
-		i += 4;
-	}
+	const cop2::BlockEnd scanned = cop2::scanBlockEnd(
+		startpc, [](u32 addr, u32* word) { return ReadCode(addr, word); }, [](u32 addr) { return Find(addr) != nullptr; },
+		[&timeout](u32 addr, u32 code) { timeout.add(code, (code >> 26) == 5 ? memRead32(addr + 4) : 0); });
+	const u32 end = scanned.end;
+	const u32 branch_to = scanned.branch_to;
 
 	block.nominal_end = end;
 	const u32 nominal_size = (end - startpc) >> 2;
@@ -842,12 +480,13 @@ Block* ps2n::ee::blocks::Form(u32 startpc)
 		timeout.possible = false;
 	}
 
-	std::vector<u16> cop2;
+	std::vector<u16> passes;
 	if (has_cop2)
 	{
-		Cop2Pass(words, cop2);
+		passes.resize(nominal_size);
+		cop2::microFinishPass(words.data(), nominal_size, EmuConfig.Gamefixes.FullVU0SyncHack, passes.data());
 		if (EmuConfig.Speedhacks.vuFlagHack)
-			Cop2FlagPass(words, cop2);
+			cop2::flagHackPass(words.data(), nominal_size, passes.data());
 	}
 
 	// ---- its page ---------------------------------------------------------------
@@ -865,7 +504,7 @@ Block* ps2n::ee::blocks::Form(u32 startpc)
 	else
 	{
 		block.factor = 2u - ((cpuRegs.CP0.n.Config >> 18) & 1u);
-		Former former{block, ps2n::r5900::RecConsts{}, startpc, block.factor, 0, false, cop2};
+		Former former{block, ps2n::r5900::RecConsts{}, startpc, block.factor, 0, false, passes};
 		while (!former.branch && former.pc < end)
 			former.Next(false);
 		pc = former.pc;
@@ -881,10 +520,10 @@ Block* ps2n::ee::blocks::Form(u32 startpc)
 	for (Step& step : block.steps)
 	{
 		const u32 opcode = step.insn.raw >> 26;
-		const bool cop2 = opcode == 022 || opcode == 066 || opcode == 076;
+		const bool is_cop2 = opcode == 022 || opcode == 066 || opcode == 076;
 		constexpr u32 acted_on = kCostOnly | kDisableInterrupts | kSkippedSyscall | kFlush | kEndsBlock | kForcesEventTest | kCop2Sync |
 								 kCop2Finish | kBranch;
-		if (!cop2 && !(step.info & acted_on))
+		if (!is_cop2 && !(step.info & acted_on))
 			step.info |= kPlain;
 	}
 

@@ -90,6 +90,25 @@ namespace ps2n::ee
 	inline constexpr uint32_t kImageOutside = 2;
 	inline constexpr uint32_t kImageLoaded = 3;
 
+	// A COP2 instruction of an image's functions (not of a variant's) of which
+	// the recompiler found PCSX2's recompiler to decide the same in every block
+	// compiled code can run it in, and wrote that into the code
+	// (PS2N_VU0_DECIDED, PS2N_COP2_MOVE_DECIDED; ps2n/rec_cop2.h,
+	// docs/adr/0046): its address, and those bits of its record (kStepFlush,
+	// kStepCop2Sync, kStepCop2Finish, kStepCop2Status, kStepCop2Mac). Before
+	// compiled code runs a block, the runtime compares its own record of each
+	// such instruction in it with this, and has the block interpreted where the
+	// two differ.
+	struct Cop2Decided
+	{
+		uint32_t pc;
+		uint32_t info;
+	};
+	// The settings they were decided with (ImageInfo::cop2_settings): PCSX2's
+	// vuFlagHack, and its GameDB's FullVU0SyncHack.
+	inline constexpr uint32_t kCop2DecidedFlagHack = 1;
+	inline constexpr uint32_t kCop2DecidedFullSync = 2;
+
 	// The code of one executable, or of a piece of the BIOS, compiled ahead of
 	// time.
 	struct ImageInfo
@@ -112,6 +131,9 @@ namespace ps2n::ee
 		const char* generator; // the recompiler that wrote it
 		uint32_t kind = kImageExecutable;
 		uint32_t program_crc = 0; // kImageLoaded: the CRC of its own executable, which names it in a capture
+		const Cop2Decided* cop2 = nullptr; // sorted by address
+		uint32_t cop2_count = 0;
+		uint32_t cop2_settings = 0;
 	};
 
 	// ---- time ---------------------------------------------------------------
@@ -739,6 +761,27 @@ namespace ps2n::ee
 		} \
 	} while (0)
 
+// The same where the recompiler decided what PCSX2's recompiler decides of
+// the instruction, `info_` (Cop2Decided): nothing is looked up, and the
+// compiler drops what does not apply (the test whether VU0 is running, the
+// adding of cycles, the flags that go nowhere). The runtime has compared its
+// own record with `info_` before compiled code runs the block.
+#define PS2N_VU0_DECIDED(acc_, eighths_, pc_, info_, call_) \
+	do \
+	{ \
+		constexpr uint32_t ps2n_info = (info_); \
+		if (PS2N_COP2_ASKS()) [[unlikely]] \
+		{ \
+			(acc_) = ::ps2n::ee::cop2Instruction(pc_, ps2n_start, (acc_) + (eighths_)); \
+			PS2N_TIME(); \
+		} \
+		else \
+		{ \
+			PS2N_COP2_CYCLES(acc_, eighths_); \
+			::ps2n::ee::vu0::call_; \
+		} \
+	} while (0)
+
 // VCALLMS or VCALLMSR at `pc_`, whose word is `code_`. PCSX2's recompiler
 // adds the cycles of the block so far before either, in every block, and
 // calls the interpreter's function (INTERPRETATE_COP2_FUNC in
@@ -768,6 +811,24 @@ namespace ps2n::ee
 	do \
 	{ \
 		const uint32_t ps2n_info = ::ps2n::ee::cop2Info(pc_, ps2n_start); \
+		if (PS2N_COP2_ASKS()) [[unlikely]] \
+		{ \
+			put_; \
+			(acc_) = ::ps2n::ee::cop2Instruction(pc_, ps2n_start, (acc_) + (eighths_)); \
+			PS2N_TIME(); \
+			get_; \
+		} \
+		else \
+		{ \
+			PS2N_COP2_CYCLES(acc_, eighths_); \
+			move_; \
+		} \
+	} while (0)
+// The same where the recompiler decided `info_`, as PS2N_VU0_DECIDED.
+#define PS2N_COP2_MOVE_DECIDED(acc_, eighths_, pc_, info_, put_, get_, move_) \
+	do \
+	{ \
+		constexpr uint32_t ps2n_info = (info_); \
 		if (PS2N_COP2_ASKS()) [[unlikely]] \
 		{ \
 			put_; \

@@ -176,6 +176,11 @@ namespace ps2n::ee
 		uint64_t variant_asks = 0;
 		uint64_t blocks_interpreted_at_labels = 0;
 		uint64_t timeout_loop_entries = 0;
+		/// Times compiled code could not run a block because the runtime's
+		/// record of a COP2 instruction in it differed from what the recompiler
+		/// decided of it and wrote into the code (ImageInfo::cop2): the
+		/// interpreter carried the block out (counted with the times above).
+		uint64_t cop2_differs = 0;
 		/// Times a function was entered while one of its variants was the code
 		/// in RAM (or the reverse), and that ran in its place.
 		uint64_t redirected = 0;

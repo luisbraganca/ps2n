@@ -42,6 +42,16 @@ struct GenerateOptions {
     // For an executable another loads itself (kind 3): its own CRC
     // (ImageInfo::program_crc).
     uint32_t programCrc = 0;
+    // The settings of PCSX2's that what its recompiler decides of a COP2
+    // instruction depends on, for the game the code is compiled for: its
+    // vuFlagHack (on unless switched off, and PS2Native fixes it) and its
+    // GameDB's FullVU0SyncHack (ps2n/rec_cop2.h; ADR 0046). The runtime
+    // compares what is decided with its own record all the same.
+    bool cop2FlagHack = true;
+    bool cop2FullSync = false;
+    // Whether to decide that at all (off: every COP2 instruction asks the
+    // runtime, as before ADR 0046).
+    bool cop2Decide = true;
 };
 
 // One generated file. `suffix` tells which, and names it once put after the
@@ -65,6 +75,9 @@ struct GenerateStats {
     size_t cop2 = 0;               // COP2 instructions, which the runtime carries out whole or decides about
     size_t vu0 = 0;                // of those, VU0 instructions that compiled code carries out itself where it may
     size_t cop2Moves = 0;          // and transfers (QMFC2, QMTC2, LQC2, SQC2) whose move it makes where it may
+    // Of those two kinds, the ones of which the recompiler decided what PCSX2's
+    // recompiler decides, by their addresses and those bits (ImageInfo::cop2).
+    std::vector<std::pair<uint32_t, uint32_t>> cop2Decided;
     size_t delayedDisables = 0;    // DI compiled in one piece with the instruction after it
     size_t onLocals = 0;           // instructions that work on the local variables registers are kept in
     size_t labelsHolding = 0;      // labels at which the locals hold registers, whichever way the label is reached

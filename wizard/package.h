@@ -28,6 +28,7 @@ namespace ps2n::wizard
 		QString bios; // the BIOS image
 		QString toolchain; // the kit's toolchain folder, which the game's folder gets a copy of
 		QStringList executables; // compiled from the disc: the one it boots first, then those it loads itself
+		bool cop2_full_sync = false; // PCSX2's GameDB sets FullVU0SyncHack for the game (PipelineInput), for make.txt
 	};
 
 	// A name Windows takes for a file or a folder: the title without what it

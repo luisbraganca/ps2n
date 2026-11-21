@@ -58,17 +58,6 @@ namespace ps2n::ee::blocks
 		                  // ee_provider.cpp, RunRecSteps)
 	};
 
-	// Which of VU0's flag registers the recompiler's code for a COP2 instruction
-	// can write: 1 the status flags, 2 the MAC flags, 4 the clip flags
-	// (cop2flags in pcsx2/x86/ix86-32/iR5900.cpp).
-	enum Cop2FlagKind : int
-	{
-		kWritesStatus = 1,
-		kWritesMac = 2,
-		kWritesClip = 4,
-	};
-	int Cop2Flags(uint32_t code);
-
 	struct Step
 	{
 		r5900::Insn insn; // the word as it was when the block was formed, its address, the instruction

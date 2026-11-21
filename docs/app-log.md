@@ -2332,3 +2332,298 @@ The maintainer's answer (2026-11-21): "1. Commit and push"; "2. All game
 folders" (ADR 0045): the new programs go into every game folder of the
 maintainer's on this computer, each compiling its game for how it is played
 after its next session of 3 minutes or more.
+
+Done the same afternoon (`build\measure\update-folders.ps1`, and inside WSL
+the same by hand), as the wizard puts the programs into a folder it makes:
+the kit made again (`build\kit`, and `build/PS2Native` inside WSL, their
+games and patches kept), then in each game folder every file of the kit's
+runtime but the wizard's, the launcher under the game's name and the kit's
+toolchain; nothing else of a folder touched (sessions, memory cards, NVRAM,
+settings, captures). Jak and Daxter, Killzone and Silent Hill 3 had their own
+recompile already, and nothing new to compile. Gran Turismo 3 and the two
+folders of Agent Under Fire were made before a game compiled what its
+sessions met itself: they got `make.txt` too, naming the executables each had
+compiled, and each then compiled its game whole with the current toolchain
+before its next start (`ps2n-remake --before-play`: 128, 221 and 470 files),
+and so has the speed step's changes as well. A run again of the start of one
+of each folder's sessions with its new programs was the session at every
+fingerprint compared, in all six, and in the folder inside WSL. (`SLES_505.39`,
+a folder of P4.4's checks with no launcher and no settings, was left as it
+was.)
+
+## Compiled games against PCSX2, as users get them (ADR 0046)
+
+At the maintainer's word on 2026-11-21 ("Speed: match PCSX2", asked what to
+work on next): every game's sessions at or below stock PCSX2's time in the
+configuration users get, a game's folder with the profile it counts itself
+(ADR 0045). First measured so, then the costs the profiles show, one change at
+a time, each kept only if it gains
+([ADR 0046](adr/0046-compiled-games-at-least-as-fast-as-stock-pcsx2-as-users-get-them.md)).
+
+### Where things stand (2026-11-21)
+
+Each game's folder made with `make-game.ps1` from the maintainer's folder's
+captures, in a kit of its own (`build\measure\kit9`), and counted as a folder
+counts: a session of the maintainer's put into its sessions, then its own
+`ps2n-remake`, as its launcher starts it after a session
+(`build\measure\batch20.ps1`). Jak and Daxter was counted on
+`20261118-120316`, Gran Turismo 3 on `20261118-102727`, Agent Under Fire on
+`20261117-103006`, one of the maintainer's four sessions in the development
+tree (82,844 frames; recorded before a session kept the game's settings and
+patch file, its first 3 minutes were run again in the folder all the same,
+the session at every fingerprint). Killzone and Silent Hill 3 have no session
+of 3 minutes, and were not counted. Each was then timed against stock PCSX2
+(the same runtime, `stock-jit`) on a session other than the one counted,
+three rounds in turns, every run the session at every fingerprint:
+
+| Game, the session timed | Stock PCSX2 | Compiled, as users get it | Ratio |
+|---|---|---|---:|
+| Jak and Daxter, `20261119-110909` (nothing drawn) | 56.63, 56.76, 56.24 s | 62.49, 63.02, 62.64 s | 1.11 |
+| Gran Turismo 3, `20261118-095532` | 21.65, 21.28, 21.33 s | 22.81, 22.72, 22.85 s | 1.06 |
+| Agent Under Fire, `20261117-185759` | 27.34, 27.44, 27.31 s | 29.71, 29.78, 29.57 s | 1.09 |
+| Killzone, `20261117-221825` (not counted) | 44.36, 44.27, 44.58 s | 47.08, 47.15, 46.98 s | 1.06 |
+| Silent Hill 3, its first 3,000 frames from boot (not counted) | 3.07, 3.16, 3.15 s | 3.92, 3.92, 3.91 s | 1.25 |
+
+(Silent Hill 3's start-up interprets what none of its sessions, of a few
+seconds each, has met.)
+
+Where the difference is, by a profiled round of each (the compiled one from a
+copy of the folder compiled with line tables and the same counts), in
+seconds of the CPU thread, compiled against stock PCSX2:
+
+| | Jak and Daxter | Gran Turismo 3 | Agent Under Fire | Killzone |
+|---|---|---|---|---|
+| The game's EE code | 11.7, 8.6 | 4.7, 4.3 | 12.3, 10.9 | 18.6, 16.0 |
+| The IOP's code, its blocks found, and PCSX2's functions for its stores | 4.0, 3.5 | 2.9, 2.4 | 1.9, 1.8 | 4.9, 3.8 |
+| Micro programs found, entered and left | 3.6, 2.2 | under 0.2 | under 0.2 | 2.4, 2.4 |
+| Accesses to devices' registers, compiled (`memoryFault`, `FindStep`, `slowRead`) | 0.7 | 0.5 | 1.3 | 0.3 |
+
+- **The counts** took Jak and Daxter's EE code from 15.4 s (2026-11-20, kit3,
+  without them) to 11.7 s. With them clang puts the hottest functions inside
+  those that call or jump to them, and the profile names the line of the
+  call or jump for what it put there: the kinds of generated line say less
+  than they did without counts.
+- **Jak and Daxter's VU0 instructions and COP2 transfers** still ask the
+  runtime what their block does at every execution (1,279 samples, 2.0 s, on
+  those lines).
+- **The IOP**: with PCSX2's functions for its stores counted on its side
+  (compiled IOP code makes them itself), compiled IOP code takes 0.5 s more in
+  Jak and Daxter and Gran Turismo 3, 0.1 s in Agent Under Fire, 1.2 s in
+  Killzone.
+- **Micro programs**: entering and leaving them costs Jak and Daxter 1.4 s
+  more than microVU (its VU0 runs a short program at a time); in Killzone the
+  two are even.
+
+The changes, in the order these give: COP2 instructions' information decided
+when the code is generated (Jak and Daxter); accesses to devices (Agent Under
+Fire, Gran Turismo 3, Jak and Daxter); micro programs entered and left (Jak
+and Daxter); the IOP's blocks (Killzone, Jak and Daxter, Gran Turismo 3); the
+EE's block starts and ends (Agent Under Fire, Killzone).
+
+### What PCSX2's recompiler decides of a COP2 instruction, decided when the code is generated (2026-11-21)
+
+What PCSX2's recompiler decides of a COP2 instruction from the rest of its
+block (whether VU0 is brought up to date first, COP2MicroFinishPass; whether
+its flags reach VU0's registers, COP2FlagHackPass; whether the cycles so far
+are added first) compiled code asked the runtime at every execution
+(`cop2Info`: a table of 4,096 places, emptied whenever any block was formed or
+thrown away). It depends on the block's range, its start and where the scan
+for its end stopped, which the runtime only knows when it forms the block;
+but the recompiler knows where a block of compiled code can begin and end
+(its leaders), and can work out what every such range decides:
+
+- **One copy of the rules.** The two passes, what follows from them for an
+  instruction, and the scan for a block's end are in `core/include/ps2n/rec_cop2.h`,
+  which the runtime forms its blocks with (`runtime/rec_blocks.cpp`) and the
+  recompiler decides with.
+- **Decided where every range agrees.** `ps2n-recomp` goes through every
+  range a block of compiled code can have (from each leader, to where the
+  scan stops by itself or to a leader before that where a block may exist
+  already) and, where all the ranges an instruction is in decide the same,
+  writes that into its code (`PS2N_VU0_DECIDED`, `PS2N_COP2_MOVE_DECIDED`): no
+  lookup, and the compiler drops what does not apply. Elsewhere the
+  instruction asks, as before.
+- **Compared before compiled code runs a block.** The image lists what was
+  decided (`ImageInfo::cop2`); before compiled code runs a block, the runtime
+  compares its own record of each such instruction in it with that
+  (`CompiledCodeCanRun`), and where they differ the block is interpreted and
+  the host says so after the run. So what was decided is right by
+  construction, whatever ranges the recompiler did not foresee.
+- **The settings the passes read.** PCSX2's vuFlagHack (on, which PS2Native
+  fixes) and its GameDB's FullVU0SyncHack (three games of its GameDB, none of
+  the five): the wizard looks the game up and writes `cop2-full-sync=on` in
+  `make.txt` where the GameDB sets it, and the folder's compile tells the
+  recompiler (`--cop2-full-sync`).
+- What a module and the host share changed: `kGameModuleVersion` 3, the
+  recompiler 0.11.0.
+
+Every test passes in both trees (535, 534; two of the recompiler's unit tests
+new: one block whose COP2 instructions are decided, two whose ranges disagree,
+which ask). Measured with the same runtime on the same captures, each game made
+twice without counts (`build\measure\batch21.ps1`, `build\measure\kit10`): with
+the recompiler's deciding off (`--cop2-decide off`, every COP2 instruction
+asking, as before) and on; in turns, which went first alternating, every run
+the session at every fingerprint, no block refused:
+
+| Game, the session timed | Decided | Asking | Asking | Decided | Less |
+|---|---:|---:|---|---|---:|
+| Jak and Daxter, `20261119-110909` | 11,317 | 158 | 68.21, 69.14, 68.60 s | 63.17, 62.73, 63.26 s | 8.2% |
+| Gran Turismo 3, `20261118-095532` | 1,093 | 14 | 23.66, 23.57 s | 23.35, 23.70 s | (within the rounds) |
+| Agent Under Fire, `20261117-185759` | 28,248 | 589 | 30.44, 30.43 s | 29.97, 29.82 s | 1.8% |
+| Killzone, `20261117-221825` | 4,581 | 8 | 46.92, 47.08 s | 45.79, 46.69 s | 1.6% |
+
+(The second and third columns count the COP2 instructions and transfers in
+each game's generated code that were decided and that ask.) Kept.
+
+With it, a folder's compile takes what it translates and compiles with into
+account when it decides whether there is anything new (`work\compiled-from.txt`
+now holds the toolchain's stamp as well): a folder whose programs are brought
+up to date compiles itself whole before its next start, where before it kept
+the modules of the recompiler it had, which a runtime of another module
+version would not load.
+
+### Accesses to devices' registers asking only where they may fault, tried and taken out (2026-11-21)
+
+Every access of compiled code to memory that is not plain asks the runtime
+about its step (`memoryFault`: 1.0 s of Agent Under Fire's run, which reads a
+GS register in a loop), although after each step's first fault it changes
+nothing. The runtime kept, for every word of RAM, how many steps of the blocks
+not yet gone for good may still fault there, and the slow paths of loads and
+stores asked only where that was not zero. Every test passed in both trees
+(535, 534); the same modules run by the runtime before and after it
+(`build\measure\batch22.ps1`, kit10's folders), three rounds in turns, every
+run the session at every fingerprint:
+
+| Game | Before | After |
+|---|---|---|
+| Agent Under Fire | 30.17, 29.88, 30.06 s | 30.05, 30.28, 30.00 s |
+| Gran Turismo 3 | 23.63, 23.51, 23.70 s | 23.21, 23.42, 23.56 s |
+| Jak and Daxter | 62.76, 62.60, 62.98 s | 62.58, 63.36, 62.58 s |
+| Killzone | 46.66, 46.71, 46.69 s | 46.93, 46.55, 46.69 s |
+
+Nothing that shows. A profile of Agent Under Fire after it has no samples in
+`memoryFault`, and as many again in the read of the GS register around it
+(`slowRead`, `gsRead64`, the address table): what the profile had put in
+`memoryFault` was the read's own time, which PCSX2's code for the loop spends
+too. Taken out whole.
+
+### A micro program's run entered at less cost (2026-11-21)
+
+The VU provider's work at the start of each run of a micro program (VU0 runs
+short programs many times a frame in Jak and Daxter):
+
+- **The settings a plan is made with** (the clamp mode, the game fixes, the
+  flag hack) were read from PCSX2's settings at every run (`ReadSettings`,
+  about twelve fields). They are read when the provider is reset, which the
+  core does whenever such a setting changes, and when a block is compiled (for
+  the self-test, which changes them between its programs itself).
+- **The program and the block a run begins at** were searched for at every
+  run (`SearchProg`, and the block manager's search for the pipeline's state).
+  Where nothing was written into micro memory since the last search for the
+  same start, address and state, the search can only find the same: the
+  program found there last (microVU's "quick" reference, which only a write
+  clears), and the first block of a list that is only added to whose state
+  fits. That is kept (`Vu::StartMemo`) and taken, with what the search's quick
+  path does besides (the current program); a state that needs an exact match
+  is searched for as before.
+
+Every test passes in both trees (535, 534: the self-test's 20,000 random
+micro programs held to microVU, runs sliced over many calls among them). The
+same modules run by the runtime before and after it
+(`build\measure\batch23.ps1`, kit10's folders), in turns, every run the session
+at every fingerprint:
+
+| Game | Before | After |
+|---|---|---|
+| Jak and Daxter, six rounds | 63.55, 63.40, 64.90, 63.35, 63.69, 62.94 s | 62.27, 62.67, 62.51, 62.13, 62.73, 62.17 s |
+| Killzone | 47.02, 46.89, 46.49 s | 46.47, 46.70, 46.47 s |
+| Gran Turismo 3 | 23.49, 23.45, 23.36 s | 23.52, 23.46, 23.32 s |
+| Agent Under Fire | 29.93, 29.90, 30.05 s | 29.81, 30.04, 29.87 s |
+
+Jak and Daxter 1.5 to 2% less, every round after faster than every round
+before; the others within their rounds. Kept.
+
+### Where things stand with the two changes kept (2026-11-21)
+
+As at the start, the folders made again in a kit of their own from the
+current module tree (`build\measure\kit11`, `build\measure\batch24.ps1`), the
+same sessions counted by each folder's own `ps2n-remake` (again: the code
+changed), and timed against stock PCSX2 on the same sessions as before, three
+rounds in turns, every run the session at every fingerprint:
+
+| Game, the session timed | Stock PCSX2 | Compiled, as users get it | Ratio | At the start |
+|---|---|---|---:|---:|
+| Jak and Daxter, `20261119-110909` (nothing drawn) | 57.05, 56.40, 56.43 s | 59.89, 58.82, 58.63 s | 1.04 | 1.11 |
+| Gran Turismo 3, `20261118-095532` | 21.44, 21.63, 21.50 s | 22.94, 22.90, 22.84 s | 1.06 | 1.06 |
+| Agent Under Fire, `20261117-185759` | 27.45, 27.45, 27.28 s | 29.75, 29.55, 29.45 s | 1.08 | 1.09 |
+| Killzone, `20261117-221825` (not counted) | 44.52, 44.82, 44.74 s | 46.94, 46.74, 46.57 s | 1.05 | 1.06 |
+| Silent Hill 3, its first 3,000 frames from boot (not counted) | 3.05, 3.13, 3.15 s | 3.90, 3.91, 3.88 s | 1.25 | 1.25 |
+
+By a profiled round of each, in seconds of the CPU thread, compiled against
+stock PCSX2: the micro code now takes less than PCSX2's in all four (Jak and
+Daxter 15.1 against 15.9); the game's EE code takes 1.2 s more in Jak and
+Daxter (9.5, 8.3), 0.3 s in Gran Turismo 3, 1.4 s in Agent Under Fire and in
+Killzone; the IOP's (with PCSX2's functions for its stores on its side) 0.55
+s, 0.43 s, 0.12 s and 1.27 s; accesses to devices' registers 1.3 s of Agent
+Under Fire's (its loop that reads a GS register).
+
+### An IOP block's way out at less cost, tried and taken out (2026-11-21)
+
+Compiled IOP blocks already go on to each other by themselves (a jump to the
+next one's function); what each does more than PCSX2's linked blocks is small
+and on every block. A way out checked the next block's own record (thrown
+away or not) in the place of a count of the blocks thrown away anywhere,
+which compiled code read through the import table; blocks thrown away were
+kept until the whole record was (2,800 to 10,400 of them over a session); a
+block's record was put in one line of the host's cache; and a branch that
+does not go back to its own block's start was not asked whether it is a wait
+loop. Every test passed in both trees (535, 534); each game made again without
+counts (`build\measure\kit12`), against the changes kept so far on the same
+captures (kit10's folders with the runtime of the change before), in turns,
+every run the session at every fingerprint (`build\measure\batch25.ps1`):
+
+| Game | Before | After |
+|---|---|---|
+| Jak and Daxter | 62.04, 62.55, 62.49 s | 61.97, 61.95, 62.68 s |
+| Gran Turismo 3 | 23.20, 23.39, 23.49 s | 23.38, 23.65, 23.61 s |
+| Agent Under Fire | 29.87, 30.01, 29.89 s | 29.87, 30.00, 30.23 s |
+| Killzone | 46.31, 46.55, 46.67 s | 46.30, 46.72, 46.62 s |
+
+Nothing that shows. With the counts, clang already makes the jump to a
+block's most frequent next block a direct one (the IOP's idle loop jumps to
+itself so); what is left of the IOP's time is spread over thousands of small
+blocks. Taken out whole.
+
+### What is left, and the maintainer's answers (2026-11-21)
+
+Compiled games take 1.04 to 1.08 times stock PCSX2's time as users get them
+(the table under "Where things stand with the two changes kept"); the goal,
+no more than its time, is not reached. By the profiled rounds of that
+measurement, what is left:
+
+- **In the game's EE code,** 1.2 to 1.4 s more than PCSX2's in three games,
+  spread over kinds of line that each take a fraction of a second: the
+  128-bit instructions' lines 0.7 s of Jak and Daxter's run (467 samples);
+  the starts and ends of blocks 3.8 s of Agent Under Fire's and 3.4 s of
+  Killzone's, much of it in loops that wait, which PCSX2's code spends time
+  in too.
+- **In the IOP's code,** 0.1 to 1.3 s more, over thousands of small blocks.
+- **In PS2Native's runtime and PCSX2's core,** the largest part of every
+  run, which no change so far has been aimed at as a whole:
+
+| The profiled round | Jak and Daxter | Gran Turismo 3 | Agent Under Fire | Killzone |
+|---|---:|---:|---:|---:|
+| The compiled run, the processor thread | 59.2 s | 23.1 s | 30.2 s | 47.5 s |
+| PS2Native's runtime and PCSX2's core in it | 23.6 s, 39.8% | 11.6 s, 50.4% | 12.3 s, 40.8% | 16.0 s, 33.7% |
+| PCSX2's core in the stock run | 23.3 s | 11.1 s | 11.0 s | 16.3 s |
+
+The session put three decisions to the maintainer with the numbers,
+recommending yes to the first two and, of what could come next, the runtime
+itself built with a profile of play before the smaller changes (the 128-bit
+registers kept whole, for Jak and Daxter; loops that wait let off their
+blocks' checks at every turn, for Agent Under Fire and Killzone). The
+maintainer's answers: "1. Yes", "2. Yes", "3. Ok"
+([ADR 0046](adr/0046-compiled-games-at-least-as-fast-as-stock-pcsx2-as-users-get-them.md)):
+committed and pushed; the new programs into the maintainer's game folders;
+and the runtime built with a profile next, measured first, against stock
+PCSX2 built without one.

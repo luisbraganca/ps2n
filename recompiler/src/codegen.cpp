@@ -2,6 +2,7 @@
 #include "codegen.h"
 
 #include "ps2n/codehash.h"
+#include "ps2n/rec_cop2.h"
 #include "ps2n/rec_rules.h"
 #include "ps2n/util.h"
 #include "ps2n/waitloop.h"
@@ -10,12 +11,13 @@
 #include <bit>
 #include <initializer_list>
 #include <sstream>
+#include <unordered_map>
 
 namespace ps2n::recomp {
 
 using namespace r5900;
 
-const char* const kGeneratorName = "ps2n-recomp 0.10.0";
+const char* const kGeneratorName = "ps2n-recomp 0.11.0";
 
 namespace {
 
@@ -252,9 +254,117 @@ std::string fnName(const Function& f, int variant) {
     return variant < 0 ? fnName(f.start) : fnName(f.start) + strprintf("_v%d", variant);
 }
 
-// Where each function's leaders begin in the image's list of all of them.
+// What PCSX2's recompiler decides of each COP2 instruction of the program's
+// functions, by its address, where that is the same in every block compiled
+// code can run it in (ps2n/rec_cop2.h; ADR 0046): the bits cop2::kDecided.
+//
+// A block of compiled code begins at a leader. Its range ends where the scan
+// for its end stops: where the scan stops by itself, or before that at a
+// leader where a block exists already, which the scan looks at before each
+// word it reads; at any other address compiled code does not run the block
+// (CompiledCodeCanRun in runtime/ee_provider.cpp). An instruction is in the
+// block when compiling it gets there: not past a branch or jump and its delay
+// slot, nor past an instruction that ends a block. Ranges that never form
+// may be counted (a read of a timer that ends a block is not looked for):
+// that leaves more instructions undecided, never one decided wrongly, and
+// the runtime compares all the same.
+std::unordered_map<uint32_t, uint32_t> decideCop2(const Program& prog, bool flagHack, bool fullSync) {
+    namespace cop2 = r5900::cop2;
+    // Where a block may exist already: at any leader of any function.
+    std::vector<uint32_t> all;
+    for (const Function& f : prog.functions) all.insert(all.end(), f.leaders.begin(), f.leaders.end());
+    std::sort(all.begin(), all.end());
+
+    // A block whose start leaves more ranges than this is not looked into: its
+    // instructions are left undecided.
+    constexpr size_t kMaxRanges = 32;
+
+    struct Seen {
+        uint32_t info;
+        bool differs;
+    };
+    std::unordered_map<uint32_t, Seen> seen;
+    const auto note = [&](uint32_t a, uint32_t info, bool differs) {
+        auto [it, fresh] = seen.try_emplace(a, Seen{info, differs});
+        if (!fresh && (differs || it->second.info != info)) it->second.differs = true;
+    };
+
+    std::vector<uint32_t> words;
+    std::vector<uint16_t> passes;
+    for (const Function& f : prog.functions) {
+        for (const uint32_t start : f.leaders) {
+            if (!prog.inCode(start)) continue;
+            uint32_t lastRead = start;
+            const cop2::BlockEnd scanned = cop2::scanBlockEnd(
+                start,
+                [&](uint32_t a, uint32_t* word) {
+                    if (!prog.inCode(a)) return false;
+                    *word = prog.word(a);
+                    return true;
+                },
+                [](uint32_t) { return false; }, [&](uint32_t a, uint32_t) { lastRead = a; });
+            if (scanned.end <= start) continue;
+
+            // Where compiling the block stops at the latest: after the first
+            // branch or jump and its delay slot, or instruction that ends a
+            // block, among the words the scan read. (A conditional branch back
+            // inside the block ends its range at its target; a range cut short
+            // at a leader after that target still reaches the leader.)
+            uint32_t reach = lastRead + 4;
+            for (uint32_t a = start; a <= lastRead; a += 4) {
+                const Insn in = prog.insn(a);
+                if (in.isControlFlow()) {
+                    reach = a + 8;
+                    break;
+                }
+                if (in.op == Op::SYSCALL || in.op == Op::BREAK || in.op == Op::ERET || in.op == Op::EI || in.is(F_TRAP)) {
+                    reach = a + 4;
+                    break;
+                }
+            }
+            bool any = false;
+            for (uint32_t a = start; a < reach && !any; a += 4) any = cop2::decided(prog.word(a));
+            if (!any) continue;
+
+            // Where the range may end: at a leader the scan looked at before it
+            // stopped, or where it stopped by itself.
+            std::vector<uint32_t> ends;
+            for (auto it = std::upper_bound(all.begin(), all.end(), start); it != all.end() && *it <= lastRead; ++it) ends.push_back(*it);
+            ends.push_back(scanned.end);
+            if (ends.size() > kMaxRanges) {
+                for (uint32_t a = start; a < reach; a += 4)
+                    if (cop2::decided(prog.word(a))) note(a, 0, true);
+                continue;
+            }
+
+            for (const uint32_t end : ends) {
+                const size_t n = (end - start) / 4;
+                words.resize(n);
+                for (size_t i = 0; i < n; ++i) words[i] = prog.word(start + static_cast<uint32_t>(i) * 4);
+                passes.assign(n, 0);
+                cop2::microFinishPass(words.data(), n, fullSync, passes.data());
+                if (flagHack) cop2::flagHackPass(words.data(), n, passes.data());
+                const uint32_t last = std::min(end, reach);
+                for (uint32_t a = start; a < last; a += 4) {
+                    const size_t i = (a - start) / 4;
+                    if (cop2::decided(words[i])) note(a, cop2::stepInfo(words[i], passes[i], flagHack), false);
+                }
+            }
+        }
+    }
+
+    std::unordered_map<uint32_t, uint32_t> decided;
+    for (const auto& [a, s] : seen)
+        if (!s.differs) decided.emplace(a, s.info);
+    return decided;
+}
+
+// Where each function's leaders begin in the image's list of all of them; and
+// what the recompiler decided of the program's COP2 instructions (decideCop2),
+// which every function's code is written with.
 struct LeaderIndex {
     std::vector<uint32_t> first;   // by function
+    std::unordered_map<uint32_t, uint32_t> cop2;
 
     explicit LeaderIndex(const Program& p) {
         uint32_t n = 0;
@@ -419,6 +529,18 @@ private:
 
     // The instruction at `a` as this function, or this variant of it, has it.
     Insn insn(uint32_t a) const { return p_.insn(f_, variant_, a); }
+
+    // What PCSX2's recompiler decides of the COP2 instruction at `a`, where the
+    // recompiler decided it (decideCop2): in the function's own code, not a
+    // variant's, whose words are others. Noted for the image's table, which
+    // the runtime compares with its record (ImageInfo::cop2).
+    std::optional<uint32_t> cop2Decided(uint32_t a) {
+        if (variant_ >= 0) return std::nullopt;
+        const auto it = leaders_.cop2.find(a);
+        if (it == leaders_.cop2.end()) return std::nullopt;
+        stats_.cop2Decided.emplace_back(a, it->second);
+        return it->second;
+    }
 
     std::string body_;
     int depth_ = 1;              // indentation
@@ -982,7 +1104,12 @@ private:
         const uint32_t rt = in.rt();
         const std::string pc = hex(in.addr);
         const auto emit = [&](const std::string& puts, const std::string& get, const std::string& move) {
-            line(strprintf("PS2N_COP2_MOVE(acc, %uu, %s, %s, %s, %s);", cost, pc.c_str(), puts.c_str(), get.c_str(), move.c_str()), &in, note);
+            if (const auto decided = cop2Decided(in.addr))
+                line(strprintf("PS2N_COP2_MOVE_DECIDED(acc, %uu, %s, 0x%04Xu, %s, %s, %s);", cost, pc.c_str(), *decided, puts.c_str(), get.c_str(),
+                               move.c_str()),
+                     &in, note);
+            else
+                line(strprintf("PS2N_COP2_MOVE(acc, %uu, %s, %s, %s, %s);", cost, pc.c_str(), puts.c_str(), get.c_str(), move.c_str()), &in, note);
         };
         switch (in.op) {
         case Op::QMFC2: {
@@ -1092,7 +1219,10 @@ private:
         if (isCop2(in)) {
             const std::string vu0 = vu0Call(in);
             if (!vu0.empty()) {
-                line(strprintf("PS2N_VU0(acc, %uu, %s, %s);", cost, hex(in.addr).c_str(), vu0.c_str()), &in, note);
+                if (const auto decided = cop2Decided(in.addr))
+                    line(strprintf("PS2N_VU0_DECIDED(acc, %uu, %s, 0x%04Xu, %s);", cost, hex(in.addr).c_str(), *decided, vu0.c_str()), &in, note);
+                else
+                    line(strprintf("PS2N_VU0(acc, %uu, %s, %s);", cost, hex(in.addr).c_str(), vu0.c_str()), &in, note);
                 stats_.cop2++;
                 stats_.vu0++;
                 return 0;
@@ -1803,7 +1933,8 @@ std::vector<GeneratedFile> generateFiles(const Program& prog, const GenerateOpti
         return static_cast<unsigned long long>(hash.value);
     };
 
-    const LeaderIndex leaderIndex(prog);
+    LeaderIndex leaderIndex(prog);
+    if (options.cop2Decide) leaderIndex.cop2 = decideCop2(prog, options.cop2FlagHack, options.cop2FullSync);
 
     std::string table = "static const FunctionInfo functions[] = {\n";
     std::string leaders = "static const uint32_t leaders[] = {\n";
@@ -1863,7 +1994,23 @@ std::vector<GeneratedFile> generateFiles(const Program& prog, const GenerateOpti
     if (variantCount == 0) variants += "\t{nullptr, nullptr},   // (none)\n";
     variants += "};\n\n";
 
-    std::string tables = table + leaders + hashes + variantHashes + variants;
+    // What the recompiler decided of COP2 instructions and wrote into the code,
+    // by address, each once: what the runtime compares with its record before
+    // compiled code runs a block (ImageInfo::cop2).
+    std::sort(stats.cop2Decided.begin(), stats.cop2Decided.end());
+    stats.cop2Decided.erase(std::unique(stats.cop2Decided.begin(), stats.cop2Decided.end()), stats.cop2Decided.end());
+    std::string cop2 = "static const Cop2Decided cop2_decided[] = {\n";
+    for (size_t i = 0; i < stats.cop2Decided.size(); ++i)
+        cop2 += strprintf("%s{%s, 0x%04Xu},%s", i % 4 == 0 ? "\t" : " ", hex(stats.cop2Decided[i].first).c_str(), stats.cop2Decided[i].second,
+                          i % 4 == 3 ? "\n" : "");
+    if (stats.cop2Decided.empty())
+        cop2 += "\t{0, 0},   // (none)\n";
+    else if (stats.cop2Decided.size() % 4)
+        cop2 += "\n";
+    cop2 += "};\n\n";
+    const uint32_t cop2Settings = (options.cop2FlagHack ? 1u : 0u) | (options.cop2FullSync ? 2u : 0u);
+
+    std::string tables = table + leaders + hashes + variantHashes + variants + cop2;
     tables += "const ImageInfo image = {\n";
     tables += "\t" + cstring(options.id) + ",\n";
     tables += "\t" + cstring(name) + ",\n";
@@ -1874,9 +2021,10 @@ std::vector<GeneratedFile> generateFiles(const Program& prog, const GenerateOpti
     tables += strprintf("\tvariants, %u,\n", variantCount);
     tables += "\tblocks,\n";
     tables += "\t" + cstring(kGeneratorName) + ",\n";
-    if (options.kind == 1) tables += "\tkImageBios,\n";
-    if (options.kind == 2) tables += "\tkImageOutside,\n";
-    if (options.kind == 3) tables += "\tkImageLoaded,\n\t" + hex(options.programCrc) + ",\n";
+    static const char* const kKinds[] = {"kImageExecutable", "kImageBios", "kImageOutside", "kImageLoaded"};
+    if (options.kind > 3) throw Error(strprintf("an image of kind %u", options.kind));
+    tables += strprintf("\t%s, %s,\n", kKinds[options.kind], hex(options.kind == 3 ? options.programCrc : 0).c_str());
+    tables += strprintf("\tcop2_decided, %zu, %u,\n", stats.cop2Decided.size(), cop2Settings);
     tables += "};\n\n";
 
     // What the runtime knows of the block that begins at each leader
