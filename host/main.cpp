@@ -257,6 +257,7 @@ namespace
 		std::string iop_report_path; // where the report of what the IOP ran is written (iop_report.h)
 		std::vector<u32> marks; // frames at which the wall-clock time is noted, for the report
 		bool fast_cores = false; // keep the run on the processor's fastest cores, so that its time repeats
+		bool progress = false; // say how far the run has got, every 60 frames (a game's folder counting, ADR 0045)
 		bool window = false; // play in a window: the console's speed, sound, the keyboard, a controller, a memory card
 		bool mute = false; // with -window: no sound
 		bool osd = false; // with -window: let the core draw its messages and figures over the picture
@@ -586,6 +587,15 @@ namespace
 			"                     moves a run between them, and the same run takes up to\n"
 			"                     twice as long from one time to the next. For runs that\n"
 			"                     are timed. Windows only; elsewhere it changes nothing.\n"
+			"  -progress          Say every 60 frames how many the run has had, on a line\n"
+			"                     of its own: \"ps2n-host: frame <n> of <frames>\".\n"
+			"  -modules <dir>     Before any other option: load the modules of compiled\n"
+			"                     code from <dir>, not from beside the host's executable.\n"
+			"  -module-counts <dir>  Before any other option: when the run is over, write\n"
+			"                     what each module made to count what of its code runs\n"
+			"                     counted (module_counts.cpp; docs/adr/0045) as LLVM's raw\n"
+			"                     profile, <dir>/<module>.profraw, for llvm-profdata. The\n"
+			"                     two are what a game's folder counts with.\n"
 			"  -until <text>      Stop once the program prints a line containing this\n"
 			"                     (default \"-- TEST END\").\n"
 			"  -frames <n>        Stop after this many frames (default 3600).\n"
@@ -764,6 +774,8 @@ namespace
 			}
 			else if (is("-fast-cores"))
 				o.fast_cores = true;
+			else if (is("-progress"))
+				o.progress = true;
 			else if (is("-image") && has_value)
 				o.image_id = argv[++i];
 			else if (is("-trace") && has_value)
@@ -3487,6 +3499,14 @@ void ps2n::host::OnGuestFrame()
 	if (const u32 shot = s_shot_requested.exchange(0))
 		WriteShot(shot);
 
+	// How far the run has got, for what waits on it (a game's folder counting,
+	// wizard/remake_main.cpp).
+	if (s_options.progress && s_frames % 60 == 0)
+	{
+		std::fprintf(stderr, "ps2n-host: frame %u of %u\n", s_frames, s_options.max_frames);
+		std::fflush(stderr);
+	}
+
 	// 0 frames: no limit (someone is playing in a window).
 	const bool frames_done = s_options.max_frames != 0 && s_frames >= s_options.max_frames;
 
@@ -3574,34 +3594,91 @@ static void PublishGameModules()
 }
 #endif
 
+#if defined(PS2N_GAME_MODULE)
+// -modules and -module-counts, taken from the command line before the rest of
+// it is read: the modules are loaded first.
+static std::string s_modules_dir;
+static std::string s_module_counts_dir;
+
+// Takes -modules <dir> and -module-counts <dir> out of `args` (the program's
+// name first). False, with why on stderr, when one has no folder after it.
+static bool TakeModuleOptions(std::vector<std::string>* args)
+{
+	for (size_t i = 1; i < args->size();)
+	{
+		const std::string& option = (*args)[i];
+		std::string* dir = option == "-modules" ? &s_modules_dir : option == "-module-counts" ? &s_module_counts_dir : nullptr;
+		if (!dir)
+		{
+			i++;
+			continue;
+		}
+		if (i + 1 >= args->size())
+		{
+			std::fprintf(stderr, "ps2n-host: %s takes a folder\n", option.c_str());
+			return false;
+		}
+		*dir = (*args)[i + 1];
+		args->erase(args->begin() + static_cast<std::ptrdiff_t>(i), args->begin() + static_cast<std::ptrdiff_t>(i) + 2);
+	}
+	return true;
+}
+
+// What a module made to count what of its code runs gives the host when the
+// run is over (runtime/module_counts.cpp, docs/adr/0045): what it counted, as
+// LLVM's raw profile, a piece at a time, which the host writes to
+// <-module-counts>/<module>.profraw. A module that does not count gives
+// nothing. False when one that counts could not be written.
+using ModuleCountsPut = void (*)(void* context, const void* data, size_t size);
+using ModuleCountsWrite = int (*)(ModuleCountsPut put, void* context);
+static bool WriteModuleCounts(const std::string& module, ModuleCountsWrite write)
+{
+	if (!write)
+		return true;
+	std::vector<char> profile;
+	const ModuleCountsPut put = [](void* context, const void* data, size_t size) {
+		std::vector<char>& to = *static_cast<std::vector<char>*>(context);
+		const size_t at = to.size();
+		to.resize(at + size);
+		if (data)
+			std::memcpy(to.data() + at, data, size);
+	};
+	const std::string path = Path::Combine(s_module_counts_dir, std::string(Path::GetFileTitle(module)) + ".profraw");
+	if (write(put, &profile) != 0 || !FileSystem::WriteBinaryFile(path.c_str(), profile.data(), profile.size()))
+	{
+		std::fprintf(stderr, "ps2n-host: cannot write what %s counted to %s\n", module.c_str(), path.c_str());
+		return false;
+	}
+	std::fprintf(stderr, "ps2n-host: what %s counted: %s (%zu bytes)\n", module.c_str(), path.c_str(), profile.size());
+	return true;
+}
+#endif
+
 #ifdef _WIN32
 
 #if defined(PS2N_GAME_MODULE)
-// The modules of compiled code, as loaded.
-static std::vector<HMODULE> s_game_modules;
+// The modules of compiled code, as loaded, with their files.
+static std::vector<std::pair<HMODULE, std::string>> s_game_modules;
 
-// A module compiled to count what of its code runs, for a profile of it
-// (clang's -fprofile-instr-generate, linked with the profile runtime: for
-// measurements, build\measure): loaded without its C runtime's start
-// (/NOENTRY), it cannot write its counts at exit itself, so the host has it
-// write them when the run is over, to where LLVM_PROFILE_FILE says.
-static void WriteGameModuleProfiles()
+// When the run is over, what the modules made to count counted (-module-counts).
+static bool WriteGameModuleCounts()
 {
-	for (const HMODULE module : s_game_modules)
+	if (s_module_counts_dir.empty())
+		return true;
+	if (!FileSystem::CreateDirectoryPath(s_module_counts_dir.c_str(), true))
 	{
-		const auto write = reinterpret_cast<int (*)()>(GetProcAddress(module, "__llvm_profile_write_file"));
-		if (!write)
-			continue;
-		if (const auto initialize = reinterpret_cast<void (*)()>(GetProcAddress(module, "__llvm_profile_initialize_file")))
-			initialize();
-		const int result = write();
-		std::fprintf(stderr, "ps2n-host: a module's profile written: %s\n", result == 0 ? "done" : "failed");
+		std::fprintf(stderr, "ps2n-host: cannot make %s\n", s_module_counts_dir.c_str());
+		return false;
 	}
+	bool written = true;
+	for (const auto& [module, file] : s_game_modules)
+		written &= WriteModuleCounts(file, reinterpret_cast<ModuleCountsWrite>(GetProcAddress(module, "ps2n_module_counts_write")));
+	return written;
 }
 
-// Loads the modules of compiled code beside the host's executable and puts
-// their lists together. False, with what went wrong on stderr, when one is
-// missing or was not built for this host.
+// Loads the modules of compiled code beside the host's executable, or from
+// -modules, and puts their lists together. False, with what went wrong on
+// stderr, when one is missing or was not built for this host.
 static bool LoadGameModules()
 {
 	std::wstring directory(MAX_PATH, L'\0');
@@ -3621,6 +3698,12 @@ static bool LoadGameModules()
 		directory.resize(directory.size() * 2);
 	}
 	directory.erase(directory.find_last_of(L"\\/") + 1);
+	if (!s_modules_dir.empty())
+	{
+		directory = StringUtil::UTF8StringToWideString(Path::Canonicalize(
+			Path::IsAbsolute(s_modules_dir) ? s_modules_dir : Path::Combine(FileSystem::GetWorkingDirectory(), s_modules_dir)));
+		directory += L'\\';
+	}
 
 	for (const wchar_t* file : ps2n::kGameModuleFiles)
 	{
@@ -3643,7 +3726,7 @@ static bool LoadGameModules()
 		}
 		if (!TakeGameModule(entry, shown))
 			return false;
-		s_game_modules.push_back(module);
+		s_game_modules.emplace_back(module, StringUtil::WideStringToUTF8String(file));
 	}
 	PublishGameModules();
 	return true;
@@ -3664,19 +3747,20 @@ int wmain(int argc, wchar_t** argv)
 		return *code;
 
 #if defined(PS2N_GAME_MODULE)
-	if (!LoadGameModules())
+	if (!TakeModuleOptions(&u8_args) || !LoadGameModules())
 		return EXIT_ERROR;
 #endif
 
 	std::vector<char*> u8_argptrs;
 	u8_argptrs.reserve(u8_args.size() + 1);
-	for (int i = 0; i < argc; i++)
-		u8_argptrs.push_back(u8_args[i].data());
+	for (std::string& arg : u8_args)
+		u8_argptrs.push_back(arg.data());
 	u8_argptrs.push_back(nullptr);
 
-	const int code = Run(argc, u8_argptrs.data());
+	const int code = Run(static_cast<int>(u8_args.size()), u8_argptrs.data());
 #if defined(PS2N_GAME_MODULE)
-	WriteGameModuleProfiles();
+	if (!WriteGameModuleCounts())
+		return EXIT_ERROR;
 #endif
 	return code;
 }
@@ -3684,16 +3768,41 @@ int wmain(int argc, wchar_t** argv)
 #else
 
 #if defined(PS2N_GAME_MODULE)
-// Loads the modules of compiled code beside the host's executable and puts
-// their lists together, as on Windows. Each is bound whole when it is loaded
-// (RTLD_NOW), so that no import is looked up while compiled code runs.
+// The modules of compiled code, as loaded, with their files.
+static std::vector<std::pair<void*, std::string>> s_game_modules;
+
+// When the run is over, what the modules made to count counted (-module-counts).
+static bool WriteGameModuleCounts()
+{
+	if (s_module_counts_dir.empty())
+		return true;
+	if (!FileSystem::CreateDirectoryPath(s_module_counts_dir.c_str(), true))
+	{
+		std::fprintf(stderr, "ps2n-host: cannot make %s\n", s_module_counts_dir.c_str());
+		return false;
+	}
+	bool written = true;
+	for (const auto& [module, file] : s_game_modules)
+		written &= WriteModuleCounts(file, reinterpret_cast<ModuleCountsWrite>(dlsym(module, "ps2n_module_counts_write")));
+	return written;
+}
+
+// Loads the modules of compiled code beside the host's executable, or from
+// -modules, and puts their lists together, as on Windows. Each is bound whole
+// when it is loaded (RTLD_NOW), so that no import is looked up while compiled
+// code runs.
 static bool LoadGameModules()
 {
-	const std::string directory = std::string(Path::GetDirectory(FileSystem::GetProgramPath()));
+	std::string directory = std::string(Path::GetDirectory(FileSystem::GetProgramPath()));
 	if (directory.empty())
 	{
 		std::fputs("ps2n-host: cannot find its own executable\n", stderr);
 		return false;
+	}
+	if (!s_modules_dir.empty())
+	{
+		directory = Path::Canonicalize(
+			Path::IsAbsolute(s_modules_dir) ? s_modules_dir : Path::Combine(FileSystem::GetWorkingDirectory(), s_modules_dir));
 	}
 	for (const char* file : ps2n::kGameModuleFiles)
 	{
@@ -3713,6 +3822,7 @@ static bool LoadGameModules()
 		}
 		if (!TakeGameModule(entry, path))
 			return false;
+		s_game_modules.emplace_back(module, file);
 	}
 	PublishGameModules();
 	return true;
@@ -3727,11 +3837,21 @@ int main(int argc, char* argv[])
 		return *code;
 
 #if defined(PS2N_GAME_MODULE)
-	if (!LoadGameModules())
+	std::vector<std::string> args(argv, argv + argc);
+	if (!TakeModuleOptions(&args) || !LoadGameModules())
 		return EXIT_ERROR;
-#endif
-
+	std::vector<char*> argptrs;
+	argptrs.reserve(args.size() + 1);
+	for (std::string& arg : args)
+		argptrs.push_back(arg.data());
+	argptrs.push_back(nullptr);
+	const int code = Run(static_cast<int>(args.size()), argptrs.data());
+	if (!WriteGameModuleCounts())
+		return EXIT_ERROR;
+	return code;
+#else
 	return Run(argc, argv);
+#endif
 }
 
 #endif

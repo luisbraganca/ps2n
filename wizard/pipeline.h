@@ -16,7 +16,13 @@
 // P4.6, docs/adr/0034; remake_main.cpp): then it keeps what the last compile
 // left and compiles only what changed since, and does nothing at all when the
 // captures are those the modules were compiled from (work/compiled-from.txt,
-// which every compile that ends well writes).
+// which every compile to play with that ends well writes).
+//
+// And it is how a game's folder takes a profile of its user's play
+// (docs/adr/0045): the modules compiled to count what of their code runs,
+// with objects of their own, for a run again of a session; then compiled with
+// what that run counted, which every compile after takes too
+// (captures/profile.profdata).
 
 #pragma once
 
@@ -41,6 +47,16 @@ namespace ps2n::wizard
 		QString folder; // the game's folder: its work in work, its captures in captures
 		QString modules; // where the four modules are linked: the game's folder when empty
 		bool incremental = false; // the game's own recompile (above)
+		QString objects; // where the objects are kept, in the folder's work: "objects" when empty
+		// Compiled to count what of the code runs, and linked with LLVM's
+		// profile runtime: modules for a run that counts, not to play with.
+		bool count = false;
+		// The counts compiled with (-fprofile-instr-use). When empty, the
+		// folder's own (captures/profile.profdata), where it has one; none to count.
+		QString profile;
+		// Only compiled and linked, from the C++ the last compile left, which
+		// has what the captures hold: no captures merged, nothing translated.
+		bool compile_only = false;
 	};
 
 	class Pipeline : public QObject
@@ -99,12 +115,18 @@ namespace ps2n::wizard
 		// What the toolchain is: work/objects/toolchain.txt holds it for the
 		// objects there, which another toolchain's would not match.
 		QString toolchainStamp() const;
+		// The toolchain, and how the objects are compiled: to count, or with
+		// which counts. The objects' toolchain.txt holds it.
+		QString objectsStamp() const;
 
 		PipelineInput m_in;
 		bool m_running = false;
 		bool m_cancelled = false;
 		bool m_nothing_new = false;
 		QString m_fingerprint;
+		QString m_objects; // the objects' folder
+		QString m_profile; // the counts compiled with, if any
+		QStringList m_profile_arguments; // what the compiler is given for them, or to count
 
 		std::deque<Job> m_turn;
 		std::function<void()> m_after_turn;
@@ -115,6 +137,7 @@ namespace ps2n::wizard
 			QString kind; // game, bios, vu, iop
 			QString source;
 			QString object;
+			bool plain = false; // compiled without counting or counts: module_counts.cpp
 		};
 		std::vector<Compile> m_compiles; // every object a module is linked from
 		std::vector<size_t> m_todo; // of them, those to compile now

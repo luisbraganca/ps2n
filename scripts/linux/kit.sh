@@ -14,7 +14,10 @@
 #                (22.1.3, docs/adr/0030; their symbols stripped) with the
 #                compiler's own headers and the libraries ld.lld needs,
 #                ps2n-recomp, PS2Native's headers the generated code includes,
-#                and a module's entry (runtime/module_entry.cpp)
+#                and a module's entry (runtime/module_entry.cpp); and what a
+#                game's folder counts what of its code runs with (docs/adr/0045):
+#                LLVM's llvm-profdata and profile runtime, and
+#                runtime/module_counts.cpp
 #   licences/    the licence of everything the folder carries
 #
 # The libraries: PCSX2's dependencies (built by PCSX2's own script into
@@ -179,24 +182,28 @@ mkdir -p "$toolchain/bin" "$toolchain/lib/clang" "$toolchain/include/ps2n" "$too
 # LLVM's release as it is but for its symbol tables, which nothing here reads (100 MB of the 470).
 strip -o "$toolchain/bin/clang" "$(readlink -f "$llvm/bin/clang")"
 strip -o "$toolchain/bin/ld.lld" "$(readlink -f "$llvm/bin/ld.lld")"
-chmod 755 "$toolchain/bin/clang" "$toolchain/bin/ld.lld"
-copy_needed "$toolchain/lib" "$toolchain/bin/clang" "$toolchain/bin/ld.lld"
+strip -o "$toolchain/bin/llvm-profdata" "$(readlink -f "$llvm/bin/llvm-profdata")"
+chmod 755 "$toolchain/bin/clang" "$toolchain/bin/ld.lld" "$toolchain/bin/llvm-profdata"
+copy_needed "$toolchain/lib" "$toolchain/bin/clang" "$toolchain/bin/ld.lld" "$toolchain/bin/llvm-profdata"
 for file in "$toolchain"/lib/*.so*; do
 	patchelf --set-rpath '$ORIGIN' "$file"
 done
-patchelf --set-rpath '$ORIGIN/../lib' "$toolchain/bin/clang"
-patchelf --set-rpath '$ORIGIN/../lib' "$toolchain/bin/ld.lld"
-# Of the compiler's own files, its headers.
+for program in clang ld.lld llvm-profdata; do
+	patchelf --set-rpath '$ORIGIN/../lib' "$toolchain/bin/$program"
+done
+# Of the compiler's own files, its headers, and its profile runtime, which a
+# module made to count is linked with (docs/adr/0045).
 clang_major="${llvm_version%%.*}"
 mkdir -p "$toolchain/lib/clang/$clang_major"
 cp -r "$llvm/lib/clang/$clang_major/include" "$toolchain/lib/clang/$clang_major/"
+cp "$llvm/lib/clang/$clang_major/lib/x86_64-unknown-linux-gnu/libclang_rt.profile.a" "$toolchain/lib/"
 cp "$recomp" "$toolchain/bin/"
 cp "$root"/runtime/include/ps2n/*.h "$toolchain/include/ps2n/"
 for header in r3000a.h vu_step.h vu_steps.inc; do
 	cp "$root/core/include/ps2n/$header" "$toolchain/include/ps2n/"
 done
 cp "$root/runtime/game_module.h" "$toolchain/include/runtime/"
-cp "$root/runtime/module_entry.cpp" "$toolchain/src/"
+cp "$root/runtime/module_entry.cpp" "$root/runtime/module_counts.cpp" "$toolchain/src/"
 
 # ---- the licences -----------------------------------------------------------------------------------
 cp "$root/LICENSE" "$licences/PS2Native-LICENSE.txt"
@@ -475,8 +482,9 @@ Qt $qt (runtime/libQt6*.so.6 and runtime/qt): Qt-NOTICE.txt, made from Qt's own 
 holds, with every licence text it names, Qt's own LGPL, version 3, among them. Its source: Qt's release, as
 Qt-NOTICE.txt says.
 
-LLVM's clang and ld.lld, and the compiler's headers (toolchain/): LLVM-LICENSE.TXT (Apache License 2.0 with
-LLVM exceptions). Their source: https://github.com/llvm/llvm-project, llvmorg-$llvm_version.
+LLVM's clang, ld.lld and llvm-profdata, the compiler's headers and its profile runtime (toolchain/):
+LLVM-LICENSE.TXT (Apache License 2.0 with LLVM exceptions). Their source: https://github.com/llvm/llvm-project,
+llvmorg-$llvm_version.
 
 The other libraries, in runtime/ and toolchain/lib, are $system's, as its packages have them; each
 package's copyright and licence is in Ubuntu/, and Ubuntu keeps the source of that very version:

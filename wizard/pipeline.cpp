@@ -196,6 +196,10 @@ namespace ps2n::wizard
 		QDirIterator headers(toolchain.filePath(QStringLiteral("include")), QDir::Files, QDirIterator::Subdirectories);
 		while (headers.hasNext())
 			files.push_back(toolchain.relativeFilePath(headers.next()));
+		// A module made to count is built from LLVM's profile runtime and
+		// module_counts.cpp as well.
+		if (m_in.count)
+			files += {platform::kProfileRuntime, platform::kCountsSource};
 		std::sort(files.begin(), files.end());
 		QString stamp;
 		for (const QString& file : files)
@@ -203,6 +207,16 @@ namespace ps2n::wizard
 			const QFileInfo info(toolchain.filePath(file));
 			stamp += QStringLiteral("%1 %2 %3\n").arg(file).arg(info.size()).arg(info.lastModified().toMSecsSinceEpoch());
 		}
+		return stamp;
+	}
+
+	QString Pipeline::objectsStamp() const
+	{
+		QString stamp = toolchainStamp();
+		if (m_in.count)
+			stamp += QStringLiteral("compiled to count\n");
+		if (!m_profile.isEmpty())
+			stamp += QStringLiteral("compiled with the counts %1\n").arg(QString::fromLatin1(Sha256(m_profile).toHex()));
 		return stamp;
 	}
 
@@ -221,13 +235,39 @@ namespace ps2n::wizard
 		m_program_ids.clear();
 		m_have_vu = m_have_iop = false;
 		m_jobs = std::max(1, QThread::idealThreadCount());
-		for (const QString& name : {platform::Program(QStringLiteral("ps2n-recomp")), platform::kCompiler, platform::kLinker})
+		const QDir folder(m_in.folder);
+		m_objects = folder.filePath(QStringLiteral("work/") + (m_in.objects.isEmpty() ? QStringLiteral("objects") : m_in.objects));
+		// The folder's counts of its user's play, once it has them (docs/adr/0045),
+		// in every compile to play with.
+		m_profile = m_in.profile;
+		const QString own_profile = folder.filePath(QStringLiteral("captures/profile.profdata"));
+		if (m_profile.isEmpty() && !m_in.count && QFileInfo::exists(own_profile))
+			m_profile = own_profile;
+		m_profile_arguments = platform::ProfileArguments(m_in.count, m_profile);
+		QStringList needed = {QStringLiteral("bin/") + platform::Program(QStringLiteral("ps2n-recomp")), QStringLiteral("bin/") + platform::kCompiler,
+			QStringLiteral("bin/") + platform::kLinker};
+		if (m_in.count)
+			needed += {platform::kProfileRuntime, platform::kCountsSource};
+		for (const QString& name : needed)
 		{
-			if (!QFileInfo::exists(tool(name)))
+			const QString path = QDir::toNativeSeparators(QDir(m_in.toolchain).filePath(name));
+			if (!QFileInfo::exists(path))
 			{
-				fail(tr("The toolchain is not whole: %1 is missing.").arg(tool(name)));
+				fail(tr("The toolchain is not whole: %1 is missing.").arg(path));
 				return;
 			}
+		}
+		if (!m_profile.isEmpty() && !QFileInfo::exists(m_profile))
+		{
+			fail(tr("There are no counts at %1.").arg(QDir::toNativeSeparators(m_profile)));
+			return;
+		}
+		if (m_in.compile_only)
+		{
+			// What the captures hold is translated already: compiled and linked.
+			m_fingerprint = fingerprint();
+			compileAll();
+			return;
 		}
 		mergeCaptures();
 	}
@@ -371,22 +411,17 @@ namespace ps2n::wizard
 		const QDir folder(m_in.folder);
 		const QString disc = folder.filePath(QStringLiteral("work/disc"));
 		const QString gen = folder.filePath(QStringLiteral("work/generated"));
-		const QString obj = folder.filePath(QStringLiteral("work/objects"));
 		const QString own = folder.filePath(QStringLiteral("captures"));
 		if (!m_in.incremental)
 		{
 			// What an earlier compile left is no guide to this one, nor are the
-			// modules a recompile of the game's own left for its next start.
+			// modules a recompile of the game's own left for its next start, nor
+			// what it made to count with.
 			QDir(gen).removeRecursively();
-			QDir(obj).removeRecursively();
 			const QDir work(folder.filePath(QStringLiteral("work")));
-			for (const QString& next : work.entryList({QStringLiteral("next-*")}, QDir::Dirs | QDir::NoDotAndDotDot))
-				QDir(work.filePath(next)).removeRecursively();
-		}
-		else if (ReadText(QDir(obj).filePath(QStringLiteral("toolchain.txt"))) != toolchainStamp())
-		{
-			// Objects another toolchain compiled.
-			QDir(obj).removeRecursively();
+			for (const QString& left : work.entryList({QStringLiteral("next-*"), QStringLiteral("objects*"), QStringLiteral("count")},
+					 QDir::Dirs | QDir::NoDotAndDotDot))
+				QDir(work.filePath(left)).removeRecursively();
 		}
 		QDir().mkpath(gen);
 
@@ -467,8 +502,14 @@ namespace ps2n::wizard
 	{
 		const QDir folder(m_in.folder);
 		const QString gen = folder.filePath(QStringLiteral("work/generated"));
-		const QString obj = folder.filePath(QStringLiteral("work/objects"));
+		const QString obj = m_objects;
+		// Objects another toolchain compiled, or compiled otherwise: to count, or
+		// with other counts, or without.
+		const QString stamp = objectsStamp();
+		if (m_in.incremental && ReadText(QDir(obj).filePath(QStringLiteral("toolchain.txt"))) != stamp)
+			QDir(obj).removeRecursively();
 		const QString entry = QDir(m_in.toolchain).filePath(QStringLiteral("src/module_entry.cpp"));
+		const QString counts = QDir(m_in.toolchain).filePath(platform::kCountsSource);
 		const std::pair<const char*, QStringList> kinds[] = {
 			{"game", Files(gen, QStringLiteral("game*.cpp"))},
 			{"bios", Files(QDir(gen).filePath(QStringLiteral("bios")), QStringLiteral("*.cpp"))},
@@ -484,10 +525,13 @@ namespace ps2n::wizard
 			all += {QDir(gen).filePath(QStringLiteral("registry_%1.cpp").arg(kind)), entry};
 			for (const QString& source : all)
 				m_compiles.push_back({kind, source, QDir(dir).filePath(QFileInfo(source).completeBaseName() + platform::kObject)});
+			// A module made to count hands the host its counts (docs/adr/0045).
+			if (m_in.count)
+				m_compiles.push_back({kind, counts, QDir(dir).filePath(QFileInfo(counts).completeBaseName() + platform::kObject), true});
 		}
-		// The objects from now on are this toolchain's; a game's own recompile
-		// compiles only what is newer than its object.
-		if (!WriteText(QDir(obj).filePath(QStringLiteral("toolchain.txt")), toolchainStamp()))
+		// The objects from now on are this toolchain's, so compiled; a game's own
+		// recompile compiles only what is newer than its object.
+		if (!WriteText(QDir(obj).filePath(QStringLiteral("toolchain.txt")), stamp))
 		{
 			fail(tr("Cannot write %1.").arg(QDir(obj).filePath(QStringLiteral("toolchain.txt"))));
 			return;
@@ -520,7 +564,7 @@ namespace ps2n::wizard
 			m_compile_processes.push_back(p);
 			p->setProcessChannelMode(QProcess::MergedChannels);
 			p->setProgram(tool(platform::kCompiler));
-			p->setArguments(platform::CompileArguments(m_in.toolchain, c.object, c.source));
+			p->setArguments(platform::CompileArguments(m_in.toolchain, c.object, c.source, c.plain ? QStringList() : m_profile_arguments));
 			m_compiles_running++;
 			connect(p, &QProcess::finished, this, [this, p, c](int code, QProcess::ExitStatus status) {
 				m_compiles_running--;
@@ -558,7 +602,7 @@ namespace ps2n::wizard
 	void Pipeline::link()
 	{
 		emit stage(tr("Linking the game's four modules"));
-		const QString obj = QDir(m_in.folder).filePath(QStringLiteral("work/objects"));
+		const QString obj = m_objects;
 		const QString modules = m_in.modules.isEmpty() ? m_in.folder : m_in.modules;
 		if (!QDir().mkpath(modules))
 		{
@@ -590,14 +634,16 @@ namespace ps2n::wizard
 			const bool placed = ordered && (kind == QStringLiteral("game") || kind == QStringLiteral("bios"));
 			jobs.push_back({tool(platform::LinkProgram()),
 				platform::LinkArguments(m_in.toolchain, kind, QDir(modules).filePath(platform::Module(kind)), rsp,
-					QDir(obj).filePath(QStringLiteral("ps2n-%1.lib").arg(kind)), placed ? order : QString()),
+					QDir(obj).filePath(QStringLiteral("ps2n-%1.lib").arg(kind)), placed ? order : QString(), m_in.count),
 				placed ? tr("link %1, its functions in the order the sessions ran them").arg(platform::Module(kind)) :
 						 tr("link %1").arg(platform::Module(kind))});
 		}
 		runInTurn(std::move(jobs), [this]() {
 			// What these modules were compiled from, for a recompile of the
-			// game's own to tell whether a session met anything new.
-			if (!WriteText(QDir(m_in.folder).filePath(QStringLiteral("work/compiled-from.txt")), m_fingerprint + QLatin1Char('\n')))
+			// game's own to tell whether a session met anything new: modules to
+			// play with, not those made to count.
+			if (!m_in.count &&
+				!WriteText(QDir(m_in.folder).filePath(QStringLiteral("work/compiled-from.txt")), m_fingerprint + QLatin1Char('\n')))
 			{
 				fail(tr("Cannot write %1.").arg(QDir(m_in.folder).filePath(QStringLiteral("work/compiled-from.txt"))));
 				return;

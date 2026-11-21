@@ -2191,3 +2191,144 @@ a folder), the maintainer answered "1. Yes"
 and "2. Commit and push" to committing what had been done since ADR 0044.
 Every test passes with it on Windows (535, 534) and on Linux under WSL 2
 (534, 534).
+
+### The counted profile on a second game, and further into the first (2026-11-21)
+
+ADR 0045's measurement before anything goes into a folder, as a folder would
+count: the first 3 minutes (10,800 frames) of one of the maintainer's
+sessions run again with the modules compiled to count, the counts merged, the
+modules compiled again with them, against the same captures compiled without;
+in turns, which went first alternating, every run the session at every
+fingerprint (`build\measure\batch15.ps1`, the runtime as committed in
+`433eb77`):
+
+| Game, the session counted, the session timed | Without | With the counts | Less |
+|---|---|---|---|
+| Gran Turismo 3, `20261118-102727`, `20261118-095532` (8,678 frames, Vulkan at the console's resolution, four rounds) | 23.61, 24.10, 23.69, 23.82 s | 22.79, 23.12, 23.00, 23.01 s | 3.5% |
+| Jak and Daxter, `20261118-120316`, `20261119-110909` (8,357 frames, nothing drawn, four rounds) | 68.99, 69.71, 69.90, 68.67 s | 63.83, 64.37, 64.32, 63.67 s | 7.6% |
+| Jak and Daxter, `20261118-120316`, the first 20,000 frames of `20261121-000955` (nothing drawn, three rounds) | 162.90, 163.45, 162.56 s | 151.58, 150.36, 151.56 s | 7.2% |
+
+Gran Turismo 3 gains less (its replay draws as well: PCSX2's null renderer
+stops at an assertion on its drawing; why it gains less was not looked into
+further). The last row is a session of 2026-11-21, played two days after the
+one counted and further into the game: a profile of 3 minutes near a game's
+start serves its later play nearly as well. What counting cost (the folders
+made with `make-game.ps1`, the compile's time with taking the executables
+from the disc and translating them): Jak and Daxter compiled to count in
+102 s, its 3 minutes run again in 187 s, compiled with the counts in 67 s;
+Gran Turismo 3 in 32 s, 92 s and 24 s.
+
+clang counts in two ways: in its front end (`-fprofile-instr-generate`, what
+the 7.5% and the table above had), or where LLVM's optimizer has the code
+(`-fprofile-generate`, the IR level), which counts after the first inlining
+and counts the targets of calls through a pointer and the sizes of copies
+too. The second, on the same 3 minutes of Jak and Daxter, against the first
+and against none, three rounds each, in turns, every run the session at
+every fingerprint (`build\measure\batch16.ps1`):
+
+| Jak and Daxter, `20261119-110909` | Rounds | Mean | Less |
+|---|---|---|---|
+| No profile | 69.09, 68.40, 67.42 s | 68.30 s | |
+| Counted in the front end | 63.43, 64.09, 63.61 s | 63.71 s | 6.7% |
+| Counted at the IR level | 62.39, 62.52, 62.82 s | 62.58 s | 8.4% |
+
+And it counts at less cost: the 3 minutes run again in 83 s where 187 s, the
+modules compiled to count in 78 s where 102 s. A folder counts at the IR
+level. Its counts of the targets of calls through a pointer are written with
+the rest only by the profile runtime's own writer (its buffer leaves them
+out, and llvm-profdata then takes the profile for one cut short): a module
+made to count hands the host its counts through that writer
+(`runtime/module_counts.cpp`), which defines what the profile runtime asks of
+a C runtime on Windows, where a module has none (the C runtime's warnings
+and its environment empty, memory from an arena of the module's own).
+
+### A game's folder compiles its game for how it is played, built (2026-11-21)
+
+ADR 0045 in a game's folder:
+
+- **When.** After a session, once the folder's compile has compiled what the
+  sessions met (ADR 0040), its `ps2n-remake` goes on, in the same window,
+  when the folder has no counts yet and has a session that lasted at least
+  3 minutes (10,800 frames; the newest such one is counted), or has counts it
+  has not compiled with yet. Never before the game starts.
+- **The modules made to count.** The game's four modules compiled from the
+  C++ the last compile left (`compile_only`), with clang's `-fprofile-generate`,
+  into objects of their own (`work\count\objects`), each linked with LLVM's
+  profile runtime and `runtime/module_counts.cpp` (`work\count\modules`).
+- **The run again.** The folder's own runtime with the folder's own options
+  but a window's, on copies of what the session began with (its memory cards,
+  the console's NVRAM, the BIOS's images it had, the game's settings and patch
+  file: `work\count\run`), the modules made to count loaded in place of the
+  folder's (`ps2n-host -modules`), what they counted written when the run is
+  over (`-module-counts`), its first 10,800 frames, at the console's
+  resolution, on Vulkan where the folder's options name no renderer (a run
+  that draws nothing is not safe for every game), how far it has got said
+  every 60 frames (`-progress`) for the window's bar.
+- **The counts.** The four modules' raw profiles merged by the toolchain's
+  `llvm-profdata`, the game's modules compiled again with them
+  (`-fprofile-use`, into `work\objects-profiled`) and linked into
+  `work\next-<time>`, which the launcher puts in place at the next start; the
+  objects are then the folder's own, and the counts are kept with its
+  captures (`captures\profile.profdata`), which every later compile takes
+  (the objects' stamp, `work\objects\toolchain.txt`, says with which counts
+  they were compiled). Code a later session meets, or changes, is compiled
+  without counts, as clang does when the counts do not know a function.
+- **Later, a game started, a failure.** Later puts the rest off to the end of
+  another session, what was done kept. The game started meanwhile has its
+  `ps2n-remake --before-play` ask the round to stop (`work\stop-profile`),
+  which it does at once: it never keeps the game from starting. When it
+  fails, its window says why, the game plays as it was, and the folder does
+  not try again (`work\count\failed.txt`).
+- **What a folder carries for it.** LLVM's `llvm-profdata` (5.9 MB on
+  Windows) and its profile runtime (0.15 MB), and
+  `runtime/module_counts.cpp`, in the toolchain (`kit.ps1`, `kit.sh`).
+
+Every test passes in both trees on Windows (535, 534). Through a folder's own
+path (`build\measure\batch17.ps1`): Jak and Daxter made with `make-game.ps1`
+from the maintainer's folder's captures, as users get it, a session of the
+maintainer's that lasted 26,413 frames put into its sessions, then its own
+`ps2n-remake` as its launcher starts it after a session: nothing new to
+compile, then the round, 174 s on the development computer (compiled to
+count, 132 files, 49 s; the 3 minutes run again, 84 s; the counts merged,
+under a second; compiled with them, 40 s). Its modules put in place as the
+launcher puts them, against the same folder made without, on the session
+timed throughout, in turns, every run the session at every fingerprint:
+
+| Jak and Daxter, `20261119-110909` | Rounds | Mean |
+|---|---|---|
+| Without counts | 69.21, 68.36, 68.09 s | 68.55 s |
+| After the folder's own round | 63.00, 62.46, 63.65 s | 63.04 s, 8.0% less |
+
+A compile after another session kept the objects compiled with the counts
+(`work\compiled-from.txt` taken away, as when a session met new code: "Compiling
+0 of 128 files, the others as they were", the modules linked again), and
+started no round again; before the game started there was nothing to do
+(`build\measure\batch19.ps1`). Gran Turismo 3 the same way
+(`build\measure\batch18.ps1`), a session of the maintainer's that lasted
+13,582 frames counted: the round 95 s (compiled to count, 22 s; the 3 minutes
+run again, 52 s; compiled with the counts, 21 s), and on its other session
+(Vulkan at the console's resolution, four rounds):
+
+| Gran Turismo 3, `20261118-095532` | Rounds | Mean |
+|---|---|---|
+| Without counts | 23.34, 23.92, 23.94, 23.62 s | 23.71 s |
+| After the folder's own round | 22.80, 22.83, 22.91, 22.90 s | 22.86 s, 3.6% less |
+
+On Linux under WSL 2 every test passes in both trees (534, 534), and the
+same path runs (a Linux folder of its own, `build/kit-linux-adr45`, no
+window: the wizard and `ps2n-remake` on Qt's offscreen platform, half the
+processors): Jak and Daxter made with the Linux wizard from its disc image,
+the same session of the maintainer's put into its sessions, then its own
+`ps2n-remake`: what the session met compiled, then the round, 336 s
+(compiled to count, 20 s; the 3 minutes run again, 300 s, on WSL's Vulkan,
+which is the processor's, with the BIOS's code a folder made from the disc
+alone has not compiled yet interpreted; compiled with the counts, 16 s), the
+modules linked with LLVM's profile runtime by `ld.lld` and the C library's
+functions it asks for bound when the runtime loads them; the counts kept,
+and a run on the modules compiled with them to its last frame. Not timed
+there.
+
+The maintainer's answer (2026-11-21): "1. Commit and push"; "2. All game
+folders" (ADR 0045): the new programs go into every game folder of the
+maintainer's on this computer, each compiling its game for how it is played
+after its next session of 3 minutes or more.

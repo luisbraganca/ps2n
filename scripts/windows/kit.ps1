@@ -15,7 +15,9 @@ The folder (build\kit unless -Out says otherwise) holds:
   toolchain\   what compiles a game's modules: LLVM's own clang-cl and lld-link (22.1.3, the version
                the development builds use; fetched from LLVM's release into deps\llvm-22.1.3 when
                not there yet, its SHA-256 checked) with the compiler's headers; ps2n-recomp;
-               PS2Native's headers the generated code includes; the runtime's import library
+               PS2Native's headers the generated code includes; the runtime's import library; and
+               what a game's folder counts what of its code runs with (ADR 0045): LLVM's
+               llvm-profdata and profile runtime, and module_counts.cpp
   licences\    the licence of everything in it, and where the source of each is (licences\README.txt;
                step P4.8): PS2Native's, PCSX2's and its dependencies' (PCSX2's own list), SDL's, LLVM's,
                Qt's (Qt-NOTICE.txt, made from the SBOMs Qt's build wrote into PCSX2's dependency package,
@@ -64,9 +66,15 @@ $readobj = Join-Path $vs 'VC\Tools\Llvm\x64\bin\llvm-readobj.exe'
 $llvmVersion = '22.1.3'
 $llvmArchive = "clang+llvm-$llvmVersion-x86_64-pc-windows-msvc"
 $llvmSha256 = 'f2d7d200f72c83880aa2c1c00f6b6a67d0ea607ea663dafbd0cb2db6e2819ed0'
+$llvmMajor = $llvmVersion.Split('.')[0]
 $llvmDir = Join-Path $root "deps\llvm-$llvmVersion"
 $llvm = Join-Path $llvmDir $llvmArchive
-if (-not (Test-Path (Join-Path $llvm 'bin\clang-cl.exe'))) {
+# Of the archive, what a module needs: clang-cl, lld-link and the compiler's headers; and what a game's folder
+# counts what of its code runs with (docs\adr\0045): llvm-profdata, and LLVM's profile runtime.
+$profileRuntime = "lib/clang/$llvmMajor/lib/windows/clang_rt.profile-x86_64.lib"
+$llvmMembers = @('bin/clang-cl.exe', 'bin/lld-link.exe', 'bin/llvm-profdata.exe', "lib/clang/$llvmMajor/include", $profileRuntime)
+$llvmMissing = @($llvmMembers | Where-Object { -not (Test-Path (Join-Path $llvm $_)) })
+if ($llvmMissing) {
     New-Item -ItemType Directory -Force $llvmDir | Out-Null
     $tar = Join-Path $llvmDir "$llvmArchive.tar.xz"
     if (-not (Test-Path $tar)) {
@@ -77,8 +85,7 @@ if (-not (Test-Path (Join-Path $llvm 'bin\clang-cl.exe'))) {
     }
     $hash = (Get-FileHash -LiteralPath $tar -Algorithm SHA256).Hash.ToLower()
     if ($hash -ne $llvmSha256) { throw "$tar is not LLVM's release (SHA-256 $hash, not $llvmSha256)." }
-    # Of the archive, what a module needs: clang-cl, lld-link and the compiler's headers.
-    & (Join-Path $env:SystemRoot 'System32\tar.exe') -xf $tar -C $llvmDir "$llvmArchive/bin/clang-cl.exe" "$llvmArchive/bin/lld-link.exe" "$llvmArchive/lib/clang"
+    & (Join-Path $env:SystemRoot 'System32\tar.exe') -xf $tar -C $llvmDir @($llvmMissing | ForEach-Object { "$llvmArchive/$_" })
     if ($LASTEXITCODE -ne 0) { throw "Could not unpack $tar." }
 }
 $llvmLicence = Join-Path $llvmDir 'LICENSE.TXT'
@@ -173,8 +180,10 @@ else {
 # The toolchain.
 New-Item -ItemType Directory -Force (Join-Path $toolchain 'bin'), (Join-Path $toolchain 'lib'), (Join-Path $toolchain 'include\ps2n'),
     (Join-Path $toolchain 'include\runtime'), (Join-Path $toolchain 'src') | Out-Null
-Copy-Item -LiteralPath (Join-Path $llvm 'bin\clang-cl.exe'), (Join-Path $llvm 'bin\lld-link.exe') -Destination (Join-Path $toolchain 'bin')
-Copy-Item -LiteralPath (Join-Path $llvm 'lib\clang') -Destination (Join-Path $toolchain 'lib') -Recurse
+Copy-Item -LiteralPath (Join-Path $llvm 'bin\clang-cl.exe'), (Join-Path $llvm 'bin\lld-link.exe'), (Join-Path $llvm 'bin\llvm-profdata.exe') -Destination (Join-Path $toolchain 'bin')
+New-Item -ItemType Directory -Force (Join-Path $toolchain "lib\clang\$llvmMajor") | Out-Null
+Copy-Item -LiteralPath (Join-Path $llvm "lib\clang\$llvmMajor\include") -Destination (Join-Path $toolchain "lib\clang\$llvmMajor") -Recurse
+Copy-Item -LiteralPath (Join-Path $llvm $profileRuntime) -Destination (Join-Path $toolchain 'lib')
 Copy-Item -LiteralPath $recomp -Destination (Join-Path $toolchain 'bin')
 foreach ($dll in 'msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll') {
     Copy-Item -LiteralPath (Join-Path $crt.FullName $dll) -Destination (Join-Path $toolchain 'bin')
@@ -185,7 +194,7 @@ foreach ($header in 'r3000a.h', 'vu_step.h', 'vu_steps.inc') {
     Copy-Item -LiteralPath (Join-Path $root "core\include\ps2n\$header") -Destination (Join-Path $toolchain 'include\ps2n')
 }
 Copy-Item -LiteralPath (Join-Path $root 'runtime\game_module.h') -Destination (Join-Path $toolchain 'include\runtime')
-Copy-Item -LiteralPath (Join-Path $root 'runtime\module_entry.cpp') -Destination (Join-Path $toolchain 'src')
+Copy-Item -LiteralPath (Join-Path $root 'runtime\module_entry.cpp'), (Join-Path $root 'runtime\module_counts.cpp') -Destination (Join-Path $toolchain 'src')
 
 # ---- the licences (step P4.8, docs\adr\0033) --------------------------------------------------------
 # Of everything the folder carries: PS2Native's and PCSX2's (GPL-3.0); the libraries of PCSX2's dependency
@@ -396,8 +405,9 @@ $changedNote = if ($ps2nChanged) { ', with changes not committed when this folde
         "Qt $qtVersion (runtime\Qt6*.dll and runtime\qt): Qt-NOTICE.txt, made from Qt's own record of what each file holds,",
         'with every licence text it names, Qt''s own LGPL, version 3, among them. Its source: Qt''s release, as Qt-NOTICE.txt says.',
         '',
-        "LLVM's clang-cl and lld-link, and the compiler's headers (toolchain\): LLVM-LICENSE.TXT (Apache License 2.0 with",
-        "LLVM exceptions). Their source: https://github.com/llvm/llvm-project, llvmorg-$llvmVersion.",
+        "LLVM's clang-cl, lld-link and llvm-profdata, the compiler's headers and its profile runtime (toolchain\):",
+        "LLVM-LICENSE.TXT (Apache License 2.0 with LLVM exceptions). Their source: https://github.com/llvm/llvm-project,",
+        "llvmorg-$llvmVersion.",
         '',
         "Microsoft's C++ runtime: Microsoft-CPP-runtime.txt says where Microsoft's terms for it are."), $utf8)
 

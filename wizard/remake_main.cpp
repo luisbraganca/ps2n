@@ -18,6 +18,16 @@
 // same window, and plays only when that is done. work/remake.log says what it
 // did.
 //
+// Once for a game, after a session of at least 3 minutes (docs/adr/0045), it
+// then compiles the game for how its user plays it, in the same window: the
+// modules compiled to count what of their code runs (work/count), the
+// session's first 3 minutes run again with them without a window, which
+// counts, and the modules compiled again with the counts (work/objects-profiled,
+// then the folder's objects), the counts kept in captures/profile.profdata for
+// every compile after. That never keeps the game from starting: Later puts it
+// off to another session's end, and the game started meanwhile stops it
+// (work/stop-profile), what it did kept.
+//
 //   ps2n-remake [--before-play] [<the game's folder>]      by default the folder it is in
 //
 // It ends with 0 when what there was is compiled, or there was nothing; 3 when
@@ -33,7 +43,10 @@
 #include <QtCore/QDirIterator>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QLocale>
 #include <QtCore/QLockFile>
+#include <QtCore/QProcess>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QSaveFile>
 #include <QtCore/QTimer>
 #include <QtGui/QCloseEvent>
@@ -51,7 +64,9 @@
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
 
+#include <algorithm>
 #include <functional>
+#include <memory>
 
 #ifdef _WIN32
 #include <QtGui/private/qguiapplication_p.h>
@@ -147,6 +162,179 @@ namespace
 		return last;
 	}
 
+	// ---- How the user plays the game, counted (docs/adr/0045) -------------------
+
+	// The session counted: its first 3 minutes at 60 frames a second, of one at
+	// least that long.
+	constexpr int kCountFrames = 10800;
+
+	QString ReadText(const QString& path)
+	{
+		QFile file(path);
+		return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
+	}
+
+	// A line of a session's input.txt (host/session_record.h) that begins with
+	// `key` and a space: the rest of it, or nothing.
+	QString SessionLine(const QString& session, const QString& key)
+	{
+		const QRegularExpression line(QStringLiteral("^%1 +(.*)$").arg(QRegularExpression::escape(key)), QRegularExpression::MultilineOption);
+		const QRegularExpressionMatch match = line.match(ReadText(QDir(session).filePath(QStringLiteral("input.txt"))));
+		return match.hasMatch() ? match.captured(1).trimmed() : QString();
+	}
+
+	// The newest session in the folder that ended and lasted kCountFrames frames
+	// at least: the one counted. Nothing when there is none.
+	QString CountableSession(const QDir& folder)
+	{
+		const QDir sessions(folder.filePath(QStringLiteral("sessions")));
+		QStringList names = sessions.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+		std::reverse(names.begin(), names.end());
+		for (const QString& name : names)
+		{
+			bool ok = false;
+			const int frames = SessionLine(sessions.filePath(name), QStringLiteral("end")).toInt(&ok);
+			if (ok && frames >= kCountFrames)
+				return sessions.filePath(name);
+		}
+		return QString();
+	}
+
+	bool CopyInto(const QString& from, const QString& to)
+	{
+		QFile::remove(to);
+		return QFile::copy(from, to);
+	}
+
+	// What the runtime is started with to run the session `session` again,
+	// without a window, with the modules made to count (`modules`), writing
+	// their counts to `counts`: the folder's own options (settings.txt, as its
+	// launcher starts it), but those of a window and of where it keeps what it
+	// plays with, which the run has copies of in `run` (PrepareRun). False,
+	// with why, when settings.txt cannot be read.
+	bool ReplayArguments(const QDir& folder, const QString& session, const QString& run, const QString& modules, const QString& counts,
+		QStringList* arguments, QString* bios, QString* error)
+	{
+		const QString settings = folder.filePath(QStringLiteral("settings.txt"));
+		QFile file(settings);
+		if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+		{
+			*error = QObject::tr("%1 cannot be read.").arg(QDir::toNativeSeparators(settings));
+			return false;
+		}
+		QStringList given;
+		const QString here = QDir::toNativeSeparators(folder.absolutePath());
+		for (QString line : QString::fromUtf8(file.readAll()).split(QLatin1Char('\n')))
+		{
+			line = line.trimmed();
+			if (line.isEmpty() || line.startsWith(QLatin1Char('#')))
+				continue;
+			line.replace(QStringLiteral("%GAME%"), here, Qt::CaseInsensitive);
+			given.push_back(line);
+		}
+		// A window's, and where the folder keeps what it plays with: the run has
+		// copies of those, as the session began with them.
+		const QStringList without_value = {QStringLiteral("-window"), QStringLiteral("-mute"), QStringLiteral("-osd")};
+		const QStringList with_value = {QStringLiteral("-title"), QStringLiteral("-sessions"), QStringLiteral("-record"),
+			QStringLiteral("-window-size"), QStringLiteral("-log"), QStringLiteral("-out"), QStringLiteral("-data"), QStringLiteral("-bios"),
+			QStringLiteral("-upscale"), QStringLiteral("-frames"), QStringLiteral("-seconds"), QStringLiteral("-input"),
+			QStringLiteral("-memcards"), QStringLiteral("-clock")};
+		QStringList kept;
+		bool renderer = false;
+		for (qsizetype i = 0; i < given.size(); i++)
+		{
+			if (without_value.contains(given[i]))
+				continue;
+			if (with_value.contains(given[i]))
+			{
+				if (given[i] == QStringLiteral("-bios") && i + 1 < given.size())
+					*bios = given[i + 1];
+				i++;
+				continue;
+			}
+			renderer |= given[i] == QStringLiteral("-renderer");
+			kept.push_back(given[i]);
+		}
+		if (bios->isEmpty())
+		{
+			*error = QObject::tr("%1 names no BIOS image.").arg(QDir::toNativeSeparators(settings));
+			return false;
+		}
+		const QDir r(run);
+		*arguments = {QStringLiteral("-modules"), QDir::toNativeSeparators(modules), QStringLiteral("-module-counts"),
+			QDir::toNativeSeparators(counts)};
+		*arguments += kept;
+		*arguments += {QStringLiteral("-bios"), QDir::toNativeSeparators(r.filePath(QStringLiteral("bios/") + QFileInfo(*bios).fileName())),
+			QStringLiteral("-data"), QDir::toNativeSeparators(r.filePath(QStringLiteral("data"))), QStringLiteral("-log"),
+			QDir::toNativeSeparators(r.filePath(QStringLiteral("core.log"))), QStringLiteral("-out"),
+			QDir::toNativeSeparators(r.filePath(QStringLiteral("guest.txt"))), QStringLiteral("-memcards"),
+			QDir::toNativeSeparators(r.filePath(QStringLiteral("memcards"))), QStringLiteral("-input"),
+			QDir::toNativeSeparators(QDir(session).filePath(QStringLiteral("input.txt"))), QStringLiteral("-frames"),
+			QString::number(kCountFrames), QStringLiteral("-seconds"), QStringLiteral("7200"), QStringLiteral("-upscale"), QStringLiteral("1"),
+			QStringLiteral("-progress")};
+		// The renderer a window has when the folder's options name none: a run
+		// without one draws nothing, which not every game's drawing allows.
+		if (!renderer)
+			*arguments += {QStringLiteral("-renderer"), QStringLiteral("vulkan")};
+		return true;
+	}
+
+	// The run's own copies of what the session began with, as a session run
+	// again has them (tests/guest_test.cmake): the BIOS image with the images
+	// beside it the session had (its bios-roms line) and the console's NVRAM as
+	// it was; the memory cards; the game's own settings file and patch file.
+	bool PrepareRun(const QString& session, const QString& bios, const QString& run, QString* error)
+	{
+		QDir(run).removeRecursively();
+		const QDir r(run);
+		for (const char* dir : {"bios", "memcards", "data/PCSX2/gamesettings", "data/PCSX2/patches"})
+		{
+			if (!QDir().mkpath(r.filePath(QString::fromLatin1(dir))))
+			{
+				*error = QObject::tr("Cannot make %1.").arg(QDir::toNativeSeparators(r.filePath(QString::fromLatin1(dir))));
+				return false;
+			}
+		}
+		const QFileInfo image(bios);
+		const QString stem = image.completeBaseName();
+		bool copied = CopyInto(bios, r.filePath(QStringLiteral("bios/") + image.fileName()));
+		const QString roms = SessionLine(session, QStringLiteral("bios-roms"));
+		const QStringList wanted = roms.split(QLatin1Char(','), Qt::SkipEmptyParts);
+		for (const QFileInfo& beside : image.dir().entryInfoList(QDir::Files))
+		{
+			const QString kind = beside.suffix().toLower();
+			if (beside.completeBaseName().compare(stem, Qt::CaseInsensitive) != 0 ||
+				!(kind == QStringLiteral("rom1") || kind == QStringLiteral("rom2") || kind == QStringLiteral("erom")))
+				continue;
+			// Under the extension in lower case, the one the core asks for.
+			if (kind != QStringLiteral("erom") && !roms.isEmpty() && !wanted.contains(kind))
+				continue;
+			copied &= CopyInto(beside.absoluteFilePath(), r.filePath(QStringLiteral("bios/%1.%2").arg(stem, kind)));
+		}
+		const QDir s(session);
+		for (const char* extension : {"nvm", "mec"})
+		{
+			const QString nvram = s.filePath(QStringLiteral("%1.%2").arg(stem, QString::fromLatin1(extension)));
+			if (QFileInfo::exists(nvram))
+				copied &= CopyInto(nvram, r.filePath(QStringLiteral("bios/%1.%2").arg(stem, QString::fromLatin1(extension))));
+		}
+		for (const char* card : {"Mcd001.ps2", "Mcd002.ps2"})
+		{
+			if (QFileInfo::exists(s.filePath(QString::fromLatin1(card))))
+				copied &= CopyInto(s.filePath(QString::fromLatin1(card)), r.filePath(QStringLiteral("memcards/") + QString::fromLatin1(card)));
+		}
+		for (const QString& ini : s.entryList({QStringLiteral("*.ini")}, QDir::Files))
+			copied &= CopyInto(s.filePath(ini), r.filePath(QStringLiteral("data/PCSX2/gamesettings/") + ini));
+		for (const QString& pnach : s.entryList({QStringLiteral("*.pnach")}, QDir::Files))
+			copied &= CopyInto(s.filePath(pnach), r.filePath(QStringLiteral("data/PCSX2/patches/") + pnach));
+		if (!copied)
+		{
+			*error = QObject::tr("Cannot copy what %1 began with into %2.").arg(QDir::toNativeSeparators(session), QDir::toNativeSeparators(run));
+			return false;
+		}
+		return true;
+	}
+
 	// The window it compiles in (docs/adr/0040), shown when there is something
 	// to compile: what it compiles and for what, how far it has got, and
 	// "Later", which closing it is too. Once the compile has ended, done or
@@ -213,14 +401,20 @@ namespace
 			m_note->setText(note);
 		}
 		void Stage(const QString& stage) { m_stage->setText(stage); }
-		void Progress(int done, int total)
+		void Progress(int done, int total, const QString& format = QObject::tr("%v of %m files"))
 		{
 			if (m_ended || total <= 0)
 				return;
 			m_bar->setRange(0, total);
 			m_bar->setValue(done);
-			m_bar->setFormat(QObject::tr("%v of %m files"));
+			m_bar->setFormat(format);
 			m_bar->setTextVisible(true);
+		}
+		// Moving, until there is something to count again.
+		void Busy()
+		{
+			m_bar->setRange(0, 0);
+			m_bar->setTextVisible(false);
 		}
 		void Ended(const QString& heading, const QString& text, bool done)
 		{
@@ -302,11 +496,29 @@ int main(int argc, char* argv[])
 	// One at a time in a folder. After a session, one that finds another
 	// compiling leaves at once: that one takes what the session met in a round
 	// after. Before the game starts, it waits for the other, whose window says
-	// what it does, and then sees whether anything is left to compile.
+	// what it does, and then sees whether anything is left to compile; one
+	// compiling the game for how its user plays it is asked to stop first
+	// (work/stop-profile), which it does at once: that never keeps the game from
+	// starting (docs/adr/0045).
+	const QString stop_profile = work.filePath(QStringLiteral("stop-profile"));
 	QLockFile lock(work.filePath(QStringLiteral("remake.lock")));
 	lock.setStaleLockTime(0);
-	if (before_play ? !lock.lock() : !lock.tryLock(0))
-		return before_play ? 1 : 0;
+	if (before_play)
+	{
+		if (!lock.tryLock(0))
+		{
+			QFile stop(stop_profile);
+			if (stop.open(QIODevice::WriteOnly))
+				stop.close();
+			if (!lock.lock())
+				return 1;
+		}
+		QFile::remove(stop_profile);
+	}
+	else if (!lock.tryLock(0))
+	{
+		return 0;
+	}
 
 	// What it does, for the user to read when it could not compile: without
 	// the file it compiles all the same. Each run after the ones before (one
@@ -355,15 +567,9 @@ int main(int argc, char* argv[])
 	QString modules;
 	bool stopped = false;
 
-	const auto round = [&]() {
-		// What a round that did not end left behind.
-		for (const QString& next : work.entryList({QStringLiteral("next-*")}, QDir::Dirs | QDir::NoDotAndDotDot))
-		{
-			if (!QFileInfo::exists(QDir(work.filePath(next)).filePath(QStringLiteral("ready"))))
-				QDir(work.filePath(next)).removeRecursively();
-		}
-		round_started = QDateTime::currentDateTime();
-		modules = work.filePath(QStringLiteral("next-") + round_started.toString(QStringLiteral("yyyyMMdd-HHmmss-zzz")));
+	// What a round compiles with: the folder's own toolchain, as make.txt says
+	// the game is made, keeping what the last compile left.
+	const auto input_for = [&](const QString& into) {
 		ps2n::wizard::PipelineInput input;
 		input.toolchain = folder.filePath(QStringLiteral("toolchain"));
 		input.runtime = folder.path();
@@ -371,21 +577,97 @@ int main(int argc, char* argv[])
 		input.bios = recipe.bios;
 		input.executables = recipe.executables;
 		input.folder = folder.path();
-		input.modules = modules;
+		input.modules = into;
 		input.incremental = true;
-		pipeline.start(input);
+		return input;
+	};
+	// The folder a round links the modules into, work/next-<time>; what a round
+	// that did not end left behind goes.
+	const auto next_modules = [&]() {
+		for (const QString& next : work.entryList({QStringLiteral("next-*")}, QDir::Dirs | QDir::NoDotAndDotDot))
+		{
+			if (!QFileInfo::exists(QDir(work.filePath(next)).filePath(QStringLiteral("ready"))))
+				QDir(work.filePath(next)).removeRecursively();
+		}
+		round_started = QDateTime::currentDateTime();
+		modules = work.filePath(QStringLiteral("next-") + round_started.toString(QStringLiteral("yyyyMMdd-HHmmss-zzz")));
+	};
+	const auto round = [&]() {
+		next_modules();
+		pipeline.start(input_for(modules));
+	};
+	// The modules of the round ready for the launcher, which takes the newest
+	// such folder. False when that cannot be written.
+	const auto mark_ready = [&]() {
+		QSaveFile ready(QDir(modules).filePath(QStringLiteral("ready")));
+		QString names;
+		for (const char* kind : {"game", "bios", "vu", "iop"})
+			names += ps2n::wizard::platform::Module(QString::fromLatin1(kind)) + QLatin1Char('\n');
+		return ready.open(QIODevice::WriteOnly) && ready.write(names.toUtf8()) >= 0 && ready.commit();
+	};
+
+	// ---- The game compiled for how its user plays it (docs/adr/0045) -------------
+	const QDir count_dir(work.filePath(QStringLiteral("count")));
+	const QString counted = count_dir.filePath(QStringLiteral("profile.profdata"));
+	const QString count_failed = count_dir.filePath(QStringLiteral("failed.txt"));
+	const QString own_profile = folder.filePath(QStringLiteral("captures/profile.profdata"));
+	ps2n::wizard::Pipeline counting;
+	ps2n::wizard::Pipeline profiled;
+	QProcess* runner = nullptr;
+	QProcess* merger = nullptr;
+	QString counted_session;
+	QString step; // "1 of 3: ", what the window says the step is
+	bool profiling = false;
+	QTimer stop_watch;
+
+	// Once for a game, after a session: not when it has its counts, nor when
+	// they could not be made; when a session was long enough, or the counts
+	// were made before and not yet compiled with.
+	const auto profile_wanted = [&]() {
+		if (before_play || QFileInfo::exists(own_profile) || QFileInfo::exists(count_failed) || QFileInfo::exists(stop_profile))
+			return false;
+		return QFileInfo::exists(counted) || !CountableSession(folder).isEmpty();
+	};
+	const auto stop_profile_work = [&]() {
+		stop_watch.stop();
+		counting.cancel();
+		profiled.cancel();
+		if (runner)
+			runner->kill();
+		if (merger)
+			merger->kill();
 	};
 
 	// Later: what it compiled so far stays (objects newer than their sources
 	// are not compiled again), what it was linking goes with the round, and the
-	// game compiles the rest before it next starts.
+	// game compiles the rest before it next starts. Compiling the game for how
+	// it is played, the same, but the game starts without it.
 	window.later = [&]() {
 		stopped = true;
-		say(QStringLiteral("left for later: the game compiles it before it next starts"));
-		pipeline.cancel();
+		if (profiling)
+		{
+			say(QStringLiteral("left for later: compiling the game for how it is played, after another session"));
+			stop_profile_work();
+		}
+		else
+		{
+			say(QStringLiteral("left for later: the game compiles it before it next starts"));
+			pipeline.cancel();
+		}
 		lock.unlock();
 		app.exit(3);
 	};
+	// The game started meanwhile.
+	QObject::connect(&stop_watch, &QTimer::timeout, &app, [&]() {
+		if (!profiling || stopped || !QFileInfo::exists(stop_profile))
+			return;
+		stopped = true;
+		say(QStringLiteral("the game is starting: compiling it for how it is played is left for after another session"));
+		stop_profile_work();
+		window.hide();
+		lock.unlock();
+		app.exit(3);
+	});
 	// Ended: done, or not compiled, said in the window; the game starts when
 	// it is done, before it starts.
 	const auto ended = [&](int code) {
@@ -430,6 +712,255 @@ int main(int argc, char* argv[])
 	});
 	QObject::connect(&pipeline, &ps2n::wizard::Pipeline::progress, &app, [&](int done, int total) { window.Progress(done, total); });
 	QObject::connect(&pipeline, &ps2n::wizard::Pipeline::line, &app, [&](const QString& text) { say(text); });
+	// ---- The game compiled for how its user plays it (docs/adr/0045) -------------
+	// Not compiled so: the game plays as it is, and the folder does not try again.
+	const auto profile_failed = [&](const QString& why) {
+		say(QStringLiteral("not compiled for how the game is played: ") + why);
+		stopped = true;
+		stop_profile_work();
+		profiling = false;
+		QDir().mkpath(count_dir.path());
+		QSaveFile marker(count_failed);
+		if (marker.open(QIODevice::WriteOnly))
+		{
+			marker.write((why + QLatin1Char('\n')).toUtf8());
+			marker.commit();
+		}
+		lock.unlock();
+		window.Ended(QObject::tr("It could not be compiled for how you play it"),
+			QObject::tr("%1\n\n%2 plays as it is, and does not try this again. %3 in the game's folder says what was done.")
+				.arg(why, recipe.title, log_path),
+			false);
+		window.closed = [&app]() { app.exit(0); };
+		window.Bring();
+	};
+
+	std::function<void()> count_compile, count_run, count_merge, compile_with_counts;
+	const auto start_profile = [&]() {
+		profiling = true;
+		window.Compiling(QObject::tr("Compiling %1 for how you play it").arg(recipe.title),
+			QObject::tr("Once for this game: the first 3 minutes of a session of yours are run again out of sight, counting what the "
+						"game's code does most, and the game is compiled again with what was counted. Every processor is at work: it "
+						"takes several minutes."),
+			QObject::tr("Later: %1 starts as it is, and does this after another session.").arg(recipe.title));
+		window.Busy();
+		window.Bring();
+		stop_watch.start(500);
+		if (QFileInfo::exists(counted))
+			compile_with_counts();
+		else
+			count_compile();
+	};
+
+	// 1: the modules compiled to count, with objects of their own.
+	count_compile = [&]() {
+		counted_session = CountableSession(folder);
+		if (counted_session.isEmpty())
+		{
+			profile_failed(QObject::tr("No session lasted 3 minutes."));
+			return;
+		}
+		say(QStringLiteral("compiling the game for how it is played, counting on the session %1: the modules made to count")
+				.arg(QDir(counted_session).dirName()));
+		step = QObject::tr("1 of 3: ");
+		window.Stage(step + QObject::tr("compiling the game to count what its code does"));
+		ps2n::wizard::PipelineInput input = input_for(count_dir.filePath(QStringLiteral("modules")));
+		input.compile_only = true;
+		input.count = true;
+		input.objects = QStringLiteral("count/objects");
+		counting.start(input);
+	};
+
+	// 2: the session's first 3 minutes run again with them, without a window,
+	// which writes what they counted.
+	count_run = [&]() {
+		const QString run = count_dir.filePath(QStringLiteral("run"));
+		const QString raw = count_dir.filePath(QStringLiteral("raw"));
+		QDir(raw).removeRecursively();
+		QStringList arguments;
+		QString bios;
+		QString error;
+		if (!ReplayArguments(folder, counted_session, run, count_dir.filePath(QStringLiteral("modules")), raw, &arguments, &bios, &error) ||
+			!PrepareRun(counted_session, bios, run, &error))
+		{
+			profile_failed(error);
+			return;
+		}
+		const QDateTime began = QDateTime::fromString(QDir(counted_session).dirName(), QStringLiteral("yyyyMMdd-HHmmss"));
+		step = QObject::tr("2 of 3: ");
+		window.Stage(step + QObject::tr("running the first 3 minutes of your session of %1 again, counting")
+								.arg(began.isValid() ? QLocale().toString(began, QLocale::ShortFormat) : QDir(counted_session).dirName()));
+		window.Progress(0, kCountFrames, QObject::tr("%v of %m frames"));
+		const QString program = folder.filePath(ps2n::wizard::platform::Program(QStringLiteral("ps2n-host")));
+		say(QStringLiteral("run again, counting: %1 %2").arg(QDir::toNativeSeparators(program), arguments.join(QLatin1Char(' '))));
+		runner = new QProcess(&app);
+		runner->setProcessChannelMode(QProcess::MergedChannels);
+		runner->setWorkingDirectory(run);
+		runner->setProgram(program);
+		runner->setArguments(arguments);
+		auto pending = std::make_shared<QByteArray>();
+		QObject::connect(runner, &QProcess::readyRead, &app, [&, pending]() {
+			static const QRegularExpression frame_line(QStringLiteral("^ps2n-host: frame (\\d+) of \\d+$"));
+			*pending += runner->readAll();
+			for (qsizetype end; (end = pending->indexOf('\n')) >= 0;)
+			{
+				const QString line = QString::fromLocal8Bit(pending->left(end)).trimmed();
+				pending->remove(0, end + 1);
+				const QRegularExpressionMatch frame = frame_line.match(line);
+				if (frame.hasMatch())
+					window.Progress(frame.captured(1).toInt(), kCountFrames, QObject::tr("%v of %m frames"));
+				else if (!line.isEmpty())
+					say(line);
+			}
+		});
+		QObject::connect(runner, &QProcess::finished, &app, [&, raw](int code, QProcess::ExitStatus status) {
+			const QString rest = QString::fromLocal8Bit(runner->readAll()).trimmed();
+			if (!rest.isEmpty())
+				say(rest);
+			runner->deleteLater();
+			runner = nullptr;
+			if (stopped)
+				return;
+			// It ends at its last frame (the runtime's exit code 2), with what the
+			// four modules counted written.
+			const QStringList written = QDir(raw).entryList({QStringLiteral("*.profraw")}, QDir::Files);
+			if (status != QProcess::NormalExit || code != 2 || written.size() != 4)
+			{
+				profile_failed(QObject::tr("The session run again did not end at its 3 minutes with what the game's code did counted "
+										   "(exit code %1, %2 of 4 counts written).")
+								   .arg(code)
+								   .arg(written.size()));
+				return;
+			}
+			count_merge();
+		});
+		QObject::connect(runner, &QProcess::errorOccurred, &app, [&, program](QProcess::ProcessError error) {
+			if (error == QProcess::FailedToStart && !stopped)
+				profile_failed(QObject::tr("%1 did not start.").arg(QDir::toNativeSeparators(program)));
+		});
+		runner->start();
+	};
+
+	// What the four modules counted, put together by llvm-profdata: the counts.
+	count_merge = [&]() {
+		const QDir raw(count_dir.filePath(QStringLiteral("raw")));
+		window.Busy();
+		window.Stage(step + QObject::tr("putting what was counted together"));
+		const QString program = QDir(folder.filePath(QStringLiteral("toolchain"))).filePath(ps2n::wizard::platform::ProfileTool());
+		const QString part = counted + QStringLiteral(".part");
+		QStringList arguments = {QStringLiteral("merge"), QStringLiteral("-o"), QDir::toNativeSeparators(part)};
+		for (const QString& file : raw.entryList({QStringLiteral("*.profraw")}, QDir::Files))
+			arguments.push_back(QDir::toNativeSeparators(raw.filePath(file)));
+		say(QStringLiteral("%1 %2").arg(QDir::toNativeSeparators(program), arguments.join(QLatin1Char(' '))));
+		merger = new QProcess(&app);
+		merger->setProcessChannelMode(QProcess::MergedChannels);
+		merger->setProgram(program);
+		merger->setArguments(arguments);
+		QObject::connect(merger, &QProcess::finished, &app, [&, part](int code, QProcess::ExitStatus status) {
+			const QString output = QString::fromLocal8Bit(merger->readAll()).trimmed();
+			merger->deleteLater();
+			merger = nullptr;
+			if (stopped)
+				return;
+			if (!output.isEmpty())
+				say(output);
+			QFile::remove(counted);
+			if (status != QProcess::NormalExit || code != 0 || !QFile::rename(part, counted))
+			{
+				profile_failed(QObject::tr("What was counted could not be put together (llvm-profdata exit code %1).").arg(code));
+				return;
+			}
+			say(QStringLiteral("counted: %1").arg(QDir::toNativeSeparators(counted)));
+			// What the run was made with and from goes; the counts stay.
+			for (const char* dir : {"run", "raw", "objects", "modules"})
+				QDir(count_dir.filePath(QString::fromLatin1(dir))).removeRecursively();
+			compile_with_counts();
+		});
+		QObject::connect(merger, &QProcess::errorOccurred, &app, [&, program](QProcess::ProcessError error) {
+			if (error == QProcess::FailedToStart && !stopped)
+				profile_failed(QObject::tr("%1 did not start.").arg(QDir::toNativeSeparators(program)));
+		});
+		merger->start();
+	};
+
+	// 3: the modules compiled again with the counts, with objects of their own,
+	// which become the folder's.
+	compile_with_counts = [&]() {
+		step = QObject::tr("3 of 3: ");
+		window.Busy();
+		window.Stage(step + QObject::tr("compiling the game with what was counted"));
+		next_modules();
+		say(QStringLiteral("compiling the game with the counts into %1").arg(QDir::toNativeSeparators(modules)));
+		ps2n::wizard::PipelineInput input = input_for(modules);
+		input.compile_only = true;
+		input.profile = counted;
+		input.objects = QStringLiteral("objects-profiled");
+		profiled.start(input);
+	};
+
+	for (ps2n::wizard::Pipeline* p : {&counting, &profiled})
+	{
+		QObject::connect(p, &ps2n::wizard::Pipeline::stage, &app, [&](const QString& what) {
+			say(what);
+			window.Stage(step + what);
+		});
+		QObject::connect(p, &ps2n::wizard::Pipeline::progress, &app, [&](int done, int total) { window.Progress(done, total); });
+		QObject::connect(p, &ps2n::wizard::Pipeline::line, &app, [&](const QString& text) { say(text); });
+	}
+	QObject::connect(&counting, &ps2n::wizard::Pipeline::finished, &app, [&](bool ok, const QString& why) {
+		if (stopped)
+			return;
+		if (!ok)
+		{
+			profile_failed(why);
+			return;
+		}
+		count_run();
+	});
+	QObject::connect(&profiled, &ps2n::wizard::Pipeline::finished, &app, [&](bool ok, const QString& why) {
+		if (stopped)
+			return;
+		if (!ok)
+		{
+			profile_failed(why);
+			return;
+		}
+		if (!mark_ready())
+		{
+			profile_failed(QObject::tr("%1 cannot be written.").arg(QDir::toNativeSeparators(QDir(modules).filePath(QStringLiteral("ready")))));
+			return;
+		}
+		// Its objects are the folder's from now on, and its counts are kept with
+		// what the folder's sessions met, for every compile after.
+		QDir(work.filePath(QStringLiteral("objects"))).removeRecursively();
+		const bool objects = QDir(work).rename(QStringLiteral("objects-profiled"), QStringLiteral("objects"));
+		QFile::remove(own_profile);
+		const bool kept = QFile::rename(counted, own_profile);
+		say(QStringLiteral("compiled for how the game is played: ready for the game's next start%1")
+				.arg(objects && kept ? QString() : QStringLiteral(" (the objects or the counts could not be moved: the next compile compiles "
+																  "everything again)")));
+		if (kept)
+			QDir(count_dir.path()).removeRecursively();
+		profiling = false;
+		stop_watch.stop();
+		lock.unlock();
+		window.Ended(QObject::tr("Compiled for how you play it"), QObject::tr("%1's next start has it.").arg(recipe.title), true);
+		window.closed = [&app]() { app.exit(0); };
+		window.Bring();
+		QTimer::singleShot(3000, &app, [&app]() { app.exit(0); });
+	});
+
+	// A round's end, after a session: the game compiled for how it is played
+	// next, where that is wanted.
+	const auto done = [&]() {
+		if (profile_wanted())
+		{
+			start_profile();
+			return;
+		}
+		ended(0);
+	};
+
 	QObject::connect(&pipeline, &ps2n::wizard::Pipeline::finished, &app, [&](bool ok, const QString& why) {
 		if (stopped)
 			return;
@@ -441,19 +972,14 @@ int main(int argc, char* argv[])
 		if (pipeline.nothingNew())
 		{
 			say(QStringLiteral("nothing new: the modules have all the sessions met"));
-			ended(0);
+			done();
 			return;
 		}
-		// Ready for the launcher, which takes the newest such folder.
-		QSaveFile ready(QDir(modules).filePath(QStringLiteral("ready")));
-		QString names;
-		for (const char* kind : {"game", "bios", "vu", "iop"})
-			names += ps2n::wizard::platform::Module(QString::fromLatin1(kind)) + QLatin1Char('\n');
-		if (!ready.open(QIODevice::WriteOnly) || ready.write(names.toUtf8()) < 0 || !ready.commit())
+		if (!mark_ready())
 		{
 			// Not for the launcher to take: the next round compiles it all again.
 			QFile::remove(work.filePath(QStringLiteral("compiled-from.txt")));
-			failed(QObject::tr("%1 cannot be written.").arg(QDir::toNativeSeparators(ready.fileName())));
+			failed(QObject::tr("%1 cannot be written.").arg(QDir::toNativeSeparators(QDir(modules).filePath(QStringLiteral("ready")))));
 			return;
 		}
 		say(QStringLiteral("ready for the game's next start"));
@@ -465,7 +991,7 @@ int main(int argc, char* argv[])
 			round();
 			return;
 		}
-		ended(0);
+		done();
 	});
 
 	QTimer::singleShot(0, &app, round);

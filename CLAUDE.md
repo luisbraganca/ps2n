@@ -180,7 +180,12 @@ it: Windows' line tables have no discriminators); at the maintainer's word
 7.5%: after a session of at least 3 minutes, once per game, on a run again
 of its first 3 minutes without a window, never keeping the game from
 starting, measured on a second game (Gran Turismo 3) before it goes into a
-folder. The docs/app-log.md section "The speed step" has every number.**
+folder. Measured and built the same day, counted at clang's IR level
+(`-fprofile-generate`, 8.4% where the front end's gave 6.7%): through a
+folder's own path, after a session of the maintainer's, Jak and Daxter's
+round took 174 s and the game 8.0% less time, Gran Turismo 3's 95 s and
+3.6%; the same path runs on Linux under WSL 2, every test passing there and
+on Windows. The docs/app-log.md section "The speed step" has every number.**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -847,7 +852,10 @@ Decisions:
   the counts; Later puts it off to the next session's end and never keeps
   the game from starting (unlike new code, ADR 0040). Built and measured on
   a second game (Gran Turismo 3, the session's choice) before it goes into
-  a folder. It replaces ADR 0044's second part.
+  a folder. It replaces ADR 0044's second part. Built on 2026-11-21 at
+  clang's IR level (the session's choice, listed in the ADR with the others):
+  Jak and Daxter 8.0% less time after its folder's own round, Gran Turismo 3
+  3.6%.
 
 ## Layout, build and test
 
@@ -991,9 +999,12 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   `results.txt`. Batches run on a desktop of their own
   (`build\measure\hidden.ps1`), one at a time. `game.ps1 -FunctionsRan`
   (`ps2n-host -functions-ran`) writes the compiled functions a run ran, for
-  `lld-link /ORDER`; a module compiled with `-fprofile-instr-generate` and
-  linked with LLVM's profile runtime has its counts written by the host at
-  the run's end (`LLVM_PROFILE_FILE`). `game.ps1 -SampleProfile`
+  `lld-link /ORDER`; a module made to count what of its code runs (compiled
+  with `-fprofile-generate`, linked with LLVM's profile runtime and
+  `runtime/module_counts.cpp`, as a game's folder makes it: ADR 0045) has
+  its counts written by the host at the run's end (`ps2n-host -module-counts
+  <dir>`, with `-modules <dir>` to load such modules from elsewhere than
+  beside the host). `game.ps1 -SampleProfile`
   (`ps2n-host -sample-profile`) writes the profiler's samples of the modules
   (made with `-LineTables`) as a sampled profile for clang's
   `-fprofile-sample-use`: tried on 2026-11-21, it gave nothing that shows
@@ -1082,7 +1093,18 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   (`captures\functions-ran.txt`) and links the game's and the BIOS's
   modules in that order (ADR 0044: `/ORDER` on Windows,
   `--symbol-ordering-file` on Linux), a session that ran new ones having
-  the modules linked again. The game never starts with anything left to compile: before the
+  the modules linked again. Once for a game, after a session of at least
+  3 minutes (10,800 frames), `ps2n-remake` then compiles the game for how its
+  user plays it, in the same window (ADR 0045): the modules compiled to count
+  (`work\count`), the session's first 3 minutes run again with them by the
+  folder's runtime without a window (`-modules`, `-module-counts`,
+  `-progress`; the session's memory cards, NVRAM and settings copied into
+  `work\count\run`), the counts merged by the toolchain's `llvm-profdata`,
+  and the modules compiled again with them (`work\objects-profiled`, then the
+  folder's objects), the counts kept in `captures\profile.profdata`, which
+  every compile after takes. Later puts it off to another session's end; a
+  game started meanwhile stops it (`work\stop-profile`); when it fails,
+  `work\count\failed.txt` says why and it is not tried again. The game never starts with anything left to compile: before the
   runtime, the launcher runs `ps2n-remake --before-play`, which compiles
   what is left in the same window (and waits for a compile already
   running), and starts the game only when it ends with 0; Later there
