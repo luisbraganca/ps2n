@@ -674,6 +674,34 @@ h3 { font-size: 1.22rem; font-weight: 650; letter-spacing: -0.012em; line-height
 	.cards, .cards--2 { grid-template-columns: 1fr; }
 }
 
+/* ---- Download ---------------------------------------------------------------- */
+
+.dl { display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.dl__card { display: flex; flex-direction: column; }
+.dl__top { display: flex; align-items: flex-start; gap: 18px; margin-bottom: 20px; min-height: 5.2em; }
+.dl__icon { flex: none; width: 46px; height: 46px; color: var(--blue-text); overflow: visible; }
+.dl__top h3 { margin: 2px 0 4px; font-size: 1.4rem; }
+.dl__for { margin: 0; font-size: .95rem; color: var(--ink-2); }
+.dl__btn { align-self: flex-start; margin-bottom: 16px; }
+.dl__file { margin: 0 0 6px; font-size: .9rem; color: var(--ink-3); }
+.dl__file code { font-family: var(--mono); font-size: .86rem; color: var(--ink-2); }
+.dl__sum { margin: auto 0 0; font-family: var(--mono); font-size: .72rem; line-height: 1.5; color: var(--ink-3); word-break: break-all; }
+.dl__sum span { margin-right: 8px; color: var(--blue-text); letter-spacing: .06em; }
+.dl__more { display: grid; gap: 18px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 18px; }
+.dl__more .plain p { margin: 14px 0 0; }
+.dl__list { margin: 0; padding-left: 1.1em; }
+.dl__list li { margin-bottom: 6px; }
+.dl__list li::marker { color: var(--blue-text); }
+.dl__all { margin: 26px 0 0; text-align: center; font-size: .95rem; color: var(--ink-3); }
+
+@media (max-width: 1000px) {
+	.dl__more { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) {
+	.dl { grid-template-columns: 1fr; }
+	.dl__btn { align-self: stretch; }
+}
+
 /* ---- How it works: the pipeline and the machine ----------------------------- */
 
 .flow__label {
@@ -1157,6 +1185,12 @@ h3 { font-size: 1.22rem; font-weight: 650; letter-spacing: -0.012em; line-height
 .note:hover, .note.is-hot { border-top-color: var(--blue-text); background: rgba(0, 96, 252, .07); }
 .note h3 { font-size: 1.05rem; margin-bottom: 8px; }
 .note p { font-size: .95rem; }
+/* Four notes: in a row where there is room, two by two where less (and one
+   under another below, as three are). */
+.notes--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1180px) {
+	.notes--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 
 @media (max-width: 1000px) {
 	.xl8 { grid-template-columns: minmax(0, 1fr); }
@@ -1334,6 +1368,7 @@ h3 { font-size: 1.22rem; font-weight: 650; letter-spacing: -0.012em; line-height
 	border-radius: var(--radius);
 	background: var(--navy-2);
 }
+.chart--wide { grid-column: 1 / -1; }
 .chart h3 { font-size: 1.08rem; margin-bottom: 4px; }
 .chart__sub { font-size: .88rem; color: var(--ink-3); margin-bottom: 16px; }
 .legend {
@@ -1355,6 +1390,8 @@ h3 { font-size: 1.22rem; font-weight: 650; letter-spacing: -0.012em; line-height
 }
 .k-ps2n { background: var(--blue); }
 .k-stock { background: var(--stock); }
+/* PS2Native before a change, beside it after. */
+.k-before { background: rgba(0, 96, 252, .38); }
 
 .bars { width: 100%; border-collapse: collapse; font-size: .9rem; }
 .bars caption { text-align: left; }
@@ -1407,6 +1444,7 @@ h3 { font-size: 1.22rem; font-weight: 650; letter-spacing: -0.012em; line-height
 	transition: filter .2s;
 }
 .bar--ps2n .bar__fill { background: var(--blue); }
+.bar--before .bar__fill { background: rgba(0, 96, 252, .38); }
 .bar:hover .bar__fill, .bar:focus-visible .bar__fill { filter: brightness(1.28); }
 .bar__val { position: relative; z-index: 1; color: var(--ink); font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
 /* Where a value sits on the line at 1.00, the line gives way. */
