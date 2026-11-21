@@ -653,6 +653,11 @@ if(EE STREQUAL "ps2n")
 	if(DEFINED FUNCTIONS_RAN AND FUNCTIONS_RAN)
 		list(APPEND static -functions-ran "${WORK_DIR}/functions-ran.txt")
 	endif()
+	# The same samples a profile takes, as a sampled profile of the modules of
+	# compiled code for clang, when asked (game.ps1 -SampleProfile).
+	if(DEFINED SAMPLE_PROFILE AND SAMPLE_PROFILE)
+		list(APPEND static -sample-profile "${WORK_DIR}/sample-profile.txt")
+	endif()
 	if(DEFINED BIOS_STATIC AND BIOS_STATIC STREQUAL "off")
 		list(APPEND static -bios-static off)
 	endif()

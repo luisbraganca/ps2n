@@ -150,6 +150,10 @@ param(
     # Also write functions-ran.txt among the run's files: the compiled functions whose code ran, in the order they first
     # did, by the names the linker knows them by (ps2n-host -functions-ran), which a module's functions can be placed by.
     [switch]$FunctionsRan,
+    # Also write sample-profile.txt among the run's files: where the CPU thread was, about a thousand times a
+    # second, as a sampled profile of the modules of compiled code for clang's -fprofile-sample-use (ps2n-host
+    # -sample-profile). The modules need line tables (make-game.ps1 -LineTables).
+    [switch]$SampleProfile,
     [string]$BuildDir = 'build\windows-clang',
     # The runtime of a game's folder (scripts\windows\kit\make-game.ps1: games\<name>\ps2n-host.exe, the
     # game's modules beside it) in the place of the build tree's, to run a packaged game as it is, a session
@@ -349,6 +353,7 @@ if ($Replay) {
 }
 if ($TimeProfile) { $arguments += '-DPROFILE=1' }
 if ($FunctionsRan) { $arguments += '-DFUNCTIONS_RAN=1' }
+if ($SampleProfile) { $arguments += '-DSAMPLE_PROFILE=1' }
 if ($TimeProfile -and $ProfileFrom -gt 0) { $arguments += "-DPROFILE_FROM=$ProfileFrom" }
 if ($VuReport) { $arguments += '-DVU_REPORT=1' }
 if ($IopReport) { $arguments += '-DIOP_REPORT=1' }

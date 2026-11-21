@@ -170,11 +170,17 @@ interpreters made faster, Gran Turismo 3's first session takes 77.5 s
 where 108.8 s, and 6% less again
 where other games' folders give a new game the BIOS's kernel they met (the
 wizard, `BiosCapturesBeside`). A profile of another session gave Jak and
-Daxter 7.5% more and the placing of its functions 2.0%; at the
-maintainer's word a game's folder will learn from its user's own play, the
-order of its functions first, then a profile sampled while the game plays,
-each measured before it goes into a folder (ADR 0044). The docs/app-log.md
-section "The speed step" has every number.**
+Daxter 7.5% more; at the maintainer's word a game's folder learns from its
+user's own play (ADR 0044): the order of its functions, as its sessions ran
+them, is in since 2026-11-21 (about 0.4%, measured with care; a first link
+by hand had seemed to give 2.0%); a profile sampled while the game plays,
+tried the same day, gave nothing that shows (clang could place a quarter of
+it: Windows' line tables have no discriminators); at the maintainer's word
+(ADR 0045) a folder takes its profile by counting instead, which gave the
+7.5%: after a session of at least 3 minutes, once per game, on a run again
+of its first 3 minutes without a window, never keeping the game from
+starting, measured on a second game (Gran Turismo 3) before it goes into a
+folder. The docs/app-log.md section "The speed step" has every number.**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -823,13 +829,25 @@ Decisions:
   a game's folder learns from its user's own play, at the maintainer's word
   on 2026-11-20 ("1. Yes.", to the session's recommendation): first the
   order of the game's functions, as its sessions ran them, given to the
-  linker when the folder compiles after a session (2.0% on Jak and Daxter);
-  then a profile sampled while the game plays, given to the compiler (the
-  counted profile gave 7.5%), built and measured before it goes into a
-  folder. Each measured on the maintainer's sessions first; what a folder
-  learns stays in it. The order was built on 2026-11-21 (docs/app-log.md,
-  "The order of a folder's functions, built"); its Linux build and its time
-  through a folder are still to be done.
+  linker when the folder compiles after a session; then a profile sampled
+  while the game plays, given to the compiler (the counted profile gave
+  7.5%), built and measured before it goes into a folder. Each measured on
+  the maintainer's sessions first; what a folder learns stays in it. The
+  order was built on 2026-11-21, on Windows and Linux (docs/app-log.md, "The
+  order of a folder's functions, built"): about 0.4% on Jak and Daxter,
+  where a first link by hand had seemed to give 2.0%. The sampled profile,
+  tried the same day, gave 0.2% and goes into no folder (ADR 0045).
+- [ADR 0045](docs/adr/0045-a-games-folder-counts-its-profile-on-a-run-again-of-a-session-after-play.md):
+  a game's folder takes its profile by counting, not by sampling, at the
+  maintainer's word on 2026-11-21 ("1. Yes", to the session's
+  recommendation): the sampled profile gave 0.2%, the counted one 7.5% on
+  Jak and Daxter. After a session of at least 3 minutes, once per game, the
+  folder's compile compiles the modules to count, runs the session's first
+  3 minutes again with them without a window, and compiles them again with
+  the counts; Later puts it off to the next session's end and never keeps
+  the game from starting (unlike new code, ADR 0040). Built and measured on
+  a second game (Gran Turismo 3, the session's choice) before it goes into
+  a folder. It replaces ADR 0044's second part.
 
 ## Layout, build and test
 
@@ -975,7 +993,13 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   (`ps2n-host -functions-ran`) writes the compiled functions a run ran, for
   `lld-link /ORDER`; a module compiled with `-fprofile-instr-generate` and
   linked with LLVM's profile runtime has its counts written by the host at
-  the run's end (`LLVM_PROFILE_FILE`).
+  the run's end (`LLVM_PROFILE_FILE`). `game.ps1 -SampleProfile`
+  (`ps2n-host -sample-profile`) writes the profiler's samples of the modules
+  (made with `-LineTables`) as a sampled profile for clang's
+  `-fprofile-sample-use`: tried on 2026-11-21, it gave nothing that shows
+  (docs/app-log.md, "A profile sampled while the game plays, tried").
+  Clang's `-mllvm -sample-profile-check-record-coverage=100` says how much
+  of a sampled profile a file's functions took.
 - The compiled code in modules of its own (Phase 4, steps P4.1 and P4.2):
   `scripts\windows\build.ps1 -BuildDir build\windows-clang-module -Module on`
   with the main tree's game settings builds everything the host would hold

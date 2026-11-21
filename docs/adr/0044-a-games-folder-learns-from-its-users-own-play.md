@@ -51,3 +51,23 @@ before it goes into a game's folder; neither changes how time is counted
 (ADR 0011) or what a run does, every session run again still the session at
 every fingerprint; and what a folder learns from its user's play stays in
 that folder.
+
+## Measured since
+
+2026-11-21: the order, built into a game's folder, measured again with
+four rounds each on the same objects, gives Jak and Daxter about 0.4%, not
+the 2.0% above, whose two rounds without the order had run slow
+([docs/app-log.md](../app-log.md), "The order of a folder's functions,
+built (2026-11-21)"). It costs a relink after a session that ran new
+functions, and stays. The profile's 7.5% is the larger part of what a
+folder can learn.
+
+2026-11-21: the profile sampled while the game plays, built as a
+measurement (`ps2n-host -sample-profile`) and tried on Jak and Daxter, gives
+0.2%, within the noise: clang could place about a quarter of its records,
+and Windows' debugging format has no discriminators to place the rest by
+(docs/app-log.md, "A profile sampled while the game plays, tried
+(2026-11-21)"). It does not go into a folder. Counting after the session,
+on a run again of it with modules compiled to count, which gave the 7.5%,
+was put to the maintainer as a decision of its own, and takes this part's
+place ([ADR 0045](0045-a-games-folder-counts-its-profile-on-a-run-again-of-a-session-after-play.md)).

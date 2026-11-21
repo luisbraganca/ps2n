@@ -34,6 +34,14 @@ namespace ps2n::host::profile
 	/// at, from frame `first_frame` on, for the report's first lines.
 	bool Write(const char* path, uint32_t first_frame, uint32_t frames, double seconds);
 
+	/// Writes what the samples say of the compiled code in the four modules of
+	/// a game's folder, compiled with line tables, as a sampled profile in
+	/// LLVM's text format, for clang's -fprofile-sample-use (ADR 0044): for each
+	/// generated function, by the name the compiler gives it, how many samples
+	/// fell on each of its lines, counted from the line that declares it. False
+	/// when it cannot be written.
+	bool WriteSampleProfile(const char* path);
+
 	/// A compiled image the host holds: its id (ImageInfo::id) and how many
 	/// guest instructions its functions have.
 	struct ImageCode

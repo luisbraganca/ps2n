@@ -250,6 +250,7 @@ namespace
 		u32 frame_every = 0; // when not zero: the frame on display is also fingerprinted every so many frames
 		std::string pad_path; // a script of controller input for port 1
 		std::string profile_path; // where the report of where the CPU thread's time went is written
+		std::string sample_profile_path; // where the same samples are written as a sampled profile of the compiled code, for clang
 		std::string code_size_path; // where the report of how much host code the compiled images became is written
 		u32 profile_from = 1; // the frame from which the profile looks (startup left out when later than 1)
 		std::string vu_report_path; // where the report of what the vector units ran is written (vu_report.h)
@@ -559,6 +560,12 @@ namespace
 			"                     with the functions that had most of it. Windows only.\n"
 			"  -profile-from <n>  With -profile: look from frame n on, not from the first,\n"
 			"                     to leave out what comes before (a game's startup).\n"
+			"  -sample-profile <file>  Look as -profile does, and write to this file what\n"
+			"                     the samples say of the modules of compiled code, where\n"
+			"                     they have line tables, as a sampled profile in LLVM's\n"
+			"                     text format, for clang's -fprofile-sample-use: the\n"
+			"                     samples on each line of each generated function. With or\n"
+			"                     without -profile. Windows only.\n"
 			"  -vu-report <file>  Watch the core's two VU providers and write to this file\n"
 			"                     what was written into each VU's micro memory, where, with\n"
 			"                     how many different contents, at which addresses programs\n"
@@ -733,6 +740,8 @@ namespace
 			}
 			else if (is("-profile") && has_value)
 				o.profile_path = argv[++i];
+			else if (is("-sample-profile") && has_value)
+				o.sample_profile_path = argv[++i];
 			else if (is("-code-size") && has_value)
 				o.code_size_path = argv[++i];
 			else if (is("-vu-report") && has_value)
@@ -1080,7 +1089,8 @@ namespace
 		// A report on the host itself, which runs no machine.
 		if (!o.code_size_path.empty())
 		{
-			if (!o.boot_path.empty() || o.selftest || o.window || !o.profile_path.empty() || !ps2n::host::profile::Available())
+			if (!o.boot_path.empty() || o.selftest || o.window || !o.profile_path.empty() || !o.sample_profile_path.empty() ||
+				!ps2n::host::profile::Available())
 			{
 				std::fputs("ps2n-host: -code-size takes nothing else, and is not available on this platform yet\n", stderr);
 				return false;
@@ -1143,9 +1153,9 @@ namespace
 			std::fputs("ps2n-host: -input and -memcards are for a run without a window\n", stderr);
 			return false;
 		}
-		if (!o.profile_path.empty() && (o.selftest || !ps2n::host::profile::Available()))
+		if ((!o.profile_path.empty() || !o.sample_profile_path.empty()) && (o.selftest || !ps2n::host::profile::Available()))
 		{
-			std::fputs("ps2n-host: -profile is for a run of a program, and is not available on this platform yet\n", stderr);
+			std::fputs("ps2n-host: -profile and -sample-profile are for a run of a program, and are not available on this platform yet\n", stderr);
 			return false;
 		}
 		if ((!o.vu_report_path.empty() || !o.iop_report_path.empty()) && o.selftest)
@@ -1161,7 +1171,8 @@ namespace
 		for (std::string* path : {&o.boot_path, &o.bios_path, &o.data_dir, &o.out_path, &o.times_path, &o.log_path, &o.capture_path,
 				 &o.bios_capture_path, &o.functions_ran_path, &o.trace_path, &o.trace_against_path, &o.sync_path, &o.sync_against_path,
 				 &o.frame_path, &o.pad_path,
-				 &o.profile_path, &o.vu_report_path, &o.iop_report_path, &o.vu_programs_path, &o.vu_capture_path, &o.iop_capture_path,
+				 &o.profile_path, &o.sample_profile_path, &o.vu_report_path, &o.iop_report_path, &o.vu_programs_path, &o.vu_capture_path,
+				 &o.iop_capture_path,
 				 &o.record_dir, &o.sessions_dir, &o.input_path, &o.memcards_dir, &o.patch_archive})
 			Path::ToNativePath(path);
 
@@ -3146,7 +3157,7 @@ namespace
 		// the core may create are owned by this thread; keep its message queue
 		// served while the machine runs.
 		HANDLE handle = static_cast<HANDLE>(static_cast<void*>(cpu_thread));
-		if (!s_options.profile_path.empty() && !ps2n::host::profile::Start(handle))
+		if ((!s_options.profile_path.empty() || !s_options.sample_profile_path.empty()) && !ps2n::host::profile::Start(handle))
 			std::fputs("ps2n-host: cannot look at the CPU thread: there will be no profile\n", stderr);
 		for (;;)
 		{
@@ -3172,7 +3183,7 @@ namespace
 		watchdog.join();
 		ps2n::host::window::Destroy();
 
-		if (!s_options.profile_path.empty())
+		if (!s_options.profile_path.empty() || !s_options.sample_profile_path.empty())
 		{
 			// The CPU thread has ended: what it kept for itself can be read here.
 			ps2n::host::profile::Stop();
@@ -3180,10 +3191,15 @@ namespace
 			const bool looked = s_frames >= s_options.profile_from;
 			const double seconds = looked ? std::chrono::duration<double>(s_latest_frame_time - s_profile_start_time).count() : 0.0;
 			const u32 frames = looked ? s_frames - s_options.profile_from : 0;
-			if (ps2n::host::profile::Write(s_options.profile_path.c_str(), s_options.profile_from, frames, seconds))
-				std::fprintf(stderr, "ps2n-host: where the CPU thread's time went: %s\n", s_options.profile_path.c_str());
-			else
-				std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.profile_path.c_str());
+			if (!s_options.profile_path.empty())
+			{
+				if (ps2n::host::profile::Write(s_options.profile_path.c_str(), s_options.profile_from, frames, seconds))
+					std::fprintf(stderr, "ps2n-host: where the CPU thread's time went: %s\n", s_options.profile_path.c_str());
+				else
+					std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.profile_path.c_str());
+			}
+			if (!s_options.sample_profile_path.empty() && !ps2n::host::profile::WriteSampleProfile(s_options.sample_profile_path.c_str()))
+				std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_options.sample_profile_path.c_str());
 		}
 
 		if (!WriteGuestOutput())
@@ -3390,7 +3406,7 @@ static void WatchNewCode()
 void ps2n::host::OnGuestFrame()
 {
 	s_frames++;
-	const bool profiling = !s_options.profile_path.empty();
+	const bool profiling = !s_options.profile_path.empty() || !s_options.sample_profile_path.empty();
 	s_latest_frame_time = std::chrono::steady_clock::now();
 	if (s_frames == 1)
 	{

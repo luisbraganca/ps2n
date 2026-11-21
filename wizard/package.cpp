@@ -155,6 +155,17 @@ namespace ps2n::wizard
 				*error = QObject::tr("Cannot copy %1 into %2.").arg(QDir::toNativeSeparators(from), folder.path());
 				return false;
 			}
+			// With the time it was last written, which a copy on Linux does not
+			// keep (on Windows it does): the game's own recompile tells the
+			// objects the wizard compiled from another toolchain's by the
+			// toolchain's files' sizes and times (Pipeline::toolchainStamp), and
+			// would otherwise compile them all again after the first session.
+			QFile copied(to);
+			if (copied.open(QIODevice::ReadWrite))
+			{
+				copied.setFileTime(QFileInfo(from).lastModified(), QFileDevice::FileModificationTime);
+				copied.close();
+			}
 		}
 
 		// The BIOS image linked into the folder with the ROM1, ROM2 and EROM

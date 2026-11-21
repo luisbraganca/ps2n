@@ -1933,6 +1933,10 @@ compiled again from the same captures (`build\measure\flags.ps1`,
   against 69.86 and 70.60 s, 2.0% less, every run the session at every
   fingerprint. A folder that did this would place its functions by its
   user's own sessions: a profile of their play (ADR 0043, decision 4).
+  (Measured again on 2026-11-21, four rounds each on the same objects, it
+  is about 0.4%: the two unordered rounds here were slower than every other
+  round of the same folder, 68.7 to 69.8 s. "The order of a folder's
+  functions, built (2026-11-21)", below.)
 
 ### Stores of sixteen bytes, tried and taken out (2026-11-20)
 
@@ -2043,7 +2047,8 @@ instructions each ask the runtime's record of their block what to do,
 compiled code (1.4 to 1.7 times the time of PCSX2's in every game, about 2
 s of each session), the VU provider's work around each micro program
 (about 1.7 s of Jak and Daxter's), and a profile, which these modules lack
-(7.5% of Jak and Daxter's time) and the placing of their functions (2.0%).
+(7.5% of Jak and Daxter's time); the placing of their functions gives
+little (about 0.4%, measured on 2026-11-21).
 
 First sessions: Gran Turismo 3's 77.5 s where 108.8 s (29% less), and 6%
 less again where other games' folders have met the BIOS's kernel; Jak and
@@ -2086,8 +2091,103 @@ ADR 0044's first part, through a game's folder's own path:
   in a session of the folder goes into the folder's list, and the game's and
   the BIOS's modules are linked with it.
 
-Every test passes in both trees on Windows (535, 534). Not done yet, the
-maintainer playing on the development computer: the Linux build with it, the
-time of a folder made with a list against one made without (the 2.0% of
-"Two ways of compiling the same code" was measured by linking by hand), and
-a session played from a folder followed by its own compile.
+Every test passes in both trees on Windows (535, 534) and on Linux under
+WSL 2 (534, 534).
+
+What it gives, measured on Jak and Daxter's session, the folder made with
+`make-game.ps1` from its captures and the list another session's first
+9,000 frames ran (`build\measure\kit6\games\jak-o`, its functions read back
+from its symbols in the list's order: 1,999 of the first 2,000 one after
+another), against the same objects linked again without the list
+(`jak-u`), so that the two differ in where their functions are and in
+nothing else; four rounds each, which went first alternating:
+
+| Run | Round 1 | Round 2 | Round 3 | Round 4 | Mean |
+|---|---|---|---|---|---|
+| Without the order | 69.20 s | 69.38 s | 69.50 s | 69.32 s | 69.35 s |
+| In the order sessions ran them | 69.21 s | 69.22 s | 68.90 s | 68.85 s | 69.05 s |
+
+About 0.4% less, every run the session at every fingerprint: much less
+than the 2.0% of the link by hand, whose two rounds without the order were
+slower than every other round of that folder. Small, as the profile's 7.5%
+is not: what a profile gives is mostly not where the functions are.
+
+Through the folder's own path: a session of 900 frames played from a
+folder's launcher (`kit6\games\jak`, on a desktop of its own, muted) wrote
+the 2,261 compiled functions it ran; its `ps2n-remake` then added them to the
+folder's list, compiled the 17 files the session's new code changed, and
+linked the game's and the BIOS's modules "in the order the sessions ran
+them". On Linux the same (`build/kit-linux-adr44`, no window: the wizard
+and `ps2n-remake` on Qt's offscreen platform, the sessions runs without a
+window): Silent Hill 3 made with the wizard, a run's 1,639 functions added
+to the folder's list, the modules linked with it, the game's module opening
+with the list's functions in the list's order (1,489 of 1,490), and a run
+on them as the launcher puts them in place.
+
+Found on the way: on Linux, a game's folder's copy of the toolchain did not
+keep its files' times (a copy there does not; on Windows it does), so the
+folder's first recompile after a session took the wizard's objects for
+another toolchain's and compiled them all again (Silent Hill 3: 77 files,
+124 s). The copy now keeps them (`wizard/package.cpp`): made again, the
+folder's first recompile after a session compiled 0 of the 77 files and
+linked the modules in the sessions' order, in 8 s. Every test passes on
+Windows with it (535 in the module tree, which builds the wizard).
+
+### A profile sampled while the game plays, tried (2026-11-21)
+
+ADR 0044's second part, measured before anything goes into a folder. The
+runtime writes the samples its profiler takes (about a thousand a second)
+as a sampled profile in LLVM's text format (`ps2n-host -sample-profile`,
+`game.ps1 -SampleProfile`; `host/profile.cpp`, `WriteSampleProfile`): for
+each generated function of the four modules, by the name the compiler gives
+it, the samples on each of its lines, counted from the line that declares
+it, for clang's `-fprofile-sample-use`. Jak and Daxter's folder made with
+line tables (`build\measure\kit7\games\jak`), the first 9,000 frames of
+another of the maintainer's sessions run on it with the sampling (56.33 s:
+the sampling costs nothing that shows, where the counting took 146.93 s),
+3,061 functions and 19,047 samples in the profile; the folder made again
+with it (`jak-sp`), the two timed on the session timed throughout, four
+rounds each, which went first alternating:
+
+| Run | Round 1 | Round 2 | Round 3 | Round 4 | Mean |
+|---|---|---|---|---|---|
+| Without the profile | 69.29 s | 69.22 s | 68.42 s | 69.73 s | 69.17 s |
+| With the sampled profile | 69.02 s | 69.03 s | 68.91 s | 69.20 s | 69.04 s |
+
+0.2%, within the noise, where the counted profile gave 7.5%. Clang says why
+(`-mllvm -sample-profile-check-record-coverage=100` on the file that holds
+the hottest function): it could place 216 of the profile's 846 records for
+that file's functions (19 of 145 for `fn_00721F48`), and the same profile
+moved a line either way does no better (300 and 259): not an offset, but
+lines it cannot place. My reading, not measured further: clang keys a
+sampled profile by line and by discriminator, the number that tells apart
+the blocks on one line, and the line tables of Windows' debugging format
+(CodeView) have no discriminators, while a generated line is mostly a macro
+of several blocks. More samples would not change that.
+
+What does give the counted profile's 7.5% without making play slower:
+counting not while the game plays but after, on a run again of the
+session the folder has written down (deterministic: the session at every
+fingerprint), with modules compiled to count, and compiling the folder
+again with the counts. The 7.5% came from 9,000 frames of another session:
+a few minutes of a session counted once would do. Not built: it is not
+what ADR 0044 named, and is put to the maintainer, with its cost (on the
+development computer, for Jak and Daxter, the folders made with
+`make-game.ps1`: the folder compiled to count, 98 s; the run again, 147 s
+for 9,000 frames, two and a half minutes of play; the folder compiled with
+the counts, 63 s; longer on a slower computer), and what it adds to a
+game's folder: LLVM's `llvm-profdata` (5.9 MB on Windows) and its profile
+runtime (0.15 MB).
+
+### The maintainer's answer (2026-11-21)
+
+Asked whether a game's folder should take its profile by counting on a run
+again of part of a session after play, instead of sampling while the game
+plays, with the session's recommendation (once per game, after a session of
+at least 3 minutes; never keeping the game from starting, Later putting it
+off to the next session's end; measured on a second game before it goes into
+a folder), the maintainer answered "1. Yes"
+([ADR 0045](adr/0045-a-games-folder-counts-its-profile-on-a-run-again-of-a-session-after-play.md)),
+and "2. Commit and push" to committing what had been done since ADR 0044.
+Every test passes with it on Windows (535, 534) and on Linux under WSL 2
+(534, 534).

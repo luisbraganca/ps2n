@@ -506,6 +506,151 @@ namespace ps2n::host::profile
 		}
 	}
 
+	namespace
+	{
+		// The name the compiler gave the function that begins at `address`, as
+		// the module's public symbols have it, decorated: what a sampled profile
+		// names a function by.
+		std::string DecoratedName(HANDLE process, u64 address)
+		{
+			const DWORD options = SymGetOptions();
+			SymSetOptions((options & ~static_cast<DWORD>(SYMOPT_UNDNAME)) | SYMOPT_PUBLICS_ONLY);
+			char buffer[sizeof(SYMBOL_INFO) + 1024] = {};
+			SYMBOL_INFO* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
+			symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+			symbol->MaxNameLen = 1023;
+			DWORD64 displacement = 0;
+			std::string name;
+			if (SymFromAddr(process, address, &displacement, symbol) && displacement == 0)
+				name = symbol->Name;
+			SymSetOptions(options);
+			return name;
+		}
+
+		// The line of a generated file that declares the function named `name`
+		// (its name and an opening parenthesis, the line not a declaration that
+		// ends in a semicolon), the nearest at or above `line`: a function's
+		// lines are counted from it in a sampled profile. 0 when there is none.
+		u32 DeclarationLine(const std::string& file, u32 line, const std::string& name)
+		{
+			const std::string opening = name + "(";
+			for (u32 n = line; n > 0; n--)
+			{
+				const std::string* text = SourceLine(file, n);
+				if (!text)
+					return 0;
+				if (text->find(opening) == std::string::npos)
+					continue;
+				size_t end = text->find_last_not_of(" \t\r");
+				if (end != std::string::npos && (*text)[end] != ';')
+					return n;
+			}
+			return 0;
+		}
+	} // namespace
+
+	bool WriteSampleProfile(const char* path)
+	{
+		std::unordered_map<u64, u64> by_address;
+		for (const u64 address : s_samples)
+			by_address[address]++;
+
+		const HANDLE process = GetCurrentProcess();
+		SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_FAIL_CRITICAL_ERRORS | SYMOPT_LOAD_LINES);
+		if (!SymInitialize(process, nullptr, TRUE) && GetLastError() != ERROR_INVALID_PARAMETER)
+			return false;
+
+		// The functions the samples fell in, by where they begin. Only those of
+		// the generated files: what of the runtime's headers a module did not
+		// inline is not the game's code, and code a header inlined is on the line
+		// of its call (CodeView's line tables).
+		struct Function
+		{
+			std::string name;
+			u32 declared = 0;
+			u64 total = 0;
+			std::map<u32, u64> lines;
+		};
+		std::unordered_map<u64, Function> functions;
+		u64 counted = 0, passed_over = 0;
+		for (const auto& [address, count] : by_address)
+		{
+			IMAGEHLP_MODULE64 module = {};
+			module.SizeOfStruct = sizeof(module);
+			if (!SymGetModuleInfo64(process, address, &module))
+				continue;
+			if (_stricmp(module.ModuleName, "ps2n-game") != 0 && _stricmp(module.ModuleName, "ps2n-bios") != 0 &&
+				_stricmp(module.ModuleName, "ps2n-vu") != 0 && _stricmp(module.ModuleName, "ps2n-iop") != 0)
+				continue;
+			char buffer[sizeof(SYMBOL_INFO) + 1024] = {};
+			SYMBOL_INFO* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
+			symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+			symbol->MaxNameLen = 1023;
+			DWORD64 displacement = 0;
+			IMAGEHLP_LINE64 line = {};
+			line.SizeOfStruct = sizeof(line);
+			DWORD column = 0;
+			if (!SymFromAddr(process, address, &displacement, symbol) || !SymGetLineFromAddr64(process, address, &column, &line) ||
+				!line.FileName)
+			{
+				passed_over += count;
+				continue;
+			}
+			std::string file(line.FileName);
+			for (char& c : file)
+				c = (c == '\\') ? '/' : c;
+			if (file.find("/generated/") == std::string::npos)
+			{
+				passed_over += count;
+				continue;
+			}
+			auto [it, added] = functions.try_emplace(symbol->Address);
+			Function& f = it->second;
+			if (added)
+			{
+				std::string short_name(symbol->Name);
+				const size_t colon = short_name.rfind("::");
+				if (colon != std::string::npos)
+					short_name = short_name.substr(colon + 2);
+				f.name = DecoratedName(process, symbol->Address);
+				f.declared = DeclarationLine(line.FileName, line.LineNumber, short_name);
+			}
+			if (f.name.empty() || f.declared == 0 || line.LineNumber < f.declared)
+			{
+				passed_over += count;
+				continue;
+			}
+			f.lines[line.LineNumber - f.declared] += count;
+			f.total += count;
+			counted += count;
+		}
+
+		std::FILE* fp = std::fopen(path, "wb");
+		if (!fp)
+			return false;
+		// LLVM's text format: "name:total:head", then " offset: samples" for each
+		// line. The head, how often the function was entered, is taken as the
+		// samples of its first line that has any.
+		std::vector<const Function*> order;
+		for (const auto& [start, f] : functions)
+		{
+			if (f.total)
+				order.push_back(&f);
+		}
+		std::sort(order.begin(), order.end(), [](const Function* a, const Function* b) { return a->total > b->total; });
+		for (const Function* f : order)
+		{
+			std::fprintf(fp, "%s:%llu:%llu\n", f->name.c_str(), static_cast<unsigned long long>(f->total),
+				static_cast<unsigned long long>(f->lines.begin()->second));
+			for (const auto& [offset, count] : f->lines)
+				std::fprintf(fp, " %u: %llu\n", offset, static_cast<unsigned long long>(count));
+		}
+		std::fclose(fp);
+		std::fprintf(stderr, "ps2n-host: a sampled profile of the compiled code: %zu functions, %llu samples (%llu passed over): %s\n",
+			order.size(), static_cast<unsigned long long>(counted), static_cast<unsigned long long>(passed_over), path);
+		return true;
+	}
+
 	bool Write(const char* path, uint32_t first_frame, uint32_t frames, double seconds)
 	{
 		std::FILE* fp = std::fopen(path, "wb");
@@ -925,6 +1070,11 @@ namespace ps2n::host::profile
 	}
 
 	bool Write(const char* path, uint32_t first_frame, uint32_t frames, double seconds)
+	{
+		return false;
+	}
+
+	bool WriteSampleProfile(const char* path)
 	{
 		return false;
 	}
