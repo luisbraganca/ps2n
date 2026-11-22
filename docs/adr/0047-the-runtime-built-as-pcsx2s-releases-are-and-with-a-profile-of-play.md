@@ -73,7 +73,8 @@ I'll change it", "5. Yes", "6. Yes", "7. Ok do it".
    defect is, when it shows and how it is seen, and that an AI session found
    it. Meanwhile PS2Native changes nothing of PCSX2 for it; the three
    comparisons stay off for a runtime built with link-time optimization, and
-   run where it is built without.
+   run where it is built without. The maintainer opened the issue the same
+   day: PCSX2's issue 15223.
 5. **What was built and measured is committed and pushed.**
 6. **A folder counts its profile after a session of 3 minutes of the game's
    own time:** 9,000 frames of a game that runs at 50 frames a second, 10,800

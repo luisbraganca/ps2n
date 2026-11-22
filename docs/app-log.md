@@ -2901,7 +2901,8 @@ its recommendation for each. Their answers: "1. Yes", "2. Yes", "3. Yes",
 4. **The maintainer tells PCSX2 of the defect themselves.** The session wrote
    no text for it
    ([ADR 0010](adr/0010-pcsx2-fix-goes-upstream-through-the-maintainer.md)),
-   and gave where the defect is, when it shows and how it is seen.
+   and gave where the defect is, when it shows and how it is seen. They
+   opened it the same day: PCSX2's issue 15223.
 5. **Committed and pushed.**
 6. **A folder counts its profile after a session of 3 minutes of the game's
    own time,** 9,000 frames at 50 frames a second, where it took 10,800 for
@@ -3364,3 +3365,288 @@ same way. None of the seven has counts: each counts after its next session of
 3 minutes of the game's own time, Killzone's among them now. A seventh folder
 in `build\kit\games`, `SLES_505.39`, one of the session's own early checks, is
 not a game's folder to the wizard (no `make.txt`) and stays as it is.
+
+## Linux's speed (ADR 0049, ADR 0050)
+
+The maintainer's "5. After" (ADR 0049): why a compiled game takes more than
+stock PCSX2's time on Linux is looked for once 0.2 is out. What was known:
+under WSL 2, Jak and Daxter's session `20261119-110909` (8,357 frames, nothing
+drawn) took 76.5 s on stock PCSX2 and 79.4 s compiled, with the folder's own
+counts: 1.05 times stock PCSX2's time, where Windows takes 55.7 s and 54.8 s,
+0.98.
+
+### The runtime's profile, on Linux too (2026-11-22)
+
+`ps2n-host -profile` looked at the CPU thread on Windows only. On Linux now
+(`host/profile.cpp`): a thread of the profile's own wakes every millisecond
+and, when the CPU thread has run for most of it by its own processor time,
+sends it a signal, whose handler notes where it was and the six words on top
+of its stack; a thread that waits is left alone. The names come from the
+symbol tables of the files the process has loaded, so there are no lines: the
+report says where the time went by kind of code and by function, for compiled
+code by function and offset, and for the system's functions by what called
+them, as far as the stack's top says, with where in the host's file the call
+returns to, for `llvm-symbolizer --inlines` to say what was compiled into
+there. `tests/guest_test.cmake -DPROFILE=1` asks for it, as on Windows. (A
+first version used a timer of the thread's own processor time: this kernel
+looks at those at its tick, 250 times a second.)
+
+### Where the time goes, Linux beside Windows (2026-11-22)
+
+One profiled run of each, as 0.2 has them, in seconds (on Windows a sample is a
+millisecond of the clock, on the fast cores; on Linux a millisecond the thread
+ran, which it did for 99.9% of the run):
+
+| Seconds | Windows, stock | Windows, compiled | Linux, stock | Linux, compiled |
+|---|---:|---:|---:|---:|
+| The whole run | 56.2 | 56.2 | 75.1 | 79.8 |
+| Code PCSX2 generated | 27.3 | | 27.8 | |
+| The game's compiled code | | 9.3 | | 11.4 |
+| The compiled micro code | | 15.7 | | 17.4 |
+| The IOP's compiled code | | 3.5 | | 4.7 |
+| PS2Native's runtime and PCSX2's core | 21.9 | 20.3 | 23.6 | 21.6 |
+| The system's libraries and the kernel | 5.5 | 5.8 | 21.7 | 22.8 |
+| Not identified | 1.5 | 1.6 | 1.8 | 1.8 |
+
+- **Under WSL 2 more than a quarter of either run is one function of the
+  system's, `sem_post`,** which wakes a thread that waits: 19.6 s of stock
+  PCSX2's 75.1 s, 20.7 s of the compiled game's 79.8 s. On Windows its
+  counterpart, `ZwReleaseSemaphore`, takes 3.3 s and 3.6 s.
+- **Whose calls they are** (the stack's top, then `llvm-symbolizer`): 17.7 s
+  of stock PCSX2's and 18.4 s of the compiled game's come from
+  `vifCode_STRow`, through `VU_Thread::WriteRow` and `VU_Thread::KickStart`
+  (`pcsx2/Vif_Codes.cpp:667`, `pcsx2/MTVU.cpp:542` and `:427`): PCSX2's VU
+  thread, which neither run uses. The rest, about 2 s, wakes the GS thread
+  for its packets.
+- **The compiled code takes longer on Linux, kind by kind,** where the code
+  PCSX2's recompilers generate takes the same: the game's 23% more, the micro
+  code 11%, the IOP's 34%.
+
+### What costs more inside WSL 2 than on Windows itself: a probe (2026-11-22)
+
+The same small measurements built by the same compiler (clang 22.1.3) for both
+and run on this computer (`build\measure\probe\probe.c`): calls through a
+pointer to code packed tight and to code a page apart, in an order that
+repeats and in one that does not; reads of a byte a page; and waking a thread
+that waits.
+
+| | Windows | WSL 2 |
+|---|---:|---:|
+| A call through a pointer, 2,048 places packed tight | 6.4 ns | 6.9 ns |
+| The same, a page apart: 2,048 pages | 26.6 ns | 26.2 ns |
+| 8,192 pages (32 MB of code) | 106 ns | 115 ns |
+| 131,072 pages (512 MB) | 145 ns | 192 ns |
+| A call whose place cannot be foreseen, of 1,024 | 6.7 ns | 7.0 ns |
+| A read of one byte a page, 131,072 pages | 9.1 ns | 9.9 ns |
+| Waking a thread that waits: the call alone | 1.2 µs | 7.2 µs |
+| The same, until the thread has answered | 4.7 µs | 22 µs |
+
+- **Waking a thread costs six times as much inside WSL 2:** 7.2 µs where
+  1.2 µs. At that price the 17.7 s are about 2.4 million wakes, 290 a frame,
+  which on Windows come to 3 s: what its profile has.
+- **Code and data cost the same on both** until they spread over more than
+  the 8 MB the processor's second table of pages reaches; beyond, code costs
+  8% more inside WSL 2 at 32 MB and a third more at 512 MB.
+- A busy thread inside WSL 2 runs on a fast core: a loop that only the clock's
+  rate bounds took 1.17 ns a turn there, 5.1 GHz (a slow core's 4.0 GHz would
+  make it 1.5 ns).
+
+### PCSX2 wakes its VU thread at every STROW and STCOL of VIF1 (2026-11-22)
+
+PCSX2 can carry VU1 out on a thread of its own (its "MTVU" speed hack), which
+PS2Native has fixed off (`vuThread`, `host/game_settings.h`): VU1's micro code
+is compiled code's, on the CPU thread. The thread exists all the same, asleep.
+And two of VIF1's commands, STROW and STCOL, which set the row and the column
+an unpack fills in, are mirrored into that thread's own copy of them whether
+it is in use or not: `vifCode_STRow` and `vifCode_STCol` (`pcsx2/Vif_Codes.cpp`),
+and a write of the row and column registers (`pcsx2/Vif.cpp`), call
+`VU_Thread::WriteRow` and `WriteCol` (`pcsx2/MTVU.cpp`), which put a command
+into the thread's queue and wake it (`KickStart`). The thread wakes, copies
+16 bytes and goes back to sleep. Every other use of the thread in those files
+is under `THREAD_VU1`. Jak and Daxter sends about 290 of these commands a
+frame.
+
+**A trial without it,** PCSX2's source not touched: a copy of the submodule in
+the build tree (`build/pcsx2-trial`), where the ten calls are made only when
+the thread is in use (`&& THREAD_VU1`), built in trees of its own
+(`build.sh --pcsx2-source`, which the Linux script now has as `build.ps1` has
+`-Pcsx2Source`). On Linux, three rounds in turns, every run the session at
+every one of its 167 fingerprints:
+
+| Jak and Daxter, Linux under WSL 2 | Seconds | Rounds |
+|---|---:|---|
+| Stock PCSX2 | 75.43 | 74.78, 75.69, 75.82 |
+| Stock PCSX2 without the wakes | 54.06 | 53.98, 54.04, 54.17 |
+| The compiled game | 79.52 | 79.31, 79.76, 79.49 |
+| The compiled game without the wakes | 56.73 | 56.83, 56.69, 56.66 |
+
+- **Without the wakes both take 28% less time under WSL 2:** 21.4 s and
+  22.8 s less, more than the 17.7 s and 18.4 s the calls themselves took.
+- **Stock PCSX2 inside WSL 2 then takes what it takes on Windows** (54.1 s;
+  Windows, with its own wakes, 55.7 s), and in its profile the code PCSX2
+  generates, PCSX2's core and the compiled micro code take what they take on
+  Windows (27.0 s, 21.9 s, 15.7 s). What was slower in them was what a wake
+  leaves behind in the processor's caches, 30,000 times a second.
+- **The compiled game's distance to stock PCSX2 stays:** 1.05 times its time
+  with the wakes and without. What is left of it is in the game's compiled
+  code (11.1 s where Windows 9.3 s) and the IOP's (4.4 s where 3.5 s).
+
+### What Linux's compiler made of the same code (2026-11-22)
+
+One generated file of the game (`game_outside_part003.cpp`, 452 functions)
+compiled by the same compiler for both systems, as each one's folder compiles
+it, without counts (`clang --driver-mode=cl --target=x86_64-pc-windows-msvc`
+makes Windows's on Linux): 8.8% more code for Linux. Two causes, both in how
+Linux passes values between functions:
+
+- **The 128-bit instructions' lanes.** `ops_mmi.h` writes them as loops over a
+  register's lanes, held in a small struct (`Lanes`, 16 bytes) that a helper
+  returns by value, and leaves it to the compiler to make host SIMD of the
+  loops. Windows returns 16 bytes through memory. Linux returns them in two
+  general registers, and the compiler, left to put the lanes together again
+  out of two 64-bit values, did not: in `fn_00721160`, PSRLH and PMINH came
+  out a lane at a time, with eight 16-bit stores read back as one register,
+  where Windows's build has `psrlw` and `pminsw`. That function took 0.63 s
+  of the run on Linux and 0.31 s on Windows. **Kept:** `Lanes` has a
+  destructor that does nothing, with which it goes through memory on Linux
+  too; Linux's build then has the same instructions, and the function takes
+  0.31 s. (Windows's build of the file is the same size to the byte with it.)
+- **The registers a call keeps.** Windows's convention keeps xmm6 to xmm15 for
+  the caller, Linux's none, so compiled code that holds FPU and VU0 values in
+  them saved them around every call of the runtime: the worst function,
+  `fn_007C324C`, was 7,175 instructions on Linux where 5,149 on Windows, with
+  1,080 saves of an SSE register where 12. **Tried and taken out:** the
+  runtime's 33 functions that compiled EE code calls given Windows's
+  convention on Linux (clang's `ms_abi`). The function came to 5,185
+  instructions and the game's module to 36.4 MB from 38.1 MB, but what
+  compiled code no longer saved, the runtime's functions now saved themselves
+  at every call: in the profile the game's code took 0.9 s less with both
+  changes, and the runtime's functions for loads, stores and VU0 calls 0.3 s
+  more; the whole run 80.09 s against stock PCSX2's 76.34 s (1.049), where
+  79.52 s against 75.43 s before (1.054). The calls are on ways seldom taken,
+  and the compiler had put the saves there.
+
+### The measurement folder's own micro code (2026-11-22)
+
+The Linux run interpreted 28 of VU1's 1,776 blocks (4.7 million of 1,738
+million block runs, 0.7 s), where the Windows run interprets none: the Linux
+folder was made from the Windows folder's captures, and the plans of those
+blocks differ between the two systems (60,508 steps where 60,489). A user's
+folder compiles them after its first session, as anything a session meets;
+the measurement's had not played. So 20,000 frames of the session it counted
+on, not the one timed, were run again from it, what it interpreted put into
+its captures (1,750 of VU1's blocks, from 1,722) and compiled (17 of 128
+files); the timed run then interprets none.
+
+### Code on large pages, tried and taken out (2026-11-22)
+
+The modules' code and the runtime's own moved onto the processor's 2 MB pages
+when a run starts (memory of no file that asks for large pages, moved over the
+file's with `mremap`: 32 of the game's 34 MB, 2 of the IOP's 4.7 MB, 10 of the
+runtime's 13 MB). Three rounds in turns: stock PCSX2 76.14 s, and 75.23 s
+with the runtime's code on large pages; the compiled game 78.40 s, 78.20 s
+with its modules' code on them, 78.90 s with the runtime's as well. Nothing
+for the compiled game: taken out.
+
+### Where Linux stands (2026-11-22)
+
+| Jak and Daxter, Linux under WSL 2 | Stock PCSX2 | Compiled | Times stock PCSX2's time |
+|---|---:|---:|---:|
+| As 0.2 has it | 75.43 s | 79.52 s | 1.05 |
+| With the lanes, and the folder's own micro code | 76.14 s | 78.40 s | 1.03 |
+| Without PCSX2's wake of its VU thread (a trial: not in) | 54.06 s | 56.73 s | 1.05 |
+
+(The rounds of the second line: 75.79, 75.79, 76.84 and 78.05, 78.83, 78.31,
+every run the session at every one of 167 fingerprints.)
+
+- **What is left, 3%, is in the game's compiled code and the IOP's,** and its
+  cause was not found. The IOP's blocks are the same instructions on both
+  systems and do the same work (324 million block runs of 1,810 million
+  instructions), in 4.4 s where 3.5 s. Looked at and ruled out: the calling
+  convention and the pages the code is on (above); what the kernel does against
+  speculation (nothing on jumps in a program's own code); which of the
+  processor's cores the run is on (a fast one); what lies beside the IOP's and
+  the EE's registers in the runtime's data (nothing another thread writes).
+- **The larger matter is not Linux's:** PCSX2's wake of a thread that is not
+  in use, which costs both runs 28% inside WSL 2. It is put to the maintainer
+  (below), with what it costs on Windows.
+
+### The wake on Windows, game by game (2026-11-22)
+
+The same trial on Windows (`build\measure\vif-trial.ps1`: `build\pcsx2-trial`,
+the trees `build\windows-clang-trial` and `-trial-stock`, kit13's folders with
+those runtimes), each game's timed session, two rounds in turns, every run
+the session at every fingerprint written down. Means, in seconds:
+
+| | Stock PCSX2 | Without the wakes | The compiled game | Without the wakes |
+|---|---:|---:|---:|---:|
+| Jak and Daxter | 56.20 | 51.40 | 55.10 | 50.21 |
+| Gran Turismo 3 | 21.10 | 20.72 | 21.00 | 20.97 |
+| Agent Under Fire | 26.76 | 27.45 | 26.94 | 26.93 |
+| Killzone | 43.89 | 43.99 | 40.69 | 40.81 |
+
+(The rounds, in that order of columns: 56.14, 56.25; 51.25, 51.54; 54.56,
+55.64; 49.89, 50.53. 21.10, 21.09; 20.62, 20.81; 21.03, 20.96; 20.85, 21.08.
+26.70, 26.82; 27.27, 27.63; 26.76, 27.11; 26.78, 27.07. 43.89, 43.88; 43.68,
+44.29; 40.67, 40.70; 40.65, 40.96.)
+
+- **Jak and Daxter takes 9% less without the wakes on Windows too,** stock
+  PCSX2 (8.5%) and the compiled game (8.9%) alike: more than the 3.3 s and
+  3.6 s the calls themselves take there. Against stock PCSX2 as it is
+  released, the compiled game without them takes 0.89 times its time, where
+  0.98.
+- **The other three games do not change:** they send few of these commands.
+  (Their stock PCSX2 from the trial's tree differs from the other tree's by
+  up to 2.6% either way, Agent Under Fire's the wrong way: two builds of the
+  same code, without a profile, laid out differently.)
+- **PCSX2's source today has the same lines** (`master` read on 2026-11-22),
+  and none of its issues or pull requests mentions them (three searches).
+
+**Put to the maintainer:** whether PS2Native's own builds leave those wakes
+out, which would be the first change it carries to PCSX2's code (the
+submodule as it is, the change applied to a copy when the runtime is built,
+stock PCSX2 timed without it as before); and whether PCSX2 is told. Answered
+the same day, yes to both ("The maintainer's answers", below).
+
+### The tests, with what is kept (2026-11-22)
+
+What is kept of the day: the profile on Linux (`host/profile.cpp`, and the
+host starting it there), the lanes' struct (`ops_mmi.h`), `build.sh
+--pcsx2-source`. Every test with it: on Windows 532 of 532 in the tree
+releases are made from (the three comparisons of `dma/vif/stcycl` not run) and
+534 of 534 in the development tree; on Linux 531 of 531 and 534 of 534. On
+Windows the runtime and the modules of that tree are the size they were, to
+the byte.
+
+### The maintainer's answers (2026-11-22, ADR 0050)
+
+To the four decisions put with the above: "1. Yes", with their reason; "2.
+Yes, write an issue as a guide I'll write it myself."; "3. Yes"; "Stop."
+
+- **PS2Native's builds leave PCSX2's wakes of its VU thread out,** the first
+  change PS2Native carries to PCSX2's code: a patch in this repository,
+  applied to a copy of PCSX2's source when the runtime is built, the
+  submodule as it is, stock PCSX2 timed as released. Built next.
+- **The maintainer tells PCSX2 themselves.** Asked for an issue written as a
+  guide, the session wrote none (ADR 0010) and gave where it is, how it is
+  seen and what limits it (ADR 0050 has all three).
+- **Committed and pushed.**
+- **The last 3% on Linux is left for now.**
+
+### What "stock PCSX2" has had switched off: its VU thread (2026-11-22)
+
+Found while the answers were written down:
+
+- **PCSX2 switches its VU thread on by default** on a computer with three
+  processor cores or more, on Windows and on Linux
+  (`VMManager::SetHardwareDependentDefaultSettings`, `pcsx2/VMManager.cpp`).
+  With it on, the thread is in use and the STROW and STCOL commands are its
+  work: the wakes cost where it is off. That is PS2Native, always, and stock
+  PCSX2 on a computer of two cores or where its user switched it off.
+- **Every run of `ps2n-host` has had that thread off, stock PCSX2's among
+  them** (`host/main.cpp`: "VU1 stays on the CPU thread so that runs
+  repeat"). "Stock PCSX2's time" in these logs is the time of PCSX2's
+  recompilers with VU1 carried out on the CPU thread, as PS2Native carries
+  it out. Against stock PCSX2 with its VU thread on, as most of its users
+  have it, no compiled game has been timed. Put to the maintainer, with a
+  measurement to come.

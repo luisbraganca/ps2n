@@ -46,6 +46,9 @@
 #   --module <on|off|imports>  the compiled code in modules of its own (ps2n-game.so and the
 #                              others beside the host; docs/phase4-proposal.md, P4.1 and P4.2)
 #   --wizard <on|off>          the wizard and ps2n-remake (P4.5, P4.6)
+#   --pcsx2-source <dir>       another PCSX2 source tree in the place of the pinned submodule, in
+#                              a build tree of its own (--build-dir): to try a newer PCSX2, or a
+#                              change to PCSX2, against the tests here
 #
 # The default target is ps2n-host (with the modules, and the wizard, where the
 # tree builds them). Each game, BIOS and capture option is remembered by the
@@ -62,6 +65,7 @@ llvm="$root/deps/llvm-22.1.3-linux/bin"
 
 reconfigure=0
 tools_only=0
+other_pcsx2=0
 targets=()
 settings=()
 
@@ -80,13 +84,21 @@ while [ "$#" -gt 0 ]; do
 		--tools-only) tools_only=1 ;;
 		--build-dir|--game|--game-more|--game-capture|--bios|--bios-capture|--vu-capture|--vu-selftest-capture|\
 		--iop-capture|--iop-selftest-capture|--pgo|--pgo-data|--lto|--module|--wizard|\
-		--runtime-lto|--runtime-pgo|--runtime-pgo-data)
+		--runtime-lto|--runtime-pgo|--runtime-pgo-data|--pcsx2-source)
 			if [ "$#" -lt 2 ]; then
 				echo "$1 needs a value" >&2
 				exit 1
 			fi
 			case "$1" in
 				--build-dir) build="$(realpath -m "$2")" ;;
+				--pcsx2-source)
+					pcsx2="$(realpath "$2")"
+					other_pcsx2=1
+					if [ ! -f "$pcsx2/pcsx2/CMakeLists.txt" ]; then
+						echo "$pcsx2 is not a PCSX2 source tree" >&2
+						exit 1
+					fi
+					;;
 				--game) settings+=("-DPS2N_GAME_ELF=$(path_of "$2")") ;;
 				--game-more)
 					more=""
@@ -163,6 +175,10 @@ if [ "${#targets[@]}" -eq 0 ]; then
 	targets=(ps2n-host)
 fi
 
+if [ "$other_pcsx2" -eq 1 ] && [ "$build" = "$root/build/linux-clang" ]; then
+	echo "Give another PCSX2 source tree a build tree of its own: --build-dir build/<name>" >&2
+	exit 1
+fi
 if [ ! -f "$pcsx2/CMakeLists.txt" ]; then
 	echo "The PCSX2 submodule is missing. Run: git submodule update --init --depth 1" >&2
 	exit 1

@@ -3192,6 +3192,10 @@ namespace
 			}
 		}
 #else
+		// (On Linux the CPU thread says which thread it is itself, when the
+		// profile begins: host/profile.cpp.)
+		if ((!s_options.profile_path.empty() || !s_options.sample_profile_path.empty()) && !ps2n::host::profile::Start(nullptr))
+			std::fputs("ps2n-host: cannot look at the CPU thread: there will be no profile\n", stderr);
 		// The game's window, when there is one, is served by this thread until
 		// the machine has stopped.
 		if (s_options.window)

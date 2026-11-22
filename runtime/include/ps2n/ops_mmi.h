@@ -32,6 +32,15 @@ namespace ps2n::ee::ops
 	struct Lanes {
 		static constexpr int N = 16 / static_cast<int>(sizeof(T));
 		T v[16 / sizeof(T)];
+		// A destructor that does nothing, on purpose: with it a Lanes returned by
+		// value goes through memory on every system, as Windows's calling
+		// convention has any 16 bytes go. Without it Linux's returns one in two
+		// general registers, and the compiler, left to put the lanes together
+		// again out of those two values, no longer made host SIMD of the loops
+		// below: PSRLH and PMINH came out a lane at a time, with eight 16-bit
+		// stores read back as one register (2026-11-22, docs/app-log.md,
+		// "Linux's speed").
+		~Lanes() {}
 	};
 
 	template <typename T>

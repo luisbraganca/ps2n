@@ -257,8 +257,37 @@ every fingerprint); the release a draft on GitHub, which the session
 published the same day at the maintainer's word ("1. Yes, publish"; the tag
 `v0.2`), the website's downloads then moved to 0.2 ("2. Yes do it"); and the
 maintainer's seven folders have 0.2's programs, each compiled again and the
-start of one of its sessions run again from it the session. Next: why a
-compiled game takes more than stock PCSX2's time on Linux. docs/app-log.md,
+start of one of its sessions run again from it the session. Then Linux's
+speed, looked for the same day (docs/app-log.md, "Linux's speed"): the
+runtime's profile works on Linux (`ps2n-host -profile`), and with it most of
+what a run takes more inside WSL 2 than on Windows turned out to be PCSX2's
+own, in stock PCSX2 as in the compiled game: its core wakes its VU thread,
+which is not in use, at every STROW and STCOL command of VIF1 (2.4 million
+times in Jak and Daxter's session), and a wake costs six times as much inside
+WSL 2 as on Windows; without those wakes (a trial on a copy of PCSX2's source,
+nothing of it in) both runs take 28% less there, and Jak and Daxter 9% less
+on Windows, the other three games the same. Whether PS2Native carries such a
+change to PCSX2's code, and whether PCSX2 is told, was put to the maintainer,
+who answered the same day (ADR 0050: "1. Yes", "2. Yes, write an issue as a
+guide I'll write it myself.", "3. Yes", "Stop."): PS2Native's builds leave
+those wakes out, its first change to PCSX2's code, a patch applied to a copy
+of PCSX2's source when the runtime is built, the submodule as it is and stock
+PCSX2 timed as released (built next); the maintainer tells PCSX2 themselves
+(the session wrote no text for it, ADR 0010); committed and pushed; and the
+last 3% of Linux's distance is left for now. Found writing that down: PCSX2
+switches its VU thread on by default on a computer with three cores or more,
+and every run of `ps2n-host`, stock PCSX2's among them, has had it off, so
+"stock PCSX2's time" in every comparison here is PCSX2's recompilers with VU1
+on the CPU thread; against stock PCSX2 with its VU thread on no compiled game
+has been timed, which is put to the maintainer with a measurement to come.
+Of the compiled game's own distance to stock PCSX2 on Linux, 1.05 times its
+time, two parts were found and put right (1.03 now): the 128-bit
+instructions' lanes, which Linux's calling convention kept the compiler from
+making host SIMD of (`Lanes` in `ops_mmi.h`), and micro code the measurement's
+Linux folder had not compiled; the rest, in the game's and the IOP's compiled
+code, was not found (tried and taken out: the runtime's functions given
+Windows's calling convention on Linux, and the code on large pages).
+docs/app-log.md,
 "Compiled games against PCSX2, as users get them" and "0.2: a game's folder
 brought up to date".**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
@@ -961,7 +990,8 @@ Decisions:
   PCSX2's time), on each system from training runs made there, the profile
   kept in the build tree; the maintainer's game folders get it. The maintainer
   tells PCSX2 of the defect found with it themselves; asked for the text, the
-  session wrote none (ADR 0010) and gave where it is and how it is seen. A
+  session wrote none (ADR 0010) and gave where it is and how it is seen; the
+  maintainer opened it the same day, PCSX2's issue 15223. A
   folder counts its profile after 3 minutes of the game's own time (9,000
   frames at 50 frames a second, 10,800 at 60: it changes ADR 0045's number).
   0.2 is next, with a way to bring the game folders of an earlier version up
@@ -1005,6 +1035,23 @@ Decisions:
   compile its game and runs the start of a session again, and what each counts
   waits for a session of the maintainer's; the website's downloads stay 0.1's
   until 0.2 is published.
+- [ADR 0050](docs/adr/0050-pcsx2s-vu-thread-not-woken-where-it-is-not-in-use-ps2natives-first-change-to-pcsx2s-code.md):
+  the maintainer's answers of 2026-11-22 to what looking for Linux's speed
+  found ("1. Yes", "2. Yes, write an issue as a guide I'll write it myself.",
+  "3. Yes", "Stop."). PS2Native's builds leave out PCSX2's wakes of its VU
+  thread where that thread is not in use (at every STROW and STCOL command of
+  VIF1; PS2Native has the thread fixed off): the first change PS2Native
+  carries to PCSX2's code, a patch in this repository applied to a copy of
+  PCSX2's source when the runtime is built, the submodule never edited, stock
+  PCSX2 timed as released, without it; carried at once, since it changes no
+  result of a run. The maintainer tells PCSX2 themselves; asked for an issue
+  written as a guide, the session wrote none (ADR 0010) and gave where it is,
+  how it is seen and what limits it. Committed and pushed. The last 3% of the
+  compiled game's distance to stock PCSX2 on Linux is left for now. Found
+  writing it down, and put to the maintainer: PCSX2 switches its VU thread on
+  by default on a computer with three cores or more, and every run of
+  `ps2n-host` has had it off, stock PCSX2's among them; no compiled game has
+  been timed against stock PCSX2 with it on.
 
 ## Layout, build and test
 
@@ -1088,7 +1135,10 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   CMake file). It enters the Visual Studio developer shell by itself.
   `-Pcsx2Source <dir> -BuildDir build\<name>` builds against another PCSX2
   source tree in a build tree of its own (and `test.ps1 -BuildDir` tests
-  it): to try a newer PCSX2, or a change someone made to PCSX2.
+  it): to try a newer PCSX2, or a change someone made to PCSX2
+  (`build.sh --pcsx2-source` on Linux). A change of the session's own to
+  PCSX2 is tried so, on a copy of the submodule in the build tree, never in
+  the submodule (`build\measure\vif-trial.ps1` is one such trial).
 - Test: `scripts\windows\test.ps1 -Bios <BIOS image>`, optionally
   `-Filter <regex>`. The BIOS is the maintainer's `SCPH-70004` dump in
   `Documents\PCSX2\bios`. Tests are skipped, not passed, without one.
@@ -1103,7 +1153,15 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   instruction, and its hottest
   instructions by function and offset, to read beside the function's
   disassembly (`llvm-objdump --disassemble-symbols`, in the Visual Studio
-  install's `VC\Tools\Llvm\x64\bin`). Over the level run, two builds of
+  install's `VC\Tools\Llvm\x64\bin`). On Linux `ps2n-host -profile` (through
+  `tests/guest_test.cmake -DPROFILE=1`) says it by kind of code and by
+  function, without lines, a sample for every millisecond the thread ran,
+  and names what called each of the system's functions, with where in the
+  host's file the call returns to (`llvm-symbolizer --inlines -e` the host
+  says what was compiled into there); to see what the two systems' compilers
+  make of one generated file, compile it for both on Linux (`clang
+  --driver-mode=cl --target=x86_64-pc-windows-msvc` with a Windows folder's
+  options; docs/app-log.md, "Linux's speed"). Over the level run, two builds of
   the same code, or the same build an hour apart, can differ by a second:
   a change worth less than that does not show, and a ratio needs a stock
   run timed beside it. `docs/game-log.md`, "G5" and "G6", has what was
@@ -1550,7 +1608,10 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   numbers and states from `docs/game-log.md`, `docs/poc-log.md` and the
   status above: when one of those changes, change `docs/index.html` and the
   date at its foot too (`docs/site/README.md` lists what comes from where).
-  It goes live when `main` is pushed.
+  It goes live when `main` is pushed. The repository's `README.md` repeats
+  the fewest of them (the version to download and its two files, the games
+  tried, where each system stands, the number of tests): a release, or a
+  change of one of those, changes it with the page.
 
 ## Standing rules
 

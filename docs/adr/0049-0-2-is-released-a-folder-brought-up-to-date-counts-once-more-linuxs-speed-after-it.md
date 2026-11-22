@@ -63,6 +63,39 @@ session read the first as its word to publish, and published the draft the
 same day: 0.2 is public since 2026-11-22, the tag `v0.2` on the commit the
 downloads were made from. The website's downloads moved to 0.2 after it.
 
+## Linux's speed, looked for (point 5)
+
+Looked for the same day, once 0.2 was out
+([docs/app-log.md](../app-log.md), "Linux's speed"):
+
+- **Most of what a run takes more inside WSL 2 than on Windows is not
+  PS2Native's and not the compiled game's alone:** PCSX2's core wakes its VU
+  thread at every STROW and STCOL command of VIF1, whether that thread is in
+  use or not, and waking a thread costs six times as much inside WSL 2 as on
+  Windows. Jak and Daxter's session does it about 2.4 million times: 28% of
+  the run under WSL 2, for stock PCSX2 and for the compiled game alike. A
+  trial without those wakes, on a copy of PCSX2's source, took 54.1 s where
+  75.4 s (stock PCSX2) and 56.7 s where 79.5 s (the compiled game). On Windows
+  the same trial took 9% off Jak and Daxter's run, stock and compiled, and
+  nothing that shows off the other three games', which send few of those
+  commands. Nothing of it is in: a change to PCSX2's code is the maintainer's
+  to order
+  ([ADR 0010](0010-pcsx2-fix-goes-upstream-through-the-maintainer.md)), and it
+  is put to them with these numbers. (Answered the same day:
+  [ADR 0050](0050-pcsx2s-vu-thread-not-woken-where-it-is-not-in-use-ps2natives-first-change-to-pcsx2s-code.md).)
+- **Of the compiled game's own distance to stock PCSX2 there, 1.05 times its
+  time, two parts were found and put right:** the 128-bit instructions' lanes,
+  which Linux's calling convention kept the compiler from making host SIMD of
+  (`ops_mmi.h`), and, in the measurement, micro code the Linux folder had not
+  compiled. With both, 1.03.
+- **The rest, 3%, was not found,** and is left for now (ADR 0050). It is in
+  the game's compiled code and the IOP's, the same instructions as on Windows
+  for the same work. Tried and taken out, for no gain: the runtime's
+  functions given Windows's calling convention on Linux, and the code on
+  large pages.
+- **The runtime's profile works on Linux** (`ps2n-host -profile`), which is
+  how the above was seen.
+
 ## The session's choices, for the maintainer to decide otherwise
 
 - **0.2 is a pre-release,** as 0.1 is: tried with the same five games, on

@@ -68,6 +68,8 @@ set(PROGRAMS_DIFFERS_same-as-stock)
 # PCSX2 too, and a comparison of two runs fails whenever its two runs differ.
 # The program's output is listed as differing from the console's in every
 # configuration for these cases (tests/ps2autotests-known-differences.cmake).
+# The maintainer told PCSX2 of it on 2026-11-22 (PCSX2's issue 15223): when
+# the PCSX2 pinned here has it corrected, the program comes off this list.
 set(PS2AUTOTESTS_UNSTEADY_WITH_RUNTIME_LTO
 	dma/vif/stcycl
 )

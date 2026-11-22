@@ -113,7 +113,7 @@
 #              output with the frame and EE cycle count at which each line was
 #              printed (ps2n-host -times), to see where two runs part in time
 #   PROFILE    also write profile.txt in the scratch directory: where the CPU
-#              thread's time went (ps2n-host -profile; Windows only)
+#              thread's time went (ps2n-host -profile)
 #   PROFILE_FROM  with PROFILE: the frame from which to look (ps2n-host
 #              -profile-from), to leave a game's startup out
 #   VU_REPORT  also write vu-report.txt in the scratch directory: what was

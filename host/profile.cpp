@@ -1047,6 +1047,749 @@ namespace ps2n::host::profile
 	}
 } // namespace ps2n::host::profile
 
+#elif defined(__linux__)
+
+#include "pcsx2/PrecompiledHeader.h"
+
+#include "pcsx2/Memory.h"
+
+#include <algorithm>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <new>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include <csignal>
+#include <ctime>
+#include <cxxabi.h>
+#include <elf.h>
+#include <fcntl.h>
+#include <link.h>
+#include <pthread.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
+#include <ucontext.h>
+#include <unistd.h>
+
+// On Linux a thread of the profile's own wakes every millisecond and, when the
+// CPU thread has run for most of it (by its own processor time), sends it a
+// signal, whose handler notes where it was and the words on top of its stack.
+// So a sample is a millisecond the thread ran, in its own code or in the
+// kernel for it, and none is taken while it waits (on Windows the samples are
+// of the clock's time, waiting included). The names come from the symbol
+// tables of the files the process has loaded; there are no lines: the report
+// says where the time went by kind of code, by function, for compiled code by
+// function and offset, to read beside its disassembly, and for the system's
+// libraries by what called them, as far as the stack's top words say.
+namespace ps2n::host::profile
+{
+	namespace
+	{
+		// Half an hour at a thousand samples a second, the room taken before the
+		// first: the handler that takes them may not allocate.
+		constexpr size_t kMaxSamples = 2 * 1000 * 1000;
+		constexpr int kStackWords = 6;
+
+		struct Sample
+		{
+			u64 at;
+			u64 stack[kStackWords];
+		};
+		Sample* s_samples = nullptr;
+		std::atomic<size_t> s_taken{0};
+		std::atomic<u64> s_dropped{0};
+		std::atomic<bool> s_enabled{false};
+		std::once_flag s_ready_once;
+		std::atomic<bool> s_ready{false};
+		std::atomic<bool> s_running{false};
+		std::thread s_sampler;
+		// The CPU thread, as it gave itself in Enable: its number for the
+		// signal, and the clock of its processor time.
+		std::atomic<pid_t> s_tid{0};
+		clockid_t s_cpu_clock = 0;
+		// How long the CPU thread ran while it was looked at, by that clock.
+		u64 s_ran_from = 0;
+		u64 s_ran = 0;
+
+		// The areas PCSX2's recompilers generate host code into. They belong to
+		// no file, so they are told apart by address.
+		struct Area
+		{
+			const u8* begin;
+			const u8* end;
+			const char* name;
+		};
+		std::vector<Area> s_areas;
+
+		// The kinds of code a sample can fall into, in the order they are
+		// reported: the same as on Windows, and by the same names but the
+		// system's.
+		enum Kind
+		{
+			kGame,
+			kMicro,
+			kIop,
+			kRuntime,
+			kCore,
+			kGenerated,
+			kSystem,
+			kUnknown,
+			kKindCount,
+		};
+		constexpr const char* kKindNames[kKindCount] = {
+			"the game's code, compiled ahead of time",
+			"the vector units' micro code, compiled ahead of time",
+			"the IOP's code, compiled ahead of time",
+			"PS2Native's runtime",
+			"PCSX2's core",
+			"host code PCSX2 generated at run time",
+			"the system's libraries, and the kernel's work for them",
+			"not identified",
+		};
+
+		// (0 when the clock is not there: a thread's, once the thread has ended.)
+		u64 Nanoseconds(clockid_t clock)
+		{
+			struct timespec now = {};
+			if (clock_gettime(clock, &now) != 0)
+				return 0;
+			return static_cast<u64>(now.tv_sec) * 1000000000ull + static_cast<u64>(now.tv_nsec);
+		}
+
+		// The signal, on the CPU thread: where it was, and what its stack had on
+		// top (the address a function of the system's was called from is among
+		// those words more often than not).
+		void OnSample(int, siginfo_t*, void* context)
+		{
+			if (!s_enabled.load(std::memory_order_relaxed))
+				return;
+			const size_t at = s_taken.load(std::memory_order_relaxed);
+			if (at >= kMaxSamples)
+			{
+				s_dropped.fetch_add(1, std::memory_order_relaxed);
+				return;
+			}
+			const greg_t* const registers = static_cast<const ucontext_t*>(context)->uc_mcontext.gregs;
+			Sample& sample = s_samples[at];
+			sample.at = static_cast<u64>(registers[REG_RIP]);
+			const u64 top = static_cast<u64>(registers[REG_RSP]);
+			for (int i = 0; i < kStackWords; i++)
+				sample.stack[i] = (top && (top & 7) == 0) ? reinterpret_cast<const u64*>(top)[i] : 0;
+			s_taken.store(at + 1, std::memory_order_relaxed);
+		}
+
+		// Every millisecond: has the CPU thread run for most of it? Then it is
+		// asked where it is. A thread that waits is left alone, so that nothing
+		// it waits in is cut short.
+		void SamplerMain()
+		{
+			struct timespec next = {};
+			clock_gettime(CLOCK_MONOTONIC, &next);
+			u64 before = 0;
+			bool looking = false;
+			while (s_running.load())
+			{
+				next.tv_nsec += 1000000;
+				if (next.tv_nsec >= 1000000000)
+				{
+					next.tv_nsec -= 1000000000;
+					next.tv_sec++;
+				}
+				clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, nullptr);
+				const pid_t tid = s_tid.load();
+				if (!s_enabled.load() || tid == 0)
+				{
+					looking = false;
+					continue;
+				}
+				const u64 now = Nanoseconds(s_cpu_clock);
+				if (now == 0)
+				{
+					looking = false;
+					continue;
+				}
+				if (looking && now >= before + 500000)
+					syscall(SYS_tgkill, getpid(), tid, SIGPROF);
+				before = now;
+				looking = true;
+			}
+		}
+
+		void MakeReady()
+		{
+			std::call_once(s_ready_once, []() {
+				s_samples = new (std::nothrow) Sample[kMaxSamples];
+				if (!s_samples)
+					return;
+				struct sigaction action = {};
+				action.sa_sigaction = OnSample;
+				action.sa_flags = SA_SIGINFO | SA_RESTART;
+				sigemptyset(&action.sa_mask);
+				s_ready.store(sigaction(SIGPROF, &action, nullptr) == 0);
+			});
+		}
+
+		// A file the process has loaded: where, its code, and its functions as
+		// its symbol table names them, read when a sample falls into it.
+		struct Symbol
+		{
+			u64 address; // in the file
+			u64 size;
+			u32 name; // where in `names`
+		};
+		struct Object
+		{
+			std::string path;
+			std::string name; // its last part
+			u64 base = 0;
+			std::vector<std::pair<u64, u64>> code; // its executable segments, as loaded
+			bool read = false;
+			std::vector<Symbol> symbols; // by address
+			std::string names; // the symbol table's strings, as they are in the file
+		};
+		std::vector<Object> s_objects;
+
+		// What is mapped where, as the system lists it: for an address in no
+		// file's code.
+		struct Mapping
+		{
+			u64 begin;
+			u64 end;
+			std::string rights;
+			std::string path;
+		};
+		std::vector<Mapping> s_mappings;
+
+		int OneObject(struct dl_phdr_info* info, size_t, void* context)
+		{
+			std::vector<Object>& objects = *static_cast<std::vector<Object>*>(context);
+			Object object;
+			object.path = info->dlpi_name ? info->dlpi_name : "";
+			// The first is the program itself, which the loader gives no name.
+			if (object.path.empty() && objects.empty())
+			{
+				char self[4096];
+				const ssize_t length = readlink("/proc/self/exe", self, sizeof(self) - 1);
+				if (length > 0)
+					object.path.assign(self, static_cast<size_t>(length));
+			}
+			const size_t slash = object.path.rfind('/');
+			object.name = (slash == std::string::npos) ? object.path : object.path.substr(slash + 1);
+			if (object.name.empty())
+				object.name = "(a file without a name)";
+			object.base = info->dlpi_addr;
+			for (int i = 0; i < info->dlpi_phnum; i++)
+			{
+				const ElfW(Phdr)& segment = info->dlpi_phdr[i];
+				if (segment.p_type == PT_LOAD && (segment.p_flags & PF_X))
+					object.code.emplace_back(object.base + segment.p_vaddr, object.base + segment.p_vaddr + segment.p_memsz);
+			}
+			objects.push_back(std::move(object));
+			return 0;
+		}
+
+		// The file's functions: its whole symbol table where it has one, what
+		// it exports otherwise.
+		void ReadSymbols(Object& object)
+		{
+			object.read = true;
+			const int fd = open(object.path.c_str(), O_RDONLY | O_CLOEXEC);
+			if (fd < 0)
+				return;
+			struct stat status;
+			if (fstat(fd, &status) != 0 || status.st_size < static_cast<off_t>(sizeof(Elf64_Ehdr)))
+			{
+				close(fd);
+				return;
+			}
+			const size_t size = static_cast<size_t>(status.st_size);
+			void* const map = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0);
+			close(fd);
+			if (map == MAP_FAILED)
+				return;
+
+			const u8* const file = static_cast<const u8*>(map);
+			const Elf64_Ehdr* const header = reinterpret_cast<const Elf64_Ehdr*>(file);
+			const bool elf = std::memcmp(header->e_ident, ELFMAG, SELFMAG) == 0 && header->e_ident[EI_CLASS] == ELFCLASS64 &&
+							 header->e_shentsize == sizeof(Elf64_Shdr) && header->e_shoff != 0 &&
+							 header->e_shoff + static_cast<u64>(header->e_shnum) * sizeof(Elf64_Shdr) <= size;
+			if (elf)
+			{
+				const Elf64_Shdr* const sections = reinterpret_cast<const Elf64_Shdr*>(file + header->e_shoff);
+				const Elf64_Shdr* table = nullptr;
+				for (unsigned i = 0; i < header->e_shnum; i++)
+				{
+					if (sections[i].sh_type == SHT_SYMTAB)
+					{
+						table = &sections[i];
+						break;
+					}
+					if (sections[i].sh_type == SHT_DYNSYM && !table)
+						table = &sections[i];
+				}
+				if (table && table->sh_link < header->e_shnum && table->sh_entsize == sizeof(Elf64_Sym) &&
+					table->sh_offset + table->sh_size <= size)
+				{
+					const Elf64_Shdr& strings = sections[table->sh_link];
+					if (strings.sh_type == SHT_STRTAB && strings.sh_offset + strings.sh_size <= size)
+					{
+						object.names.assign(reinterpret_cast<const char*>(file + strings.sh_offset), strings.sh_size);
+						object.names.push_back('\0');
+						const Elf64_Sym* const symbols = reinterpret_cast<const Elf64_Sym*>(file + table->sh_offset);
+						const size_t count = table->sh_size / sizeof(Elf64_Sym);
+						for (size_t i = 0; i < count; i++)
+						{
+							const Elf64_Sym& symbol = symbols[i];
+							if (ELF64_ST_TYPE(symbol.st_info) != STT_FUNC || symbol.st_shndx == SHN_UNDEF || symbol.st_name >= strings.sh_size)
+								continue;
+							object.symbols.push_back({symbol.st_value, symbol.st_size, symbol.st_name});
+						}
+						std::sort(object.symbols.begin(), object.symbols.end(), [](const Symbol& a, const Symbol& b) {
+							return a.address != b.address ? a.address < b.address : a.name < b.name;
+						});
+					}
+				}
+			}
+			munmap(map, size);
+		}
+
+		// The function of the file that holds the address `at` (in the file).
+		const Symbol* FunctionAt(Object& object, u64 at)
+		{
+			if (!object.read)
+				ReadSymbols(object);
+			auto it = std::upper_bound(object.symbols.begin(), object.symbols.end(), at, [](u64 address, const Symbol& symbol) {
+				return address < symbol.address;
+			});
+			if (it == object.symbols.begin())
+				return nullptr;
+			--it;
+			// (One without a size, as hand-written assembly has them, reaches to
+			// the next.)
+			return (it->size == 0 || at < it->address + it->size) ? &*it : nullptr;
+		}
+
+		// A symbol's name as the source has it. What the compiler and the
+		// linker add after a dot (".llvm.123" on a function link-time
+		// optimization made local, ".cold" on the part of one it moved away) is
+		// left out, but that a part is the cold one.
+		std::string Readable(const char* symbol)
+		{
+			std::string plain(symbol);
+			bool cold = false;
+			const size_t dot = plain.find('.');
+			if (dot != std::string::npos && dot > 0)
+			{
+				cold = plain.find(".cold", dot) != std::string::npos;
+				plain.resize(dot);
+			}
+			int status = 0;
+			char* const text = abi::__cxa_demangle(plain.c_str(), nullptr, nullptr, &status);
+			std::string out = (status == 0 && text) ? std::string(text) : plain;
+			std::free(text);
+			if (out.size() > 150)
+				out = out.substr(0, 150) + "...";
+			if (cold)
+				out += " [its cold part]";
+			return out;
+		}
+
+		// Whether a symbol is of PS2Native's own code: in the namespace ps2n
+		// (the name as the compiler wrote it says so near its start), or one of
+		// its functions with C names.
+		bool OfPs2Native(const char* symbol)
+		{
+			if (std::strncmp(symbol, "ps2n_", 5) == 0)
+				return true;
+			if (std::strncmp(symbol, "_Z", 2) != 0)
+				return false;
+			const char* const found = std::strstr(symbol, "4ps2n");
+			return found && found - symbol <= 6;
+		}
+
+		struct Place
+		{
+			Kind kind;
+			std::string name;
+			u64 offset = 0; // for compiled code: how far into its function the instruction is
+			bool compiled = false; // a function compiled ahead of time, by name
+		};
+
+		Place Identify(u64 address)
+		{
+			for (size_t i = 0; i < s_objects.size(); i++)
+			{
+				Object& object = s_objects[i];
+				bool inside = false;
+				for (const auto& [begin, end] : object.code)
+				{
+					if (address >= begin && address < end)
+					{
+						inside = true;
+						break;
+					}
+				}
+				if (!inside)
+					continue;
+
+				const Symbol* const symbol = FunctionAt(object, address - object.base);
+				const char* const raw = symbol ? object.names.c_str() + symbol->name : nullptr;
+				const u64 offset = symbol ? address - object.base - symbol->address : 0;
+
+				// The functions compiled ahead of time say what they are in
+				// their names, wherever they are: in the host, or in a module
+				// of their own (runtime/game_module.h; a game's folder).
+				if (raw)
+				{
+					const Kind compiled = std::strstr(raw, "ps2n_vu_image_") ? kMicro :
+										  std::strstr(raw, "ps2n_iop_image_") ? kIop :
+										  std::strstr(raw, "ps2n_image_") ? kGame : kKindCount;
+					if (compiled != kKindCount)
+					{
+						std::string name = Readable(raw);
+						const size_t bracket = name.find('(');
+						if (bracket != std::string::npos)
+							name.resize(bracket);
+						return {compiled, name, offset, true};
+					}
+				}
+
+				Kind module_kind = kKindCount;
+				if (object.name == "ps2n-game.so" || object.name == "ps2n-bios.so")
+					module_kind = kGame;
+				else if (object.name == "ps2n-vu.so")
+					module_kind = kMicro;
+				else if (object.name == "ps2n-iop.so")
+					module_kind = kIop;
+				if (module_kind != kKindCount)
+				{
+					if (!raw)
+						return {module_kind, object.name + " (a place without a name)"};
+					// What of the runtime's headers a module's code calls and
+					// was not compiled into it.
+					return {kRuntime, object.name + "!" + Readable(raw)};
+				}
+
+				// The host itself: PS2Native's own code by its names, the rest
+				// PCSX2's core and what it is built from.
+				if (i == 0)
+				{
+					if (!raw)
+						return {kCore, "(a function of the host without a name)"};
+					return {OfPs2Native(raw) ? kRuntime : kCore, Readable(raw)};
+				}
+				if (raw)
+					return {kSystem, object.name + "!" + Readable(raw)};
+				// (A library's own functions have no names in it: by where in
+				// the file, to the nearest 256 bytes, for its disassembly.)
+				char where[64];
+				std::snprintf(where, sizeof(where), "!(no name, at +0x%llx)", static_cast<unsigned long long>((address - object.base) & ~0xffull));
+				return {kSystem, object.name + where};
+			}
+
+			for (const Area& area : s_areas)
+			{
+				if (reinterpret_cast<const u8*>(address) >= area.begin && reinterpret_cast<const u8*>(address) < area.end)
+					return {kGenerated, area.name};
+			}
+			// What the system says is mapped there (/proc/self/maps).
+			for (const Mapping& mapping : s_mappings)
+			{
+				if (address >= mapping.begin && address < mapping.end)
+				{
+					char where[700];
+					std::snprintf(where, sizeof(where), "(in no file's code and no known area: %s, %s, %llu KB mapped at %llx)",
+						mapping.path.empty() ? "memory of no file" : mapping.path.c_str(), mapping.rights.c_str(),
+						static_cast<unsigned long long>((mapping.end - mapping.begin) / 1024), static_cast<unsigned long long>(mapping.begin));
+					return {kUnknown, where};
+				}
+			}
+			return {kUnknown, "(an address where nothing is mapped)"};
+		}
+
+		void ReadMappings()
+		{
+			s_mappings.clear();
+			std::FILE* const fp = std::fopen("/proc/self/maps", "r");
+			if (!fp)
+				return;
+			char line[1024];
+			while (std::fgets(line, sizeof(line), fp))
+			{
+				unsigned long long begin = 0, end = 0;
+				char rights[8] = {};
+				char path[600] = {};
+				if (std::sscanf(line, "%llx-%llx %7s %*s %*s %*s %599[^\n]", &begin, &end, rights, path) >= 3)
+					s_mappings.push_back({begin, end, rights, path});
+			}
+			std::fclose(fp);
+		}
+
+		// Whether an address is in the host's own code or in a module of
+		// compiled code: where a function of the system's can have been
+		// called from.
+		bool InOurCode(u64 address)
+		{
+			for (size_t i = 0; i < s_objects.size(); i++)
+			{
+				const Object& object = s_objects[i];
+				if (i != 0 && object.name != "ps2n-game.so" && object.name != "ps2n-bios.so" && object.name != "ps2n-vu.so" && object.name != "ps2n-iop.so")
+					continue;
+				for (const auto& [begin, end] : object.code)
+				{
+					if (address >= begin && address < end)
+						return true;
+				}
+			}
+			for (const Area& area : s_areas)
+			{
+				if (reinterpret_cast<const u8*>(address) >= area.begin && reinterpret_cast<const u8*>(address) < area.end)
+					return true;
+			}
+			return false;
+		}
+	} // namespace
+
+	bool Available()
+	{
+		return true;
+	}
+
+	// (The CPU thread says which it is itself, in Enable: `thread` is not
+	// needed.)
+	bool Start(void*)
+	{
+		MakeReady();
+		if (!s_ready.load())
+			return false;
+		if (!s_running.exchange(true))
+			s_sampler = std::thread(SamplerMain);
+		return true;
+	}
+
+	void Enable(bool on)
+	{
+		if (!on)
+		{
+			if (s_enabled.exchange(false))
+				s_ran += Nanoseconds(CLOCK_THREAD_CPUTIME_ID) - s_ran_from;
+			return;
+		}
+
+		MakeReady();
+		if (!s_ready.load())
+			return;
+		s_areas = {
+			{SysMemory::GetEERec(), SysMemory::GetEERecEnd(), "host code from PCSX2's EE recompiler"},
+			{SysMemory::GetIOPRec(), SysMemory::GetIOPRecEnd(), "host code from PCSX2's IOP recompiler"},
+			{SysMemory::GetVU0Rec(), SysMemory::GetVU0RecEnd(), "host code from PCSX2's VU0 recompiler"},
+			{SysMemory::GetVU1Rec(), SysMemory::GetVU1RecEnd(), "host code from PCSX2's VU1 recompiler"},
+			{SysMemory::GetVIFUnpackRec(), SysMemory::GetVIFUnpackRecEnd(), "host code from PCSX2's VIF unpack generator"},
+			{SysMemory::GetSWRec(), SysMemory::GetSWRecEnd(), "host code from PCSX2's software renderer"},
+		};
+		// This thread is the one to look at: the clock of its processor time,
+		// then its number, which the sampler waits for.
+		if (pthread_getcpuclockid(pthread_self(), &s_cpu_clock) != 0)
+		{
+			std::fputs("ps2n-host: no clock of the CPU thread's own time: there will be no profile\n", stderr);
+			return;
+		}
+		s_ran_from = Nanoseconds(CLOCK_THREAD_CPUTIME_ID);
+		s_enabled.store(true);
+		s_tid.store(static_cast<pid_t>(syscall(SYS_gettid)));
+	}
+
+	void Stop()
+	{
+		s_enabled.store(false);
+		s_tid.store(0);
+		if (s_running.exchange(false) && s_sampler.joinable())
+			s_sampler.join();
+	}
+
+	bool Write(const char* path, uint32_t first_frame, uint32_t frames, double seconds)
+	{
+		std::FILE* fp = std::fopen(path, "wb");
+		if (!fp)
+			return false;
+
+		const size_t taken = s_samples ? std::min(s_taken.load(), kMaxSamples) : 0;
+		std::unordered_map<u64, u64> by_address;
+		for (size_t i = 0; i < taken; i++)
+			by_address[s_samples[i].at]++;
+
+		s_objects.clear();
+		dl_iterate_phdr(OneObject, &s_objects);
+		ReadMappings();
+
+		u64 by_kind[kKindCount] = {};
+		std::unordered_map<std::string, std::pair<Kind, u64>> by_name;
+		std::unordered_map<u64, Place> places;
+		// The compiled code, instruction by instruction: where in which function,
+		// and how often.
+		struct Hot
+		{
+			u64 count;
+			std::string where;
+		};
+		std::vector<Hot> hot[kKindCount];
+		for (const auto& [address, count] : by_address)
+		{
+			const Place& place = places.emplace(address, Identify(address)).first->second;
+			by_kind[place.kind] += count;
+			auto& entry = by_name[place.name];
+			entry.first = place.kind;
+			entry.second += count;
+			if (place.compiled)
+			{
+				char where[400];
+				std::snprintf(where, sizeof(where), "%s+0x%llx", place.name.c_str(), static_cast<unsigned long long>(place.offset));
+				hot[place.kind].push_back({count, where});
+			}
+		}
+
+		// The system's functions and the places not identified, by what called
+		// them: the first word on top of the stack that is an address in the
+		// host's code, in compiled code or in code PCSX2 generated. A guess that
+		// is right for a function called straight from there, which most are.
+		std::unordered_map<std::string, u64> by_call;
+		std::unordered_map<u64, std::string> callers;
+		for (size_t i = 0; i < taken; i++)
+		{
+			const Place& place = places.at(s_samples[i].at);
+			if (place.kind != kSystem && place.kind != kUnknown)
+				continue;
+			std::string from = "(nothing of ours on top of the stack)";
+			for (const u64 word : s_samples[i].stack)
+			{
+				if (!InOurCode(word))
+					continue;
+				auto it = callers.find(word);
+				if (it == callers.end())
+				{
+					// With where in the host's file the call returns to, for
+					// llvm-symbolizer, which says what was compiled into there.
+					std::string name = Identify(word).name;
+					if (!s_objects.empty() && !s_objects[0].code.empty() && word >= s_objects[0].code.front().first &&
+						word < s_objects[0].code.back().second)
+					{
+						char where[48];
+						std::snprintf(where, sizeof(where), " (the host's file at 0x%llx)", static_cast<unsigned long long>(word - s_objects[0].base));
+						name += where;
+					}
+					it = callers.emplace(word, std::move(name)).first;
+				}
+				from = it->second;
+				break;
+			}
+			by_call[place.name + "  <-  " + from]++;
+		}
+
+		const std::string host_symbols = s_objects.empty() ? std::string("none") :
+			std::to_string(s_objects[0].symbols.size()) + " functions named in " + s_objects[0].path;
+		const double total = taken ? static_cast<double>(taken) : 1.0;
+		const double ran = static_cast<double>(s_ran) / 1e9;
+		std::fprintf(fp,
+			"# Where the CPU thread was, looked at after every millisecond it ran (ps2n-host -profile).\n"
+			"# The CPU thread carries the EE, the IOP and the VUs. The GS has a thread of its own, which was not looked at.\n"
+			"# %zu samples over %u frames from frame %u on, in %.1f s, of which the CPU thread ran %.1f s (%.0f samples for each second it ran; %.1f frames a second)%s\n"
+			"# The host's own symbols: %s\n\n",
+			taken, frames, first_frame, seconds, ran, ran > 0.0 ? static_cast<double>(taken) / ran : 0.0,
+			seconds > 0.0 ? static_cast<double>(frames) / seconds : 0.0, s_dropped.load() ? "; more would have been taken had there been room" : "",
+			host_symbols.c_str());
+
+		std::fputs("By kind of code:\n", fp);
+		for (int kind = 0; kind < kKindCount; kind++)
+		{
+			std::fprintf(fp, "  %6.2f%%  %9llu  %s\n", 100.0 * static_cast<double>(by_kind[kind]) / total,
+				static_cast<unsigned long long>(by_kind[kind]), kKindNames[kind]);
+		}
+
+		// The instructions of the compiled code that had most of the samples, by
+		// function and offset: to be read beside the function's disassembly
+		// (llvm-objdump --disassemble-symbols). A sample falls on the instruction
+		// the processor was about to complete, which is often the one after the
+		// one waiting.
+		const auto list_hot = [&](Kind kind, const char* what, size_t most) {
+			std::vector<Hot>& list = hot[kind];
+			if (list.empty())
+				return;
+			std::sort(list.begin(), list.end(), [](const Hot& a, const Hot& b) { return a.count > b.count; });
+			std::fprintf(fp, "\nThe instructions of %s with most of the samples (share of the run, samples, where):\n", what);
+			for (size_t i = 0; i < list.size() && i < most; i++)
+			{
+				std::fprintf(fp, "  %6.2f%%  %7llu  %s\n", 100.0 * static_cast<double>(list[i].count) / total,
+					static_cast<unsigned long long>(list[i].count), list[i].where.c_str());
+			}
+		};
+		list_hot(kGame, "the game's compiled code", 80);
+		list_hot(kIop, "the IOP's compiled code", 40);
+		list_hot(kMicro, "the compiled micro code", 40);
+
+		if (!by_call.empty())
+		{
+			std::vector<std::pair<std::string, u64>> calls(by_call.begin(), by_call.end());
+			std::sort(calls.begin(), calls.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+			std::fputs("\nThe system's functions and the places not identified, by what called them, as far as the stack's top says (share of the run, samples):\n", fp);
+			for (size_t i = 0; i < calls.size() && i < 40; i++)
+			{
+				std::fprintf(fp, "  %6.2f%%  %9llu  %s\n", 100.0 * static_cast<double>(calls[i].second) / total,
+					static_cast<unsigned long long>(calls[i].second), calls[i].first.c_str());
+			}
+		}
+
+		// Within each kind, the functions that had most of the samples.
+		std::vector<std::pair<std::string, std::pair<Kind, u64>>> names(by_name.begin(), by_name.end());
+		std::sort(names.begin(), names.end(), [](const auto& a, const auto& b) { return a.second.second > b.second.second; });
+
+		std::fputs("\nThe sixty places with most of the samples:\n", fp);
+		for (size_t i = 0; i < names.size() && i < 60; i++)
+		{
+			std::fprintf(fp, "  %6.2f%%  %9llu  %s  [%s]\n", 100.0 * static_cast<double>(names[i].second.second) / total,
+				static_cast<unsigned long long>(names[i].second.second), names[i].first.c_str(), kKindNames[names[i].second.first]);
+		}
+
+		for (int kind = 0; kind < kKindCount; kind++)
+		{
+			if (by_kind[kind] == 0)
+				continue;
+			std::fprintf(fp, "\nMost of the samples in %s:\n", kKindNames[kind]);
+			size_t listed = 0;
+			for (size_t i = 0; i < names.size() && listed < 40; i++)
+			{
+				if (names[i].second.first != kind)
+					continue;
+				std::fprintf(fp, "  %6.2f%%  %9llu  %s\n", 100.0 * static_cast<double>(names[i].second.second) / total,
+					static_cast<unsigned long long>(names[i].second.second), names[i].first.c_str());
+				listed++;
+			}
+		}
+
+		std::fclose(fp);
+		return true;
+	}
+
+	// (A sampled profile for the compiler, and how much host code the generated
+	// files became, need the lines of the code: not written for Linux.)
+	bool WriteSampleProfile(const char*)
+	{
+		return false;
+	}
+
+	bool WriteCodeSize(const char*, const std::vector<ImageCode>&)
+	{
+		return false;
+	}
+} // namespace ps2n::host::profile
+
 #else // not written for this platform yet
 
 namespace ps2n::host::profile
