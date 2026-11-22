@@ -42,6 +42,7 @@ BaseVUmicroCPU* Interpreter(int vu);
 struct InterpreterStats
 {
 	uint64_t runs = 0; // calls of Execute that ran
+	uint64_t threaded = 0; // of them, those on PCSX2's own VU thread (VU1's, where that thread is on)
 	uint64_t blocks = 0; // blocks carried out
 	uint64_t interpreted = 0; // of them, those carried out step by step, no build having compiled their plan
 	uint64_t pairs = 0; // instruction pairs carried out
@@ -57,6 +58,17 @@ struct InterpreterStats
 	uint64_t unknown = 0;
 };
 const InterpreterStats& Stats(int vu);
+
+/// The blocks VU `vu` has carried out and those of them it interpreted, as
+/// they stood when its last run ended. Unlike Stats, it may be asked from
+/// another thread than the one that carries the VU out: VU1 can be carried
+/// out on PCSX2's VU thread (docs/adr/0051).
+void Work(int vu, uint64_t* blocks, uint64_t* interpreted);
+
+/// Waits until PCSX2's VU thread has carried out what it was given, where it
+/// is running: before the host reads what the provider counted, or writes
+/// its capture, at a run's end.
+void Finish();
 
 /// Null while everything it met was carried out; otherwise the first thing
 /// it met and does not carry out yet. The VU stops there.

@@ -38,6 +38,7 @@ void Host::CommitBaseSettingChanges()
 
 void Host::LoadSettings(SettingsInterface& si, std::unique_lock<std::mutex>& lock)
 {
+	ps2n::host::OnSettingsLoaded();
 }
 
 void Host::CheckForSettingsChanges(const Pcsx2Config& old_config)

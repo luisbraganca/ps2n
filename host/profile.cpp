@@ -13,6 +13,7 @@
 
 #include "pcsx2/PrecompiledHeader.h"
 
+#include "pcsx2/Config.h"
 #include "pcsx2/Memory.h"
 
 #include <algorithm>
@@ -33,6 +34,15 @@ namespace ps2n::host::profile
 {
 	namespace
 	{
+		// The report's second line: what the thread looked at carries. VU1 may
+		// be on PCSX2's VU thread (docs/adr/0051), which is not looked at.
+		const char* WhatTheCpuThreadCarries()
+		{
+			return THREAD_VU1 ? "# The CPU thread carries the EE, the IOP and VU0. VU1 is on PCSX2's VU thread and the GS on a thread of its own: "
+								"neither was looked at.\n" :
+								"# The CPU thread carries the EE, the IOP and the VUs. The GS has a thread of its own, which was not looked at.\n";
+		}
+
 		// An hour at a thousand samples a second. The room is taken up front:
 		// nothing may be allocated while the CPU thread is held, because it may
 		// be holding the allocator's lock.
@@ -788,10 +798,10 @@ namespace ps2n::host::profile
 		const double total = s_samples.empty() ? 1.0 : static_cast<double>(s_samples.size());
 		std::fprintf(fp,
 			"# Where the CPU thread was, looked at about a thousand times a second (ps2n-host -profile).\n"
-			"# The CPU thread carries the EE, the IOP and the VUs. The GS has a thread of its own, which was not looked at.\n"
+			"%s"
 			"# %zu samples over %u frames from frame %u on, in %.1f s (%.0f samples a second, %.1f frames a second)%s\n"
 			"# The host's own symbols: %s\n\n",
-			s_samples.size(), frames, first_frame, seconds, seconds > 0.0 ? static_cast<double>(s_samples.size()) / seconds : 0.0,
+			WhatTheCpuThreadCarries(), s_samples.size(), frames, first_frame, seconds, seconds > 0.0 ? static_cast<double>(s_samples.size()) / seconds : 0.0,
 			seconds > 0.0 ? static_cast<double>(frames) / seconds : 0.0,
 			s_dropped ? "; more would have been taken had there been room" : "", host_symbols.c_str());
 
@@ -1051,6 +1061,7 @@ namespace ps2n::host::profile
 
 #include "pcsx2/PrecompiledHeader.h"
 
+#include "pcsx2/Config.h"
 #include "pcsx2/Memory.h"
 
 #include <algorithm>
@@ -1093,6 +1104,15 @@ namespace ps2n::host::profile
 {
 	namespace
 	{
+		// The report's second line: what the thread looked at carries. VU1 may
+		// be on PCSX2's VU thread (docs/adr/0051), which is not looked at.
+		const char* WhatTheCpuThreadCarries()
+		{
+			return THREAD_VU1 ? "# The CPU thread carries the EE, the IOP and VU0. VU1 is on PCSX2's VU thread and the GS on a thread of its own: "
+								"neither was looked at.\n" :
+								"# The CPU thread carries the EE, the IOP and the VUs. The GS has a thread of its own, which was not looked at.\n";
+		}
+
 		// Half an hour at a thousand samples a second, the room taken before the
 		// first: the handler that takes them may not allocate.
 		constexpr size_t kMaxSamples = 2 * 1000 * 1000;
@@ -1699,10 +1719,10 @@ namespace ps2n::host::profile
 		const double ran = static_cast<double>(s_ran) / 1e9;
 		std::fprintf(fp,
 			"# Where the CPU thread was, looked at after every millisecond it ran (ps2n-host -profile).\n"
-			"# The CPU thread carries the EE, the IOP and the VUs. The GS has a thread of its own, which was not looked at.\n"
+			"%s"
 			"# %zu samples over %u frames from frame %u on, in %.1f s, of which the CPU thread ran %.1f s (%.0f samples for each second it ran; %.1f frames a second)%s\n"
 			"# The host's own symbols: %s\n\n",
-			taken, frames, first_frame, seconds, ran, ran > 0.0 ? static_cast<double>(taken) / ran : 0.0,
+			WhatTheCpuThreadCarries(), taken, frames, first_frame, seconds, ran, ran > 0.0 ? static_cast<double>(taken) / ran : 0.0,
 			seconds > 0.0 ? static_cast<double>(frames) / seconds : 0.0, s_dropped.load() ? "; more would have been taken had there been room" : "",
 			host_symbols.c_str());
 

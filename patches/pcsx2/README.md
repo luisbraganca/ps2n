@@ -10,7 +10,7 @@ PCSX2's licence, the GNU General Public License, version 3 or later.
 
 | Change | Since | What it does |
 |---|---|---|
-| `0001-the-vu-thread-is-not-woken-where-it-is-not-in-use` | 2026-11-22 | VIF1's STROW and STCOL commands, and writes of its row and column registers, wake PCSX2's VU thread only while that thread is in use. PS2Native never uses it; a game that sends many of them paid for the wakes all the same. |
+| `0001-the-vu-thread-is-not-woken-where-it-is-not-in-use` | 2026-11-22 | VIF1's STROW and STCOL commands, and writes of its row and column registers, wake PCSX2's VU thread only while that thread is in use. Where it is not (every run but a game played in a window with the setting on, since ADR 0051), a game that sends many of them paid for the wakes all the same. With it the setting must not be switched on while a game runs: PS2Native decides it once, when the game's disc is read. |
 
 - **They are PS2Native's, not PCSX2's.** A run that is compared with stock
   PCSX2 for time is compared with PCSX2 built without them

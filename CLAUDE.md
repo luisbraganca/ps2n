@@ -311,6 +311,38 @@ making host SIMD of (`Lanes` in `ops_mmi.h`), and micro code the measurement's
 Linux folder had not compiled; the rest, in the game's and the IOP's compiled
 code, was not found (tried and taken out: the runtime's functions given
 Windows's calling convention on Linux, and the code on large pages).
+The VU thread step was built and measured the same day (ADR 0051, "The step,
+built"; docs/app-log.md, "VU1 on a thread of its own"), and is put to the
+maintainer: it is not committed, in no folder of theirs and in no release.
+Where PCSX2's VU thread is on, PS2Native's VU provider carries VU1 out on it,
+doing there what PCSX2's VU recompiler does differently there. A game played
+in a window has the thread as PCSX2 would give it (on where the computer has
+three processor cores or more, the user's to switch on PCSX2's own page in
+the wizard, PCSX2's game database over both), decided once when its disc is
+read; every other run has VU1 on the CPU thread, whatever a game's settings
+file says. Every test passes: 543 in the development trees and 541 and 540 in
+the release's, on Windows and on Linux, where two tests (the self-tests on
+blocks compiled ahead of time) ran for the first time: every count of Linux's
+tests before had them skipped, which no report had said. Measured as a
+release would have it (the runtime's profile of play made again with the
+thread, each folder's own counts taken with these programs), on the
+maintainer's sessions against stock PCSX2 with its VU thread on: Jak and
+Daxter 0.96 times its time, Gran Turismo 3 1.01, Agent Under Fire 0.98,
+Killzone 0.95, where 1.50, 1.13, 1.02 and 1.24 without the thread; under WSL
+2, Jak and Daxter 0.99 (with 0.2's profile there). The last picture and sound
+of the runs are the same with the thread and without, but Agent Under Fire's:
+its run with the thread on does not repeat, on stock PCSX2 as compiled, so a
+session of such a game played with the thread cannot be run again as itself.
+Gran Turismo 3's 1.4% is on the main thread's EE and IOP side, which
+PS2Native's faster micro code made up for while VU1 shared that thread. A
+game's first session takes 19% and 32% less time with the thread (Gran
+Turismo 3, Jak and Daxter). The maintainer's answers the same day (ADR 0052:
+"1. Yes", "2. Yes", "3. Yes", "Do whatever needs doing from your side (from
+your "Not done" category)"): the step committed and pushed; their seven game
+folders given the release's programs; 0.3 prepared with it, a draft on GitHub
+they publish; and what the session had not done, done (the Linux runtime's
+profile of play made again with the thread, a game in a window on Linux with
+the thread). The version is 0.3 (`version.txt`).
 docs/app-log.md,
 "Compiled games against PCSX2, as users get them" and "0.2: a game's folder
 brought up to date".**
@@ -1112,7 +1144,44 @@ Decisions:
   their sessions at every fingerprint wherever stock PCSX2's with its VU
   thread on are; its criterion, no more than stock PCSX2's time with its VU
   thread on, every test passing as before; measured on one game first and
-  put to the maintainer before it goes into a folder or a release.
+  put to the maintainer before it goes into a folder or a release. Built and
+  measured the same day (the ADR's "The step, built"; docs/app-log.md, "VU1
+  on a thread of its own"), and put to the maintainer, in no folder of theirs
+  and no release: the provider on PCSX2's VU thread where that thread is on,
+  held to PCSX2's VU recompiler by a sixth mode of the self-test and nine
+  tests more. The session's choices within it, for the maintainer to decide
+  otherwise: a game played has the thread as PCSX2 would give it, the user's
+  to switch on PCSX2's own page in the wizard; every run without a window
+  has VU1 on the main thread, whatever a game's settings file says; a session
+  written down says when it was played with the thread; the runtime's
+  profile of play is trained with the thread on; and the thread's setting is
+  decided once for a run, when the game's disc is read, PCSX2's game database
+  heard then (ADR 0050's change holds only if the thread is never switched
+  on while a game runs; the note at its top says what is true now). Found
+  with it: Agent Under Fire's run with the thread on does not repeat (on
+  stock PCSX2 as compiled), so a session of such a game played with the
+  thread cannot be run again as itself; and two of Linux's tests had never
+  run there, skipped for want of a capture and counted as passing, which
+  `scripts/linux/vu-selftest.sh` and `iop-selftest.sh` put right.
+- [ADR 0052](docs/adr/0052-vu1-on-its-own-thread-committed-the-maintainers-folders-get-it-and-0-3-is-prepared-with-it.md):
+  the maintainer's answers of 2026-11-22 to what ADR 0051's step measured
+  ("1. Yes", "2. Yes", "3. Yes", "Do whatever needs doing from your side
+  (from your "Not done" category)"). The step is committed and pushed. The
+  maintainer's seven game folders get the release's programs, made from
+  0.3's tree, each compiling its game again. 0.3 is prepared with it as ADR
+  0042 and ADR 0049 have a release made (the profile of play made again on
+  each system from the tree released, both downloads tried, a draft on
+  GitHub the maintainer publishes); the session had recommended doing it
+  after the maintainer had played with the step, and their "Yes" with "Do
+  whatever needs doing" is read as now, the draft leaving them free to play
+  first. What the session had not done is done: the Linux runtime's profile
+  of play made again with the thread, and a game in a window on Linux with
+  the thread, inside WSL, its window on the maintainer's screen meanwhile.
+  The session's choices, for the maintainer to decide otherwise: the Windows
+  profile made again too (the runtime's source changed after the one
+  measured with); the release's runtime timed again before the notes quote
+  a number; 0.3 a pre-release, its notes saying which stock PCSX2 each speed
+  claim is against. The version is 0.3 from this commit.
 
 ## Layout, build and test
 
@@ -1192,7 +1261,7 @@ docs/                     brief, assessment, decisions (adr/), proof-of-concept 
                           proposal and log (app-log.md); and the website,
                           which GitHub Pages serves from this folder: index.html, 404.html, .nojekyll, site/
                           (site/README.md says what belongs to it and where each of its numbers comes from)
-version.txt               PS2Native's version (0.2), which the build gives the programs as ps2n_version.h (ADR 0042;
+version.txt               PS2Native's version (0.3), which the build gives the programs as ps2n_version.h (ADR 0042;
                           not VERSION: the root is on the include path, and Windows would find it for <version>)
 build/, deps/             build trees and downloaded dependency packages; git-ignored
 ```
@@ -1321,8 +1390,10 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   (`scripts/linux/runtime-profile.sh`): the runtime built to count in
   `build\windows-clang-count`, the training runs of `build\pgo\training.txt`
   (one to a line: a name, the disc image, a game's folder whose modules the
-  run takes, a session to run again or `-`, the frames; a session that is
-  timed against stock PCSX2 never among them) each through `game.ps1
+  run takes, a session to run again or `-`, the frames, and `vu-thread` for
+  a sixth part where the run is to have VU1 on PCSX2's VU thread, as a game
+  is played where that thread is on; a session that is timed against stock
+  PCSX2 never among them) each through `game.ps1
   -Modules <game folder>`, and the counts merged sparse; about 10 minutes on
   Windows, 18 on Linux under WSL 2, where each game's folder has to be one
   made on Linux. The build gives the compiler a copy of the profile named
@@ -1519,7 +1590,11 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   image>` captures the self-test's first random programs and builds them
   in (`build.ps1 -VuSelftestCapture`), for the test `selftest/vu-compiled`:
   run it again whenever that test says blocks had to be interpreted, which
-  is what any change to how blocks are planned does. So does a game's
+  is what any change to how blocks are planned does. On Linux it is
+  `scripts/linux/vu-selftest.sh --build-dir <tree>` (`PS2N_BIOS` set), once
+  for each tree: a tree it was never run for skips the test, and ctest counts
+  a skipped test among those that did not fail, so look for "Skipped" in a
+  test run's output before saying that every test passed. So does a game's
   capture go stale: run the game with `-VuCapture` again and rebuild. The
   captures are derived from the game and stay in the build tree. The
   execution model's "The vector units' micro programs" says how it works.
@@ -1544,8 +1619,9 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   blocks of the self-test's random IOP programs and builds them in
   (`build.ps1 -IopSelftestCapture`), for the test `selftest/iop-compiled`:
   run it again whenever that test says blocks had to be interpreted, which
-  is what a change to the programs the self-test makes does. The captures
-  are derived from the BIOS and the game and stay in the build tree. What
+  is what a change to the programs the self-test makes does (on Linux,
+  `scripts/linux/iop-selftest.sh --build-dir <tree>`, as for the VUs). The
+  captures are derived from the BIOS and the game and stay in the build tree. What
   the provider does not carry out it stops at, with an error that names it
   (`r3000a::shape`, `Refuse` in `runtime/iop_provider.cpp`). The execution
   model's "The I/O processor's code" says how it works.
@@ -1562,7 +1638,23 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   run's data folder), at the
   console's speed, with sound, the keyboard and the first controller
   (`ps2n-host -help` has the keys), until the window is closed; `-Config
-  stock-jit` puts stock PCSX2 in the same window. `game.ps1 -Patches
+  stock-jit` puts stock PCSX2 in the same window. In a window VU1 is carried
+  out on PCSX2's own VU thread where the settings have it, as in PCSX2 (ADR
+  0051: its default where the computer has three processor cores or more, a
+  game's own setting over it, PCSX2's game database over both); every run
+  without a window has VU1 on the CPU thread, so that it repeats, whatever a
+  game's own settings file says (`OnSettingsLoaded`, `host/main.cpp`), unless
+  `game.ps1 -Pcsx2VuThread` (`ps2n-host -pcsx2-vu-thread on`) asks for the
+  thread. The setting is decided once for a run, when the game's disc is
+  read, PCSX2's game database heard then, and nothing switches the thread on
+  while a game runs: `patches/pcsx2`'s first change holds only so (a run's
+  report says how many of VU1's runs were on the thread: all of them or
+  none). A session written down says when it was played with the thread
+  on (`vu-thread on`): a run of it again need not be it then (Agent Under
+  Fire's is not, with the thread or without: with the thread on its run does
+  not repeat). To check what a played game gets without a window on the
+  maintainer's screen, a game's window runs on the measurement's hidden
+  desktop, muted (`build\measure\vut-04.ps1`). `game.ps1 -Patches
   widescreen,fps` gives a comparison's two runs the patches and the
   overclock their note asks for. A session
   in the window takes `-Pad`, `-Frames` and `-Marks` as a scripted run
@@ -1615,12 +1707,20 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   line; CTest runs the two it compares first), and for the console-recorded
   VU programs `ps2n-static-microvu` (compiled EE code with PCSX2's VU and
   IOP recompilers under it, as before G11: tells a fault of the VU provider
-  or of the IOP provider from one of the EE's). Also
+  or of the IOP provider from one of the EE's) and `ps2n-static-vu-thread`
+  (PS2Native's providers with VU1 carried out on PCSX2's own VU thread, ADR
+  0051: held to the recordings as `ps2n-static` is; the picture a test
+  program's VU1 draws has it too, `frames/software/ps2n-static-vu-thread/vu`,
+  beside `stock-jit-vu-thread`, PCSX2's VU recompiler on that thread). Every
+  other configuration has VU1 on the CPU thread: a run with the thread on is
+  not compared with another sync point by sync point. Also
   `selftest/tables-and-semantics`: our instruction semantics
   against PCSX2's interpreter and recompiler, and PS2Native's VU provider
   against PCSX2's VU recompiler on random micro programs
   (`host/selftest_vu.cpp`: 2,000 per VU in each of five settings, the fifth
-  with encodings PCSX2's VU recompiler knows nothing of; a program that
+  with encodings PCSX2's VU recompiler knows nothing of, and for VU1 a sixth,
+  as on PCSX2's VU thread, where what a program's end tells the main thread
+  is compared with the rest; a program that
   differs is made as small as it still differs in and printed with the
   registers it uses); and `selftest/vu-compiled`, the first 150 of those
   programs per VU and setting with every block compiled ahead of time

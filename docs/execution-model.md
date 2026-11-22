@@ -1074,16 +1074,71 @@ it.
 
 **How it is held to microVU.** The self-test (`host/selftest_vu.cpp`) runs
 random micro programs on microVU and on the provider and compares
-everything the VU holds afterwards, its cycle count included: on 20,000 of
-them, in five settings, nothing differs. `selftest/vu-compiled` runs the
+everything the VU holds afterwards, its cycle count included: on 22,000 of
+them, in five settings for each VU and a sixth for VU1 (as on PCSX2's VU
+thread, below), nothing differs. `selftest/vu-compiled` runs the
 first 150 programs of each VU and setting with every block compiled ahead
 of time, and fails if one had to be interpreted; without that capture in
 the build it is skipped, not passed
-(`scripts\windows\vu-selftest.ps1` captures and builds them; the capture is
-in the build tree). The test programs and the game are held to the stock
+(`scripts\windows\vu-selftest.ps1` captures and builds them, on Linux
+`scripts/linux/vu-selftest.sh`; the capture is in the build tree). The test
+programs and the game are held to the stock
 run with the VUs on the provider (`same-as-stock`, VU0's and VU1's
 registers at every sync point), and to the run with everything
 interpreted, the micro code too (`lockstep`).
+
+**VU1 on PCSX2's VU thread** (ADR 0051). PCSX2 can carry VU1 out on a
+thread of its own (its "MTVU" setting, on by default where the computer has
+three processor cores or more). The thread, the queue the main thread
+fills for it (`VU_Thread`, `pcsx2/MTVU.cpp`: a program to run with the
+VIF's TOP and ITOP and FBRST as they are then, what is written into VU1's
+memories, an unpack) and the places where the main thread waits for VU1 are
+PCSX2's core; the thread calls whichever VU1 provider is installed. So
+PS2Native's provider runs there as microVU does, and what it does
+differently there is what microVU's code does differently where it has
+`THREAD_VU1` (`OnVuThread` in `runtime/vu_interp.cpp`):
+
+- a run is carried out when it is asked for, whatever VU0's status
+  register says of VU1;
+- where a program ends, pauses or stops at a T bit, VU0's status register
+  is left alone and VU1's interrupt is not raised: the main thread is told
+  (`VU_Thread::mtvuInterrupts`) and does both;
+- XTOP, XITOP and a pair with the T bit read the thread's own copies of
+  TOP, ITOP and FBRST: compiled micro code reads all three through pointers
+  that whoever runs the program sets (`vu::Ctx`), so that one compiled
+  block serves both ways, and a block's plan is the same;
+- the floating-point control register is set at every run's start and put
+  back at its end;
+- the EE's cycles are left alone at a run's end;
+- VU0, where it reaches VU1's registers, waits for the thread first.
+
+Where the thread is on is decided as in PCSX2: by the settings where a game
+is played in a window (PCSX2's default for the computer, a game's own
+setting over it, PCSX2's game database over both). Every other run has VU1
+on the CPU thread unless `ps2n-host -pcsx2-vu-thread on` asks otherwise: a
+run with the thread on need not repeat (a game can depend on when VU1's
+work is done: Agent Under Fire's run does, and the same input gives it
+another machine each time), VU1's registers are not the main thread's to
+read while the thread works, and so nothing is compared with such a run
+sync point by sync point. What the host decides so holds over a game's own
+settings file, which the core reads over the host's settings, and again
+when the game's executable starts: each time the core has read its
+settings, the host puts its decision into the configuration and into the
+settings as the core holds them in memory (`OnSettingsLoaded` in
+`host/main.cpp`). The setting is decided once for a run, when the game's
+disc is read: PCSX2 hears its game database only from the start of a game's
+executable, and not while the next is loaded, which would switch the thread
+off and on within a run, and PS2Native's change to PCSX2's code
+(`patches/pcsx2`) keeps the thread's copy of the VIF's row and column up to
+date only while the thread is in use; so a game the database switches the
+thread off for has it off from the start, and nothing switches it on while a
+game runs. A session written down says when it was played with the
+thread on, since a run of it again need not be it then. The provider on the
+thread is held to microVU by the self-test's sixth mode for VU1
+("as on PCSX2's VU thread": both sides run as the thread would run them,
+and what a program's end tells the main thread is compared with the rest),
+by the console-recorded VU programs and the picture a test program's VU1
+draws (`ps2n-static-vu-thread`), and by sessions run again with it.
 
 ## The I/O processor's code
 
@@ -1273,7 +1328,8 @@ its own code included, and the addresses at which each holds a block: on
 1,500 of them with every block compiled ahead of time,
 and fails if one had to be interpreted; without that capture in the build
 it is skipped, not passed (`scripts\windows\iop-selftest.ps1` captures and
-builds them). The test programs and the game are held to the stock run
+builds them, on Linux `scripts/linux/iop-selftest.sh`). The test programs
+and the game are held to the stock run
 with the IOP on the provider (`same-as-stock`: the IOP's PC and cycle
 count with the place and time, and its registers, at every sync point),
 and to the run with everything interpreted, the IOP's code too

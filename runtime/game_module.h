@@ -36,8 +36,9 @@ namespace ps2n
 	// Changes whenever what a module and the host share changes: 2, the
 	// machine's state as PS2Native describes it (ps2n/pcsx2_layout.h); 3, what
 	// the recompiler decided of COP2 instructions (ee::ImageInfo::cop2, ADR
-	// 0046).
-	inline constexpr uint32_t kGameModuleVersion = 3;
+	// 0046); 4, where compiled micro code reads its VIF's TOP and ITOP and
+	// FBRST (vu::Ctx, ADR 0051).
+	inline constexpr uint32_t kGameModuleVersion = 4;
 
 	// The lists of the compiled code a module holds, each ending with a null
 	// entry, as the recompiler writes them.

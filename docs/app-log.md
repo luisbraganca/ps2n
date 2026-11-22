@@ -14,7 +14,7 @@ its date. Nothing here comes from a game or a BIOS but counts and times.
 | P4.4 The packaged game | Killzone and Agent Under Fire run from their folders, at the console's pace, the same runs as from the development host | **Done** (2026-11-17): a game is a folder that plays it (`make-game.ps1 -Title`), started from a launcher named after the game, which starts the runtime beside it with the folder's settings, without a console, and says why when it cannot play; the sessions written down in the folder. Killzone and Agent Under Fire, started from their launchers, played at the console's pace (50.00 frames a second in play), nothing of their code interpreted; the maintainer's four sessions of Agent Under Fire and three of Killzone's from the development host, run again from the folders, and the launchers' sessions run again by the development host, are the sessions at every fingerprint. Killzone's code needed a module to have its own stack probe (`__chkstk`), which a test of the module tree holds |
 | P4.5 The wizard | A game packaged from the disc image and the BIOS with every default accepted, without a command line | **Under way** (2026-11-17): the maintainer's word that it goes through all of PCSX2's settings, and how ([ADR 0032](adr/0032-the-wizard-goes-through-pcsx2s-settings.md)); PCSX2's own per-game settings pages work in `ps2n-wizard`, compiled unchanged, what PS2Native carries out in PCSX2's place fixed; a game's settings are a file in its folder that the runtime reads (`-packaged`), and a session played so is run again at every fingerprint; the five steps, from the disc image to a folder that plays the game, in `PS2Native.exe` at the root of the folder `kit.ps1` makes: Agent Under Fire made with every default accepted in 336 seconds, and played from its folder at the console's pace. **Done** (2026-11-18): the maintainer made a game the project had never run, Gran Turismo 3, without a command line (three settings changed, the rest accepted), which counts for the criterion ([ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)); its code, loaded from its own data, was interpreted in its first session, which wrote it down, and the folder made again from that played at the console's pace. What was left of the step is P4.8's |
 | P4.6 New code in play | A session that meets new code finds it compiled at its next start | **Criterion met** (2026-11-18): a game's folder carries its own toolchain, and when a session ends its launcher starts `ps2n-remake`, which compiles what the session met, only what changed, in the background, with an icon and a notification, for the next start ([ADR 0034](adr/0034-a-game-compiles-new-code-with-its-own-toolchain-and-says-so.md)); a fresh folder of Gran Turismo 3: what its first session interpreted (5,871 blocks of its code, 7,846 of the IOP's, 15 of VU1's, the BIOS's kernel) all compiled at the next start, the third session interpreting nothing of it; the code met outside the executables compiled in 16 parts (that compile 151 s to 27 s); the maintainer's fourth game, Jak and Daxter, played from a folder the wizard made for 39 and then 23 minutes at the console's pace, 0.17% and then 0.04% of the EE's cycles interpreted, what each session met compiled about a minute after it |
-| P4.7 Linux | The maintainer's own run inside the Ubuntu 22.04 of WSL 2 on this computer ([ADR 0041](adr/0041-p4-7s-run-inside-wsl-on-the-development-computer.md); at first their Linux laptop, [ADR 0038](adr/0038-p4-7-built-and-tested-on-a-linux-inside-the-development-computer-first.md), which is not theirs to use; [ADR 0004](adr/0004-proof-of-concept-environment.md)): a game made with the wizard from its disc image plays from its folder at the console's pace, and what a session meets for the first time is compiled for its next start (the session's proposal, accepted). Linux is then described as tested under WSL 2 until a Linux machine of its own runs it | **Under way** (2026-11-19), at the maintainer's word ([ADR 0037](adr/0037-p4-8-done-a-game-does-not-play-while-it-compiles.md)), built and tested first on a Linux inside this computer, WSL 2 with Ubuntu 22.04 ([ADR 0038](adr/0038-p4-7-built-and-tested-on-a-linux-inside-the-development-computer-first.md)): every test passes on Linux (534), the compiled code in the host and in shared objects of its own; the game's window an X11 one, with the notice over its picture; the launcher, the wizard and the recompile working there, and the folder for Linux put together (`scripts/linux/kit.sh`): with it, inside that Linux, Silent Hill 3 made from the maintainer's `.chd` as without PCSX2 in 123 s, played from its folder by its own launcher at the console's pace (49.72 frames a second of 50), what its first session met compiled in the background, and the next session interpreting none of the IOP's code and 0.00% of the EE's cycles. **Done** (2026-11-19), with the maintainer's run inside WSL ([ADR 0041](adr/0041-p4-7s-run-inside-wsl-on-the-development-computer.md)): Jak and Daxter made with the Linux wizard from its `.iso` and played from its folder for five sessions, what each met compiled in its window when it ended, the later ones on compiled code alone at about 90% of the console's pace there (Silent Hill 3 99.3%); the transparent parts of characters on WSL's OpenGL are not there on PCSX2's software renderer. The maintainer's words: "I guess it's good", then "Let's create releases on Github" ([ADR 0042](adr/0042-releases-on-github-beginning-with-0-1.md)) |
+| P4.7 Linux | The maintainer's own run inside the Ubuntu 22.04 of WSL 2 on this computer ([ADR 0041](adr/0041-p4-7s-run-inside-wsl-on-the-development-computer.md); at first their Linux laptop, [ADR 0038](adr/0038-p4-7-built-and-tested-on-a-linux-inside-the-development-computer-first.md), which is not theirs to use; [ADR 0004](adr/0004-proof-of-concept-environment.md)): a game made with the wizard from its disc image plays from its folder at the console's pace, and what a session meets for the first time is compiled for its next start (the session's proposal, accepted). Linux is then described as tested under WSL 2 until a Linux machine of its own runs it | **Under way** (2026-11-19), at the maintainer's word ([ADR 0037](adr/0037-p4-8-done-a-game-does-not-play-while-it-compiles.md)), built and tested first on a Linux inside this computer, WSL 2 with Ubuntu 22.04 ([ADR 0038](adr/0038-p4-7-built-and-tested-on-a-linux-inside-the-development-computer-first.md)): every test passes on Linux (534; two of them, the self-tests on blocks compiled ahead of time, were skipped there and counted so until 2026-11-22: "The tests on Linux, and the self-tests' compiled blocks there"), the compiled code in the host and in shared objects of its own; the game's window an X11 one, with the notice over its picture; the launcher, the wizard and the recompile working there, and the folder for Linux put together (`scripts/linux/kit.sh`): with it, inside that Linux, Silent Hill 3 made from the maintainer's `.chd` as without PCSX2 in 123 s, played from its folder by its own launcher at the console's pace (49.72 frames a second of 50), what its first session met compiled in the background, and the next session interpreting none of the IOP's code and 0.00% of the EE's cycles. **Done** (2026-11-19), with the maintainer's run inside WSL ([ADR 0041](adr/0041-p4-7s-run-inside-wsl-on-the-development-computer.md)): Jak and Daxter made with the Linux wizard from its `.iso` and played from its folder for five sessions, what each met compiled in its window when it ended, the later ones on compiled code alone at about 90% of the console's pace there (Silent Hill 3 99.3%); the transparent parts of characters on WSL's OpenGL are not there on PCSX2's software renderer. The maintainer's words: "I guess it's good", then "Let's create releases on Github" ([ADR 0042](adr/0042-releases-on-github-beginning-with-0-1.md)) |
 | P4.8 The folder for others | On a computer without PCSX2, a game made with the wizard from a `.chd` image, its patches fetched at the user's word, and the folder carrying the licence of everything in it (the session's proposal, [ADR 0033](adr/0033-the-wizards-step-ends-what-the-folder-needs-for-others-is-a-step-of-its-own.md)) | **Under way** (2026-11-18), before P4.7, at the maintainer's word ([ADR 0036](adr/0036-the-folder-for-others-how-p4-8-is-done.md)): a disc in any format PCSX2 plays, read through PCSX2's own readers; the executables chosen; PCSX2's archive of patches fetched at the user's word or given; a fixed setting in a game's settings file refused; the licence of everything in the folder, Qt's made from Qt's own SBOMs. On this computer the wizard made Silent Hill 3, a game the project had never run, from the maintainer's `.chd`, as without PCSX2, its patches fetched, in 155 s, once a function the recompiler made of a megabyte of its data was cut into pieces. **Done** (2026-11-18): on the maintainer's Windows 10 computer, which has no PCSX2, Silent Hill 3 made with the wizard from its `.chd`, PCSX2's patches fetched at the button, and played from its folder for four sessions: "Everything went flawlessly" ([ADR 0037](adr/0037-p4-8-done-a-game-does-not-play-while-it-compiles.md)). At the maintainer's word with it, a game does not play while it compiles: started while its own recompile compiles, its launcher waits for it, in a window that says so, and then plays with what it compiled |
 
 ## How to run it
@@ -3886,3 +3886,499 @@ To the six decisions put with the above: "1. Yes", "2. Yes", "3. Yes",
   proposes to take the step).
 - **The maintainer's seven game folders get the runtime with the change;** no
   release with the change alone.
+
+### The maintainer's game folders given the runtime with the change (2026-11-22)
+
+At the maintainer's "4. Yes" (ADR 0051), from the committed tree (`004a1d6`),
+the wizard's own way, as for 0.2 (`build\measure\folders-03.ps1`, which makes
+`build\kit` again and runs `folders-02.ps1`; inside WSL the scratch
+`release-02.sh theirs`):
+
+- **The maintainer's own PS2Native folders made again,** on Windows
+  (`build\kit`) and inside WSL (`~/ps2n/build/PS2Native`), their games left
+  as they were: each now has the patch in `licences/PCSX2-changes`.
+- **A trial first,** on the copy of the Jak and Daxter folder kept from the
+  morning's (at 0.2's programs): `ps2n-wizard --update` said "Made with
+  another build of PS2Native 0.2. Brought up to date", the version being the
+  same and the programs' fingerprint another; the folder's own `ps2n-remake
+  --before-play` compiled the game again (52 s), a toolchain header having
+  changed (`ops_mmi.h`'s lanes); 900 frames of a session run again were the
+  session at every fingerprint.
+- **The six folders on Windows,** each the same way, its memory cards copied
+  aside first and the same bytes after: Jak and Daxter (compiled again in
+  52 s), Killzone (113 s), Silent Hill 3 (89 s), Gran Turismo 3 (22 s),
+  Agent Under Fire (96 s) and 007 - Agent Under Fire (321 s). The start of
+  one of each folder's sessions run again with its new programs is the
+  session at every fingerprint compared (18 of them; Silent Hill 3's 90
+  frames, 1); asked again, the wizard says "Up to date" and changes nothing;
+  nothing is left to compile. None has counts yet.
+- **The one inside WSL,** Jak and Daxter: compiled again in 27 s, 600 frames
+  of its longest session the session at every one of 12 fingerprints.
+- **Each folder's runtime says what it is:** the second line of its
+  `ps2n-host -help` names the change.
+
+## VU1 on a thread of its own (ADR 0051)
+
+The maintainer's "3. Yes" (ADR 0051): the next speed step is VU1 carried out
+on a thread of its own, as PCSX2 does by default, measured against stock
+PCSX2 with its VU thread on. Where things stood: with that thread on, stock
+PCSX2 takes 33.49 s for Jak and Daxter's session where the compiled game
+takes 50.23 s (1.50 times its time), 33.33 s where 40.71 s for Killzone's
+(1.22), 18.43 s where 20.83 s for Gran Turismo 3's (1.13).
+
+### What the thread is, and what PS2Native's VU provider does differently on it (2026-11-22)
+
+- **The thread and its machinery are PCSX2's core, and stay.** The main
+  thread puts VU1's work into a queue (`VU_Thread`, `pcsx2/MTVU.cpp`: a
+  program to run, with the VIF's TOP and ITOP and FBRST as they are then;
+  what is written into VU1's micro and data memory; an unpack) and waits for
+  the thread where it needs VU1's state. The thread takes the work and calls
+  whichever VU1 provider is installed (`CpuVU1`): it is there whether PCSX2's
+  VU recompiler is the provider or PS2Native's, and with the setting off it
+  sleeps.
+- **What PCSX2's VU recompiler does differently where the thread carries VU1
+  out** (the places of `THREAD_VU1` in `pcsx2/x86/microVU*`), the provider
+  now does too (`runtime/vu_interp.cpp`, `OnVuThread`):
+  - a run is carried out when it is asked for, whatever VU0's status register
+    says of VU1 (`recMicroVU1::Execute`);
+  - where a program ends, pauses or stops at a T bit, VU0's status register
+    is left alone and VU1's interrupt is not raised: the main thread is told
+    (`VU_Thread::mtvuInterrupts`, as `mVUEBit` and `mVUTBit` tell it) and
+    does both (`Get_MTVUChanges`);
+  - XTOP and XITOP read the thread's own copy of the VIF's TOP and ITOP, and
+    a pair with the T bit the thread's own copy of FBRST;
+  - the floating-point control register is set at every run's start and put
+    back at its end, not only where it differs from the EE's;
+  - the EE's cycles are left alone at a run's end;
+  - a reset and a shutdown let the thread finish first;
+  - and VU0, where it reaches VU1's registers, waits for the thread
+    (`WaitForVu1`, microVU's `mVUwaitMTVU`).
+- **Compiled micro code reads TOP, ITOP and FBRST through three pointers**
+  that whoever runs the program sets (`vu::Ctx`), so that the same compiled
+  block serves both ways. What a module and the host share changed with it:
+  the module version is 4, and a game's modules are compiled again. A block's
+  plan did not change: the micro code captured so far is as good as it was.
+- **The host.** `ps2n-host -pcsx2-vu-thread` now goes with PS2Native's VU
+  provider (`game.ps1 -Pcsx2VuThread` with `ps2n-static`), and is refused
+  with what reads VU1's registers from the main thread (`-sync`,
+  `-sync-against`, `-trace`, `-trace-against`, `-vu-report`). What the host
+  asks of the provider while a game runs (how much of the VUs' work was
+  interpreted, for the notice; whether it stopped at something) it now asks
+  in a way that is safe from another thread, and before a run's report it
+  lets the thread finish. Every run without a window and without the option
+  has VU1 on the CPU thread, as before; what a game played in a window has
+  is below ("Where the thread is on").
+
+### Held to PCSX2's VU recompiler, and the tests (2026-11-22)
+
+- **The self-test has a mode more for VU1: as on PCSX2's VU thread.** The
+  setting on, both sides run on the self-test's own thread as that thread
+  would run them, the T bit's enable and TOP and ITOP in the thread's copies,
+  and what the program's end tells the main thread compared with everything
+  else: 2,000 random programs, 21,016 instruction pairs, none differing from
+  PCSX2's VU recompiler. With a fault planted (the end not told), 1,662 of
+  the 2,000 differ, each saying so ("what the end told the main thread:
+  microVU 08, PS2Native 00").
+- **Nine tests more, with VU1 on PCSX2's VU thread:** the seven
+  console-recorded VU programs on PS2Native's providers
+  (`ps2autotests/ps2n-static-vu-thread`), held to the recordings as
+  `ps2n-static` is; and the picture a test program's VU1 draws, its packets
+  reaching the GS from that thread, by PS2Native's VU provider and by
+  PCSX2's VU recompiler (`frames/software/ps2n-static-vu-thread/vu`,
+  `stock-jit-vu-thread`).
+- **Every test passes with the step as it ends,** in the four trees: on
+  Windows 543 of 543 in the development tree and 541 of 541 in the release's
+  (the three comparisons of `dma/vif/stcycl` not run there, as before), on
+  Linux 543 of 543 and 540 of 540, none skipped ("The tests on Linux",
+  below). The 534 of before are among them.
+
+### Timed on Windows, with the profile of play as 0.2 had it (2026-11-22)
+
+`build\measure\vut-01.ps1`. The release's tree built with the step (every
+test in it passing: 541 of 541, the three comparisons of `dma/vif/stcycl`
+not run), a folder for others made from it (`build\measure\kit15`), and in it
+a copy of each game's folder of kit13 brought up to date by that folder's
+wizard and compiled by its own `ps2n-remake --before-play` with the counts
+it has: what a user's folder goes through (Jak and Daxter compiled in 56 s,
+Gran Turismo 3 in 27 s, Agent Under Fire in 110 s). Stock PCSX2 from the
+folders of the timing before (`rpstock`, `rpstockt`). Each game's timed
+session, three rounds in turns, the order turned round every second round;
+means in seconds:
+
+| | Stock PCSX2, VU1 on the CPU thread | Stock PCSX2, its VU thread on | The compiled game, VU1 on the CPU thread | The compiled game, VU1 on PCSX2's VU thread | Times the time of stock PCSX2 with its VU thread on |
+|---|---:|---:|---:|---:|---:|
+| Jak and Daxter | 55.94 | 33.44 | 50.89 | 32.89 | 0.98 |
+| Gran Turismo 3 | 20.97 | 18.39 | 20.77 | 18.65 | 1.01 |
+| Agent Under Fire | 26.79 | 26.23 | 27.01 | 25.92 | 0.99 |
+| Killzone | 43.78 | 33.41 | 41.04 | 31.76 | 0.95 |
+
+(The rounds, in that order of columns: 56.06, 55.47, 56.28; 33.24, 33.28,
+33.79; 50.91, 51.18, 50.58; 32.71, 32.97, 33.00. 21.01, 20.95, 20.94; 18.51,
+18.27, 18.39; 20.91, 20.73, 20.68; 18.63, 18.58, 18.75. 26.75, 26.77, 26.84;
+26.24, 26.22, 26.24; 27.26, 26.91, 26.85; 26.14, 25.81, 25.80. 43.71, 44.04,
+43.60; 33.30, 33.58, 33.36; 41.24, 41.06, 40.81; 32.52, 31.24, 31.53.)
+
+- **With VU1 on PCSX2's VU thread a compiled game takes 0.95 to 1.01 times
+  the time of stock PCSX2 with its VU thread on,** where in the same turns it
+  takes 1.03 to 1.52 with VU1 on the CPU thread: Jak and Daxter 35% less time
+  than without the
+  thread, Killzone 23% less, Gran Turismo 3 10% less, Agent Under Fire 4%
+  less. Gran Turismo 3 is 0.26 s behind stock PCSX2 so (1.4%).
+- **The runs are the sessions where stock PCSX2's are.** Jak and Daxter's,
+  Gran Turismo 3's and Killzone's runs with the thread on, stock and
+  compiled, are their sessions at every fingerprint (167, 173 and 186), all
+  eighteen, nothing interpreted. Agent Under Fire's part from the session at
+  frame 1,900 on stock PCSX2 and on the compiled game alike, as before: its
+  two times are of runs that were no longer the session.
+- **One thing is not as a release would have it:** the runtime's profile of
+  play is 0.2's, in which the functions this step changed (the VU
+  provider's way into and out of a program among them) have no counts. With
+  VU1 on the CPU thread the compiled games take up to 1% more than in the
+  timing before for it (50.89 s where 50.23 s, 41.04 s where 40.71 s, 27.01 s
+  where 26.79 s; Gran Turismo 3 20.77 s where 20.83 s).
+- **A first run of the same folder,** one round alone before these: Jak and
+  Daxter 32.07 s with the thread, 50.76 s without, stock PCSX2 33.37 s and
+  56.55 s.
+
+### Timed on Linux, under WSL 2 (2026-11-22)
+
+The scratch `vut-01.sh`, as the timings before on Linux: the release's tree
+built with the step (link-time optimization, the profile of play as 0.2 had
+it there), the Linux folder made from it, and a copy of the measurement's
+folder of Jak and Daxter brought up to date by that folder's wizard and
+compiled by its own `ps2n-remake --before-play` with the counts it has (128
+files, 70 s at ten at a time). Stock PCSX2 from the tree left as it was
+built for ADR 0050, as released. The session of the Windows timing, nothing
+drawn, three rounds in turns, the order turned round in the second; seconds:
+
+| | Rounds | Mean |
+|---|---|---:|
+| Stock PCSX2, VU1 on the CPU thread | 75.88, 74.06, 74.22 | 74.72 |
+| Stock PCSX2, its VU thread on | 37.41, 37.35, 37.18 | 37.31 |
+| The compiled game, VU1 on the CPU thread | 56.14, 56.01, 56.21 | 56.12 |
+| The compiled game, VU1 on PCSX2's VU thread | 36.80, 37.16, 36.75 | 36.90 |
+
+- **With VU1 on PCSX2's VU thread the compiled game takes 0.99 times the
+  time of stock PCSX2 with its VU thread on** under WSL 2, where 1.50 with
+  VU1 on the CPU thread (56.12 s against 37.31 s), and 34% less time than
+  without the thread.
+- **All twelve runs are the session at every one of its 167 fingerprints,**
+  nothing of the micro code interpreted.
+- **The same caveat as on Windows:** the profile of play is 0.2's. And it
+  was timed before the step's last changes to the host (how the thread's
+  setting is decided at a run's start, below), which are on no run's path;
+  it was not timed again.
+
+### Where the thread is on: a game played in a window, by default (2026-11-22)
+
+- **In a window, as in PCSX2.** The host leaves the setting as the settings
+  have it: PCSX2's default for the computer (on where it has three processor
+  cores or more), a game's own setting over it, and PCSX2's game database
+  over both (67 of its entries switch the thread off, none of them one of
+  the five games tried). In the wizard's settings step PCSX2's own box for
+  it, "Enable Multithreaded VU1 (MTVU)" on the Emulation page, is the
+  user's: it was shown fixed off until now, and `vuThread` is no longer among
+  the settings a game's settings file may not set (`host/game_settings.h`).
+- **Every other run has VU1 on the CPU thread,** unless `ps2n-host
+  -pcsx2-vu-thread on` asks for the thread (`game.ps1 -Pcsx2VuThread`): every
+  test and comparison, a session run again, the run a game's folder counts
+  its profile on. A run without a window is to repeat.
+- **The host's word holds over a game's own settings file.** The core reads a
+  game's settings over the host's, and reads them again when the game's
+  executable starts, without telling the host. So the host puts what it
+  decided into the configuration each time the core has read its settings,
+  and into the game's settings as the core holds them in memory, never into
+  the file (`OnSettingsLoaded`, `host/main.cpp`). The check below found it:
+  before, a settings file that said `vuThread = true` put a run without a
+  window on the thread, a comparison with a stock run among them, and one
+  that said `false` undid `-pcsx2-vu-thread on`.
+- **Decided once for a run.** PCSX2 hears its game database only from the
+  moment a game's executable starts, and not while the next one is being
+  loaded: for a game the database switches the thread off for, the thread
+  would be on, off, on and off again within one run. PS2Native's change to
+  PCSX2's code (ADR 0050) keeps the thread's copy of the VIF's row and
+  column up to date only while the thread is in use, so the thread must
+  never be switched on while a game runs; it was written when PS2Native
+  never used the thread, and its note says so. So the host decides when the
+  game's disc is read, before anything runs, the database heard then too,
+  and the thread stays as decided for the run: such a game has it off from
+  the start. A run's report says how many of VU1's runs were on the thread.
+  The note at the top of the change, and the list of PS2Native's changes
+  (`patches/pcsx2`), say what holds now; the change itself is as it was.
+- **A session written down says when it was played with the thread on**
+  (`vu-thread on` in its record), and a run of it again that parts from it
+  says so.
+
+Checked (`build\measure\vut-04.ps1`, `vut-05.ps1`; a game's window on the
+measurement's own desktop, which nobody sees, muted):
+
+- **Jak and Daxter played in a window,** 1,500 frames from its folder
+  (kit15's, the release tree's runtime as the step ends), no word on the
+  thread anywhere: VU1 on PCSX2's VU thread, all 171,118 of its runs, the
+  session's record saying so, none of its micro code interpreted. That
+  session run again
+  without a window is the session at every one of its 30 fingerprints, with
+  VU1 on the CPU thread and with the thread on.
+- **The same as a folder the wizard made** (`-packaged`, a game settings
+  file): the file saying nothing of the thread, VU1 on the thread (all
+  129,196 runs) and the record saying so; the file saying `vuThread =
+  false`, none of VU1's runs on the thread and the record saying nothing.
+- **A game PCSX2's database switches the thread off for** (a line more for
+  this game in a copy of the database, in a copy of its folder), played in a
+  window the same way: none of VU1's runs on the thread, from the start, the
+  record saying nothing of it, and PCSX2's own log saying that it set its
+  switch off.
+- **A session of the maintainer's run again without a window from a copy
+  whose settings file names the thread,** 600 frames: the file saying
+  `true`, VU1 on the CPU thread and the run the session; with
+  `-pcsx2-vu-thread on`, on the thread whether the file says `true` or
+  `false`, the run the session each time; and compared with a stock run
+  (`same-as-stock`, 300 frames), the file saying `true`, both runs with VU1
+  on the CPU thread and the same at every one of 1,005,323 sync points.
+- **The wizard's settings step,** saved as pictures: the box for the thread
+  is live on PCSX2's Emulation page, beside the ones still shown fixed (the
+  EE's cycle skipping).
+
+### A game whose run does not repeat with the thread on: Agent Under Fire (2026-11-22)
+
+The timings above had Agent Under Fire's session, played without the
+thread, part from itself at frame 1,900 when run again with it. Looked at
+the other way round (`vut-04.ps1`, parts `aut` and `autagain`):
+
+- **A session played with the thread on.** Its folder (kit15's, the release
+  tree's runtime) played in a window by the script into its first mission
+  (`tests/games/agent-under-fire/start.pad`), 4,600 frames, VU1 on PCSX2's
+  VU thread as a window has it by default: its record says so, and none of
+  VU1's micro code was interpreted.
+- **That session run again without a window, three times:** twice with the
+  thread on, once with VU1 on the CPU thread. Each is the session at its
+  first 37 fingerprints and parts from it at frame 1,900, each with another
+  state there (fingerprints `FEB3B93A71327CF7`, `1573A15D895E2AE7` and
+  `5BCE05B31427FA0C`, where the session had `20919A98E1AFBE3C`).
+- **So with the thread on this game's run is not one run:** the same input
+  gave three different machines at frame 1,900, two of them with the thread
+  on both times. Between frames 1,850 and 1,900 from power-on, something of
+  what the main thread sees depends on when the thread did its work; what,
+  was not looked for. Jak and Daxter's, Gran Turismo 3's and Killzone's
+  sessions repeat with the thread on, at every fingerprint.
+- **What follows for a game like it:** a session played with the thread on
+  cannot be run again as itself, with the thread or without. A run of it
+  again still runs (it is the same input from the same start), so a folder
+  still counts its profile on it, but on a run that leaves what was played
+  where the game's run first depends on the thread; and such a session is no
+  session to compare runs on or to time. The sessions written down until now
+  were all played without the thread, and are what they were.
+
+### The tests on Linux, and the self-tests' compiled blocks there (2026-11-22)
+
+- **Two tests had never run on Linux.** `selftest/vu-compiled` and
+  `selftest/iop-compiled` run the self-test's random programs on blocks
+  compiled ahead of time, from a capture that is made on the system and
+  built in; without it they are skipped, and the Linux trees never had one.
+  Every count of Linux's tests until now ("534, all passing") had those two
+  skipped, not passed: ctest counts a skipped test among those that did not
+  fail. It was in the test runs' own logs and in no report.
+- **Linux has the scripts for them now:** `scripts/linux/vu-selftest.sh` and
+  `scripts/linux/iop-selftest.sh`, the counterparts of the Windows ones (the
+  programs run with every block interpreted and written down, the tree
+  built with the capture). On Linux the IOP's 1,500 programs give 6,366
+  different blocks, all compiled.
+- **With both captures in both trees,** every test of the development tree
+  passes there, 543 of 543, none skipped, and 540 of 540 in the release's
+  tree (the three comparisons of `dma/vif/stcycl` not run, as on Windows),
+  the nine with VU1 on PCSX2's VU thread among them.
+
+### The runtime's profile of play made again, with the thread (2026-11-22)
+
+A release's runtime is built with a profile of play (ADR 0047), and 0.2's
+was counted with VU1 on the CPU thread: what the VU provider does on the
+thread, and what the main thread does beside it, had no counts.
+
+- **A training run can have VU1 on the thread:** a sixth part of its line,
+  `vu-thread` (`scripts\windows\runtime-profile.ps1`,
+  `scripts/linux/runtime-profile.sh`). Such a run of a session need not be
+  the session; the script says so where it is not, and goes on.
+- **Made again on Windows** (`-Training build\pgo\training-vut.txt -Out
+  build\pgo\runtime-windows-vut.profdata`; 731 s with the runtime built to
+  count): the seven runs of 0.2's profile, from the measurement's folders
+  with the step's programs, six of them with the thread (Jak and Daxter's,
+  Gran Turismo 3's and Killzone's play, Silent Hill 3's boot, and the first
+  sessions of Jak and Daxter and of Gran Turismo 3, their micro code
+  interpreted, VU1's on the thread), and Agent Under Fire's play without it,
+  whose run with the thread leaves its session, which keeps the other way
+  counted too. Every run of a session was the session at every fingerprint
+  compared (216, 216, 216, 186, 60 and 60). The profile has 5,105
+  functions.
+- **Not made again on Linux:** the Linux timing above is with 0.2's profile
+  there, and the profile is made again on each system for a release, from
+  the tree released.
+
+### Timed on Windows, as a release would have it (2026-11-22)
+
+`build\measure\vut-06.ps1`, then `vut-01.ps1 -Parts time -Variant rv`, alone
+on the computer. Two things are as a release's would be that were not in the
+first timing above:
+
+- **The runtime** is the release's tree's as the step ends, built with
+  link-time optimization and the profile of play made again with the thread
+  (every test passing in it: 541 of 541).
+- **Each game's folder has its own counts, taken with these programs.** A
+  folder brought up to date counts once more after its next session of three
+  minutes (ADR 0049): each of the four folders did, by its own `ps2n-remake`
+  as after a session, on its count session, never the one timed: Jak and
+  Daxter in 196 s, Gran Turismo 3 in 95 s, Agent Under Fire in 396 s,
+  Killzone in 345 s, each run it counted on the session at every fingerprint
+  compared.
+
+Stock PCSX2 from the folders of the timings before, as released (`rpstock`,
+`rpstockt`). Each game's timed session, three rounds in turns, the order
+turned round in the second; means in seconds:
+
+| | Stock PCSX2, VU1 on the CPU thread | Stock PCSX2, its VU thread on | The compiled game, VU1 on the CPU thread | The compiled game, VU1 on PCSX2's VU thread | Times the time of stock PCSX2 with its VU thread on |
+|---|---:|---:|---:|---:|---:|
+| Jak and Daxter | 55.99 | 33.68 | 50.37 | 32.35 | 0.96 |
+| Gran Turismo 3 (its second set) | 20.94 | 18.51 | 20.92 | 18.76 | 1.01 |
+| Agent Under Fire | 26.91 | 26.31 | 26.85 | 25.83 | 0.98 |
+| Killzone | 44.21 | 33.12 | 40.95 | 31.39 | 0.95 |
+
+(The rounds, in that order of columns: 56.04, 56.03, 55.90; 33.70, 33.83,
+33.52; 50.39, 50.38, 50.35; 32.20, 32.49, 32.37. 20.86, 20.84, 21.12; 18.48,
+18.50, 18.56; 20.89, 20.95, 20.93; 18.79, 18.71, 18.79. 26.69, 27.05, 26.99;
+26.07, 26.42, 26.45; 26.72, 26.92, 26.91; 25.78, 25.91, 25.79. 43.99, 44.44,
+44.20; 32.76, 33.36, 33.24; 40.30, 41.38, 41.16; 31.31, 31.46, 31.41.)
+
+- **With VU1 on PCSX2's VU thread a compiled game takes 0.95 to 1.01 times
+  the time of stock PCSX2 with its VU thread on:** three of the four games
+  less than it (4%, 2% and 5% less), Gran Turismo 3 1.4% more. With VU1 on
+  the CPU thread the same folders take 1.50, 1.13, 1.02 and 1.24 times that
+  stock PCSX2's time in these turns, and 0.90, 1.00, 1.00 and 0.93 times the
+  time of stock PCSX2 with VU1 on the CPU thread.
+- **The step's criterion (ADR 0051) is met by three games and not by Gran
+  Turismo 3,** which is 0.25 s behind in 18.5 s; where its time goes is
+  below.
+- **What a player sees and hears is the same.** The last picture and the
+  sound at the last frame are the same in all twelve runs of Gran Turismo 3
+  and in all twelve of Killzone, and the sound in all twelve of Jak and
+  Daxter (nothing drawn): stock PCSX2 and compiled, with the thread and
+  without. All thirty-six are their sessions at every fingerprint.
+- **Agent Under Fire's runs with the thread are no longer its session,** as
+  before, stock PCSX2's three and the compiled game's three: each of the six
+  ends with another picture and another sound; its six without the thread
+  end with the same. Its two times with the thread are of runs that differ.
+- **Gran Turismo 3 was timed twice.** The measurement's script first had its
+  folder count on 9,000 frames, having given its copy of the session 50
+  frames a second by hand, where this game is shown at 60 and three minutes
+  are 10,800 (the same slip as in 0.2's measurement, "As the release has
+  it"): timed so, 18.72 s with the thread (18.69, 18.82, 18.64) against stock
+  PCSX2's 18.40 s (18.11, 18.63, 18.45), 1.02, and 21.08 s against 20.87 s
+  without. Counted on its 10,800 frames (the run it counted on the session
+  at all 216 fingerprints compared), the row above. A user's folder is not
+  open to the slip: the runtime writes a session's frames a second down
+  itself.
+- **With VU1 on the CPU thread nothing was lost:** 50.37 s for Jak and Daxter
+  where 50.23 s before the step, 20.92 s where 20.83 s, 26.85 s where 26.79 s,
+  40.95 s where 40.71 s ("Timed on Windows", in the chapter before), each
+  within what two sets of turns differ by.
+
+### Where Gran Turismo 3's time goes with the thread (2026-11-22)
+
+One profiled run of each side with the thread on (`vut-01.ps1 -Parts
+profile`): the compiled game's main thread 19.1 s, stock PCSX2's 18.8 s. With
+VU1 on a thread of its own, what the main thread carries is the EE's and the
+IOP's code and the core's devices. In seconds of the main thread:
+
+| | The compiled game | Stock PCSX2 |
+|---|---:|---:|
+| The game's EE code (PCSX2's: its EE recompiler's) | 4.4 | 4.2 |
+| The EE's event test | 1.8 | 2.0 |
+| The IOP's code, with its stores into IOP memory | 2.8 | 2.4 |
+| The EE's accesses to devices (the runtime's and the core's functions for them) | 0.7 | 0.2 |
+| System instructions carried out by the runtime, and the provider's loop | 0.6 | 0.1 |
+| The sound | 2.6 | 2.8 |
+| The films' decoder (IPU) | 2.1 | 2.1 |
+
+- **The compiled side takes more** for the IOP's code, for the EE's accesses
+  to devices (while its films play, this game reads the IPU's registers in a
+  loop, and compiled code goes through the runtime for them), for the system
+  instructions and for the EE's code itself; and less for the event test and
+  the sound. Net, 0.3 s of 18.8 s.
+- **They are costs ADR 0046 listed,** two of them tried then and taken out
+  for want of a gain (accesses to devices asking only where they may fault,
+  an IOP block's way out). With VU1 on the main thread they were made up for
+  there: the thread takes 2.43 s of this session off stock PCSX2's main
+  thread and 2.16 s off the compiled game's, PS2Native's compiled micro code
+  being the cheaper of the two.
+
+### What a profile is worth when its run left the session (2026-11-22)
+
+A folder counts its profile on a run again of a session (ADR 0045), and a
+session of a game like Agent Under Fire played with the thread on cannot be
+run again as itself. Measured the other way round (`vut-06.ps1`, parts
+`copy`, `drift` and `timedrift`): a copy of Agent Under Fire's folder counted
+once more on the same session as its folder above, but with the thread on in
+the run it counts on, which left the session at frame 2,300 of its 9,000
+(the other's run was the session at all 180 fingerprints compared). Its
+timed session then, the thread on, three rounds in turns:
+
+| The folder's counts are of | Rounds | Mean |
+|---|---|---:|
+| a run that was its session | 26.03, 26.14, 25.85 | 26.01 |
+| a run that left its session at frame 2,300 | 25.39, 25.95, 25.66 | 25.67 |
+
+No loss shows: the difference is the other way, and within what this game's
+runs with the thread differ by (no two of them are the same run; the first
+folder took 25.83 s in the turns above).
+
+### A game's first session, with the thread (2026-11-22)
+
+`vut-06.ps1`, part `timefirst`: the first sessions the maintainer played of
+Gran Turismo 3 and of Jak and Daxter, from folders made from the disc alone
+(the game's code interpreted where the game loads it from its data, the
+micro code interpreted), the release tree's runtime, two rounds in turns;
+seconds:
+
+| | VU1 on the CPU thread | VU1 on PCSX2's VU thread | |
+|---|---:|---:|---:|
+| Gran Turismo 3's first session (8,678 frames) | 68.44 (68.26, 68.62) | 55.56 (56.03, 55.09) | 19% less |
+| Jak and Daxter's (2,564 frames) | 41.56 (41.24, 41.88) | 28.23 (28.41, 28.05) | 32% less |
+
+All eight runs are the session at every fingerprint, the micro code of both
+vector units interpreted at once on two threads. (As 0.2 has them: 69.6 s
+and 44.8 s. Stock PCSX2 with VU1 on the CPU thread takes 20.8 s and 13.1 s;
+with its VU thread on it was not timed on these.)
+
+### Where the step stands, and what is put to the maintainer (2026-11-22)
+
+- **Built, tested and measured;** in no folder of the maintainer's and in no
+  release, and not committed.
+- **Not tried:** a game in a window on Linux with the thread (inside WSL its
+  window would have come up on the maintainer's screen; without a window the
+  thread was run and timed there); any game but the five; the maintainer's
+  own play.
+- **Left as it is:** what in Agent Under Fire depends on the thread; Gran
+  Turismo 3's 1.4%; the Linux profile of play, which a release makes again.
+- **Put to the maintainer:** whether it is committed and pushed; whether
+  their seven game folders get these programs (each compiles its game
+  again); and whether the next release, 0.3, is prepared with it, after they
+  have played with it or at once.
+
+### The maintainer's answers (2026-11-22, ADR 0052)
+
+"1. Yes", "2. Yes", "3. Yes", and "Do whatever needs doing from your side
+(from your "Not done" category)":
+
+1. **The step is committed and pushed.**
+2. **The maintainer's seven game folders get these programs,** the release's
+   own, made from 0.3's tree, each compiling its game again before it next
+   starts.
+3. **0.3 is prepared with it:** both downloads from the committed and pushed
+   tree, the runtime's profile of play made again on each system, each
+   download tried, a draft on GitHub that the maintainer publishes. The
+   session had recommended it after the maintainer had played with the step;
+   their answer is read as now, the draft leaving them free to play first.
+   The version is 0.3 (`version.txt`).
+4. **What the session had not done is done** (below, as it is done): its last
+   edits carried into the Linux tree and the website looked at again (it
+   renders as before, the changed passages where they belong); the Linux
+   runtime's profile of play made again with the thread; and a game in a
+   window on Linux with the thread.

@@ -62,6 +62,15 @@ namespace ps2n::vu
 	{
 		VURegs* R = nullptr; // this VU's registers
 		const uint32_t* micro = nullptr; // its micro memory, as words
+		// What a program reads of what the main thread owns, where this VU
+		// reads it (whoever runs the program sets them, runtime/vu_interp.cpp):
+		// TOP and ITOP of its VIF, for XTOP and XITOP, and FBRST, for a pair
+		// with the T bit. VU1 carried out on PCSX2's VU thread reads that
+		// thread's own copies of them, as PCSX2's VU recompiler does there
+		// (docs/adr/0051).
+		const uint32_t* vifTop = nullptr;
+		const uint32_t* vifItop = nullptr;
+		const uint32_t* fbrst = nullptr;
 		uint32_t memMask = 0; // the byte address of its last pair
 		uint32_t avx = 0; // PCSX2's emitter writes AVX: it swaps the sources of some additions and multiplications
 		uint32_t base = 0; // the byte address of the running block's first pair
@@ -99,6 +108,11 @@ namespace ps2n::vu
 	// The GIF transfer of an XGKICK: PCSX2's own function for it, as microVU
 	// calls it (runtime/vu_interp.cpp).
 	PS2N_API void Xgkick(uint32_t address);
+
+	// Before VU0 reaches VU1's registers: where VU1 is carried out on PCSX2's
+	// VU thread, that thread is waited for first (microVU's mVUwaitMTVU);
+	// elsewhere nothing.
+	PS2N_API void WaitForVu1();
 
 	// What the analysis and the settings decided for an instruction, in a
 	// step's "mode" operand.
@@ -237,7 +251,10 @@ namespace ps2n::vu
 			if (vu1)
 				return a.vu1Mem() + ((quadword & 0x3ff) << 4);
 			if (quadword & 0x400)
+			{
+				WaitForVu1();
 				return a.vu1Regs() + ((quadword & 0x3f) << 4);
+			}
 			return a.vu0Mem() + ((quadword & 0xff) << 4);
 		}
 
@@ -349,7 +366,9 @@ namespace ps2n::vu
 		template <class A>
 		PS2N_VU_OP void T0Vif(A& a, uint32_t which)
 		{
-			a.t0() = which == 0 ? vif1Regs.top : which == 1 ? (vif0Regs.itop & 0xffu) : (vif1Regs.itop & 0x3ffu);
+			// XTOP (VU1's alone), VU0's XITOP, VU1's XITOP: of the VIF registers
+			// this VU reads (Ctx::vifTop, vifItop).
+			a.t0() = which == 0 ? *a.c.vifTop : which == 1 ? (*a.c.vifItop & 0xffu) : (*a.c.vifItop & 0x3ffu);
 		}
 		template <class A>
 		PS2N_VU_OP void T0Rd16(A& a, uint32_t lane)
@@ -1251,10 +1270,10 @@ namespace ps2n::vu
 		// A pair with the T bit: whether FBRST has the VU stop there. Whoever
 		// runs the plan ends the program then, at the block's T bit `which`.
 		template <class A>
-		PS2N_VU_OP bool TBit(A&, uint32_t which, uint32_t vu1)
+		PS2N_VU_OP bool TBit(A& a, uint32_t which, uint32_t vu1)
 		{
 			(void)which;
-			return (VU0.VI[REG_FBRST].UL & (vu1 ? 0x800u : 0x8u)) != 0;
+			return (*a.c.fbrst & (vu1 ? 0x800u : 0x8u)) != 0;
 		}
 
 		template <class A>

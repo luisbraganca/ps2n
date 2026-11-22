@@ -17,10 +17,12 @@
 #include "pcsx2/Common.h"
 #include "pcsx2/Config.h"
 #include "pcsx2/Dmac.h"
+#include "pcsx2/MTVU.h"
 #include "pcsx2/VU.h"
 #include "pcsx2/VUmicro.h"
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -48,7 +50,27 @@ void Xgkick(uint32_t address)
 	mVU_XGKICK_(address);
 }
 
+// mVUwaitMTVU, which microVU's code calls where THREAD_VU1.
+void WaitForVu1()
+{
+	if (THREAD_VU1)
+		vu1Thread.WaitVU();
+}
+
 namespace {
+
+// VU1 carried out on PCSX2's VU thread (its "MTVU": docs/adr/0051). The
+// thread, the queue the main thread fills for it and the main thread's waits
+// are PCSX2's core. What is different here then is what is different in
+// microVU's code where it has THREAD_VU1: the end of a program is told to the
+// main thread, which alone writes VU0's status register (mVUEBit, mVUTBit;
+// VU_Thread::Get_MTVUChanges); TOP, ITOP and FBRST are the thread's own
+// copies; the control register is always set; and the EE's cycles are left
+// alone.
+bool OnVuThread(bool vu1)
+{
+	return vu1 && THREAD_VU1;
+}
 
 using mvu::Block;
 using mvu::OpInfo;
@@ -329,6 +351,14 @@ struct Vu
 
 	InterpreterStats stats;
 	std::string unsupported;
+	// For whoever asks from another thread than the one that carries this VU
+	// out, as the host does while VU1 is on PCSX2's VU thread (Work,
+	// Unsupported): the blocks carried out and those interpreted as they
+	// stood at the end of the last run, and whether `unsupported`, which is
+	// written once, has been written.
+	std::atomic<uint64_t> shownBlocks{0};
+	std::atomic<uint64_t> shownInterpreted{0};
+	std::atomic<bool> stopped{false};
 	std::FILE* log = nullptr;
 };
 
@@ -2885,6 +2915,7 @@ public:
 		, c(V.c)
 		, R(*V.R)
 		, vu1(V.index != 0)
+		, threaded(OnVuThread(V.index != 0))
 	{
 	}
 
@@ -2944,7 +2975,9 @@ private:
 		if (ebit && (EmuConfig.Gamefixes.VUSyncHack || EmuConfig.Gamefixes.FullVU0SyncHack))
 			R.nextBlockCycles = 0;
 		R.VI[REG_TPC].UL = tpc;
-		if (ebit)
+		// (On PCSX2's VU thread the main thread clears it, told by the run's
+		// end: Runner::Run.)
+		if (ebit && !threaded)
 			VU0.VI[REG_VPU_STAT].UL &= vu1 ? ~0x100u : ~0x001u;
 	}
 
@@ -3003,11 +3036,13 @@ private:
 	Ctx& c;
 	VURegs& R;
 	const bool vu1;
+	const bool threaded; // VU1 on PCSX2's VU thread (OnVuThread)
 };
 
 void Runner::Run(uint32_t startPC, uint32_t cycles)
 {
 	V.stats.runs++;
+	V.stats.threaded += threaded ? 1 : 0;
 	// mVUexecute
 	c.cycles = static_cast<int32_t>(cycles);
 	V.totalCycles = cycles;
@@ -3037,9 +3072,28 @@ void Runner::Run(uint32_t startPC, uint32_t cycles)
 			memo = {V.quickGen, quick, startPair, startAt, flagHack, V.cur, found};
 	}
 
-	// mVUdispatcherAB: the control register, P and Q, the flags.
+	// What the program reads of what the main thread owns (Ctx): the VIF's
+	// TOP and ITOP and FBRST themselves, or on PCSX2's VU thread that
+	// thread's own copies (microVU's getVifRegs, and vuFBRST in its tests of
+	// the T bit).
+	if (threaded)
+	{
+		c.vifTop = &vu1Thread.vifRegs.top;
+		c.vifItop = &vu1Thread.vifRegs.itop;
+		c.fbrst = &vu1Thread.vuFBRST;
+	}
+	else
+	{
+		VIFregisters& vif = vu1 ? vif1Regs : vif0Regs;
+		c.vifTop = &vif.top;
+		c.vifItop = &vif.itop;
+		c.fbrst = &VU0.VI[REG_FBRST].UL;
+	}
+
+	// mVUdispatcherAB: the control register (mvuNeedsFPCRUpdate: always on the
+	// VU thread, elsewhere when it is not the EE's), P and Q, the flags.
 	const uint32_t vuFPCR = vu1 ? EmuConfig.Cpu.VU1FPCR.bitmask : EmuConfig.Cpu.VU0FPCR.bitmask;
-	const bool fpcr = EmuConfig.Cpu.FPUFPCR.bitmask != vuFPCR;
+	const bool fpcr = threaded || EmuConfig.Cpu.FPUFPCR.bitmask != vuFPCR;
 	if (fpcr)
 		_mm_setcsr(vuFPCR);
 	c.pq[0] = R.VI[REG_Q].UL;
@@ -3081,13 +3135,30 @@ void Runner::Run(uint32_t startPC, uint32_t cycles)
 		// mVUDoTBit: the T bit enabled, the program ends there.
 		const TBitEnd& t = at.tBits[c.stop - kStopTBit];
 		c.pairs -= at.pairs - (t.pair + 1); // the pairs after it did not run
-		VU0.VI[REG_VPU_STAT].UL |= vu1 ? 0x400u : 0x4u;
-		R.flags |= VUFLAG_INTCINTERRUPT;
+		if (!threaded)
+		{
+			VU0.VI[REG_VPU_STAT].UL |= vu1 ? 0x400u : 0x4u;
+			R.flags |= VUFLAG_INTCINTERRUPT;
+		}
 		EndProgram(at, 1, t.tpc, &t.end);
 	}
 	else if (V.unsupported.empty())
 	{
 		V.unsupported = at.unsupported.empty() ? std::string("a block without a plan") : at.unsupported;
+		V.stopped.store(true, std::memory_order_release);
+	}
+
+	// On PCSX2's VU thread the main thread is told how the run ended, as
+	// microVU's code tells it wherever it leaves a program there: a T bit
+	// (mVUTBit), or its end or a pause (mVUEBit). The main thread then does
+	// with VU0's status register what the code above did not
+	// (VU_Thread::Get_MTVUChanges).
+	if (threaded)
+	{
+		if (c.stop >= kStopTBit)
+			vu1Thread.mtvuInterrupts.fetch_or(VU_Thread::InterruptFlagVUTBit, std::memory_order_release);
+		else if (c.stop == kStopCycles || c.stop == kStopEnd)
+			vu1Thread.mtvuInterrupts.fetch_or(VU_Thread::InterruptFlagVUEBit, std::memory_order_release);
 	}
 
 	if (fpcr)
@@ -3095,11 +3166,16 @@ void Runner::Run(uint32_t startPC, uint32_t cycles)
 	V.stats.blocks = c.blocks;
 	V.stats.pairs = c.pairs;
 	V.stats.interpreted = c.interpreted;
+	// (For whoever watches from another thread while this one works: Work.)
+	V.shownBlocks.store(c.blocks, std::memory_order_relaxed);
+	V.shownInterpreted.store(c.interpreted, std::memory_order_relaxed);
 
 	// mVUcleanUp
 	const int32_t used = static_cast<int32_t>(V.totalCycles) - std::max(0, c.cycles);
 	R.cycle += static_cast<uint32_t>(used);
-	const uint32_t passed = static_cast<uint32_t>(std::min(used, 3000)) * static_cast<uint32_t>(EmuConfig.Speedhacks.EECycleSkip);
+	// (The EE's cycles are the main thread's: `if (!vuIndex || !THREAD_VU1)`.)
+	const uint32_t passed =
+		threaded ? 0 : static_cast<uint32_t>(std::min(used, 3000)) * static_cast<uint32_t>(EmuConfig.Speedhacks.EECycleSkip);
 	if (passed > 0)
 	{
 		const s64 vu0Offset = static_cast<s64>(VU0.cycle - cpuRegs.cycle);
@@ -3141,11 +3217,31 @@ public:
 	}
 	const char* GetShortName() const override { return m_Idx ? "ps2nVU1" : "ps2nVU0"; }
 	const char* GetLongName() const override { return m_Idx ? "PS2Native VU1 interpreter" : "PS2Native VU0 interpreter"; }
-	void Shutdown() override {}
+	// recMicroVU1::Shutdown: the VU thread is let finish first.
+	void Shutdown() override
+	{
+		if (m_Idx == 1 && vu1Thread.IsOpen())
+			vu1Thread.WaitVU();
+	}
 	void Reset() override
 	{
 		Vu& V = s_vu[m_Idx];
 		V.index = m_Idx;
+		if (m_Idx == 1 && vu1Thread.IsOpen())
+		{
+			// recMicroVU1::Reset: the VU thread is let finish, and what it
+			// left for the main thread taken, first. Then mVUreset: with the
+			// thread in use, a program of VU1 still under way is carried
+			// through here, and VU1 is no longer busy.
+			vu1Thread.WaitVU();
+			vu1Thread.Get_MTVUChanges();
+			if (THREAD_VU1)
+			{
+				if ((VU0.VI[REG_VPU_STAT].UL & 0x100) && V.R)
+					Execute(vu1RunCycles);
+				VU0.VI[REG_VPU_STAT].UL &= ~0x100u;
+			}
+		}
 		ResetVu(V);
 	}
 	void Step() override {}
@@ -3158,14 +3254,18 @@ public:
 		VURegs& R = *V.R;
 		if (m_Idx == 0)
 			VU0.flags &= ~VUFLAG_MFLAGSET;
-		if (!(VU0.VI[REG_VPU_STAT].UL & (m_Idx ? 0x100u : 0x1u)))
+		// recMicroVU1::Execute: on PCSX2's VU thread a run was asked for by
+		// the main thread, which keeps VU0's status register to itself and
+		// raises VU1's interrupt itself (VU_Thread::ExecuteVU, Get_MTVUChanges).
+		const bool threaded = OnVuThread(m_Idx != 0);
+		if (!threaded && !(VU0.VI[REG_VPU_STAT].UL & (m_Idx ? 0x100u : 0x1u)))
 			return;
 		if (!V.unsupported.empty())
 			return; // stopped at what it does not carry out
 		R.VI[REG_TPC].UL <<= 3;
 		Runner(V).Run(R.VI[REG_TPC].UL, cycles);
 		R.VI[REG_TPC].UL >>= 3;
-		if (R.flags & VUFLAG_INTCINTERRUPT)
+		if (!threaded && (R.flags & VUFLAG_INTCINTERRUPT))
 		{
 			R.flags &= ~VUFLAG_INTCINTERRUPT;
 			hwIntcIrq(m_Idx ? 7 : 6);
@@ -3225,15 +3325,30 @@ const InterpreterStats& Stats(int vu)
 	return s_vu[vu ? 1 : 0].stats;
 }
 
+void Work(int vu, uint64_t* blocks, uint64_t* interpreted)
+{
+	const Vu& V = s_vu[vu ? 1 : 0];
+	*blocks = V.shownBlocks.load(std::memory_order_relaxed);
+	*interpreted = V.shownInterpreted.load(std::memory_order_relaxed);
+}
+
+void Finish()
+{
+	if (vu1Thread.IsOpen())
+		vu1Thread.WaitVU();
+}
+
 const char* Unsupported(int vu)
 {
 	const Vu& V = s_vu[vu ? 1 : 0];
-	return V.unsupported.empty() ? nullptr : V.unsupported.c_str();
+	return V.stopped.load(std::memory_order_acquire) ? V.unsupported.c_str() : nullptr;
 }
 
 void ClearUnsupported(int vu)
 {
-	s_vu[vu ? 1 : 0].unsupported.clear();
+	Vu& V = s_vu[vu ? 1 : 0];
+	V.stopped.store(false, std::memory_order_release);
+	V.unsupported.clear();
 }
 
 bool LogPrograms(int vu, const char* path)

@@ -80,6 +80,7 @@
 #include "pcsx2/Config.h"
 #include "pcsx2/Counters.h"
 #include "pcsx2/GS/GSUtil.h"
+#include "pcsx2/GameDatabase.h"
 #include "pcsx2/Host.h"
 #include "pcsx2/INISettingsInterface.h"
 #include "pcsx2/ImGui/ImGuiManager.h"
@@ -219,7 +220,9 @@ namespace
 		bool iop_static = true; // whether it runs the blocks compiled ahead of time that the host has
 		std::string iop_capture_path; // where the blocks it had to interpret are written, for the recompiler
 		bool vu_jit = true;
-		bool pcsx2_vu_thread = false; // PCSX2's own VU thread carries VU1 out (-pcsx2-vu-thread): stock PCSX2 as its users mostly have it
+		// VU1 carried out on PCSX2's own VU thread, or on the CPU thread (-pcsx2-vu-thread [on|off]). Not given: as
+		// the settings have it where a game is played in a window, on the CPU thread in every other run.
+		std::optional<bool> pcsx2_vu_thread;
 		u32 vu_ps2n = 0; // bit 0 VU0, bit 1 VU1: PS2Native's VU provider in the place of the core's
 		std::string vu_programs_path; // where that provider writes a line for each program it records
 		bool vu_static = true; // whether it runs the blocks compiled ahead of time that the host has
@@ -460,12 +463,17 @@ namespace
 			"                     compile the blocks of IOP code that had to be interpreted\n"
 			"                     (ps2n-recomp iop).\n"
 			"  -vu jit|interp     PCSX2's VU recompilers or interpreters (default jit).\n"
-			"  -pcsx2-vu-thread   Stock PCSX2 only: VU1 carried out on PCSX2's own VU thread\n"
-			"                     (its \"MTVU\" setting), which PCSX2 switches on by default\n"
-			"                     where there are three processor cores or more. Every\n"
-			"                     other run has VU1 on the CPU thread, so that runs repeat;\n"
-			"                     this is for timing stock PCSX2 as its users mostly have\n"
-			"                     it. Not with -vu-ps2n 1 or both.\n"
+			"  -pcsx2-vu-thread [on|off]  VU1 carried out on PCSX2's own VU thread (its\n"
+			"                     \"MTVU\" setting; on where nothing follows), or on the CPU\n"
+			"                     thread: by PCSX2's VU recompiler, or by PS2Native's VU\n"
+			"                     provider with -vu-ps2n 1 or both (docs/adr/0051). Not\n"
+			"                     given: with -window as the settings have it, which is\n"
+			"                     PCSX2's default (on where there are three processor cores\n"
+			"                     or more) unless the game's own settings or PCSX2's game\n"
+			"                     database say otherwise; in every other run on the CPU\n"
+			"                     thread, so that runs repeat and can be compared. Not on\n"
+			"                     with -sync, -sync-against, -trace, -trace-against or\n"
+			"                     -vu-report.\n"
 			"  -vu-ps2n 0|1|both  Run VU0's, VU1's or both VUs' micro programs on\n"
 			"                     PS2Native's VU provider, which follows PCSX2's VU\n"
 			"                     recompiler (runtime/vu_interp.h): by the blocks compiled\n"
@@ -623,7 +631,8 @@ namespace
 			"                     micro programs alone, the first n for each VU and\n"
 			"                     setting, on PCSX2's VU recompiler and on PS2Native's\n"
 			"                     VU provider. With -vu-capture: for the build that\n"
-			"                     compiles them (scripts/windows/vu-selftest.ps1).\n"
+			"                     compiles them (scripts/windows/vu-selftest.ps1,\n"
+			"                     scripts/linux/vu-selftest.sh).\n"
 			"  -vu-require-compiled  With -selftest-vu: fail if a block of those programs\n"
 			"                     had to be interpreted; skipped (PS2N_SKIP) by a host\n"
 			"                     that was not built with them.\n"
@@ -631,7 +640,8 @@ namespace
 			"                     IOP programs alone, n of them, on PCSX2's IOP recompiler\n"
 			"                     and on PS2Native's IOP provider. With -iop-capture: for\n"
 			"                     the build that compiles their blocks\n"
-			"                     (scripts/windows/iop-selftest.ps1).\n"
+			"                     (scripts/windows/iop-selftest.ps1,\n"
+			"                     scripts/linux/iop-selftest.sh).\n"
 			"  -iop-require-compiled  With -selftest-iop: fail if a block of those\n"
 			"                     programs had to be interpreted; skipped (PS2N_SKIP) by a\n"
 			"                     host that was not built with them.\n"
@@ -943,7 +953,12 @@ namespace
 					return false;
 			}
 			else if (is("-pcsx2-vu-thread"))
+			{
+				// "on" where nothing says which.
 				o.pcsx2_vu_thread = true;
+				if (i + 1 < argc && (!std::strcmp(argv[i + 1], "on") || !std::strcmp(argv[i + 1], "off")))
+					o.pcsx2_vu_thread = !std::strcmp(argv[++i], "on");
+			}
 			else if (is("-vu-ps2n") && has_value)
 			{
 				const char* which = argv[++i];
@@ -1274,14 +1289,21 @@ namespace
 			o.patch_archive.clear();
 		}
 
-		// PCSX2's VU thread is for stock PCSX2's VU1: PS2Native's VU provider is
-		// held to the stock run with VU1 on the CPU thread, and has never run on
-		// another. (A session written down in a game's folder may be run again
-		// so: on stock PCSX2, it is still that game's settings.)
-		if (o.pcsx2_vu_thread && (o.vu_ps2n & 2) != 0)
+		// With VU1 on PCSX2's VU thread, VU1's registers are that thread's while
+		// it works: nothing that reads them from the main thread goes with it (a
+		// record of sync points or of event tests, the VU report). Two runs are
+		// compared with VU1 on the CPU thread.
+		if (!o.sync_path.empty() || !o.sync_against_path.empty() || !o.trace_path.empty() || !o.trace_against_path.empty() ||
+			!o.vu_report_path.empty())
 		{
-			std::fputs("ps2n-host: -pcsx2-vu-thread is for stock PCSX2's VU1: not with -vu-ps2n 1 or both\n", stderr);
-			return false;
+			if (o.pcsx2_vu_thread.value_or(false))
+			{
+				std::fputs("ps2n-host: -pcsx2-vu-thread on does not go with -sync, -sync-against, -trace, -trace-against or -vu-report, "
+						   "which read VU1's registers from the main thread\n",
+					stderr);
+				return false;
+			}
+			o.pcsx2_vu_thread = false;
 		}
 
 		// An archive named that is not there (a game's folder made where PCSX2
@@ -1715,8 +1737,9 @@ namespace
 
 		// CPU providers. VU1 stays on the CPU thread so that runs repeat: PCSX2's
 		// own default, on a computer with three cores or more, is its VU thread
-		// ("MTVU"), which only -pcsx2-vu-thread switches on here, for timing
-		// stock PCSX2 as its users mostly have it (docs/adr/0050).
+		// ("MTVU"), which only -pcsx2-vu-thread switches on here: for stock
+		// PCSX2 as its users mostly have it, and for PS2Native's VU provider on
+		// that thread (docs/adr/0050, docs/adr/0051).
 		//
 		// With PS2Native's EE provider the core is told its recompiler is in
 		// use: code shared by all providers then behaves as it does for the
@@ -1726,7 +1749,15 @@ namespace
 		si.SetBoolValue("EmuCore/CPU/Recompiler", "EnableIOP", o.iop_jit);
 		si.SetBoolValue("EmuCore/CPU/Recompiler", "EnableVU0", o.vu_jit);
 		si.SetBoolValue("EmuCore/CPU/Recompiler", "EnableVU1", o.vu_jit);
-		si.SetBoolValue("EmuCore/Speedhacks", "vuThread", o.pcsx2_vu_thread);
+		// VU1 on PCSX2's own VU thread (docs/adr/0051). Where a game is played in
+		// a window: as the settings have it, which is PCSX2's own default for the
+		// computer (on with three processor cores or more), a game's own setting
+		// over it, and PCSX2's game database over both. In every other run: on
+		// the CPU thread, unless the option asks for the thread.
+		if (o.pcsx2_vu_thread)
+			si.SetBoolValue("EmuCore/Speedhacks", "vuThread", *o.pcsx2_vu_thread);
+		else if (!o.window)
+			si.SetBoolValue("EmuCore/Speedhacks", "vuThread", false);
 
 		si.SetBoolValue("EmuCore", "HostFs", o.host_fs);
 
@@ -2527,13 +2558,13 @@ namespace
 				if (s_options.vu_require_compiled && !compiled_selftest)
 				{
 					std::fputs("PS2N_SKIP: this host was not built with the self-test's micro programs compiled "
-							   "(scripts/windows/vu-selftest.ps1 builds them in)\n",
+							   "(scripts/windows/vu-selftest.ps1 builds them in, scripts/linux/vu-selftest.sh on Linux)\n",
 						stderr);
 				}
 				else if (s_options.iop_require_compiled && !compiled_iop_selftest)
 				{
 					std::fputs("PS2N_SKIP: this host was not built with the blocks of the self-test's IOP programs compiled "
-							   "(scripts/windows/iop-selftest.ps1 builds them in)\n",
+							   "(scripts/windows/iop-selftest.ps1 builds them in, scripts/linux/iop-selftest.sh on Linux)\n",
 						stderr);
 				}
 				else
@@ -2553,7 +2584,8 @@ namespace
 						{
 							std::fprintf(stderr,
 								"ps2n-host: %llu blocks of the self-test's IOP programs had to be interpreted: the compiled ones this host "
-								"has are of other programs. Make them again (scripts/windows/iop-selftest.ps1).\n",
+								"has are of other programs. Make them again (scripts/windows/iop-selftest.ps1, "
+								"scripts/linux/iop-selftest.sh).\n",
 								static_cast<unsigned long long>(st.shapesInterpreted));
 							failures++;
 						}
@@ -2569,7 +2601,8 @@ namespace
 					{
 						std::fprintf(stderr,
 							"ps2n-host: %llu blocks of the self-test's micro programs had to be interpreted: the compiled ones this host has "
-							"are of other plans. Make them again (scripts/windows/vu-selftest.ps1).\n",
+							"are of other plans. Make them again (scripts/windows/vu-selftest.ps1, "
+							"scripts/linux/vu-selftest.sh).\n",
 							static_cast<unsigned long long>(interpreted));
 						failures++;
 					}
@@ -2794,14 +2827,18 @@ namespace
 					code = EXIT_TIME_LIMIT;
 					reason = "time limit";
 				}
-				std::fprintf(stderr, "ps2n-host: stopped at %s after %u frames, EE cycle %llu, EE %s, IOP %s, VU %s\n", reason,
+				// PCSX2's VU thread, where it carried VU1 out, is let finish what
+				// it was given before anything of the VUs is read.
+				ps2n::vu::Finish();
+				std::fprintf(stderr, "ps2n-host: stopped at %s after %u frames, EE cycle %llu, EE %s, IOP %s, VU %s%s\n", reason,
 					s_frames, static_cast<unsigned long long>(cpuRegs.cycle), EEProviderName(s_options.ee),
 					s_options.iop_ps2n ? "ps2n" : s_options.iop_jit ? "jit" : "interp",
 					s_options.vu_ps2n == 3 ? "ps2n" :
 					s_options.vu_ps2n == 1 ? "ps2n for VU0" :
 					s_options.vu_ps2n == 2 ? "ps2n for VU1" :
 					s_options.vu_jit ? "jit" :
-										 "interp");
+										 "interp",
+					THREAD_VU1 ? ", VU1 on PCSX2's VU thread" : "");
 				std::fprintf(stderr, "ps2n-host: EE COP0 Config %08x (double issue %s), Status %08x, EE cycle rate setting %d\n",
 					cpuRegs.CP0.n.Config, (cpuRegs.CP0.n.Config >> 18) & 1 ? "on" : "off", cpuRegs.CP0.n.Status.val,
 					static_cast<int>(EmuConfig.Speedhacks.EECycleRate));
@@ -2820,6 +2857,12 @@ namespace
 						static_cast<unsigned long long>(st.programs), static_cast<unsigned long long>(st.jumps),
 						static_cast<unsigned long long>(st.pauses), static_cast<unsigned long long>(st.searches),
 						static_cast<unsigned long long>(st.compares), static_cast<unsigned long long>(st.spared));
+					if (st.threaded)
+					{
+						// (All of them or none, unless the setting changed while the game ran.)
+						std::fprintf(stderr, "ps2n-host: PS2Native's VU%d provider: %llu of its %llu runs were on PCSX2's VU thread\n", vu,
+							static_cast<unsigned long long>(st.threaded), static_cast<unsigned long long>(st.runs));
+					}
 					if (st.unknown)
 					{
 						std::fprintf(stderr,
@@ -3373,6 +3416,57 @@ void ps2n::host::OnGameChanged(std::string_view title, std::string_view serial, 
 	}
 }
 
+void ps2n::host::OnSettingsLoaded()
+{
+	// VU1 on PCSX2's own VU thread or not (docs/adr/0051). The host's settings
+	// have it already as the options decide (InitializeConfig), but a game's
+	// own settings file, which the core reads over them, may say otherwise: a
+	// run without a window has VU1 on the CPU thread whatever that file says,
+	// so that the run repeats and VU1's registers can be read from the main
+	// thread, and -pcsx2-vu-thread is carried out as given. Only where a game
+	// is played in a window without that option does the game's own setting
+	// decide.
+	std::optional<bool> thread = s_options.pcsx2_vu_thread;
+	if (!thread && !s_options.window)
+		thread = false;
+
+	// PCSX2's game database switches the thread off for some games, over
+	// every setting, but only from the moment a game's executable starts, and
+	// not while the next one is being loaded: the thread would be off, on and
+	// off again within a run. Here such a game has it off from the moment its
+	// disc is read, before anything runs, so that the thread is never switched
+	// on while a game runs: PS2Native's change to PCSX2's code number 1 keeps
+	// the thread's copy of the VIF's row and column up to date only while the
+	// thread is in use (patches/pcsx2). (No entry of the database pinned here
+	// switches the thread on.)
+	if (!thread || *thread)
+	{
+		const std::string serial = VMManager::GetDiscSerial();
+		if (const GameDatabaseSchema::GameEntry* entry = serial.empty() ? nullptr : GameDatabase::findGame(serial))
+		{
+			for (const auto& [hack, value] : entry->speedHacks)
+			{
+				if (hack == SpeedHack::MTVU && value == 0)
+					thread = false;
+			}
+		}
+	}
+	if (!thread)
+		return;
+
+	// Decided: into the configuration the core has just read, and into the
+	// settings it reads again later without telling the host, when a game's
+	// executable starts (VMManager::ApplyCoreSettings): the host's own, and
+	// the game's own as the core holds them in memory where they name the
+	// thread. The game's file is not written. (The core calls this after
+	// every time it has read that file, holding its settings.)
+	EmuConfig.Speedhacks.vuThread = *thread;
+	Host::Internal::GetBaseSettingsLayer()->SetBoolValue("EmuCore/Speedhacks", "vuThread", *thread);
+	if (SettingsInterface* game = Host::Internal::GetGameSettingsLayer();
+		game && game->ContainsValue("EmuCore/Speedhacks", "vuThread"))
+		game->SetBoolValue("EmuCore/Speedhacks", "vuThread", *thread);
+}
+
 void ps2n::host::OnInputDeviceConnected(std::string_view identifier)
 {
 	// Only the first controller, and only when someone is playing. Not at
@@ -3422,8 +3516,11 @@ static void WatchNewCode()
 	{
 		if (s_options.vu_ps2n & (1 << vu))
 		{
-			now.vu += ps2n::vu::Stats(vu).blocks;
-			now.vu_interpreted += ps2n::vu::Stats(vu).interpreted;
+			// (As the VU's last run left them: VU1 may be on PCSX2's VU thread.)
+			u64 blocks = 0, interpreted = 0;
+			ps2n::vu::Work(vu, &blocks, &interpreted);
+			now.vu += blocks;
+			now.vu_interpreted += interpreted;
 		}
 	}
 	const Counts last = s_last;

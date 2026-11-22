@@ -1,7 +1,8 @@
 # ADR 0051: The comparison with stock PCSX2 is said as it is; VU1 on a thread of its own is next
 
 - Date: 2026-11-22
-- Status: accepted (the maintainer's answers, below).
+- Status: accepted (the maintainer's answers, below). Its step was built and
+  measured the same day and is put to the maintainer ("The step, built").
 
 ## Context
 
@@ -104,6 +105,128 @@ For the maintainer to decide otherwise, before or as it goes:
 - **How it is reported.** Measured first on one game, then put to the
   maintainer with what it changed, before it goes into a folder of theirs or
   a release.
+
+## The step, built (2026-11-22)
+
+Built and measured the same day, as proposed above
+([docs/app-log.md](../app-log.md), "VU1 on a thread of its own"). It is in
+no folder of the maintainer's and in no release: it is put to them first.
+
+- **PS2Native's VU provider carries VU1 out on PCSX2's own VU thread** where
+  that thread is on, and does there what PCSX2's VU recompiler does
+  differently there (a run carried out whenever it is asked for; VU0's status
+  register and VU1's interrupt left to the main thread, which is told where
+  a program ended; the thread's own copies of the VIF's TOP and ITOP and of
+  FBRST; the EE's cycles left alone). The thread, its queue and the places
+  where the main thread waits are PCSX2's, unchanged. Compiled micro code is
+  the same either way; what a module and the host share changed with it, so
+  a game's folder given these programs compiles its game again, as one
+  brought up to date does.
+- **Held to PCSX2's VU recompiler** by a sixth mode of the self-test for VU1
+  (2,000 random programs carried out as the thread would, what a program's
+  end tells the main thread compared with the rest), by nine tests more (the
+  seven console-recorded VU programs and the picture a test program's VU1
+  draws, with VU1 on the thread), and by the maintainer's sessions run again
+  with it: Jak and Daxter's, Gran Turismo 3's and Killzone's are their
+  sessions at every fingerprint, as stock PCSX2's runs with its VU thread on
+  are; Agent Under Fire's part from the session at frame 1,900, as stock
+  PCSX2's do.
+
+What the session chose within the step, for the maintainer to decide
+otherwise:
+
+1. **A game that is played has the thread as PCSX2 would give it:** on where
+   the computer has three processor cores or more, off where PCSX2's game
+   database says so (67 of its entries, none of the five games tried), and the
+   user's to switch in the wizard's settings step, on PCSX2's own page (the
+   box "Enable Multithreaded VU1 (MTVU)", shown fixed off until now).
+2. **Every run that is not played has VU1 on the main processor thread,**
+   whatever a game's settings say, unless the run is told otherwise
+   (`ps2n-host -pcsx2-vu-thread on`): every test, every comparison of two
+   runs, a session run again, and the run on which a game's folder counts
+   its profile ([ADR 0045](0045-a-games-folder-counts-its-profile-on-a-run-again-of-a-session-after-play.md)).
+   Such a run is to repeat, and with the thread on a run need not.
+3. **A session written down says when it was played with the thread on,**
+   and a run of it again that parts from it says that it was.
+4. **The runtime's profile of play is trained with the thread on** in the
+   runs that are play, as a game is now played, and without it in one, which
+   keeps the other way counted (a training run's sixth part, `vu-thread`).
+5. **The thread's setting is decided once for a run,** when the game's disc
+   is read and before anything runs, PCSX2's game database heard then, and
+   stays so. PCSX2 by itself hears its database only once a game's
+   executable has started, and not while the next is loaded, so that the
+   thread would go off and on within a run; and
+   [ADR 0050](0050-pcsx2s-vu-thread-not-woken-where-it-is-not-in-use-ps2natives-first-change-to-pcsx2s-code.md)'s
+   change to PCSX2's code, made when PS2Native never used the thread, holds
+   only as long as the thread is never switched on while a game runs. The
+   change itself is as the maintainer decided it; the note at its top and
+   the list of PS2Native's changes say what is true now.
+
+What the step found, besides:
+
+- **A game's run with the thread on need not be one run.** Agent Under
+  Fire's is not: a session of it played with the thread on, run again three
+  times, gave three different machines at frame 1,900, with the thread and
+  without. For such a game a session played with the thread on cannot be run
+  again as itself. A folder still counts its profile on a run of it again,
+  which then leaves what was played at that point; and such a session is not
+  one to compare runs on or to time. The other three games' sessions repeat
+  with the thread on. A user, or the maintainer, who wants a session that
+  can be run again exactly switches the thread off for that game.
+- **A game's own settings file could undo what the host decides,** the core
+  reading it over the host's settings: found by the step's checks and put
+  right before anything was measured for a release (a run without a window
+  has VU1 on the main thread whatever the file says).
+- **Two of Linux's tests had never run:** the self-test's programs on blocks
+  compiled ahead of time, for the VUs and for the IOP, skipped there for want
+  of a capture that only Windows had a script for. Linux has the scripts
+  now, and both pass there.
+
+Measured, as a release would have it (the runtime built with link-time
+optimization and its profile of play made again with the thread; each game's
+folder with its own counts, taken with these programs), on the maintainer's
+sessions run again, three rounds in turns:
+
+| | Stock PCSX2 with its VU thread on | The compiled game, VU1 on PCSX2's VU thread | Times its time | The compiled game without the thread, times its time |
+|---|---:|---:|---:|---:|
+| Jak and Daxter | 33.68 s | 32.35 s | 0.96 | 1.50 |
+| Gran Turismo 3 | 18.51 s | 18.76 s | 1.01 | 1.13 |
+| Agent Under Fire | 26.31 s | 25.83 s | 0.98 | 1.02 |
+| Killzone | 33.12 s | 31.39 s | 0.95 | 1.24 |
+
+- **The criterion is met by three of the four games.** Gran Turismo 3 is
+  0.25 s behind in 18.5 s: with VU1 off the main thread, what is left on it
+  is the EE's and the IOP's code and the core's devices, where the compiled
+  game takes a little more than PCSX2's recompilers (the IOP's code, the
+  EE's accesses to devices, costs
+  [ADR 0046](0046-compiled-games-at-least-as-fast-as-stock-pcsx2-as-users-get-them.md)
+  listed); PS2Native's faster micro code made up for it while VU1 shared
+  that thread.
+- **What a player sees and hears is the same:** the last picture and sound
+  of every run of Gran Turismo 3 and of Killzone, and the sound of every run
+  of Jak and Daxter, are the same with the thread and without, stock PCSX2
+  and compiled; every such run is its session at every fingerprint. Agent
+  Under Fire's runs with the thread differ from each other, on stock PCSX2
+  as compiled.
+- **A game's first session,** its code and micro code interpreted, takes 19%
+  less time with the thread for Gran Turismo 3 and 32% less for Jak and
+  Daxter.
+- **A profile counted on a run that left its session** (Agent Under Fire's,
+  the thread on in the run counted) was worth as much as one counted on the
+  session itself, to within the rounds.
+- **Under WSL 2,** Jak and Daxter with the thread takes 0.99 times the time
+  of stock PCSX2 with its VU thread on (36.90 s against 37.31 s), with the
+  profile of play as 0.2 had it there.
+- **Every test passes:** 543 in the development tree on Windows and on
+  Linux, 541 and 540 in the release's.
+
+Not tried: a game in a window on Linux with the thread (its window would
+have come up on the maintainer's screen), and any game but the five.
+
+Put to the maintainer on 2026-11-22, each with the session's recommendation:
+whether the step is committed and pushed; whether their seven game folders
+get these programs, each compiling its game again; and whether the next
+release, 0.3, is prepared with it at once or after they have played with it.
 
 ## Consequences
 

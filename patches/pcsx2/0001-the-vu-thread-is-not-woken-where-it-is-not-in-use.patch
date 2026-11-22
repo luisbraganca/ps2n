@@ -15,17 +15,23 @@ thread copies 16 bytes and sleeps again. With this change they are mirrored
 only while the thread is in use (THREAD_VU1), as every other use of the
 thread in these two files already is.
 
-Why. PS2Native never uses that thread: VU1's micro code is compiled code's,
-on the CPU thread, and the setting is fixed off. A game that sends many of
-these commands paid for the wakes all the same: Jak and Daxter 9% of a run on
-Windows, and 28% inside WSL 2, where waking a thread costs six times as much
-(docs/app-log.md, "Linux's speed").
+Why. Where the thread is not in use, a game that sends many of these commands
+paid for the wakes all the same: Jak and Daxter 9% of a run on Windows, and
+28% inside WSL 2, where waking a thread costs six times as much
+(docs/app-log.md, "Linux's speed"). When this was made PS2Native never used
+the thread. Since docs/adr/0051 it carries VU1 out on it where the setting is
+on, as PCSX2 does (a game played in a window), and not in any other run, nor
+for a game or on a computer that has the setting off.
 
-What it does not change: any result of a run with the thread off. What it
-takes away: with it, the setting must not be switched on while a game runs,
-since the thread's copy of the row and column would be out of date. PS2Native
-offers no such switch. Loading a saved state still brings the copy up to date
-(SaveStateBase::mtvuFreeze).
+What it does not change: any result of a run, the thread off or on for the
+whole of it. What it takes away: with it, the setting must not be switched on
+while a game runs, since the thread's copy of the row and column would be out
+of date. PS2Native has no such switch, and sees to it that PCSX2 has none
+either: the setting is decided once, when the game's disc is read and before
+anything runs, PCSX2's game database heard then too, which by itself would
+switch the thread off only when a game's executable starts and on again while
+the next is loaded (OnSettingsLoaded in host/main.cpp). Loading a saved state
+still brings the copy up to date (SaveStateBase::mtvuFreeze).
 
 --- a/pcsx2/Vif.cpp
 +++ b/pcsx2/Vif.cpp

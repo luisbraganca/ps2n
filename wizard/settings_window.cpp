@@ -195,7 +195,8 @@ void SettingsWindow::setupUi(const GameList::Entry* game)
 				"eeINTCSpinDetection", "pauseOnTLBMiss", "extraMemory", "vu0RoundingMode", "vu0ClampMode", "vu1RoundingMode",
 				"vu1ClampMode", "vuFlagHack", "vu0Recompiler", "vu1Recompiler", "instantVU1", "iopRecompiler", "gameFixes", "patches",
 				"backupSaveStates", "savestateCompressionLevel", "saveStateOnShutdown", "savestateCompressionMethod", "pineEnable"});
-		fix_named(m_emulation_settings, {"eeCycleSkipping", "MTVU", "manuallySetRealTimeClock", "rtcUseSystemLocaleFormat"});
+		// (PCSX2's VU thread, "MTVU", is not among them: docs/adr/0051.)
+		fix_named(m_emulation_settings, {"eeCycleSkipping", "manuallySetRealTimeClock", "rtcUseSystemLocaleFormat"});
 		if (m_emulation_settings)
 		{
 			for (QDateTimeEdit* clock : m_emulation_settings->findChildren<QDateTimeEdit*>())

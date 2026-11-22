@@ -21,6 +21,14 @@
 // I-bit game fix (Killzone's settings), clamp mode Normal. A program that
 // differs is made as small as it still differs in and printed, with the
 // registers it uses as they began and as each side left them.
+//
+// VU1 has a mode more: as on PCSX2's VU thread (docs/adr/0051). The setting
+// is on, and both sides are run here, on the thread of the self-test, as that
+// thread runs them: the T bit's enable and the VIF's TOP and ITOP are the
+// thread's own copies, VU0's status register is left alone, and what the
+// program's end tells the main thread (VU_Thread::mtvuInterrupts) is
+// compared with the rest. Such a program is run whole: the core gives the
+// thread no slices.
 
 #include "selftest.h"
 
@@ -30,8 +38,10 @@
 
 #include "pcsx2/Common.h"
 #include "pcsx2/Config.h"
+#include "pcsx2/MTVU.h"
 #include "pcsx2/VU.h"
 #include "pcsx2/VUmicro.h"
+#include "pcsx2/Vif.h"
 
 #include <cstdio>
 #include <cstring>
@@ -118,6 +128,8 @@ namespace
 	// that is not in a delay slot. One upper word is exempt from that: the
 	// lower NOP's, which the BIOS writes into the upper slots.
 	bool s_unknownOften = false;
+	// VU1 as on PCSX2's VU thread: the mode's cases are run whole.
+	bool s_vuThread = false;
 
 	u32 UnknownUpper(Rng& rng)
 	{
@@ -264,6 +276,7 @@ namespace
 		u32 macflags[4], clipflags[4], statusflags[4];
 		u64 cycle;
 		u32 stat; // this VU's bits of VPU_STAT: busy, D, T
+		u32 told = 0; // as on PCSX2's VU thread: what the program's end told the main thread (VU_Thread::mtvuInterrupts)
 		std::vector<u8> mem;
 		alignas(16) u8 vu1Regs[32 * 16 + 32 * 16]; // VU0 reaches VU1's registers
 	};
@@ -308,6 +321,7 @@ namespace
 		std::memcpy(m.statusflags, R.micro_statusflags, sizeof(m.statusflags));
 		m.cycle = R.cycle;
 		m.stat = VU0.VI[REG_VPU_STAT].UL & (vu ? 0x700u : 0x7u);
+		m.told = vu ? vu1Thread.mtvuInterrupts.load(std::memory_order_relaxed) : 0;
 		m.mem.assign(R.Mem, R.Mem + MemSize(vu));
 		std::memcpy(m.vu1Regs, VU1.VF, sizeof(m.vu1Regs));
 		return m;
@@ -403,6 +417,11 @@ namespace
 		if (a.stat != b.stat)
 		{
 			std::snprintf(text, sizeof(text), "VPU_STAT: microVU %03x, PS2Native %03x", a.stat, b.stat);
+			return text;
+		}
+		if (a.told != b.told)
+		{
+			std::snprintf(text, sizeof(text), "what the end told the main thread: microVU %02x, PS2Native %02x", a.told, b.told);
 			return text;
 		}
 		for (size_t i = 0; i < a.mem.size(); i += 4)
@@ -544,6 +563,16 @@ namespace
 			std::memcpy(R.Micro, c.words.data(), memSize);
 			R.VI[REG_TPC].UL = 0;
 			VU0.VI[REG_FBRST].UL = c.fbrst;
+			if (vu)
+			{
+				// What VU1 reads on PCSX2's VU thread, where the main thread
+				// has put it when it asks for a run (VU_Thread::ExecuteVU), and
+				// nothing told yet.
+				vu1Thread.vuFBRST = c.fbrst;
+				vu1Thread.vifRegs.top = vif1Regs.top;
+				vu1Thread.vifRegs.itop = vif1Regs.itop;
+				vu1Thread.mtvuInterrupts.store(0, std::memory_order_relaxed);
+			}
 			cpu.Clear(0, memSize);
 			cpu.SetStartPC(0);
 			if (c.slices.empty())
@@ -720,6 +749,11 @@ namespace
 				for (int k = 0; k < 64; k++)
 					c.slices.push_back(1 + rng.Below(48));
 			}
+			// (As on PCSX2's VU thread a program is run whole: the slices end
+			// where the VU is no longer busy, which there VU0's status register
+			// does not say.)
+			if (s_vuThread)
+				c.slices.clear();
 
 			if (trial >= run)
 				continue;
@@ -794,31 +828,53 @@ int ps2n::selftest::CheckVuPrograms(uint32_t trials, uint32_t run, uint64_t seed
 	auto& rec = EmuConfig.Cpu.Recompiler;
 	const bool o0 = rec.vu0Overflow, e0 = rec.vu0ExtraOverflow, s0 = rec.vu0SignOverflow;
 	const bool o1 = rec.vu1Overflow, e1 = rec.vu1ExtraOverflow, s1 = rec.vu1SignOverflow;
+	// So has the mode after it, VU1's alone.
+	Rng rngThread{seed ^ 0x4D545655ull};
+	const bool vuThread = EmuConfig.Speedhacks.vuThread;
 	static const struct
 	{
-		bool overflow, ibit, nans, unknown;
+		bool overflow, ibit, nans, unknown, thread;
 		const char* what;
 	} kModes[] = {
-		{false, false, false, false, "clamp mode None"},
-		{false, true, false, false, "clamp mode None and the I-bit game fix (Killzone's)"},
-		{true, false, false, false, "clamp mode Normal"},
-		{false, false, true, false, "clamp mode None, a third of the floats NaN"},
-		{false, false, false, true, "clamp mode None, with encodings PCSX2's VU recompiler knows nothing of"},
+		{false, false, false, false, false, "clamp mode None"},
+		{false, true, false, false, false, "clamp mode None and the I-bit game fix (Killzone's)"},
+		{true, false, false, false, false, "clamp mode Normal"},
+		{false, false, true, false, false, "clamp mode None, a third of the floats NaN"},
+		{false, false, false, true, false, "clamp mode None, with encodings PCSX2's VU recompiler knows nothing of"},
+		{false, false, false, false, true, "clamp mode None, as on PCSX2's VU thread"},
+	};
+	// Both sides anew where the setting of PCSX2's VU thread changes: microVU
+	// makes its way into and out of a program then (mVUreset), and the two
+	// keep their records of programs alike. Neither VU is busy when they do.
+	const auto setVuThread = [](bool on) {
+		if (EmuConfig.Speedhacks.vuThread == on)
+			return;
+		VU0.VI[REG_VPU_STAT].UL &= ~0x707u;
+		EmuConfig.Speedhacks.vuThread = on;
+		CpuMicroVU1.Reset();
+		ps2n::vu::Interpreter(1)->Reset();
 	};
 	int failures = 0;
 	for (int vu = 0; vu < 2; vu++)
 	{
 		for (const auto& mode : kModes)
 		{
+			if (mode.thread && vu == 0)
+				continue;
 			rec.vu0Overflow = rec.vu1Overflow = mode.overflow;
 			rec.vu0ExtraOverflow = rec.vu1ExtraOverflow = false;
 			rec.vu0SignOverflow = rec.vu1SignOverflow = false;
 			fixes.IbitHack = mode.ibit;
 			s_nanOften = mode.nans;
 			s_unknownOften = mode.unknown;
-			failures += CheckPrograms(vu, trials, run, mode.unknown ? rngUnknown : rng, mode.what);
+			s_vuThread = mode.thread;
+			setVuThread(mode.thread);
+			failures += CheckPrograms(vu, trials, run, mode.thread ? rngThread : mode.unknown ? rngUnknown : rng, mode.what);
 		}
 	}
+	s_vuThread = false;
+	setVuThread(vuThread);
+	vu1Thread.mtvuInterrupts.store(0, std::memory_order_relaxed);
 	s_nanOften = false;
 	s_unknownOften = false;
 	rec.vu0Overflow = o0;

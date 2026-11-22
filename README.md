@@ -56,25 +56,30 @@ Precursor Legacy and Silent Hill 3. Every other game is untried and may not
 work.
 
 - **Windows x64.** Everything measured was measured there, on Windows 11. On
-  the maintainer's own sessions played back, a compiled game takes 0.98 to
-  1.00 times the time stock PCSX2 takes with its recompilers (Killzone 0.92,
-  with counts of a session that is nearly the one timed). That is against
-  stock PCSX2 with the console's second vector unit (VU1) on the main
-  processor thread, as PS2Native runs it. PCSX2 itself gives VU1 a thread of
-  its own by default, on a computer with three cores or more, and so set it
-  takes 2% to 40% less time on those sessions: a compiled game then takes
-  1.02 to 1.65 times its time. Carrying VU1 out on a thread of its own is
-  PS2Native's next step.
+  the maintainer's own sessions played back, a compiled game as 0.2 has it
+  takes 0.98 to 1.00 times the time stock PCSX2 takes with its recompilers
+  (Killzone 0.92, with counts of a session that is nearly the one timed).
+  That is against stock PCSX2 with the console's second vector unit (VU1) on
+  the main processor thread, as 0.2 runs it. PCSX2 itself gives VU1 a thread
+  of its own by default, on a computer with three cores or more, and so set
+  it takes 2% to 40% less time on those sessions: a compiled game as 0.2 has
+  it then takes 1.02 to 1.65 times its time. Since 2026-11-22, for the next
+  release, PS2Native carries VU1 out on a thread of its own as well, where
+  PCSX2 would: with it a compiled game takes 0.95 to 1.01 times the time of
+  stock PCSX2 with its VU thread on (Jak and Daxter 0.96, Gran Turismo 3
+  1.01, Agent Under Fire 0.98, Killzone 0.95).
 - **Linux x64.** Built and tested only inside WSL 2 (Ubuntu 22.04) so far,
   every test passing there, and games made and played there. One game was
   timed, Jak and Daxter: as 0.2 has it, 1.05 times stock PCSX2's time, and
   about 2.2 times the time of stock PCSX2 with its VU thread on. Most of what
   it takes more there than on Windows was PCSX2 waking a thread PS2Native
-  does not use, which the next release leaves out (0.75 and 1.59 then).
-  Nothing is known to work on a Linux machine of its own yet.
+  did not use, which the next release leaves out (0.75 and 1.59 then); and
+  with VU1 on a thread of its own, also for the next release, it takes 0.99
+  times the time of stock PCSX2 with its VU thread on. Nothing is known to
+  work on a Linux machine of its own yet.
 - **What a compiled game is held to.** A run on PS2Native is compared with
   the same run on stock PCSX2 at every point where the two can be compared,
-  and with recordings made on a console: 534 tests.
+  and with recordings made on a console: 543 tests.
 - **No recompiler for PS2 code is in a game's folder.** Code a session meets
   for the first time (some games load theirs from their data) runs
   interpreted, slower, with a notice over the picture, and is compiled when

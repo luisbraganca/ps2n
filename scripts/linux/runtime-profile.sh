@@ -30,6 +30,11 @@
 # or the script stops. A session whose time is measured against stock PCSX2 is
 # never among them.
 #
+# A sixth part, "vu-thread", has the run carry VU1 out on PCSX2's own VU thread
+# (docs/adr/0051), as a game is played where that thread is on: the runtime is
+# then trained on what it does there too. Such a run of a session need not be
+# the session at every fingerprint: the script says so and goes on.
+#
 # Usage:
 #   PS2N_BIOS=/path/to/bios.bin scripts/linux/runtime-profile.sh [options]
 #
@@ -89,7 +94,10 @@ while IFS= read -r line || [ -n "$line" ]; do
 	case "$line" in ''|'#'*) continue ;; esac
 	IFS='|' read -r name image folder session frames extra <<< "$line"
 	name="$(trim "$name")"; image="$(trim "$image")"; folder="$(trim "$folder")"; session="$(trim "$session")"; frames="$(trim "$frames")"
-	if [ -n "${extra:-}" ] || [ -z "$frames" ]; then echo "$training: not a training run (five parts separated by |): $line" >&2; exit 1; fi
+	extra="$(trim "${extra:-}")"
+	if { [ -n "$extra" ] && [ "$extra" != "vu-thread" ]; } || [ -z "$frames" ]; then
+		echo "$training: not a training run (five parts separated by |, and vu-thread for a sixth or none): $line" >&2; exit 1
+	fi
 	[ "$session" = "-" ] && session=""
 	needed=("$image" "$folder")
 	[ -z "$session" ] || needed+=("$session/input.txt")
@@ -115,7 +123,8 @@ while IFS= read -r line || [ -n "$line" ]; do
 	fi
 	[ "$frames" -gt 0 ] 2>/dev/null || { echo "$training, $name: a run from boot needs its frames." >&2; exit 1; }
 	arguments+=("-DFRAMES=$frames")
-	echo "$name: $([ -n "$session" ] && echo "the session $(basename "$session")" || echo "from boot"), $frames frames, the modules of $folder"
+	[ -z "$extra" ] || arguments+=(-DPCSX2_VU_THREAD=1)
+	echo "$name: $([ -n "$session" ] && echo "the session $(basename "$session")" || echo "from boot"), $frames frames, the modules of $folder$([ -z "$extra" ] || echo ", VU1 on PCSX2's VU thread")"
 	# (%p: the process's number, so that no run writes over another's counts.)
 	output="$(LLVM_PROFILE_FILE="$raw/$name-%p.profraw" cmake "${arguments[@]}" -P "$root/tests/guest_test.cmake" 2>&1)"
 	if ! grep -q 'stopped at frame limit' <<< "$output"; then
@@ -123,7 +132,10 @@ while IFS= read -r line || [ -n "$line" ]; do
 		echo "$name: the run did not end as expected." >&2; exit 1
 	fi
 	said="$(grep -oE 'the run is the session at .*' <<< "$output" | tail -1)"
-	if [ -n "$session" ] && ! grep -q 'every one of' <<< "$said"; then echo "$name: the run is not the session ($said): not trained on." >&2; exit 1; fi
+	if [ -n "$session" ] && ! grep -q 'every one of' <<< "$said"; then
+		if [ -z "$extra" ]; then echo "$name: the run is not the session ($said): not trained on." >&2; exit 1; fi
+		echo "  with VU1 on PCSX2's VU thread the run is not the session at every fingerprint ($said): trained on all the same"
+	fi
 	compgen -G "$raw/$name-*.profraw" > /dev/null || { echo "$name: the run wrote no counts. Was the runtime in $count built to count?" >&2; exit 1; }
 	echo "  ${said:-ran}; counts: $(cat "$raw/$name"-*.profraw | wc -c) bytes"
 done < "$training"

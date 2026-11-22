@@ -138,9 +138,10 @@
 #              (ps2n-host -mark, once each), a list: to time parts of a run
 #   FAST_CORES keep the run on the processor's fastest cores, so that its time
 #              repeats (ps2n-host -fast-cores): for runs that are timed
-#   PCSX2_VU_THREAD  stock PCSX2 only: VU1 on PCSX2's own VU thread, as PCSX2
-#              has it by default where there are three cores or more (ps2n-host
-#              -pcsx2-vu-thread): for timing stock PCSX2 as its users have it
+#   PCSX2_VU_THREAD  VU1 on PCSX2's own VU thread, as PCSX2 has it by default
+#              where there are three cores or more (ps2n-host -pcsx2-vu-thread):
+#              by PCSX2's VU recompiler or by PS2Native's VU provider. Not for
+#              a comparison of two runs (LOCKSTEP, SAME_AS_STOCK, SYNC)
 #   MODULES    a folder the host loads the modules of compiled code from, in the
 #              place of its own (ps2n-host -modules): a game's folder, for a host
 #              of a build tree that makes modules

@@ -253,7 +253,8 @@ ps2n_add_guest_test("selftest/tables-and-semantics" 600 "selftest" -DSELFTEST=1 
 # The same random micro programs carried out by code compiled ahead of time
 # (step G11): the first so many for each VU and setting, whose blocks a build
 # has compiled when it was given their capture (scripts/windows/vu-selftest.ps1
-# makes it and builds it in). Skipped, not passed, by a host built without;
+# makes it and builds it in, scripts/linux/vu-selftest.sh on Linux). Skipped,
+# not passed, by a host built without, which a test run's count does not show;
 # failed when a block of them had to be interpreted, which is what a change
 # to how blocks are planned does until the capture is made again.
 set(PS2N_VU_SELFTEST_PROGRAMS 150)
@@ -262,8 +263,9 @@ ps2n_add_guest_test("selftest/vu-compiled" 600 "selftest;ps2n-vu" -DSELFTEST=1
 
 # The same for the random IOP programs (step G12): the first so many, whose
 # blocks a build has compiled when it was given their capture
-# (scripts/windows/iop-selftest.ps1 makes it and builds it in). Skipped by a
-# host built without; failed when a block of them had to be interpreted.
+# (scripts/windows/iop-selftest.ps1 makes it and builds it in,
+# scripts/linux/iop-selftest.sh on Linux). Skipped by a host built without;
+# failed when a block of them had to be interpreted.
 set(PS2N_IOP_SELFTEST_PROGRAMS 1500)
 ps2n_add_guest_test("selftest/iop-compiled" 600 "selftest;ps2n-iop" -DSELFTEST=1
 	-DSELFTEST_IOP=${PS2N_IOP_SELFTEST_PROGRAMS} -DIOP_REQUIRE_COMPILED=1)
@@ -325,6 +327,27 @@ foreach(elf IN LISTS ps2autotests_elfs)
 	ps2n_add_guest_test("${test}" 120 "ps2autotests;ps2n-static-microvu"
 		"-DELF=${PS2AUTOTESTS_ROOT}/${elf}" "-DEXPECTED=${PS2AUTOTESTS_ROOT}/${name}.expected"
 		-DEE=ps2n -DIOP=jit -DVU=jit -DSTATIC=on "-DIMAGE=${id}")
+	if(name IN_LIST PS2AUTOTESTS_DIFFERS_ps2n-static)
+		ps2n_expect_failure("${test}" "Output differs from")
+	endif()
+endforeach()
+
+# PS2Native's configuration with VU1 carried out on PCSX2's own VU thread
+# (docs/adr/0051), as a game is played where that thread is on: the
+# console-recorded VU tests, held to the recording as ps2n-static is, with the
+# same known differences. Every other test has VU1 on the CPU thread, where
+# two runs can be compared; a run with the thread on is not compared with
+# another sync point by sync point.
+foreach(elf IN LISTS ps2autotests_elfs)
+	if(NOT elf MATCHES "^vu/")
+		continue()
+	endif()
+	string(REGEX REPLACE "\.elf$" "" name "${elf}")
+	string(MAKE_C_IDENTIFIER "${name}" id)
+	set(test "ps2autotests/ps2n-static-vu-thread/${name}")
+	ps2n_add_guest_test("${test}" 120 "ps2autotests;ps2n-static-vu-thread"
+		"-DELF=${PS2AUTOTESTS_ROOT}/${elf}" "-DEXPECTED=${PS2AUTOTESTS_ROOT}/${name}.expected"
+		-DEE=ps2n -DIOP=ps2n -DVU=ps2n -DSTATIC=on -DPCSX2_VU_THREAD=1 "-DIMAGE=${id}")
 	if(name IN_LIST PS2AUTOTESTS_DIFFERS_ps2n-static)
 		ps2n_expect_failure("${test}" "Output differs from")
 	endif()
@@ -550,6 +573,20 @@ if(EXISTS "${vu_elf}")
 		${frame_run} -DEE=ps2n -DIOP=jit -DVU=jit -DSTATIC=on
 		-DRENDERER=sw ${ps2n_frame_expected})
 	list(APPEND ps2n_frame_tests "frames/software/ps2n-static-microvu/vu")
+
+	# The same picture with VU1 carried out on PCSX2's own VU thread
+	# (docs/adr/0051): the program's VU1 draws it, so its packets reach the GS
+	# from that thread. By PS2Native's VU provider, and by PCSX2's VU
+	# recompiler, to tell a fault of the provider there from one of the thread's
+	# own.
+	ps2n_add_guest_test("frames/software/ps2n-static-vu-thread/vu" 120 "frames;gpu;ps2n-static-vu-thread"
+		${frame_run} -DEE=ps2n -DIOP=ps2n -DVU=ps2n -DSTATIC=on -DPCSX2_VU_THREAD=1
+		-DRENDERER=sw ${ps2n_frame_expected})
+	list(APPEND ps2n_frame_tests "frames/software/ps2n-static-vu-thread/vu")
+	ps2n_add_guest_test("frames/software/stock-jit-vu-thread/vu" 120 "frames;gpu;stock-jit-vu-thread"
+		${frame_run} -DEE=jit -DIOP=jit -DVU=jit -DSTATIC=on -DPCSX2_VU_THREAD=1
+		-DRENDERER=sw ${ps2n_frame_expected})
+	list(APPEND ps2n_frame_tests "frames/software/stock-jit-vu-thread/vu")
 
 	if(NOT WIN32)
 		list(REMOVE_ITEM ps2n_frame_tests "frames/software/stock-jit/vu")

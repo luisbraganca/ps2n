@@ -35,11 +35,14 @@ namespace ps2n::game
 	// decision 2). The wizard keeps them out of a game's own settings file; the
 	// runtime refuses to play with a file that sets one (step P4.8). Whole
 	// sections, then single keys. The EE's cycle rate is not among them: it is
-	// checked at every rate (G17).
+	// checked at every rate (G17). Nor is PCSX2's VU thread
+	// (EmuCore/Speedhacks/vuThread), the user's to switch as in PCSX2:
+	// PS2Native's VU provider carries VU1 out on it as PCSX2's VU recompiler
+	// does (docs/adr/0051).
 	inline constexpr const char* kFixedSections[] = {"EmuCore/CPU", "EmuCore/CPU/Recompiler", "EmuCore/Gamefixes"};
 	inline constexpr std::pair<const char*, const char*> kFixedKeys[] = {{"EmuCore/Speedhacks", "EECycleSkip"},
 		{"EmuCore/Speedhacks", "IntcStat"}, {"EmuCore/Speedhacks", "WaitLoop"}, {"EmuCore/Speedhacks", "vuFlagHack"},
-		{"EmuCore/Speedhacks", "vuThread"}, {"EmuCore/Speedhacks", "vu1Instant"}, {"EmuCore", "EnablePatches"},
+		{"EmuCore/Speedhacks", "vu1Instant"}, {"EmuCore", "EnablePatches"},
 		{"EmuCore", "EnablePINE"}, {"EmuCore", "EnableGameFixes"}, {"EmuCore", "SaveStateOnShutdown"},
 		{"EmuCore", "BackupSavestate"}, {"EmuCore", "ManuallySetRealTimeClock"}, {"EmuCore", "UseSystemLocaleFormat"},
 		{"EmuCore", "RtcYear"}, {"EmuCore", "RtcMonth"}, {"EmuCore", "RtcDay"}, {"EmuCore", "RtcHour"},

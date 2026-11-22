@@ -35,6 +35,12 @@ down (a folder's sessions\<time>), run again; "-" runs the game from boot.
 <frames> is how far the run goes; 0 is the session whole. A run of a session
 must be the session at every fingerprint compared, or the script stops.
 
+A sixth part, "vu-thread", has the run carry VU1 out on PCSX2's own VU thread
+(docs\adr\0051), as a game is played where that thread is on: the runtime is
+then trained on what it does there too. Such a run of a session need not be
+the session at every fingerprint (with the thread a game's run need not
+repeat): the script says so and goes on.
+
 Runs worth having: play from folders that have compiled what their sessions
 met; a boot; and a first session, from a folder made from the disc alone,
 where the game's code is interpreted. A session whose time is measured
@@ -71,8 +77,11 @@ foreach ($line in Get-Content -LiteralPath $trainingFile) {
     $text = $line.Trim()
     if (-not $text -or $text.StartsWith('#')) { continue }
     $parts = @($text -split '\|' | ForEach-Object { $_.Trim() })
-    if ($parts.Count -ne 5) { throw "${trainingFile}: not a training run (five parts separated by |): $text" }
-    $run = @{ Name = $parts[0]; Image = $parts[1]; Folder = $parts[2]; Session = $(if ($parts[3] -eq '-') { '' } else { $parts[3] }); Frames = [int]$parts[4] }
+    if ($parts.Count -ne 5 -and -not ($parts.Count -eq 6 -and $parts[5] -eq 'vu-thread')) {
+        throw "${trainingFile}: not a training run (five parts separated by |, and vu-thread for a sixth or none): $text"
+    }
+    $run = @{ Name = $parts[0]; Image = $parts[1]; Folder = $parts[2]; Session = $(if ($parts[3] -eq '-') { '' } else { $parts[3] }); Frames = [int]$parts[4]
+        VuThread = ($parts.Count -eq 6) }
     if ($run.Name -notmatch '^[A-Za-z0-9_-]+$') { throw "${trainingFile}: a run's name is letters, digits, - and _: $($run.Name)" }
     foreach ($path in @($run.Image, $run.Folder, $run.Session) | Where-Object { $_ }) {
         if (-not (Test-Path -LiteralPath $path)) { throw "${trainingFile}, $($run.Name): $path is not there." }
@@ -116,14 +125,18 @@ foreach ($run in $runs) {
         Upscale = 1; Name = "train-$($run.Name)"; Seconds = 3600 }
     if ($run.Session) { $arguments.Replay = $run.Session }
     if ($run.Frames -gt 0) { $arguments.Frames = $run.Frames }
-    Write-Host "$($run.Name): $(if ($run.Session) { "the session $(Split-Path $run.Session -Leaf)" } else { 'from boot' })$(if ($run.Frames -gt 0) { ", $($run.Frames) frames" }), the modules of $($run.Folder)"
+    if ($run.VuThread) { $arguments.Pcsx2VuThread = $true }
+    Write-Host "$($run.Name): $(if ($run.Session) { "the session $(Split-Path $run.Session -Leaf)" } else { 'from boot' })$(if ($run.Frames -gt 0) { ", $($run.Frames) frames" }), the modules of $($run.Folder)$(if ($run.VuThread) { ", VU1 on PCSX2's VU thread" })"
     # (%p: the process's number, so that no run writes over another's counts.)
     $env:LLVM_PROFILE_FILE = Join-Path $raw "$($run.Name)-%p.profraw"
     try { $output = & (Join-Path $PSScriptRoot 'game.ps1') @arguments 6>&1 | ForEach-Object { "$_" }; $code = $LASTEXITCODE }
     finally { Remove-Item Env:\LLVM_PROFILE_FILE }
     $fingerprints = ($output | Where-Object { $_ -match 'the run is the session at' } | Select-Object -Last 1) -replace '^.*the run is the session at', 'the session at'
     if ($code -ne 0) { $output | Select-Object -Last 15 | ForEach-Object { Write-Host "  | $_" }; throw "$($run.Name): the run did not end as expected." }
-    if ($run.Session -and $fingerprints -notmatch 'every one of') { throw "$($run.Name): the run is not the session ($fingerprints): not trained on." }
+    if ($run.Session -and $fingerprints -notmatch 'every one of') {
+        if (-not $run.VuThread) { throw "$($run.Name): the run is not the session ($fingerprints): not trained on." }
+        Write-Host "  with VU1 on PCSX2's VU thread the run is not the session at every fingerprint ($fingerprints): trained on all the same"
+    }
     $written = @(Get-ChildItem -LiteralPath $raw -Filter "$($run.Name)-*.profraw")
     if (-not $written) { throw "$($run.Name): the run wrote no counts. Was the runtime in $CountDir built to count?" }
     Write-Host ("  {0}; counts: {1:N0} bytes" -f $(if ($fingerprints) { $fingerprints } else { 'ran' }), ($written | Measure-Object Length -Sum).Sum)

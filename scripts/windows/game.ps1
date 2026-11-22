@@ -89,9 +89,10 @@ param(
     [switch]$TimeProfile,
     # With -TimeProfile: look from this frame on (ps2n-host -profile-from), to leave the game's startup out.
     [int]$ProfileFrom = 0,
-    # With -Config stock-jit: VU1 carried out on PCSX2's own VU thread, as PCSX2 has it by default where there are
-    # three processor cores or more (ps2n-host -pcsx2-vu-thread; docs\adr\0050). For timing stock PCSX2 as its users
-    # mostly have it: every other run has VU1 on the CPU thread.
+    # VU1 carried out on PCSX2's own VU thread, as PCSX2 has it by default where there are three processor cores or
+    # more (ps2n-host -pcsx2-vu-thread; docs\adr\0050, docs\adr\0051): by PCSX2's VU recompiler (-Config stock-jit), or
+    # by PS2Native's VU provider. Without it VU1 is on the CPU thread, so that runs repeat: not with the
+    # configurations that compare two runs.
     [switch]$Pcsx2VuThread,
     # Also write vu-report.txt among the run's files: what was written into the VUs' micro memory and what
     # they ran, with the counts frame by frame and the contents written beside it (ps2n-host -vu-report).
@@ -260,6 +261,8 @@ if ($Play) {
     if ($Patches) { $hostArgs += @('-patches', $Patches) }
     if ($patchArchive) { $hostArgs += @('-patch-archive', $patchArchive) }
     if ($PSBoundParameters.ContainsKey('EeCycleRate')) { $hostArgs += @('-ee-cycle-rate', "$EeCycleRate") }
+    # (In a window VU1 is on PCSX2's VU thread where the settings have it; the switch asks for it whatever they say.)
+    if ($Pcsx2VuThread) { $hostArgs += @('-pcsx2-vu-thread', 'on') }
 
     # Someone playing goes where no script has been. What the session had to
     # interpret of the game is written down for the recompiler, as after any
@@ -383,7 +386,7 @@ if ($markList.Count -gt 0) { $arguments += "-DMARKS=$($markList -join ';')" }
 # left to the system, the same run took between 75 and 150 s.
 $arguments += '-DFAST_CORES=1'
 if ($Pcsx2VuThread) {
-    if ($Config -ne 'stock-jit') { throw "-Pcsx2VuThread is for -Config stock-jit: PCSX2's VU thread knows nothing of PS2Native's VU provider." }
+    if ($Config -in 'lockstep', 'same-as-stock') { throw "-Pcsx2VuThread is not for -Config ${Config}: two runs are compared with VU1 on the CPU thread." }
     $arguments += '-DPCSX2_VU_THREAD=1'
 }
 if ($Config -eq 'lockstep') { $arguments += '-DLOCKSTEP=1' }

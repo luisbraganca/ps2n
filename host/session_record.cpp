@@ -50,6 +50,9 @@ namespace ps2n::host::session
 		uint32_t s_frames_at_60 = 0;
 
 		bool s_replaying = false;
+		// The session run again was played with VU1 on PCSX2's VU thread, where
+		// a game's run need not repeat (its record says so: "vu-thread on").
+		bool s_replay_vu_thread = false;
 		std::string s_replay_path;
 		std::vector<std::pair<uint32_t, PadBytes>> s_inputs;
 		size_t s_next_input = 0;
@@ -180,7 +183,8 @@ namespace ps2n::host::session
 			"# beside this file. patches: the game's patches it was played with, with the EE overclock their\n"
 			"# note asks for; ee-cycle-rate: PCSX2's EE cycle rate, where the session was given one;\n"
 			"# bios-roms: which of the images the core loads from beside the BIOS image it had; packaged: played\n"
-			"# from a game's folder the wizard made, its own settings file and patch file beside this file.\n"
+			"# from a game's folder the wizard made, its own settings file and patch file beside this file;\n"
+			"# vu-thread on, at the end: played with VU1 on PCSX2's VU thread, where a run need not repeat.\n"
 			"clock %s\n"
 			"patches %s\n",
 			FormatClock(clock).c_str(), patches.c_str());
@@ -243,6 +247,12 @@ namespace ps2n::host::session
 			{
 				info->packaged = true;
 				good = true;
+			}
+			else if (words[0] == "vu-thread" && words.size() == 2)
+			{
+				// For the report of a run of it again that parts from it.
+				s_replay_vu_thread = words[1] == "on";
+				good = words[1] == "on" || words[1] == "off";
 			}
 			else if (words[0] == "frames-a-second" && words.size() == 2)
 			{
@@ -359,6 +369,8 @@ namespace ps2n::host::session
 			// one of 3 minutes, docs/adr/0047).
 			if (s_frames_at_50 != 0 || s_frames_at_60 != 0)
 				std::fprintf(s_record, "frames-a-second %d\n", s_frames_at_50 > s_frames_at_60 ? 50 : 60);
+			if (THREAD_VU1)
+				std::fputs("vu-thread on\n", s_record);
 			std::fprintf(s_record, "end %u\n", frames);
 			std::fclose(s_record);
 			s_record = nullptr;
@@ -372,8 +384,11 @@ namespace ps2n::host::session
 			{
 				lines.push_back(fmt::format("ps2n-host: the replay of {}: {} states of the controller given back; the run is the "
 											"session at {} fingerprints and parts from it at frame {} (fingerprint {:016X}, the "
-											"session's {:016X})",
-					s_replay_path, s_next_input, s_compared, *s_parted_at, s_parted_found, s_parted_expected));
+											"session's {:016X}){}",
+					s_replay_path, s_next_input, s_compared, *s_parted_at, s_parted_found, s_parted_expected,
+					s_replay_vu_thread ? "; the session was played with VU1 on PCSX2's VU thread, where a run need not repeat" :
+					THREAD_VU1         ? "; this run has VU1 on PCSX2's VU thread, where a run need not repeat" :
+										 ""));
 			}
 			else
 			{

@@ -25,4 +25,10 @@ namespace ps2n::host
 	/// The core has opened an input device ("SDL-0" is the first controller).
 	/// CPU thread, possibly while the core holds its settings.
 	void OnInputDeviceConnected(std::string_view identifier);
+
+	/// The core has read its settings into its configuration, a game's own
+	/// over the host's (while it holds them; again whenever they change, and
+	/// before it applies its game database to them). What the host decides
+	/// over a game's own settings is put into the configuration here.
+	void OnSettingsLoaded();
 } // namespace ps2n::host
