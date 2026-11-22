@@ -2627,3 +2627,290 @@ maintainer's answers: "1. Yes", "2. Yes", "3. Ok"
 committed and pushed; the new programs into the maintainer's game folders;
 and the runtime built with a profile next, measured first, against stock
 PCSX2 built without one.
+
+The folders the same evening (`build\measure\update-folders.ps1`, as on
+2026-11-21 for ADR 0045; inside WSL the same by hand). First tried on a copy
+of the Jak and Daxter folder as it was, its old programs and modules
+(`build\measure\update-trial.ps1`): given the new programs, its own
+`ps2n-remake --before-play` compiled the game whole (the toolchain's stamp in
+what it compiled from), and the start of a session run again with it was the
+session at every fingerprint compared. Then the six folders: the kit made
+again, each folder given the runtime, the launcher and the toolchain, and
+each compiling its game whole before its next start:
+
+| Folder | Files compiled | Time |
+|---|---:|---:|
+| Jak and Daxter | 128 | 53 s |
+| Killzone | 138 | 114 s |
+| Silent Hill 3 | 128 | 90 s |
+| Gran Turismo 3 | 128 | 23 s |
+| Agent Under Fire | 221 | 97 s |
+| 007 - Agent Under Fire (every language's executable) | 470 | 351 s |
+
+(The Linux folder inside WSL, Jak and Daxter: 128 files, ten at a time, 72 s.)
+A run again of the start of one of each folder's sessions with its new
+programs was the session at every fingerprint compared, in all six and inside
+WSL. None of the folders has counted its profile yet: each does after its next
+session of 3 minutes.
+
+### The runtime itself: link-time optimization, and a profile of play (2026-11-21)
+
+At the maintainer's "3. Ok": the runtime, `ps2n-host` (PS2Native's runtime
+and PCSX2's core, 34% to 50% of a run's processor thread), built with a
+profile of play, measured before anything of it goes into a release.
+
+**What PCSX2's own releases are built with.** Looking at how PCSX2's build
+takes such options showed something else first. PCSX2's releases are built
+with link-time optimization: its Windows and Linux builds ask CMake for
+`CMAKE_INTERPROCEDURAL_OPTIMIZATION`, its Visual Studio projects for whole
+program optimization. `scripts\windows\build.ps1` has left that out since
+Phase 2 ("minus the Qt interface and link-time optimization"), and
+`scripts/linux/build.sh` after it. Every "stock PCSX2" timed so far is the
+same runtime run with `-Config stock-jit`: PCSX2's core built without it. So
+it was measured beside the profile.
+
+**The trial** (`build\measure\rpgo.ps1`) changed nothing of the repository:
+build trees of their own, configured as `build.ps1` configures the module
+tree, with other options given to every file compiled, and only `ps2n-host`
+built in them. The modules of compiled code are each game folder's own
+(kit11's folders, with their counts).
+
+- **Built to count** (`-fprofile-generate`, clang's IR level, linked with
+  LLVM's profile runtime): 44 s; the runtime 24.7 MB.
+- **The training:** seven runs with it, none of them a session that is timed,
+  6 minutes in all, each run the session at every fingerprint compared:
+  - the first 3 minutes (10,800 frames) of a session of Jak and Daxter
+    (`20261118-120316`), of Gran Turismo 3 (`20261118-102727`) and of Agent
+    Under Fire (`20261117-103006`), and Killzone's other session whole (9,300
+    frames), from the folders with their counts;
+  - Silent Hill 3's first 3,000 frames from boot;
+  - two first sessions, from folders made from the disc alone, where the
+    game's code is interpreted: Jak and Daxter's (2,564 frames, 31.83% of the
+    EE's cycles interpreted) and 3,000 frames of Gran Turismo 3 (64.46%).
+- **The counts merged** (`llvm-profdata merge`): 6.6 MB, 25,861 functions, of
+  which 5,087 ran in a training run.
+- **Built with them** (`-fprofile-use`): 40 s; the runtime 10.5 MB, where 11.3
+  MB without.
+- **Built with link-time optimization** and no profile (ThinLTO): 50 s; 13.1
+  MB. With both: 60 s; 12.2 MB.
+
+**Each alone** (the first set of turns). Every game's session timed in turns,
+three rounds, the order turned round every second round, every run the session
+at every fingerprint; stock PCSX2 is `stock-jit` on the runtime named, the
+compiled game its kit11 folder's modules on it. Means, in seconds:
+
+| Game, the session timed | Stock PCSX2, built as before | Stock PCSX2, link-time optimized | Compiled, the runtime as before | Compiled, link-time optimized | Compiled, built with the counts |
+|---|---:|---:|---:|---:|---:|
+| Jak and Daxter, `20261119-110909` (nothing drawn) | 57.26 | 54.98 | 58.95 | 58.17 | 56.40 |
+| Gran Turismo 3, `20261118-095532` | 21.39 | 20.78 | 22.80 | 22.09 | 21.63 |
+| Agent Under Fire, `20261117-185759` | 27.24 | 26.61 | 29.57 | 28.92 | 27.74 |
+| Killzone, `20261117-221825` (its folder not counted) | 44.48 | 43.81 | 46.72 | 46.06 | 44.69 |
+
+(The rounds: Jak and Daxter 57.85, 57.84, 56.08; 55.37, 55.42, 54.15; 58.87,
+59.14, 58.83; 58.27, 57.55, 58.70; 56.30, 56.24, 56.67. Gran Turismo 3 21.24,
+21.50, 21.42; 20.57, 20.85, 20.91; 23.01, 22.65, 22.75; 22.22, 21.96, 22.08;
+21.36, 21.89, 21.65. Agent Under Fire 27.21, 27.33, 27.17; 26.51, 26.76,
+26.56; 29.51, 29.69, 29.51; 29.04, 28.92, 28.81; 27.69, 27.68, 27.84.
+Killzone 44.08, 44.70, 44.65; 43.64, 43.98, 43.81; 46.72, 46.80, 46.65; 46.22,
+45.95, 46.01; 44.78, 44.72, 44.56.)
+
+- **Stock PCSX2 built as its releases are takes 1.5 to 4.0% less time** than
+  the stock PCSX2 every comparison so far was made with (Jak and Daxter 4.0%,
+  Gran Turismo 3 2.9%, Agent Under Fire 2.3%, Killzone 1.5%). Against it, the
+  compiled games as users get them today take 1.07 (Jak and Daxter), 1.10
+  (Gran Turismo 3), 1.11 (Agent Under Fire) and 1.07 (Killzone) times its
+  time, where 1.03, 1.07, 1.09 and 1.05 against stock PCSX2 as built here.
+- **Link-time optimization** takes 1.3 to 3.1% off the compiled games' time.
+- **The counts** take 4.3 to 6.2% off it (Jak and Daxter 4.3%, Gran Turismo 3
+  5.1%, Agent Under Fire 6.2%, Killzone 4.4%).
+
+**Both together, and a game the profile never saw** (the second set of turns,
+`build\measure\rpgo-chain2.ps1`). The runtime built with the counts and
+link-time optimization (no function's counts failed to fit its code); and,
+for each game, a runtime built with counts taken without that game's runs.
+Three rounds in turns as before, means in seconds:
+
+| Game | Stock PCSX2, link-time optimized | Compiled, counts | Compiled, counts and link-time optimization | Compiled, counts taken without this game |
+|---|---:|---:|---:|---:|
+| Jak and Daxter | 55.97 | 56.71 | 55.20 | 56.98 |
+| Gran Turismo 3 | 21.04 | 21.78 | 20.72 | 21.68 |
+| Agent Under Fire | 26.66 | 27.71 | 26.55 | 27.82 |
+| Killzone | 43.70 | 44.89 | 44.14 | 45.20 |
+
+(The rounds: Jak and Daxter 56.33, 55.40, 56.18; 57.33, 56.07, 56.72; 55.19,
+55.59, 54.81; 57.54, 56.71, 56.69. Gran Turismo 3 21.06, 21.00, 21.07; 21.99,
+21.90, 21.45; 20.51, 20.74, 20.90; 21.51, 21.74, 21.79. Agent Under Fire
+26.67, 26.71, 26.59; 27.65, 27.56, 27.92; 26.39, 26.48, 26.79; 27.57, 28.02,
+27.88. Killzone 43.71, 43.59, 43.80; 44.94, 44.93, 44.79; 43.98, 44.22, 44.22;
+45.19, 45.36, 45.05.)
+
+- **With both, compiled games take 0.99 (Jak and Daxter), 0.98 (Gran Turismo
+  3), 1.00 (Agent Under Fire) and 1.01 (Killzone) times the time of stock
+  PCSX2 built as its releases are.**
+- **A game the profile never saw gets nearly all of it:** with counts taken
+  without its runs a game takes from 0.5% less to 0.7% more time than with
+  counts that had them.
+
+**Code the training never ran.** Of the runtime's 25,861 functions 5,087 ran
+in a training run. With the whole profile the compiler takes the other 20,774
+for code that never runs, and compiles it for size: the other renderers,
+PCSX2's code for processors without AVX2 (this computer has it), whatever a
+game the training did not play would be first to use. `llvm-profdata merge
+-sparse` leaves the functions no run ran out of the profile (1.4 MB), and the
+compiler then takes them as it does without one. The third set of turns
+(`build\measure\rpgo-chain3.ps1`): the runtime with link-time optimization and
+the whole profile, with the sparse one, and with a sparse one taken without
+the game's runs; three rounds in turns, means in seconds:
+
+| Game | Stock PCSX2, link-time optimized | Compiled, the whole profile | Compiled, the sparse profile | Compiled, a sparse profile taken without this game |
+|---|---:|---:|---:|---:|
+| Jak and Daxter | 55.40 | 55.05 | 55.09 | 54.70 |
+| Gran Turismo 3 | 20.91 | 20.95 | 20.95 | 20.71 |
+| Agent Under Fire | 26.84 | 26.55 | 26.46 | 26.79 |
+| Killzone | 43.88 | 44.14 | 43.98 | 43.84 |
+
+(The rounds: Jak and Daxter 55.73, 54.74, 55.73; 55.19, 55.25, 54.70; 54.89,
+55.39, 55.00; 54.13, 55.30, 54.68. Gran Turismo 3 20.88, 20.76, 21.09; 20.94,
+20.93, 20.99; 20.59, 20.79, 21.47; 20.68, 20.59, 20.86. Agent Under Fire
+26.93, 26.90, 26.70; 26.48, 26.84, 26.34; 26.21, 26.90, 26.27; 26.78, 26.87,
+26.71. Killzone 44.00, 43.56, 44.08; 43.78, 44.22, 44.42; 43.78, 44.01, 44.16;
+43.63, 44.08, 43.81.)
+
+The sparse profile gives what the whole one gives, to within the rounds. **With
+it and link-time optimization, compiled games take 0.99 (Jak and Daxter), 1.00
+(Gran Turismo 3), 0.99 (Agent Under Fire) and 1.00 (Killzone) times the time
+of stock PCSX2 built as its releases are**; in the second set, with the whole
+profile, 0.99, 0.98, 1.00 and 1.01.
+
+Two games drawn by PCSX2's software renderer, which no training run used,
+compiled, two rounds in turns: Gran Turismo 3 22.16 s on the link-time
+optimized runtime without a profile, 21.56 s with the whole profile, 21.61 s
+with the sparse one; Killzone 69.00 s, 68.12 s and 68.16 s. Neither profile
+costs anything there, and both still gain.
+
+**A game's first session,** where its code is interpreted
+(`build\measure\rpgo-first.ps1`): Gran Turismo 3's first session
+(`20261118-095532`, 8,678 frames, 31.84% of the EE's cycles interpreted; no
+training run ran it) from a folder made from the disc alone, two rounds in
+turns, each the session at every fingerprint: 77.36 and 77.11 s on the runtime
+as built today, 68.61 and 68.78 s with link-time optimization and the sparse
+profile, 11.1% less (stock PCSX2, which compiles as it meets, took 21.6 s on
+2026-11-20).
+
+**Built into the build scripts,** off by default: `build.ps1 -RuntimeLto on`
+and `-RuntimePgo generate|use -RuntimePgoData <file>` (`build.sh
+--runtime-lto`, `--runtime-pgo`, `--runtime-pgo-data`; CMake's
+`PS2N_RUNTIME_LTO`, `PS2N_RUNTIME_PGO` and `PS2N_RUNTIME_PGO_DATA`,
+`cmake/ps2n-inject.cmake`). They are given to every target of the project
+before PCSX2's own exist, and taken off again what is not the runtime where it
+is declared (`ps2n_not_the_runtime`: the modules of compiled code, the
+launcher, the wizard's and the tests' own programs). A tree built so has the
+runtime the trial timed, to the byte's count (15,674,880 bytes with link-time
+optimization and the sparse profile, where 11,337,216 today).
+
+**Every test with such a runtime** (`build\measure\rt-check.ps1`): a build
+tree of its own given everything the module tree was given, the runtime with
+link-time optimization and the sparse profile, built whole in 171 s. 534 of
+its 535 tests passed; `ps2autotests/same-as-stock/dma/vif/stcycl` failed, and
+run again alone it failed three times in four, its two runs parting at sync
+point 31,305.
+
+**Why: a defect of PCSX2's, which link-time optimization moves.** Each of the
+test's two runs made six times with its record of sync points written
+(`build\measure\rt-stcycl.ps1`): on the new runtime the program runs one of
+two ways (61,544 or 61,546 sync points), under stock PCSX2 as compiled; on the
+runtime as built today it runs one way every time (61,532). What it prints
+differs in its VIF0 cases with a CL of 251 and more, which PCSX2 is already
+listed as getting wrong (`tests/ps2autotests-known-differences.cmake`), and
+between the new runtime's two ways in eight of them (CL 253 to 255):
+
+- An UNPACK with masks that would run past the end of a VU's memory is carried
+  out by PCSX2's interpreted unpack routines (`dVifUnpack`,
+  `pcsx2/x86/Vif_Dynarec.cpp`, falls back to them; VU0's memory is 4 KB, and
+  with these CLs the writes wrap).
+- Their masked write (`VifUnpackSSE_Simple::doMaskWrite`,
+  `pcsx2/x86/Vif_UnpackSSE.cpp`) loads the address of `nVifMask` and counts the
+  places of its three tables from `nVifMask[2]`: it takes the data mask and the
+  write-protect mask from the 128 bytes before `nVifMask`, and the row and
+  column values from the data mask's table. (PCSX2's arm64 routine counts from
+  `nVifMask` itself. PCSX2's `master` had the same lines on 2026-11-21.)
+- What those 128 bytes hold is the linker's to say (each runtime's debugging
+  information, `build\measure\rt-neighbours.ps1`). Built as today, `nVifUpk`
+  ends there: pointers to the unpack routines, whose low bits are the same on
+  every run, so the program prints the same wrong values every time and two
+  runs agree. With link-time optimization `nVif` ends there: pointers into the
+  heap, whose low bits are not the same from run to run (the values printed
+  differ by bit 4 of a data word let through).
+
+So the comparison fails for what stock PCSX2 itself does, in a case PCSX2
+gets wrong either way; nothing of PS2Native's is in it. The three comparisons
+of two runs of that program (same-as-stock, lockstep, lockstep-no-stack) are
+disabled where the runtime is built with link-time optimization, by name and
+with this cause (`PS2AUTOTESTS_UNSTEADY_WITH_RUNTIME_LTO`,
+`tests/same-as-stock-known-differences.cmake`), and CTest lists them as not
+run: **532 of 532 pass, three not run.** Without link-time optimization they
+run and pass as before.
+
+**On Linux** (WSL 2, half the processors), the same options through
+`build.sh`, in build trees of their own given what the Linux module tree was
+given. Not timed there.
+
+- The runtime built to count: 197 s, with its tree's modules.
+- One session of the maintainer's Linux folder's game (Jak and Daxter,
+  `20261119-225148`, 4,085 frames) run again with it and the folder's own
+  modules (`ps2n-host -modules`), the session at every fingerprint, and on
+  past its end to 10,800 frames; the counts merged sparse (4,171 functions).
+  One game's one session, to see it work: a Linux release's profile needs the
+  training runs made there, with each game's folder made on Linux.
+- The whole tree built with link-time optimization and those counts: 219 s.
+  The names the host exports PCSX2's symbols under (`--defsym`) hold under it.
+- Every test: 531 of 531 pass, the same three not run (534).
+
+**What it costs.** For a release, on the computer that has the games, for each
+system: the runtime built to count (44 s on Windows), the training runs (seven,
+6 minutes), the counts merged (under a second), the runtime built with them and
+link-time optimization (about a minute; the whole module tree 171 s): about 8
+minutes. The profile stays in the build tree (`build\pgo`): a build from the
+repository alone can give the runtime link-time optimization (`-RuntimeLto
+on`), not the profile.
+The runtime is 4.3 MB larger (15.7 MB, where 11.3 MB). Three comparisons of one
+console-recorded program are not run with it, for the defect of PCSX2's above.
+
+With the options off, as by default, every test passes as before from the
+same working tree: 535 and 534 on Windows, 534 and 534 on Linux under WSL 2.
+
+### The maintainer's answers (2026-11-22)
+
+The session put seven decisions to the maintainer with these numbers, with
+its recommendation for each. Their answers: "1. Yes", "2. Yes", "3. Yes",
+"4. Yes, write the text, I'll change it", "5. Yes", "6. Yes", "7. Ok do it"
+([ADR 0047](adr/0047-the-runtime-built-as-pcsx2s-releases-are-and-with-a-profile-of-play.md)):
+
+1. **Stock PCSX2 is timed built as its releases are** from now on, with
+   link-time optimization and without a profile, and the website's chart is
+   corrected to it: the compiled games in their folders at 1.07, 1.10, 1.11
+   and 1.07 times its time with the runtime as built before (the first set of
+   turns), and at 0.99, 1.00, 0.99 and 1.00 with the runtime built with
+   link-time optimization and the sparse profile (the third).
+2. **A release's runtime is built with link-time optimization and the profile
+   of play,** on each system from training runs made there.
+3. **The maintainer's game folders get that runtime,** nothing compiled again.
+4. **The maintainer tells PCSX2 of the defect themselves.** The session wrote
+   no text for it
+   ([ADR 0010](adr/0010-pcsx2-fix-goes-upstream-through-the-maintainer.md)),
+   and gave where the defect is, when it shows and how it is seen.
+5. **Committed and pushed.**
+6. **A folder counts its profile after a session of 3 minutes of the game's
+   own time,** 9,000 frames at 50 frames a second, where it took 10,800 for
+   every game.
+7. **0.2 next,** with a way to bring the game folders of an earlier version up
+   to date.
+
+**The tree the folder is made from, built so** (the session's choice, ADR
+0047): `build.ps1 -BuildDir build\windows-clang-module -RuntimeLto on
+-RuntimePgo use -RuntimePgoData build\pgo\runtime-windows.profdata`, the
+sparse profile of the measurement above, the whole tree compiled again in
+86 s. Its runtime is the one timed, to the byte's count (15,674,880 bytes).
+Every test in it: 532 of 532 pass, the three comparisons of `dma/vif/stcycl`
+not run (190 s). The development tree with the compiled code in the host
+stays as it was, and runs them.

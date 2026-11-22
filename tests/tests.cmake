@@ -216,6 +216,13 @@ function(ps2n_add_program_tests suite name elf expected image)
 		endif()
 	endif()
 
+	# A program whose run does not repeat where the runtime is built with
+	# link-time optimization (<SUITE>_UNSTEADY_WITH_RUNTIME_LTO, which says why)
+	# has its comparisons of two runs disabled there: CTest lists them as not run.
+	if(PS2N_RUNTIME_LTO AND name IN_LIST ${suite_upper}_UNSTEADY_WITH_RUNTIME_LTO)
+		set_tests_properties("${suite}/lockstep/${name}" "${suite}/same-as-stock/${name}" PROPERTIES DISABLED TRUE)
+	endif()
+
 	# The same at PCSX2's EE cycle rates other than its default (step G17, ADR
 	# 0025), both runs with the setting: its overclock of 130%, 180% and 300%,
 	# and its 75% and 50%, which between them take every way the recompiler
@@ -332,6 +339,9 @@ foreach(name IN ITEMS cpu/ee/alu cpu/ee_fpu/arithmetic kernel/ee/thread/terminat
 		string(MAKE_C_IDENTIFIER "${name}" id)
 		ps2n_add_guest_test("ps2autotests/lockstep-no-stack/${name}" 240 "ps2autotests;lockstep"
 			"-DELF=${PS2AUTOTESTS_ROOT}/${name}.elf" -DIOP=ps2n -DVU=ps2n "-DIMAGE=${id}" -DLOCKSTEP=1 -DSTACK_BUDGET=0)
+		if(PS2N_RUNTIME_LTO AND name IN_LIST PS2AUTOTESTS_UNSTEADY_WITH_RUNTIME_LTO)
+			set_tests_properties("ps2autotests/lockstep-no-stack/${name}" PROPERTIES DISABLED TRUE)
+		endif()
 	endif()
 endforeach()
 
@@ -558,6 +568,7 @@ endif()
 # raw .bin and a .cso (tests/disc/make_images.cpp), each listed and its files
 # extracted (tests/disc_test.cmake). It needs no BIOS.
 add_executable(ps2n-disc-images "${PS2N_ROOT}/tests/disc/make_images.cpp")
+ps2n_not_the_runtime(ps2n-disc-images)
 set_target_properties(ps2n-disc-images PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin")
 add_dependencies(ps2n-host ps2n-disc-images)
 add_test(NAME disc/formats
@@ -794,6 +805,8 @@ endif()
 # (runtime/module_entry.cpp), as PCSX2's build has its own
 # (-fvisibility=hidden, which it gives every file of this directory).
 function(ps2n_compile_freestanding target)
+	# (Nor what the runtime itself is built with: cmake/ps2n-inject.cmake.)
+	ps2n_not_the_runtime(${target})
 	target_include_directories(${target} PRIVATE "${PS2N_ROOT}" "${PS2N_ROOT}/core/include" "${PS2N_ROOT}/runtime/include")
 	target_compile_definitions(${target} PRIVATE PS2N_MODULE)
 	if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
@@ -880,6 +893,9 @@ if(PS2N_GAME_MODULE)
 	message(STATUS "PS2Native: the compiled code goes into modules of its own: ${ps2n_images_targets}")
 else()
 	add_library(ps2n-test-images STATIC ${ps2n_image_sources} "${PS2N_GENERATED}/registry.cpp")
+	# The generated code has options of its own for these (PS2N_PGO and
+	# PS2N_LTO, below), not the runtime's (cmake/ps2n-inject.cmake).
+	ps2n_not_the_runtime(ps2n-test-images)
 	set(ps2n_images_targets ps2n-test-images)
 	target_link_libraries(ps2n-host PRIVATE ps2n-test-images)
 	if(PS2N_GAME_IMPORTS)

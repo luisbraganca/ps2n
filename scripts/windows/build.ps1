@@ -97,6 +97,15 @@ param(
     # Link-time optimization of PS2Native's own code, the generated code and the runtime (docs/adr/0019): "thin"
     # (ThinLTO), or "off". PCSX2's code is compiled as before either way. Remembered by the build tree, as -Game is.
     [ValidateSet('', 'thin', 'off')][string]$Lto = '',
+    # The runtime itself, ps2n-host (PCSX2's core and what PS2Native adds to it), built as PCSX2's own releases are,
+    # with link-time optimization: "on", or "off", as by default. Remembered by the build tree, as -Game is.
+    [ValidateSet('', 'on', 'off')][string]$RuntimeLto = '',
+    # The runtime itself built with a profile of play (docs/adr/0046): "generate" builds it to count what it runs (a
+    # run then writes its counts where LLVM_PROFILE_FILE says; in a build tree without the wizard), "use" builds it
+    # with the merged counts given as -RuntimePgoData (llvm-profdata merge), "off" without either. The counts come
+    # from playing games and stay in the build tree. Remembered by the build tree, as -Game is.
+    [ValidateSet('', 'generate', 'use', 'off')][string]$RuntimePgo = '',
+    [string]$RuntimePgoData = '',
     # The compiled code built into modules of its own beside the host, one for each kind of code (ps2n-game.dll,
     # ps2n-bios.dll, ps2n-vu.dll, ps2n-iop.dll), compiled with PS2Native's own headers and nothing else, which the
     # host loads when it starts (docs\phase4-proposal.md, steps P4.1 and P4.2): "on", or "off" to build it into the
@@ -211,6 +220,16 @@ if ($Pgo) {
 if ($Lto) {
     $gameSettings += "-DPS2N_LTO=$(if ($Lto -eq 'off') { '' } else { $Lto })"
 }
+if ($RuntimeLto) {
+    $gameSettings += "-DPS2N_RUNTIME_LTO=$(if ($RuntimeLto -eq 'on') { 'ON' } else { 'OFF' })"
+}
+if ($RuntimePgo) {
+    $gameSettings += "-DPS2N_RUNTIME_PGO=$(if ($RuntimePgo -eq 'off') { '' } else { $RuntimePgo })"
+    if ($RuntimePgo -eq 'use') {
+        if (-not $RuntimePgoData) { throw "-RuntimePgo use needs -RuntimePgoData, the merged profile (llvm-profdata merge)." }
+        $gameSettings += "-DPS2N_RUNTIME_PGO_DATA=$(ForCMake (Resolve-Path -LiteralPath $RuntimePgoData).Path)"
+    }
+}
 if ($Module) {
     $gameSettings += "-DPS2N_GAME_MODULE=$(if ($Module -eq 'on') { 'ON' } else { 'OFF' })"
     $gameSettings += "-DPS2N_GAME_IMPORTS=$(if ($Module -eq 'imports') { 'ON' } else { 'OFF' })"
@@ -221,7 +240,8 @@ if ($Wizard) {
 
 if ($Reconfigure -or $gameSettings -or -not (Test-Path (Join-Path $build 'build.ninja'))) {
     # The flags PCSX2's own CI uses for its Windows CMake build with clang-cl,
-    # minus the Qt interface and link-time optimization.
+    # minus the Qt interface, and minus link-time optimization, which
+    # -RuntimeLto on gives the runtime (a release's has it, docs\adr\0047).
     cmake -S $pcsx2 -B $build -G Ninja `
         -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl `
         -DCMAKE_BUILD_TYPE=Release `

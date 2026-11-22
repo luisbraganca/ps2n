@@ -43,3 +43,31 @@ set(PS2AUTOTESTS_DIFFERS_same-as-stock
 
 set(SDK_DIFFERS_same-as-stock)
 set(PROGRAMS_DIFFERS_same-as-stock)
+
+# Programs whose run does not repeat from one run to the next when the runtime
+# is built with link-time optimization (PS2N_RUNTIME_LTO, cmake/ps2n-inject.cmake),
+# under stock PCSX2 as under PS2Native. The comparisons of two runs of them
+# (same-as-stock, lockstep, lockstep-no-stack) are then disabled, and CTest
+# lists them as not run; without link-time optimization they run and pass.
+# Found on 2026-11-21 (docs/app-log.md, "The runtime itself").
+#
+# dma/vif/stcycl: a defect of PCSX2's (v2.9.170, x86). An UNPACK with masks
+# that would run past the end of a VU's memory is carried out by PCSX2's
+# interpreted unpack routines (dVifUnpack, pcsx2/x86/Vif_Dynarec.cpp, falls
+# back to them). Their masked write (VifUnpackSSE_Simple::doMaskWrite,
+# pcsx2/x86/Vif_UnpackSSE.cpp) loads the address of nVifMask and counts the
+# places of its three tables from nVifMask[2]: it takes the data mask and the
+# write-protect mask from the 128 bytes before nVifMask, and the row and column
+# values from the data mask's table. (PCSX2's arm64 routine counts from
+# nVifMask itself.) What those 128 bytes hold is the linker's to say. Without
+# link-time optimization it is the end of nVifUpk, pointers to the unpack
+# routines, whose low bits are the same on every run: the program prints the
+# same wrong values every time, and the comparisons pass. With it, it is the
+# end of nVif, pointers into the heap, whose low bits are not: the program's
+# VIF0 cases with a CL of 253 to 255 come out one of two ways, under stock
+# PCSX2 too, and a comparison of two runs fails whenever its two runs differ.
+# The program's output is listed as differing from the console's in every
+# configuration for these cases (tests/ps2autotests-known-differences.cmake).
+set(PS2AUTOTESTS_UNSTEADY_WITH_RUNTIME_LTO
+	dma/vif/stcycl
+)

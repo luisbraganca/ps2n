@@ -464,9 +464,9 @@
 			</article>
 			<article class="tile" data-reveal style="--d:90">
 				<p class="tile__label">Tests that pass</p>
-				<p class="tile__value"><span data-count="535">535</span></p>
-				<p>in the build that makes a game's modules, and 534 in the development build and in each of the two Linux builds, under WSL 2. A test that differs from a console recording is listed only once its cause is known.</p>
-				<p class="when">2026-11-20</p>
+				<p class="tile__value"><span data-count="534">534</span></p>
+				<p>in the development build and in each of the two Linux builds, under WSL 2. In the build that makes a game's modules, whose runtime is built as a release's, 532 pass and three comparisons of one program are not run: a defect of PCSX2's makes two runs of it differ there. A test that differs from a console recording is listed only once its cause is known.</p>
+				<p class="when">2026-11-22</p>
 			</article>
 			<article class="tile" data-reveal style="--d:180">
 				<p class="tile__label">Programs that match the console</p>
@@ -496,22 +496,32 @@
 
 		<div class="charts">
 			<section class="chart" data-reveal aria-labelledby="chart-folders">
-				<h3 id="chart-folders">Compiled, as users get it: a little slower</h3>
-				<p class="chart__sub">The maintainer's own sessions, run again from copies of the games' folders: time relative to stock PCSX2's recompilers on the same session. Below 1.00 is faster.</p>
+				<h3 id="chart-folders">Compiled, as users get it: at PCSX2's time</h3>
+				<p class="chart__sub">The maintainer's own sessions, run again from copies of the games' folders: time relative to stock PCSX2's recompilers on the same session, PCSX2 built as its own releases are. Below 1.00 is faster.</p>
+				<ul class="legend" aria-hidden="true">
+					<li><i class="k-before"></i>PS2Native's runtime as built before</li>
+					<li><i class="k-ps2n"></i>Built as PCSX2's releases are, with a profile of play</li>
+				</ul>
 				<table class="bars bars--ratio" style="--ref:.625">
-					<caption class="sr-only">Time of four games' sessions, compiled in a game's folder, relative to stock PCSX2's recompilers</caption>
-					<thead><tr><th scope="col"><span class="sr-only">Game</span></th><th scope="col"><span class="sr-only">Time relative to stock PCSX2</span></th></tr></thead>
+					<caption class="sr-only">Time of four games' sessions, compiled in a game's folder, relative to stock PCSX2's recompilers, with PS2Native's runtime built as before and built as the next release's</caption>
+					<thead><tr><th scope="col"><span class="sr-only">Runtime</span></th><th scope="col"><span class="sr-only">Time relative to stock PCSX2</span></th></tr></thead>
 					<tbody>
-						<tr class="grp"><th colspan="2" scope="rowgroup">A folder that has counted its user's play</th></tr>
-						<tr><th scope="row">Jak and Daxter</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.6500;--i:0"><span class="bar__fill"></span><span class="bar__val">1.04</span><span class="bar__tip" role="tooltip"><b>1.04</b> 8,357 frames, nothing drawn: 59.1 s against 56.6 s. 1.19 without the counts on 2026-11-20, 1.24 before the speed work</span></div></td></tr>
-						<tr><th scope="row">Gran Turismo 3</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.6625;--i:1"><span class="bar__fill"></span><span class="bar__val">1.06</span><span class="bar__tip" role="tooltip"><b>1.06</b> 8,678 frames: 22.9 s against 21.5 s. A longer session of it took 1.13 without the counts on 2026-11-20</span></div></td></tr>
-						<tr><th scope="row">Agent Under Fire</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.6750;--i:2"><span class="bar__fill"></span><span class="bar__val">1.08</span><span class="bar__tip" role="tooltip"><b>1.08</b> 9,000 frames: 29.6 s against 27.4 s. 1.12 without the counts on 2026-11-20, 1.16 before the speed work</span></div></td></tr>
-						<tr class="grp"><th colspan="2" scope="rowgroup">A folder that has not: no session of 3 minutes</th></tr>
-						<tr><th scope="row">Killzone</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.6563;--i:3"><span class="bar__fill"></span><span class="bar__val">1.05</span><span class="bar__tip" role="tooltip"><b>1.05</b> 9,300 frames: 46.8 s against 44.7 s. 1.06 on 2026-11-20, 1.07 before the speed work</span></div></td></tr>
+						<tr class="grp"><th colspan="2" scope="rowgroup">Jak and Daxter, 8,357 frames, nothing drawn</th></tr>
+						<tr><th scope="row">Before</th><td><div class="bar bar--before" tabindex="0" style="--v:.6688;--i:0"><span class="bar__fill"></span><span class="bar__val">1.07</span><span class="bar__tip" role="tooltip"><b>1.07</b> the runtime as built before: 58.95 s against 54.98 s</span></div></td></tr>
+						<tr><th scope="row">Now</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.6188;--i:1"><span class="bar__fill"></span><span class="bar__val">0.99</span><span class="bar__tip" role="tooltip"><b>0.99</b> the runtime built as PCSX2's releases are, with a profile of play: 55.09 s against 55.40 s</span></div></td></tr>
+						<tr class="grp"><th colspan="2" scope="rowgroup">Gran Turismo 3, 8,678 frames</th></tr>
+						<tr><th scope="row">Before</th><td><div class="bar bar--before" tabindex="0" style="--v:.6875;--i:2"><span class="bar__fill"></span><span class="bar__val">1.10</span><span class="bar__tip" role="tooltip"><b>1.10</b> the runtime as built before: 22.80 s against 20.78 s</span></div></td></tr>
+						<tr><th scope="row">Now</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.6250;--i:3"><span class="bar__fill"></span><span class="bar__val">1.00</span><span class="bar__tip" role="tooltip"><b>1.00</b> the runtime built as PCSX2's releases are, with a profile of play: 20.95 s against 20.91 s</span></div></td></tr>
+						<tr class="grp"><th colspan="2" scope="rowgroup">Agent Under Fire, 9,000 frames</th></tr>
+						<tr><th scope="row">Before</th><td><div class="bar bar--before" tabindex="0" style="--v:.6938;--i:4"><span class="bar__fill"></span><span class="bar__val">1.11</span><span class="bar__tip" role="tooltip"><b>1.11</b> the runtime as built before: 29.57 s against 26.61 s</span></div></td></tr>
+						<tr><th scope="row">Now</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.6188;--i:5"><span class="bar__fill"></span><span class="bar__val">0.99</span><span class="bar__tip" role="tooltip"><b>0.99</b> the runtime built as PCSX2's releases are, with a profile of play: 26.46 s against 26.84 s</span></div></td></tr>
+						<tr class="grp"><th colspan="2" scope="rowgroup">Killzone, 9,300 frames, its folder without counts of its own</th></tr>
+						<tr><th scope="row">Before</th><td><div class="bar bar--before" tabindex="0" style="--v:.6688;--i:6"><span class="bar__fill"></span><span class="bar__val">1.07</span><span class="bar__tip" role="tooltip"><b>1.07</b> the runtime as built before: 46.72 s against 43.81 s</span></div></td></tr>
+						<tr><th scope="row">Now</th><td><div class="bar bar--ps2n" tabindex="0" style="--v:.6250;--i:7"><span class="bar__fill"></span><span class="bar__val">1.00</span><span class="bar__tip" role="tooltip"><b>1.00</b> the runtime built as PCSX2's releases are, with a profile of play: 43.98 s against 43.88 s</span></div></td></tr>
 						<tr class="axis" aria-hidden="true"><th></th><td><div class="bar"><span>1.00, stock PCSX2</span></div></td></tr>
 					</tbody>
 				</table>
-				<p class="chart__note">Measured on 2026-11-21 in the configuration users get: a game's folder, its modules compiled with the counts the folder takes itself, by running 3 minutes of a session again after play (a session other than the one timed; Killzone's sessions are too short to count). Jak and Daxter with nothing drawn, the others on Vulkan at the console's resolution, each the mean of three rounds in turns with stock PCSX2, every run the session at every fingerprint. Without counts the folders took 1.06 to 1.19 times stock PCSX2's time on 2026-11-20, and 1.07 to 1.24 before the speed work. Two changes of 2026-11-21 are in these numbers: what PCSX2's recompiler works out about each vector-unit instruction in the main processor's code from the rest of its block is now worked out when the code is generated (Jak and Daxter 8.2% less time), and a vector-unit program is entered at less cost (1.5 to 2%). The development build's figures (Killzone into its first level at 0.97 times stock PCSX2's time, 2026-11-14) came from code compiled with a profile trained on Killzone. <span class="when">2026-11-21</span></p>
+				<p class="chart__note">Measured on 2026-11-21 and 2026-11-22 in the configuration users get: a game's folder, its modules compiled with the counts the folder takes itself, by running 3 minutes of a session again after play (a session other than the one timed; Killzone's folder had none, its sessions being too short to count then). Jak and Daxter with nothing drawn, the others on Vulkan at the console's resolution, each the mean of three rounds in turns with stock PCSX2, every run the session at every fingerprint; each ratio is from its own set of turns. PCSX2's own releases are built with link-time optimization, which the build here had left out: built so, stock PCSX2 takes 1.5 to 4% less time. The ratios this chart showed on 2026-11-21 (1.04, 1.06, 1.08 and 1.05) were against the slower build; against stock PCSX2 as released, the same folders took 1.07 to 1.11 times its time ("Before"). "Now" is the same folders on PS2Native's runtime, which is PCSX2's core and what PS2Native adds to it, built the same way and with a profile of play: counts of what the runtime ran in seven runs of the maintainer's sessions, none of them a session timed. A game left out of those runs took within 1% of the same time. Stock PCSX2 is timed without such a profile, as its releases have none. The next release's runtime is built so; 0.1's is not. The development build's figures (Killzone into its first level at 0.97 times stock PCSX2's time, 2026-11-14) came from code compiled with a profile trained on Killzone, against a stock PCSX2 built without link-time optimization. <span class="when">2026-11-22</span></p>
 			</section>
 
 			<section class="chart" data-reveal style="--d:120" aria-labelledby="chart-first">
@@ -744,7 +754,8 @@
 					<li class="is-done"><b><span class="g">0.1</span>The first release</b>Published by the maintainer on 2026-11-19: a pre-release for Windows and Linux, tried with five games</li>
 					<li class="is-done"><b><span class="g">Speed</span>As users get it</b>Done (2026-11-20): compiled games from 1.07 to 1.24 times stock PCSX2's time in their folders down to 1.06 to 1.19, and first sessions faster, Gran Turismo 3's by 29%</li>
 					<li class="is-open"><b><span class="g">Next</span>Learning from play</b>Built (2026-11-21), for the next release: a game's folder places its functions in the order its sessions ran them (about 0.4% on Jak and Daxter), and once, after a session of at least 3 minutes, runs those 3 minutes again out of sight, counting what its code does, and compiles itself with the counts: Jak and Daxter 8.0% less time, Gran Turismo 3 3.6%</li>
-					<li class="is-open"><b><span class="g">Speed</span>No more than PCSX2's time</b>Under way (2026-11-21): in their folders, each with the counts it took of its user's play (Killzone's without, no session of it being long enough), compiled games took 1.06 to 1.11 times stock PCSX2's time on the maintainer's sessions, and take 1.04 to 1.08 after two changes kept; two more were tried, gained nothing that shows and were taken out. Next: the runtime itself built with a profile of play</li>
+					<li class="is-open"><b><span class="g">Speed</span>No more than PCSX2's time</b>Measured (2026-11-22), for the next release: PCSX2's own releases are built with link-time optimization, which the build here had left out, and against stock PCSX2 built so compiled games took 1.07 to 1.11 times its time in their folders, not the 1.04 to 1.08 shown here the day before. With PS2Native's runtime built the same way, and with a profile of play, they take 0.99 to 1.00 times its time on the maintainer's sessions, and a game's first session 11% less than before</li>
+					<li class="is-open"><b><span class="g">Next</span>0.2</b>Under way (2026-11-22): the second release, with a way to bring the game folders of an earlier version up to date</li>
 				</ul>
 				<ol class="wizard" aria-label="The wizard's five steps">
 					<li>The game</li>
@@ -873,7 +884,7 @@
 		<p>PS2Native is free software under the GNU General Public License, version 3 or later. It builds on PCSX2 (GPL-3.0 or later, Copyright PCSX2 Dev Team), which is included unmodified as a submodule.</p>
 		<p>PS2Native is an independent project. It is not affiliated with the PCSX2 project or with Sony Interactive Entertainment. PlayStation and PS2 are trademarks of Sony Interactive Entertainment Inc. Other names belong to their owners and are used here only to say what the project works with.</p>
 		<div class="footer__end">
-			<span>The state of the project on 2026-11-21.</span>
+			<span>The state of the project on 2026-11-22.</span>
 			<button class="motion-switch" type="button" data-motion-switch aria-pressed="true"><i aria-hidden="true"></i>Motion</button>
 		</div>
 	</div>

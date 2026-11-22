@@ -18,6 +18,12 @@ set(PS2N_WIZARD OFF CACHE BOOL "Build ps2n-wizard, the application a game is mad
 if(NOT PS2N_WIZARD)
 	return()
 endif()
+# The wizard holds PCSX2's core too: a core built to count what it runs
+# (PS2N_RUNTIME_PGO=generate, cmake/ps2n-inject.cmake) is for the runtime
+# alone, in a build tree of its own.
+if(PS2N_RUNTIME_PGO STREQUAL "generate")
+	message(FATAL_ERROR "PS2N_WIZARD is not built with PS2N_RUNTIME_PGO=generate: count in a build tree without the wizard")
+endif()
 
 find_package(Qt6 6.10 COMPONENTS CoreTools Core GuiTools Gui WidgetsTools Widgets REQUIRED)
 # PCSX2's pages reach Qt's private platform headers on Linux (pcsx2-qt/QtUtils.h,
@@ -103,6 +109,9 @@ target_include_directories(ps2n-wizard PRIVATE
 	"${CMAKE_BINARY_DIR}/common/include"
 	"${CMAKE_SOURCE_DIR}/pcsx2"
 )
+# (Its own code is not the runtime's: cmake/ps2n-inject.cmake. The core's, which
+# it is linked with, is the core's as the runtime has it.)
+ps2n_not_the_runtime(ps2n-wizard)
 target_compile_definitions(ps2n-wizard PRIVATE QT_NO_EXCEPTIONS)
 # PS2Native's version, in the wizard's title (ps2n_version.h, cmake/ps2n-inject.cmake).
 target_include_directories(ps2n-wizard PRIVATE "${PS2N_VERSION_DIR}")
@@ -122,6 +131,7 @@ add_executable(ps2n-remake WIN32
 	"${CMAKE_CURRENT_LIST_DIR}/platform.h"
 	"${CMAKE_CURRENT_LIST_DIR}/remake_main.cpp"
 )
+ps2n_not_the_runtime(ps2n-remake)
 set_target_properties(ps2n-remake PROPERTIES
 	AUTOMOC ON
 	RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin"
@@ -155,6 +165,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	set_target_properties(ps2n-remake PROPERTIES AUTORCC ON)
 
 	add_executable(ps2n-launcher "${CMAKE_CURRENT_LIST_DIR}/launcher_main.cpp" "${ps2n_icon_qrc_file}")
+	ps2n_not_the_runtime(ps2n-launcher)
 	set_target_properties(ps2n-launcher PROPERTIES
 		AUTORCC ON
 		RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin"

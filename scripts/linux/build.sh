@@ -39,6 +39,10 @@
 #   --iop-capture <file|none>  --iop-selftest-capture <file|none>
 #   --pgo <generate|use|off>   --pgo-data <file>
 #   --lto <thin|off>
+#   --runtime-lto <on|off>     the runtime itself built with link-time optimization, as PCSX2's
+#                              own releases are
+#   --runtime-pgo <generate|use|off>   --runtime-pgo-data <file>
+#                              the runtime itself built with a profile of play (docs/adr/0046)
 #   --module <on|off|imports>  the compiled code in modules of its own (ps2n-game.so and the
 #                              others beside the host; docs/phase4-proposal.md, P4.1 and P4.2)
 #   --wizard <on|off>          the wizard and ps2n-remake (P4.5, P4.6)
@@ -75,7 +79,8 @@ while [ "$#" -gt 0 ]; do
 		--reconfigure) reconfigure=1 ;;
 		--tools-only) tools_only=1 ;;
 		--build-dir|--game|--game-more|--game-capture|--bios|--bios-capture|--vu-capture|--vu-selftest-capture|\
-		--iop-capture|--iop-selftest-capture|--pgo|--pgo-data|--lto|--module|--wizard)
+		--iop-capture|--iop-selftest-capture|--pgo|--pgo-data|--lto|--module|--wizard|\
+		--runtime-lto|--runtime-pgo|--runtime-pgo-data)
 			if [ "$#" -lt 2 ]; then
 				echo "$1 needs a value" >&2
 				exit 1
@@ -116,6 +121,21 @@ while [ "$#" -gt 0 ]; do
 						*) echo "--lto is thin or off" >&2; exit 1 ;;
 					esac
 					;;
+				--runtime-lto)
+					case "$2" in
+						on) settings+=("-DPS2N_RUNTIME_LTO=ON") ;;
+						off) settings+=("-DPS2N_RUNTIME_LTO=OFF") ;;
+						*) echo "--runtime-lto is on or off" >&2; exit 1 ;;
+					esac
+					;;
+				--runtime-pgo)
+					case "$2" in
+						generate|use) settings+=("-DPS2N_RUNTIME_PGO=$2") ;;
+						off) settings+=("-DPS2N_RUNTIME_PGO=") ;;
+						*) echo "--runtime-pgo is generate, use or off" >&2; exit 1 ;;
+					esac
+					;;
+				--runtime-pgo-data) settings+=("-DPS2N_RUNTIME_PGO_DATA=$(realpath "$2")") ;;
 				--module)
 					case "$2" in
 						on) settings+=("-DPS2N_GAME_MODULE=ON" "-DPS2N_GAME_IMPORTS=OFF") ;;

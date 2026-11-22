@@ -202,7 +202,29 @@ compiles itself again. The maintainer's answers the same day ("1. Yes",
 "2. Yes", "3. Ok"): committed and pushed, the new programs into their game
 folders, and next the runtime itself (PS2Native's runtime and PCSX2's core,
 34% to 50% of a run's processor thread) built with a profile of play,
-measured first, against stock PCSX2 built without one.
+measured first, against stock PCSX2 built without one. Measured that night:
+PCSX2's own releases are built with link-time optimization, which the build
+here had left out; stock PCSX2 built so takes 1.5 to 4% less time, and against
+it compiled games as users have them take 1.07 to 1.11 times its time. With
+the runtime built with link-time optimization and a profile of play (the
+functions no training run ran left out of it) they take 0.99 to 1.00 times
+it, a game the profile never saw nearly as little, and a game's first session
+11% less than today. The folders were brought up to date the same evening.
+Every test passes with such a runtime on Windows and on Linux but three
+comparisons of one console-recorded program, disabled there for a defect of
+PCSX2's found with it (its interpreted masked VIF unpack reads its mask tables
+128 bytes low). The build's options for it are in, off by default
+(`build.ps1 -RuntimeLto`, `-RuntimePgo`). The maintainer's answers on
+2026-11-22 (ADR 0047: "1. Yes", "2. Yes", "3. Yes", "4. Yes, write the text,
+I'll change it", "5. Yes", "6. Yes", "7. Ok do it"): stock PCSX2 is timed built
+as its releases are, without a profile, and the website's chart is corrected to
+it; a release's runtime is built with link-time optimization and the profile of
+play, and the tree the folder is made from is built so; the maintainer's game
+folders get that runtime; the maintainer tells PCSX2 of the defect themselves
+(the session wrote no text for it, ADR 0010); what was measured is committed
+and pushed; a folder counts its profile after a session of 3 minutes of the
+game's own time (9,000 frames at 50 frames a second); and 0.2 is next, with a
+way to bring the game folders of an earlier version up to date.
 docs/app-log.md, "Compiled games against PCSX2, as users get them".**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
@@ -892,6 +914,25 @@ Decisions:
   runtime itself built with a profile of play, measured first, against stock
   PCSX2 built without one. What becomes of a folder's counts after an update
   is still to be put to them.
+- [ADR 0047](docs/adr/0047-the-runtime-built-as-pcsx2s-releases-are-and-with-a-profile-of-play.md):
+  the maintainer's answers of 2026-11-22 to what that measurement found
+  ("1. Yes", "2. Yes", "3. Yes", "4. Yes, write the text, I'll change it",
+  "5. Yes", "6. Yes", "7. Ok do it"). Stock PCSX2 is timed built as its own
+  releases are, with link-time optimization, which the build here had left
+  out, and without a profile (built so it takes 1.5 to 4% less time; against
+  it compiled games took 1.07 to 1.11 times its time, not 1.04 to 1.08), and
+  the website's chart is corrected. A release's runtime is built with
+  link-time optimization and a profile of play (0.99 to 1.00 times that stock
+  PCSX2's time), on each system from training runs made there, the profile
+  kept in the build tree; the maintainer's game folders get it. The maintainer
+  tells PCSX2 of the defect found with it themselves; asked for the text, the
+  session wrote none (ADR 0010) and gave where it is and how it is seen. A
+  folder counts its profile after 3 minutes of the game's own time (9,000
+  frames at 50 frames a second, 10,800 at 60: it changes ADR 0045's number).
+  0.2 is next, with a way to bring the game folders of an earlier version up
+  to date. The session's choices, for the maintainer to decide otherwise: the
+  tree the folder is made from is built so, the development tree as before;
+  stock PCSX2 is timed on a runtime of a tree of its own.
 
 ## Layout, build and test
 
@@ -1047,6 +1088,32 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   (docs/app-log.md, "A profile sampled while the game plays, tried").
   Clang's `-mllvm -sample-profile-check-record-coverage=100` says how much
   of a sampled profile a file's functions took.
+- The runtime itself (ADR 0046; docs/app-log.md, "The runtime itself"):
+  `build.ps1 -RuntimeLto on` builds `ps2n-host`, PCSX2's core and what
+  PS2Native adds to it, with link-time optimization, as PCSX2's own releases
+  are built (`build.ps1` otherwise leaves it out); `-RuntimePgo generate`
+  builds it to count what it runs, in a tree without the wizard (a run then
+  writes its counts where `LLVM_PROFILE_FILE` says), `llvm-profdata merge
+  -sparse` puts the runs' counts together without the functions no run ran,
+  and `-RuntimePgo use -RuntimePgoData <file>` builds it with them
+  (`build.sh --runtime-lto`, `--runtime-pgo`, `--runtime-pgo-data`). The
+  build tree remembers them; `off` takes them out. The modules of compiled
+  code, the launcher and the wizard's own code are built as before
+  (`ps2n_not_the_runtime`, `cmake/ps2n-inject.cmake`). The counts come from
+  playing games and stay in the build tree. At the maintainer's word (ADR
+  0047) a release's runtime is built with both, so the tree the folder is
+  made from is: `build.ps1 -BuildDir build\windows-clang-module -RuntimeLto on
+  -RuntimePgo use -RuntimePgoData build\pgo\runtime-windows.profdata` (the
+  profile of 2026-11-21, to be made again for a release from the tree
+  released); the development tree, `build\windows-clang`, stays without
+  either. Stock PCSX2 is timed built as its releases are, on a runtime of a
+  tree of its own with link-time optimization and no profile (built so it
+  takes 1.5 to 4% less time than built as the trees are by default), never on
+  the runtime with the profile. With a runtime built with link-time
+  optimization the three comparisons of two runs of `dma/vif/stcycl` are
+  disabled, for a defect of PCSX2's that makes its runs differ there
+  (`tests/same-as-stock-known-differences.cmake`); they run in the
+  development tree. `build\measure\rpgo.ps1` is the trial that measured both.
 - The compiled code in modules of its own (Phase 4, steps P4.1 and P4.2):
   `scripts\windows\build.ps1 -BuildDir build\windows-clang-module -Module on`
   with the main tree's game settings builds everything the host would hold

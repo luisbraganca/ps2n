@@ -52,6 +52,22 @@ set_target_properties(ps2n-host PROPERTIES
 # PS2Native's version, which -help shows (ps2n_version.h, cmake/ps2n-inject.cmake).
 target_include_directories(ps2n-host PRIVATE "${PS2N_VERSION_DIR}")
 
+# The runtime built to count what it runs (PS2N_RUNTIME_PGO=generate,
+# cmake/ps2n-inject.cmake): on Windows the linker is called directly, so
+# LLVM's profile runtime has to be named. The generated code's own counting
+# (PS2N_PGO=generate) is the compiler front end's, which the same file of
+# counts cannot hold with these.
+if(PS2N_RUNTIME_PGO STREQUAL "generate")
+	if(PS2N_PGO STREQUAL "generate")
+		message(FATAL_ERROR "PS2N_RUNTIME_PGO=generate and PS2N_PGO=generate cannot be had in one build")
+	endif()
+	if(WIN32)
+		execute_process(COMMAND "${CMAKE_CXX_COMPILER}" /clang:-print-resource-dir
+			OUTPUT_VARIABLE ps2n_clang_resources OUTPUT_STRIP_TRAILING_WHITESPACE)
+		target_link_libraries(ps2n-host PRIVATE "${ps2n_clang_resources}/lib/windows/clang_rt.profile-x86_64.lib")
+	endif()
+endif()
+
 # The game's window on Linux (host/window.cpp): X11, and XRandR for the screen
 # it comes up on, which PCSX2's own build finds and links; Xft, for the
 # notice's text, is loaded when the first notice is shown, and so are the
@@ -81,6 +97,7 @@ endif()
 # what is missing.
 if(WIN32)
 	add_executable(ps2n-launcher WIN32 "${CMAKE_CURRENT_LIST_DIR}/launcher.cpp" "${PS2N_ROOT}/assets/ps2n.rc")
+	ps2n_not_the_runtime(ps2n-launcher)
 	set_property(TARGET ps2n-launcher PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
 	target_link_libraries(ps2n-launcher PRIVATE shell32 user32)
 	set_target_properties(ps2n-launcher PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/ps2n/bin")

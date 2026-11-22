@@ -1416,6 +1416,8 @@ h3 { font-size: 1.22rem; font-weight: 650; letter-spacing: -0.012em; line-height
 	white-space: nowrap;
 }
 .bars .grp th {
+	/* A group's name is as wide as the table, and wraps on a narrow screen. */
+	white-space: normal;
 	padding: 12px 0 4px;
 	font-family: var(--mono);
 	font-size: .72rem;

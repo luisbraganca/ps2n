@@ -124,3 +124,11 @@ Point 6 is still open. No folder has counts that an update could make stale
 yet, and users have no way to bring a folder up to date. It is put to the
 maintainer with a measurement of what counts taken before an update are still
 worth after it.
+
+What the third answer's measurement found, and what the maintainer decided
+with it on 2026-11-22, is
+[ADR 0047](0047-the-runtime-built-as-pcsx2s-releases-are-and-with-a-profile-of-play.md):
+against stock PCSX2 built as its own releases are, which the numbers above
+were not measured against, compiled games took 1.07 to 1.11 times its time,
+and take 0.99 to 1.00 with the runtime built the same way and with a profile
+of play.
