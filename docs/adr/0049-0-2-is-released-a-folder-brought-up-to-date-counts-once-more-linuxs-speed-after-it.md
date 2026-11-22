@@ -52,6 +52,17 @@ each. The maintainer's answers: "1. Yes", "2. Yes, prepare the release",
 5. **Why a compiled game takes more than stock PCSX2's time on Linux is looked
    for after 0.2 is out.** The release's notes say where Linux stands.
 
+## Published
+
+With both downloads made and tried and the draft on GitHub, the session asked
+two things more: whether the maintainer would publish the draft themselves,
+as they had 0.1, or have the session publish it; and whether the website's
+move to 0.2 should then be committed and pushed, with the record of the
+release. The maintainer's answers: "1. Yes, publish", "2. Yes do it". The
+session read the first as its word to publish, and published the draft the
+same day: 0.2 is public since 2026-11-22, the tag `v0.2` on the commit the
+downloads were made from. The website's downloads moved to 0.2 after it.
+
 ## The session's choices, for the maintainer to decide otherwise
 
 - **0.2 is a pre-release,** as 0.1 is: tried with the same five games, on

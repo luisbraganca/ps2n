@@ -249,7 +249,16 @@ downloads made from it and the release a draft on GitHub that the maintainer
 reads and publishes; a folder brought up to date with another toolchain counts
 its profile once more after a session; the session brings the maintainer's own
 seven game folders up to date; and why a compiled game takes more than stock
-PCSX2's time on Linux is looked for after 0.2 is out. docs/app-log.md,
+PCSX2's time on Linux is looked for after 0.2 is out. Done the same day: both
+downloads made from the commit `4b45373`, every test passing in the trees
+they were made from, each unpacked and tried (its wizard made a game, and a
+session of the maintainer's run again from that folder was the session at
+every fingerprint); the release a draft on GitHub, which the session
+published the same day at the maintainer's word ("1. Yes, publish"; the tag
+`v0.2`), the website's downloads then moved to 0.2 ("2. Yes do it"); and the
+maintainer's seven folders have 0.2's programs, each compiled again and the
+start of one of its sessions run again from it the session. Next: why a
+compiled game takes more than stock PCSX2's time on Linux. docs/app-log.md,
 "Compiled games against PCSX2, as users get them" and "0.2: a game's folder
 brought up to date".**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
@@ -981,7 +990,10 @@ Decisions:
   Committed and pushed. 0.2 is released from that commit as ADR 0042 has a
   release made: both downloads from the committed and pushed tree, the runtime
   built with link-time optimization and the profile of play, the release a
-  draft on GitHub with its notes, which the maintainer reads and publishes. A
+  draft on GitHub with its notes, which the maintainer reads and publishes
+  (asked again once it was made, "1. Yes, publish", "2. Yes do it": the
+  session published it the same day, and the website's downloads moved to
+  0.2). A
   folder brought up to date with another toolchain counts its profile once
   more after a session. The session brings the maintainer's own game folders
   up to date, the six on Windows and the one inside WSL. Why a compiled game

@@ -11,7 +11,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PS2Native: PlayStation 2 games as native applications</title>
-<meta name="description" content="PS2Native converts PlayStation 2 games into native applications by ahead-of-time static recompilation. The game's code is translated to C++ and compiled on your computer; the console around it is the core of PCSX2. First pre-release: 0.1, for Windows and Linux.">
+<meta name="description" content="PS2Native converts PlayStation 2 games into native applications by ahead-of-time static recompilation. The game's code is translated to C++ and compiled on your computer; the console around it is the core of PCSX2. Pre-release 0.2, for Windows and Linux.">
 <meta name="theme-color" content="#0A1022">
 <meta name="color-scheme" content="dark">
 <link rel="canonical" href="https://luisbraganca.github.io/ps2n/">
@@ -20,7 +20,7 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="PS2Native">
 <meta property="og:title" content="PS2Native: PlayStation 2 games as native applications">
-<meta property="og:description" content="Ahead-of-time static recompilation of PlayStation 2 games, on the core of PCSX2. First pre-release: 0.1, for Windows and Linux.">
+<meta property="og:description" content="Ahead-of-time static recompilation of PlayStation 2 games, on the core of PCSX2. Pre-release 0.2, for Windows and Linux.">
 <meta property="og:url" content="https://luisbraganca.github.io/ps2n/">
 <meta property="og:image" content="https://luisbraganca.github.io/ps2n/site/brand/ps2native-social-1280x640.png">
 <meta property="og:image:width" content="1280">
@@ -100,14 +100,14 @@
 		<div class="cta" data-enter style="--i:4">
 			<a class="btn btn--primary" href="#download">
 				<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.75v8.5m-3.5-3.5L8 10.25l3.5-3.5M2.25 11.5v1.25c0 .83.67 1.5 1.5 1.5h8.5c.83 0 1.5-.67 1.5-1.5V11.5"/></svg>
-				Download 0.1
+				Download 0.2
 			</a>
 			<a class="btn btn--ghost" href="https://github.com/luisbraganca/ps2n" rel="noopener">
 				<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
 				Source on GitHub
 			</a>
 		</div>
-		<p class="pill" data-enter style="--i:5"><span class="pill__dot" aria-hidden="true"></span>0.1, a pre-release (2026-11-19): tried with five games on Windows, and on Linux under WSL 2</p>
+		<p class="pill" data-enter style="--i:5"><span class="pill__dot" aria-hidden="true"></span>0.2, a pre-release (2026-11-22): tried with five games on Windows, and on Linux under WSL 2</p>
 	</div>
 	<a class="hero__cue" href="#idea" aria-label="On to the idea"><i></i><i></i><i></i></a>
 	<div class="dissolve" data-dissolve="#070B18" aria-hidden="true"><canvas></canvas></div>
@@ -179,8 +179,8 @@
 	<div class="container">
 		<div class="section__head" data-reveal>
 			<p class="eyebrow"><span data-scramble>02 &middot; Download</span></p>
-			<h2>PS2Native 0.1</h2>
-			<p class="section__lead">A first preview, published on 2026-11-19. It compiles a PlayStation 2 game you own into a native program for your computer and plays it on PCSX2's core. You bring the game's disc image and a BIOS dumped from your own console: PS2Native ships neither. Nothing to install: unpack it and start PS2Native.</p>
+			<h2>PS2Native 0.2</h2>
+			<p class="section__lead">The second preview, published on 2026-11-22. It compiles a PlayStation 2 game you own into a native program for your computer and plays it on PCSX2's core. You bring the game's disc image and a BIOS dumped from your own console: PS2Native ships neither. Nothing to install: unpack it and start PS2Native.</p>
 		</div>
 
 		<div class="dl" data-spot>
@@ -193,12 +193,12 @@
 						<p class="dl__for">Windows 10 (version 1803 or later) or Windows 11, 64-bit</p>
 					</div>
 				</div>
-				<a class="btn btn--primary dl__btn" href="https://github.com/luisbraganca/ps2n/releases/download/v0.1/PS2Native-0.1-windows-x64.zip">
+				<a class="btn btn--primary dl__btn" href="https://github.com/luisbraganca/ps2n/releases/download/v0.2/PS2Native-0.2-windows-x64.zip">
 					<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.75v8.5m-3.5-3.5L8 10.25l3.5-3.5M2.25 11.5v1.25c0 .83.67 1.5 1.5 1.5h8.5c.83 0 1.5-.67 1.5-1.5V11.5"/></svg>
 					Download for Windows
 				</a>
-				<p class="dl__file"><code>PS2Native-0.1-windows-x64.zip</code> &middot; 104 MB</p>
-				<p class="dl__sum"><span>SHA-256</span> b3ad03da783c8fdcc49e9ff093a9d24cd188cff40705d85a4ab70f196aec08c3</p>
+				<p class="dl__file"><code>PS2Native-0.2-windows-x64.zip</code> &middot; 110 MB</p>
+				<p class="dl__sum"><span>SHA-256</span> 134e0d5fd1fc88b31eb07fd9199b59718fe0c6bc09177cc8841c82189286d7b9</p>
 			</article>
 			<article class="card dl__card" data-reveal style="--d:110">
 				<span class="card__px" aria-hidden="true"></span>
@@ -209,12 +209,12 @@
 						<p class="dl__for">64-bit, glibc 2.35 or later (Ubuntu 22.04, Linux Mint 21 and later). Tried only under WSL 2 so far</p>
 					</div>
 				</div>
-				<a class="btn btn--primary dl__btn" href="https://github.com/luisbraganca/ps2n/releases/download/v0.1/PS2Native-0.1-linux-x64.tar.xz">
+				<a class="btn btn--primary dl__btn" href="https://github.com/luisbraganca/ps2n/releases/download/v0.2/PS2Native-0.2-linux-x64.tar.xz">
 					<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.75v8.5m-3.5-3.5L8 10.25l3.5-3.5M2.25 11.5v1.25c0 .83.67 1.5 1.5 1.5h8.5c.83 0 1.5-.67 1.5-1.5V11.5"/></svg>
 					Download for Linux
 				</a>
-				<p class="dl__file"><code>PS2Native-0.1-linux-x64.tar.xz</code> &middot; 133 MB &middot; unpack it with <code>tar -xf</code>, then start <code>./PS2Native</code></p>
-				<p class="dl__sum"><span>SHA-256</span> 11e31107404d04d94f2f4e8eac261bde38430059075f15edb798e04571930049</p>
+				<p class="dl__file"><code>PS2Native-0.2-linux-x64.tar.xz</code> &middot; 137 MB &middot; unpack it with <code>tar -xf</code>, then start <code>./PS2Native</code></p>
+				<p class="dl__sum"><span>SHA-256</span> fe7face23c112258d40b172e85573049652800b696488f80014bdfd317ebb0da</p>
 			</article>
 		</div>
 
@@ -243,12 +243,13 @@
 				<h3>What to know</h3>
 				<ul class="dl__list">
 					<li>Tried with five games: Killzone, 007: Agent Under Fire, Gran Turismo 3: A-Spec, Jak and Daxter and Silent Hill 3, the European releases. Every other game is untried and may not work</li>
+					<li>A game made with 0.1 keeps 0.1's programs until you bring it up to date: unpack 0.2 beside 0.1, and in its first step choose "Games made earlier...". Its saves and settings stay</li>
 					<li>The programs are not code-signed: Windows warns the first time</li>
 					<li>A game's folder holds code translated from your game and your BIOS. It is yours alone: do not share it</li>
 				</ul>
 			</div>
 		</div>
-		<p class="dl__all" data-reveal><a href="https://github.com/luisbraganca/ps2n/releases/tag/v0.1" rel="noopener">The release's notes</a> &middot; <a href="https://github.com/luisbraganca/ps2n/releases" rel="noopener">Every release</a> &middot; free software under the GPL, version 3, with the licence of everything in each download inside it</p>
+		<p class="dl__all" data-reveal><a href="https://github.com/luisbraganca/ps2n/releases/tag/v0.2" rel="noopener">The release's notes</a> &middot; <a href="https://github.com/luisbraganca/ps2n/releases" rel="noopener">Every release</a> &middot; free software under the GPL, version 3, with the licence of everything in each download inside it</p>
 	</div>
 </section>
 
@@ -753,9 +754,10 @@
 					<li class="is-done"><b><span class="g">P4.7</span>Linux</b>Done (2026-11-19): every test passes there, and the maintainer made Jak and Daxter with the Linux wizard and played it from its folder, at about 90% of the console's pace inside WSL 2, the only Linux it has run on so far</li>
 					<li class="is-done"><b><span class="g">0.1</span>The first release</b>Published by the maintainer on 2026-11-19: a pre-release for Windows and Linux, tried with five games</li>
 					<li class="is-done"><b><span class="g">Speed</span>As users get it</b>Done (2026-11-20): compiled games from 1.07 to 1.24 times stock PCSX2's time in their folders down to 1.06 to 1.19, and first sessions faster, Gran Turismo 3's by 29%</li>
-					<li class="is-open"><b><span class="g">Next</span>Learning from play</b>Built (2026-11-21), for the next release: a game's folder places its functions in the order its sessions ran them (about 0.4% on Jak and Daxter), and once, after a session of at least 3 minutes, runs those 3 minutes again out of sight, counting what its code does, and compiles itself with the counts: Jak and Daxter 8.0% less time, Gran Turismo 3 3.6%</li>
-					<li class="is-open"><b><span class="g">Speed</span>No more than PCSX2's time</b>Measured (2026-11-22), for the next release: PCSX2's own releases are built with link-time optimization, which the build here had left out, and against stock PCSX2 built so compiled games took 1.07 to 1.11 times its time in their folders, not the 1.04 to 1.08 shown here the day before. With PS2Native's runtime built the same way, and with a profile of play, they take 0.98 to 1.00 times its time on the maintainer's sessions (Killzone 0.92, with counts of a session that is nearly the one timed), and a game's first session 10 to 15% less than before. On Linux, timed for the first time, under WSL 2: Jak and Daxter 1.05 times stock PCSX2's time, where 1.23 before, so not there yet</li>
-					<li class="is-open"><b><span class="g">Next</span>0.2</b>Built (2026-11-22), to be released: the wizard brings a game's folder made with an earlier version up to date, giving it the new programs, and the game compiles itself again before it next starts. Tried on a folder made by 0.1 as released, on Windows and on Linux, its session played back the same at every point compared. A folder now counts its user's play after 3 minutes of the game's own time, 9,000 frames of a game shown at 50 a second</li>
+					<li class="is-done"><b><span class="g">Speed</span>Learning from play</b>In 0.2 (built 2026-11-21): a game's folder places its functions in the order its sessions ran them (about 0.4% on Jak and Daxter), and once, after a session of at least 3 minutes, runs those 3 minutes again out of sight, counting what its code does, and compiles itself with the counts: Jak and Daxter 8.0% less time, Gran Turismo 3 3.6%</li>
+					<li class="is-done"><b><span class="g">Speed</span>No more than PCSX2's time, on Windows</b>In 0.2 (measured 2026-11-22): PCSX2's own releases are built with link-time optimization, which the build here had left out, and against stock PCSX2 built so compiled games took 1.07 to 1.11 times its time in their folders, not the 1.04 to 1.08 shown here the day before. With PS2Native's runtime built the same way, and with a profile of play, they take 0.98 to 1.00 times its time on the maintainer's sessions (Killzone 0.92, with counts of a session that is nearly the one timed), and a game's first session 10 to 15% less than before</li>
+					<li class="is-done"><b><span class="g">0.2</span>The second release</b>Published on 2026-11-22, a pre-release for Windows and Linux: the speed above, and the wizard brings a game's folder made with 0.1 up to date, giving it the new programs, the game compiling itself again before it next starts. Tried on a folder made by 0.1 as released, on Windows and on Linux, its session played back the same at every point compared. A folder now counts its user's play after 3 minutes of the game's own time, 9,000 frames of a game shown at 50 a second</li>
+					<li class="is-open"><b><span class="g">Next</span>Linux's speed</b>Timed for the first time on 2026-11-22, under WSL 2: Jak and Daxter takes 1.05 times stock PCSX2's time there as 0.2 has it, where 1.23 as 0.1 had it and 0.98 on Windows. Why is looked for next</li>
 				</ul>
 				<ol class="wizard" aria-label="The wizard's five steps">
 					<li>The game</li>
@@ -776,12 +778,12 @@
 			<div class="platform" data-reveal style="--d:0">
 				<span class="badge badge--done">Required</span>
 				<h3>Windows x64</h3>
-				<p>0.1 for Windows 10 (version 1803 or later) and Windows 11. Tried on two computers; everything measured on this page was measured on the development computer, on Windows 11.</p>
+				<p>0.2 for Windows 10 (version 1803 or later) and Windows 11. 0.1 was tried on two computers, 0.2 so far on the development computer, on Windows 11, where everything measured on this page was measured.</p>
 			</div>
 			<div class="platform" data-reveal style="--d:110">
 				<span class="badge">Required</span>
 				<h3>Linux x64</h3>
-				<p>0.1 for 64-bit Linux with glibc 2.35 or later. Built and tested on a Linux inside the development computer, WSL 2 with Ubuntu 22.04, every test passing there, and games made and played there with the folder for Linux, by the maintainer too (about 90% of the console's pace inside WSL). Nothing is known to work on a Linux machine of its own yet.</p>
+				<p>0.2 for 64-bit Linux with glibc 2.35 or later. Built and tested on a Linux inside the development computer, WSL 2 with Ubuntu 22.04, every test passing there, and games made and played there with the folder for Linux, by the maintainer too (about 90% of the console's pace inside WSL). A compiled game takes more than stock PCSX2's time there so far (Jak and Daxter 1.05 times it). Nothing is known to work on a Linux machine of its own yet.</p>
 			</div>
 			<div class="platform" data-reveal style="--d:220">
 				<span class="badge">Optional</span>
@@ -856,9 +858,9 @@
 	<div class="dissolve dissolve--top" data-dissolve="#070B18" aria-hidden="true"><canvas></canvas></div>
 	<div class="container" data-reveal>
 		<h2>Try it, and follow the work</h2>
-		<p>PS2Native is free software, built in the open. Its first pre-release, 0.1, makes a game you own into a folder that plays it, on Windows and on Linux. Every decision and every measurement is written down.</p>
+		<p>PS2Native is free software, built in the open. Its second pre-release, 0.2, makes a game you own into a folder that plays it, on Windows and on Linux. Every decision and every measurement is written down.</p>
 		<div class="cta">
-			<a class="btn btn--primary" href="#download">Download 0.1</a>
+			<a class="btn btn--primary" href="#download">Download 0.2</a>
 			<a class="btn btn--ghost" href="https://github.com/luisbraganca/ps2n" rel="noopener">Source on GitHub</a>
 		</div>
 	</div>

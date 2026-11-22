@@ -3289,3 +3289,78 @@ source is as it was when each was made. Of `host`, `runtime`, `core` and
 `cmake`, the one file newer than the profiles is `cmake/ps2n-inject.cmake`,
 changed in how the build hands the profile to the compiler (a copy named
 after what it holds), not in what the compiler is given.
+
+### 0.2 made and published (2026-11-22)
+
+From the commit `4b45373`, pushed (`build\measure\release-02.ps1`, and the
+same steps inside WSL), the working tree as committed:
+
+| | Windows | Linux, under WSL 2 |
+|---|---|---|
+| The module tree at the commit | built in 47 s, the runtime 15,617,024 bytes | nothing to build: only documents had changed since it was built, the runtime 42,344,672 bytes |
+| Every test in it | 532 of 532 pass, the three comparisons of `dma/vif/stcycl` not run (189 s) | 531 of 531, the same three not run (133 s) |
+| The folder for others | 487 files, 307,600,007 bytes | 592 files, 599,363,362 bytes |
+| The download | `PS2Native-0.2-windows-x64.zip`, 115,248,300 bytes | `PS2Native-0.2-linux-x64.tar.xz`, 144,150,520 bytes |
+| Its SHA-256 | `134e0d5fd1fc88b31eb07fd9199b59718fe0c6bc09177cc8841c82189286d7b9` | `fe7face23c112258d40b172e85573049652800b696488f80014bdfd317ebb0da` |
+
+Both folders say their runtime is built with link-time optimization and with
+a profile of play, and their licences name the commit.
+
+**Each download unpacked elsewhere and tried,** with nothing but the system
+on `PATH` (on Linux Qt's offscreen platform as well, so that nothing shows):
+its runtime read the maintainer's `.chd` (`-disc-executables`: "boot
+SLES_514.34"); its wizard made Jak and Daxter from its disc image with every
+default (`--auto`: 17 s on Windows, 12 s on Linux, the disc's executable being
+small and the game's code coming from its data); the wizard, asked to bring
+that folder up to date, found it up to date; and the maintainer's session
+`20261119-110909` run again whole from it was the session at every one of the
+167 fingerprints written down, on both systems, 58.6% of the EE's cycles
+interpreted, as in a game's first session (275 s on Windows, 285 s on Linux,
+other work running beside both: a check, not a timing).
+
+**The draft.** `gh release create v0.2 --draft --prerelease --target` the
+commit, with both downloads and the notes; GitHub's sizes and SHA-256 of the
+two files are those above.
+
+**Published.** Asked whether they would publish it themselves, as they had
+0.1, or have the session do it, and whether the website's move to 0.2 should
+then be committed and pushed with this record, the maintainer answered
+"1. Yes, publish" and "2. Yes do it". The session published the draft (`gh
+release edit v0.2 --draft=false`): 0.2 is public since 2026-11-22 10:17 UTC,
+a pre-release, the tag `v0.2` on `4b45373`, both files answering at their
+addresses. The website's downloads, its roadmap and what it says of each
+system then moved to 0.2 (`docs/index.html`, `docs/site/README.md`).
+
+### The maintainer's game folders brought up to date (2026-11-22)
+
+The maintainer's "4. Do all seven" (`build\measure\folders-02.ps1`; first on a
+copy of the Jak and Daxter folder, which went as its folder did after it).
+`build\kit` made again from the released tree, then each of the six folders:
+its memory cards copied aside; `build\kit\runtime\ps2n-wizard.exe --update
+<folder>` ("Made with an earlier PS2Native. Brought up to date (PS2Native
+0.2)."); its own `ps2n-remake --before-play`, which compiled the game again
+whole, and its modules put in place as the launcher puts them; the start of
+one of its sessions run again with its new programs; and the wizard asked
+again ("Up to date.", nothing changed).
+
+| Folder | Brought up to date in | Files compiled | In | The start of a session run again |
+|---|---:|---:|---:|---|
+| Jak and Daxter | 2.0 s | 128 | 53 s | 900 frames of `20261119-110909`: the session at every one of 18 fingerprints |
+| Killzone | 1.8 s | 138 | 126 s | 900 frames of `20261117-190101`: 18 of 18 |
+| Silent Hill 3 | 2.0 s | 128 | 89 s | 90 frames of `20261118-171819`: 1 of 1 |
+| Gran Turismo 3 | 2.0 s | 128 | 23 s | 900 frames of `20261118-095532`: 18 of 18 |
+| Agent Under Fire | 2.1 s | 221 | 94 s | 900 frames of `20261117-185759`: 18 of 18 |
+| 007 - Agent Under Fire (nine executables) | 2.0 s | 470 | 323 s | 900 frames of `20261117-224454`: 18 of 18 |
+| Jak and Daxter, inside WSL | | 128, ten at a time | 45 s | 600 frames of `20261119-225148`: 12 of 12 |
+
+(The times to compile are a whole `ps2n-remake --before-play`: its analysis
+and code generation, then the files.) Nothing of a game's executables was
+interpreted but the 4 instructions Agent Under Fire always has; its second
+folder interprets 1.01% of the EE's cycles, the BIOS's program loader, as
+before. In every folder the memory cards are the bytes they were, every
+session is there, and nothing is left to compile. The folder inside WSL
+(`~/ps2n/build/PS2Native`, made again from the released tree too) went the
+same way. None of the seven has counts: each counts after its next session of
+3 minutes of the game's own time, Killzone's among them now. A seventh folder
+in `build\kit\games`, `SLES_505.39`, one of the session's own early checks, is
+not a game's folder to the wizard (no `make.txt`) and stays as it is.
