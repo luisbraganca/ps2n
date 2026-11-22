@@ -342,7 +342,23 @@ your "Not done" category)"): the step committed and pushed; their seven game
 folders given the release's programs; 0.3 prepared with it, a draft on GitHub
 they publish; and what the session had not done, done (the Linux runtime's
 profile of play made again with the thread, a game in a window on Linux with
-the thread). The version is 0.3 (`version.txt`).
+the thread). The version is 0.3 (`version.txt`). Done the same day: committed
+and pushed (`d10604d`); the runtime's profile of play made again on both
+systems from that commit; every test passing in the trees the downloads are
+made from (541 and 540, none skipped); both downloads made, each unpacked and
+tried (its wizard made Jak and Daxter, a session run again whole from that
+folder the session at every fingerprint; a folder made by 0.2's own download
+brought up to date and compiled again); the release's runtime timed again
+(Jak and Daxter 0.97, Gran Turismo 3 1.00, Agent Under Fire 0.95, Killzone
+0.94 times the time of stock PCSX2 with its VU thread on; under WSL 2 0.99);
+Jak and Daxter played in a window inside WSL with the thread, its session run
+again the session at every fingerprint, with the thread and without; the
+maintainer's seven folders given 0.3's programs, each compiled again, a
+session's start run again the session, their memory cards unchanged; and 0.3
+a draft pre-release on GitHub, which the maintainer published the same day at
+their word ("1. Publish"; the tag `v0.3` on `d10604d`), the website's
+downloads and the README then moved to it ("2. Yes"). docs/app-log.md, "0.3
+(ADR 0052)".
 docs/app-log.md,
 "Compiled games against PCSX2, as users get them" and "0.2: a game's folder
 brought up to date".**
@@ -1181,7 +1197,10 @@ Decisions:
   profile made again too (the runtime's source changed after the one
   measured with); the release's runtime timed again before the notes quote
   a number; 0.3 a pre-release, its notes saying which stock PCSX2 each speed
-  claim is against. The version is 0.3 from this commit.
+  claim is against. The version is 0.3 from this commit. All of it done the
+  same day (the ADR's "Done the same day"), and 0.3 published at the
+  maintainer's word ("1. Publish"), the website's downloads and the README
+  moved to it ("2. Yes").
 
 ## Layout, build and test
 

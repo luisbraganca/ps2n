@@ -44,7 +44,10 @@ needs doing from your side (from your "Not done" category)."
    Linux tree; the website looked at again; the Linux runtime's profile of
    play made again with the thread; and a game in a window on Linux with the
    thread, inside WSL on the development computer, muted and for as long as
-   the check needs, its window on the maintainer's screen meanwhile.
+   the check needs, its window on the maintainer's screen meanwhile. The
+   maintainer said afterwards which list they meant: "Fyi when I said "Not
+   done" I'm referring to your last message": the "Not done" list of the
+   session's report, these three things and nothing more.
 
 The session's choices, for the maintainer to decide otherwise:
 
@@ -58,6 +61,33 @@ The session's choices, for the maintainer to decide otherwise:
   PCSX2 every speed claim is against, that Agent Under Fire's run with the
   thread on does not repeat, and that a game's folder made with 0.2 compiles
   its game again when brought up to date.
+
+## Done the same day
+
+[docs/app-log.md](../app-log.md), "0.3 (ADR 0052)", has every number.
+
+- The step committed and pushed, `d10604d`.
+- The runtime's profile of play made again on both systems from that
+  commit; every test passing in the trees the downloads are made from, none
+  skipped; both downloads made, each unpacked and tried, and a game's folder
+  made by 0.2's own download brought up to date by 0.3's wizard and compiled
+  again.
+- The release's runtime timed again on the maintainer's sessions against
+  stock PCSX2 with its VU thread on: Jak and Daxter 0.97, Gran Turismo 3
+  1.00, Agent Under Fire 0.95, Killzone 0.94 times its time; under WSL 2,
+  Jak and Daxter 0.99.
+- Jak and Daxter played in a window inside WSL with the thread (its window on
+  the maintainer's screen for 28 seconds, muted), its session run again the
+  session at every fingerprint with the thread and without.
+- The maintainer's seven game folders given 0.3's programs, each compiled
+  again, the start of one of its sessions run again the session at every
+  fingerprint, their memory cards the same bytes.
+- 0.3 a draft pre-release on GitHub, with both downloads and its notes, for
+  the maintainer to read and publish. Asked then whether to publish it, and
+  whether the website and the README then move to it with this record
+  committed and pushed, the maintainer answered "1. Publish" and "2. Yes":
+  0.3 was published the same day (the tag `v0.3` on `d10604d`), and the
+  website's downloads and the README moved to it.
 
 ## Consequences
 

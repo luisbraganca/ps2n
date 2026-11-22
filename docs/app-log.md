@@ -4382,3 +4382,127 @@ with its VU thread on it was not timed on these.)
    renders as before, the changed passages where they belong); the Linux
    runtime's profile of play made again with the thread; and a game in a
    window on Linux with the thread.
+
+## 0.3 (ADR 0052)
+
+### Committed and pushed (2026-11-22)
+
+At the maintainer's "1. Yes": the step, this log, ADR 0052 and the version,
+0.3, in the commit `d10604d`, pushed.
+
+### The maintainer's game folders given 0.3's programs (2026-11-22)
+
+At their "2. Yes", from the release's own programs (below), the wizard's own
+way, as for 0.2 (`build\measure\folders-03.ps1`, `folders-02.ps1`; inside WSL
+the scratch `release-03.sh theirs`):
+
+- **Their PS2Native folders made again** from the tree released, on Windows
+  (`build\kit`) and inside WSL (`~/ps2n/build/PS2Native`), their games left
+  as they were.
+- **A trial first,** on the copy of the Jak and Daxter folder kept for it:
+  brought up to date, compiled again (56 s), 900 frames of a session the
+  session at every one of 18 fingerprints.
+- **The six folders on Windows,** each the same way, its memory cards copied
+  aside first and the same bytes after: Jak and Daxter compiled again in
+  56 s, Killzone in 123 s, Silent Hill 3 in 98 s, Gran Turismo 3 in 24 s,
+  Agent Under Fire in 103 s, 007 - Agent Under Fire in 352 s. The start of
+  one of each folder's sessions run again with its new programs is the
+  session at every fingerprint compared (18 of them each; Silent Hill 3's 90
+  frames, 1); asked again, the wizard says "Up to date" and changes nothing;
+  nothing is left to compile. None has counts yet, so none counts again.
+- **The one inside WSL,** Jak and Daxter: brought up to date and compiled
+  again in 27 s (128 files at ten at a time), 600 frames of its longest
+  session the session at every one of 12 fingerprints, its memory cards the
+  same bytes after; asked again, up to date.
+
+### 0.3 prepared (2026-11-22)
+
+At their "3. Yes", from `d10604d`, as 0.2 was (`build\measure\release-03.ps1`;
+inside WSL the scratch `release-03.sh`, a copy of which is kept as
+`build\measure\release-03-linux.sh`):
+
+- **The runtime's profile of play made again on each system** from the tree
+  released, the runs that are play with VU1 on PCSX2's VU thread, Agent Under
+  Fire's without: on Windows the seven runs of `build\pgo\training-vut.txt`
+  (475 s, 5,105 functions); on Linux the same seven from the Linux
+  measurement's folders, each brought up to date by that tree's wizard and
+  compiled again first (Agent Under Fire's nine executables in 611 s at ten
+  at a time), in 1,168 s, 4,763 functions. Every run of a session was the
+  session at every fingerprint compared. 0.2's profiles are kept beside them
+  (`runtime-windows-02.profdata`, `runtime-linux-02.profdata`).
+- **Every test passes in the trees the downloads are made from,** none
+  skipped: on Windows 541 of the 544 (the three comparisons of
+  `dma/vif/stcycl` not run), on Linux 540 of 543 likewise, and 543 of 543 in
+  Linux's development tree.
+- **The downloads:** `PS2Native-0.3-windows-x64.zip`, 115,257,596 bytes,
+  SHA-256 `5e646b4f6ebce5bb0e1596fe039812a57c8945d597b5b0289bd48b43225fa67d`;
+  `PS2Native-0.3-linux-x64.tar.xz`, 144,293,140 bytes, SHA-256
+  `7ddad1842833d93f23fcc0fd239563cb7d644d7f9ff370d35096df2b5821bce3`. Each
+  folder's licences name the commit, and say that PCSX2's core in it carries
+  PS2Native's change number 1, with the patch in `licences/PCSX2-changes`.
+- **Each tried unpacked elsewhere,** with nothing but the system on the
+  path: its runtime reads Silent Hill 3's `.chd`; its wizard makes Jak and
+  Daxter from its disc image with every default (16 s on Windows, 12 s on
+  Linux, the game's code to be met in its first session), and asked again
+  finds it up to date; the maintainer's session `20261119-110909` run again
+  whole from that folder, as a first session (58.6% of the EE's cycles
+  interpreted), is the session at every one of its 167 fingerprints (282 s on
+  Windows, 215 s on Linux).
+- **A game's folder made with 0.2 brought up to date,** on each system: a
+  copy of the Jak and Daxter folder 0.2's own download made, given 0.3's
+  programs by 0.3's wizard ("Made with PS2Native 0.2. Brought up to date
+  (PS2Native 0.3)"), compiled again by its own `ps2n-remake` before it plays
+  (10 s and 7 s, 77 files), the start of that session run again the session
+  at every fingerprint compared (18 and 12), and, asked again, up to date.
+- **The release's runtime timed again,** VU1 on PCSX2's VU thread on both
+  sides, two rounds in turns, the same folders as in "Timed on Windows, as a
+  release would have it" with the release's runtime
+  (`build\measure\release-03-time.ps1`; inside WSL `vut-01.sh time`, Jak and
+  Daxter's folder there); seconds:
+
+  | | Stock PCSX2, its VU thread on | The compiled game, VU1 on PCSX2's VU thread | Times its time |
+  |---|---:|---:|---:|
+  | Jak and Daxter | 33.74 (33.90, 33.58) | 32.61 (32.97, 32.24) | 0.97 |
+  | Gran Turismo 3 | 18.37 (18.26, 18.48) | 18.42 (18.22, 18.61) | 1.00 |
+  | Agent Under Fire | 26.82 (26.98, 26.66) | 25.54 (25.45, 25.63) | 0.95 |
+  | Killzone | 32.99 (32.82, 33.16) | 31.07 (30.68, 31.46) | 0.94 |
+  | Jak and Daxter under WSL 2 | 35.90 (35.78, 36.02) | 35.50 (35.41, 35.59) | 0.99 |
+
+  As the three rounds with the runtime before it, to within the rounds.
+  Every run is its session at every fingerprint but Agent Under Fire's, whose
+  runs with the thread are not one run, stock PCSX2's as the compiled game's.
+  These are the numbers 0.3's notes give.
+- **A game in a window on Linux with the thread,** inside WSL on this
+  computer, the window on the maintainer's screen for its 28 seconds: a copy
+  of the maintainer's Linux Jak and Daxter folder, brought up to date as
+  above, its runtime started with the folder's own settings, muted, for
+  1,500 frames. VU1 on PCSX2's VU thread as PCSX2 has it by default there
+  (all 129,017 of its runs), drawn on OpenGL, none of the micro code
+  interpreted, 56.51 frames a second where the console shows 59.94 (inside
+  WSL, as before, a little under the console's pace); the session's record
+  says `vu-thread on`. Run again without a window, with VU1 on the CPU thread
+  and with the thread on, it is the session at every one of its 30
+  fingerprints both times.
+- **The draft:** a pre-release on GitHub, "PS2Native 0.3", its tag `v0.3`
+  to be made on `d10604d` when it is published, with both downloads and its
+  notes (`build\release\notes-0.3.md`), which say against which stock PCSX2
+  each speed figure is, that Agent Under Fire's run with the thread on is not
+  the same twice, and how a game made with 0.1 or 0.2 is brought up to date.
+  It is published at the maintainer's word; until then the website's
+  downloads and the README stay 0.2's.
+
+### 0.3 published (2026-11-22)
+
+The maintainer's answers to "Publish 0.3?" and "Then the website and the
+README moved to 0.3, and the record committed and pushed?": "1. Publish",
+"2. Yes".
+
+- **Published** at 21:26 UTC (`gh release edit v0.3 --draft=false`), a
+  pre-release, the tag `v0.3` made on `d10604d`, both downloads as they were
+  made (GitHub gives their sizes as 110 MB and 138 MB).
+- **The website's downloads moved to 0.3:** the section's title, text,
+  buttons, file names, sizes and SHA-256s, the hero's button and line, the
+  page's descriptions and its closing words; the roadmap has "0.3, the third
+  release", and its "VU1 on a thread of its own" gives the numbers 0.3's notes
+  give; the platforms' notes name 0.3. The README's Download and Status the
+  same.
