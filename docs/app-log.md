@@ -3557,7 +3557,9 @@ for the compiled game: taken out.
 | Without PCSX2's wake of its VU thread (a trial: not in) | 54.06 s | 56.73 s | 1.05 |
 
 (The rounds of the second line: 75.79, 75.79, 76.84 and 78.05, 78.83, 78.31,
-every run the session at every one of 167 fingerprints.)
+every run the session at every one of 167 fingerprints. The third line's
+change is built in since, at the maintainer's word: "PS2Native's first change
+to PCSX2's code", below, has it timed again.)
 
 - **What is left, 3%, is in the game's compiled code and the IOP's,** and its
   cause was not found. The IOP's blocks are the same instructions on both
@@ -3650,3 +3652,237 @@ Found while the answers were written down:
   it out. Against stock PCSX2 with its VU thread on, as most of its users
   have it, no compiled game has been timed. Put to the maintainer, with a
   measurement to come.
+
+## PS2Native's first change to PCSX2's code (ADR 0050)
+
+The maintainer's "1. Yes" (ADR 0050): PS2Native's builds leave out PCSX2's
+wakes of its VU thread where that thread is not in use, the first change
+PS2Native carries to PCSX2's code. Until now the core was PCSX2 as released
+(ADR 0002); ADR 0010 had said that a first patch would be recorded with how it
+is applied and how it is dropped again.
+
+### The change, carried by the build (2026-11-22)
+
+- **The change** is one patch, `patches/pcsx2/0001-the-vu-thread-is-not-woken-where-it-is-not-in-use.patch`:
+  the ten calls of `VU_Thread::WriteRow` and `WriteCol` in `pcsx2/Vif.cpp`
+  and `pcsx2/Vif_Codes.cpp` are made only while the thread is in use
+  (`THREAD_VU1`), as the trial had them. It says at its top what it changes,
+  why, and when it was made; `patches/pcsx2/README.md` lists what the folder
+  holds.
+- **How a build tree gets it** (`cmake/ps2n-pcsx2-patches.cmake`, included
+  once PCSX2's own CMake file has finished, when its targets exist): each
+  file a patch changes is copied into the tree (`ps2n-pcsx2/src`), the
+  patches are applied to the copies by git, and PCSX2's own targets are given
+  the copies to compile in the place of the files they came from, each as the
+  file it came from (what PCSX2's build says of that file alone, and its own
+  folder searched first for what it includes by name). The submodule is not
+  touched, and nothing else of PCSX2's build changes: a tree built before
+  compiles two files again and links, 8 s for the development tree and 49 s
+  for the release's with its link-time optimization. The assessment had it
+  so ("a patch queue ... applied at configure time", 9.5).
+- **Line endings.** The copies are patched in a small repository of their
+  own in the build tree, whose one attribute has git read and write them with
+  Unix line endings: a first try on Windows did not apply, the submodule's
+  files having Windows line endings in this checkout and the patch Unix
+  ones. The patch has Unix line endings on every system (`.gitattributes`),
+  and so have the copies.
+- **What stops a configuration, saying which patch and why:** a patch that
+  does not apply; a patch that leaves a file as it was; a patch that changes
+  a file no target of PCSX2's compiles. A header is such a file: the files
+  beside it include it by name from their own folder and would not see a
+  copy, so this way carries changes to compiled sources only (`.cpp`, `.c`).
+- **Which trees have it:** every one but the tree stock PCSX2 is timed on,
+  which is built with `build.ps1 -Pcsx2Patches off` (`build.sh
+  --pcsx2-patches off`) and remembers it. In every other tree the tests'
+  "stock" configurations therefore run PCSX2 with the change.
+- **A runtime says which it is:** the second line of `ps2n-host -help` is
+  "PCSX2's core in it has PS2Native's changes: 0001-..." or "PCSX2's core in
+  it is as PCSX2 has it, with none of PS2Native's changes". And a release
+  says so: `kit.ps1` and `kit.sh` put the patches into the folder's
+  `licences/PCSX2-changes` and have `licences/README.txt` say that PCSX2's
+  core in it is changed, as the GPL asks of a changed version; they warn
+  when a tree's runtime was not built with the patches as they are.
+- **Stock PCSX2 with its VU thread on** can now be timed: `ps2n-host
+  -pcsx2-vu-thread` (`game.ps1 -Config stock-jit -Pcsx2VuThread`,
+  `-DPCSX2_VU_THREAD=1` through `tests/guest_test.cmake`), refused with
+  PS2Native's VU provider on VU1.
+
+### The tests with it (2026-11-22)
+
+- **Windows.** The three trees built: the release's (`build\windows-clang-module`,
+  with the change), the development tree (with it), and the tree stock PCSX2
+  is timed on (`build\windows-clang-stock`, built with `-Pcsx2Patches off`);
+  each runtime's `-help` says which it is, and the submodule has no file
+  changed. Every test: 532 of 532 in the release's tree (the three
+  comparisons of `dma/vif/stcycl` not run, as before) and 534 of 534 in the
+  development tree. A folder made from the release's tree in a scratch place
+  (`kit.ps1 -Out`) has the patch in `licences\PCSX2-changes`, and its
+  `licences\README.txt` says that PS2Native changed PCSX2's core in it.
+- **Linux, under WSL 2.** The same three trees, the build's step unchanged
+  there (the release's tree compiled the two copies and linked in 32 s):
+  531 of 531 in the release's tree (the same three comparisons not run) and
+  534 of 534 in the development tree.
+
+### Timed on Windows (2026-11-22)
+
+`build\measure\patch-01.ps1`: kit13's folders, each game as 0.2 has it (its
+modules compiled with its own counts), each game's timed session, three
+rounds in turns, the order turned round every second round. The runtimes:
+stock PCSX2's, built again without the change (`build\windows-clang-stock`);
+0.2's own; and the release tree's with the change, built as a release's is,
+with 0.2's profile of play (the functions of the two changed files have no
+counts in it until the profile is made again for a release). Means, in
+seconds:
+
+| | Stock PCSX2 | The compiled game as 0.2 has it | With the change | Times stock PCSX2's time, with the change |
+|---|---:|---:|---:|---:|
+| Jak and Daxter | 55.90 | 55.31 | 50.23 | 0.90 |
+| Gran Turismo 3 | 20.96 | 20.91 | 20.83 | 0.99 |
+| Agent Under Fire | 26.80 | 26.79 | 26.79 | 1.00 |
+| Killzone | 43.92 | 40.79 | 40.71 | 0.93 |
+
+(The rounds, in that order of columns: 56.17, 55.88, 55.65; 55.24, 55.58,
+55.10; 50.48, 50.09, 50.13. 20.89, 21.08, 20.90; 20.78, 20.91, 21.04; 20.75,
+20.95, 20.80. 26.82, 26.68, 26.91; 26.87, 26.59, 26.92; 26.73, 26.78, 26.86.
+43.88, 43.96, 43.92; 41.09, 40.74, 40.54; 40.73, 40.64, 40.75. Every one of
+these 36 runs is its session at every fingerprint written down: 167, 173, 180
+and 186.)
+
+- **Jak and Daxter takes 9.2% less time with the change,** 50.23 s where
+  55.31 s, as the trial had it: 0.90 times the time of stock PCSX2 as these
+  logs time it, where 0.99. The other three do not change (0.4%, 0.0% and
+  0.2%, within the spread of their rounds).
+- **The wake is gone from the profile:** in Jak and Daxter's compiled run
+  with the change, `ZwReleaseSemaphore` takes 0.5 s (the GS thread's packets)
+  where 3.6 s, and `vifCode_STRow` 0.06 s.
+
+### Stock PCSX2 with its VU thread on (2026-11-22)
+
+What the section "What 'stock PCSX2' has had switched off" owed: the same
+sessions on stock PCSX2 with its own VU thread carrying VU1 out
+(`game.ps1 -Config stock-jit -Pcsx2VuThread`), as PCSX2 has it by default on
+this computer (the installed PCSX2's own settings file here has
+`vuThread = true`). In the same turns as the timings above, three rounds,
+means in seconds:
+
+| | Stock PCSX2, VU1 on the CPU thread | Stock PCSX2, its VU thread on | | The compiled game, with the change | Times the time of stock PCSX2 with its VU thread on |
+|---|---:|---:|---:|---:|---:|
+| Jak and Daxter | 55.90 | 33.49 | 0.60 | 50.23 | 1.50 |
+| Gran Turismo 3 | 20.96 | 18.43 | 0.88 | 20.83 | 1.13 |
+| Agent Under Fire | 26.80 | 26.27 | 0.98 | 26.79 | 1.02 |
+| Killzone | 43.92 | 33.33 | 0.76 | 40.71 | 1.22 |
+
+(The rounds with the VU thread on: 33.45, 33.41, 33.62; 18.36, 18.39, 18.53;
+26.44, 26.25, 26.11; 33.28, 33.47, 33.25.)
+
+- **With its VU thread on, stock PCSX2 takes 40% less time on Jak and
+  Daxter's session,** 24% less on Killzone's, 12% less on Gran Turismo 3's
+  and 2% less on Agent Under Fire's: what a second processor core gives a
+  game whose micro code is a large part of its run.
+- **So the compiled games stand at 1.02 to 1.50 times the time of stock
+  PCSX2 as most of its users have it,** where the logs, the website and
+  0.2's notes say 0.98 to 1.00 (Killzone 0.92) against stock PCSX2 with VU1
+  on the CPU thread. Both are true of what they compare; only the first is
+  what someone who has PCSX2 beside PS2Native would see. These are runs
+  without a frame limiter, nothing drawn or drawn at the console's
+  resolution: how fast each can go. At the console's pace all of them play at
+  full speed on this computer either way.
+- **Runs with the VU thread on do not all repeat.** Jak and Daxter's, Gran
+  Turismo 3's and Killzone's were their sessions at every fingerprint, all
+  nine. Agent Under Fire's three were the session at 37 fingerprints and
+  parted from it at frame 1,900, each with another fingerprint there: its
+  time above is of runs that were no longer the session. It is why every
+  run here has VU1 on the CPU thread.
+- **PS2Native's VU provider cannot simply be put on that thread.** It
+  follows PCSX2's VU recompiler as that behaves with the thread off: it
+  takes a program's start from VU0's status register and clears it there at
+  the program's end (`runtime/vu_interp.cpp`), where the recompiler with the
+  thread on does neither (`recMicroVU1::Execute`, and the `THREAD_VU1` cases
+  of `microVU_Branch.inl`); switched on as it is, it would carry nothing out.
+  Carrying VU1 out on a thread of its own is a step of its own, put to the
+  maintainer.
+- **The CPU thread of stock PCSX2 with the VU thread on,** profiled once on
+  Jak and Daxter (34.1 s): PCSX2's core 55.5%, the code PCSX2 generates
+  36.5%, Windows 8.0%.
+
+### Timed on Linux, under WSL 2 (2026-11-22)
+
+A scratch script (`patch-01.sh`, kept in `build\measure\linux-tools`): Jak and
+Daxter's timed session, nothing drawn, three rounds in turns on half the
+processors, from the measurement folder as it was kept this morning (the
+lanes, its own micro code, its counts). The runtimes: stock PCSX2's tree,
+built again without the change; the release tree's as it was this morning,
+put aside before the change; and the release tree's with the change. Means,
+in seconds:
+
+| Jak and Daxter, Linux under WSL 2 | Seconds | Rounds |
+|---|---:|---|
+| Stock PCSX2 | 76.01 | 76.31, 75.61, 76.10 |
+| Stock PCSX2, its VU thread on | 36.13 | 36.22, 36.39, 35.79 |
+| The compiled game before the change | 79.13 | 78.71, 79.52, 79.16 |
+| The compiled game with the change | 57.34 | 57.19, 57.40, 57.43 |
+
+(Every one of the twelve runs is the session at every one of its 167
+fingerprints; the compiled runs interpret none of VU1's blocks.)
+
+- **With the change the compiled game takes 27.5% less time under WSL 2,**
+  57.34 s where 79.13 s, as the trial had it (56.73 s where 79.52 s). Against
+  stock PCSX2 as these logs time it, which pays for the wakes there, that is
+  0.75 times its time, where 1.04 without the change (1.03 this morning: the
+  same two builds a few hours apart, 78.40 s and 76.14 s then).
+- **With its VU thread on, stock PCSX2 takes 36.13 s there,** less than half
+  its time with VU1 on the CPU thread (0.48), and near what it takes on
+  Windows (33.49 s), where with the thread off the two systems are 36% apart
+  (76.01 s and 55.90 s). Going by the times, and not looked at in a profile:
+  a thread that is at work is seldom asleep when a command comes, so little
+  is left of what waking it costs. Against stock PCSX2 so, the compiled game
+  with the change takes 1.59 times its time under WSL 2.
+
+### Where the compiled games stand to stock PCSX2, both ways (2026-11-22)
+
+With the change, on the sessions above, a compiled game's time as a multiple
+of stock PCSX2's:
+
+| | Stock PCSX2 with VU1 on the CPU thread, as every comparison here has had it | Stock PCSX2 with its VU thread on, as it is by default |
+|---|---:|---:|
+| Jak and Daxter, Windows | 0.90 | 1.50 |
+| Gran Turismo 3, Windows | 0.99 | 1.13 |
+| Agent Under Fire, Windows | 1.00 | 1.02 (runs that left the session) |
+| Killzone, Windows | 0.93 | 1.22 |
+| Jak and Daxter, Linux under WSL 2 | 0.75 | 1.59 |
+
+**Put to the maintainer, with these numbers:** whether the change and what
+was built for it are committed and pushed; whether the website, the README
+and 0.2's notes say which stock PCSX2 they compare with, and what it takes
+with its VU thread on; whether the next speed step is VU1 carried out on a
+thread of its own, held to stock PCSX2 with its VU thread on; and whether the
+maintainer's own game folders get the runtime with the change now, a release
+with it now or with that step.
+
+### The maintainer's answers, and the comparison corrected (2026-11-22, ADR 0051)
+
+To the six decisions put with the above: "1. Yes", "2. Yes", "3. Yes",
+"4. Yes", "5. Wait for that step", "6. Leave it as it is".
+
+- **Committed and pushed,** the change and what was built for it.
+- **The public comparison corrected.**
+  - The website: the first chart of "Measured" has a third bar for each game,
+    stock PCSX2 with its VU thread on (0.60, 0.88, 0.98 and 0.76 of stock
+    PCSX2's time with VU1 on the main thread), and its title, its
+    explanation, its axis and its note say which stock PCSX2 the ratios are
+    against, with the seconds and the compiled games' 1.65, 1.13, 1.02 and
+    1.22 against stock PCSX2 as it is by default; the section's opening says
+    it for every number of the page; the roadmap and the Linux platform's
+    note likewise. Looked at as a browser draws it, at a desktop's width and
+    a phone's.
+  - The README's status says it for Windows and for Linux.
+  - 0.2's notes on GitHub: two passages added, each marked "Corrected on
+    2026-11-22", to the paragraph on speed and to the Linux limit (`gh
+    release edit`, at the maintainer's word). The release's tag, its two
+    downloads and the rest of its notes are as published; the text as
+    published and as corrected is kept in `build\release`.
+- **Next, VU1 on a thread of its own,** as PCSX2 does by default, measured
+  against stock PCSX2 with its VU thread on (ADR 0051 has how the session
+  proposes to take the step).
+- **The maintainer's seven game folders get the runtime with the change;** no
+  release with the change alone.

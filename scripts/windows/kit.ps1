@@ -61,6 +61,14 @@ foreach ($needed in $hostExe, $launcherExe, $implib, $recomp) { if (-not (Test-P
 $runtimeLto = [bool](Select-String -LiteralPath $cache -Pattern '^PS2N_RUNTIME_LTO:BOOL=ON$' -Quiet)
 $runtimePgo = "$(Select-String -LiteralPath $cache -Pattern '^PS2N_RUNTIME_PGO:[A-Z]+=(.*)$' | Select-Object -First 1 | ForEach-Object { $_.Matches[0].Groups[1].Value })"
 if ($runtimePgo -eq 'generate') { throw "$BuildDir has a runtime built to count what it runs (-RuntimePgo generate): that is for training runs, not for a folder." }
+# PS2Native's changes to PCSX2's code that the tree's runtime is built with (docs\adr\0050), by name, as
+# cmake\ps2n-pcsx2-patches.cmake wrote them down: the licences say that PCSX2 is changed, and carry the changes.
+$pcsx2Changes = @()
+$pcsx2ChangesFile = Join-Path $build 'ps2n-pcsx2\changes.txt'
+if (Test-Path $pcsx2ChangesFile) {
+    $pcsx2Changes = @("$(Get-Content -LiteralPath $pcsx2ChangesFile -TotalCount 1)" -split ',\s*' | Where-Object { $_ })
+}
+$pcsx2Patches = @(Get-ChildItem -LiteralPath (Join-Path $root 'patches\pcsx2') -Filter *.patch -ErrorAction SilentlyContinue | ForEach-Object BaseName)
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -213,6 +221,16 @@ Copy-Item -LiteralPath $llvmLicence -Destination (Join-Path $licences 'LLVM-LICE
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $licences 'PS2Native-LICENSE.txt')
 Copy-Item -LiteralPath (Join-Path $root 'third_party\pcsx2\COPYING.GPLv3') -Destination (Join-Path $licences 'PCSX2-COPYING.GPLv3.txt')
 Copy-Item -LiteralPath (Join-Path $root 'third_party\pcsx2\bin\docs\ThirdPartyLicenses.html') -Destination (Join-Path $licences 'PCSX2-ThirdPartyLicenses.html')
+# PS2Native's changes to PCSX2's code, where the runtime is built with any: the patches themselves, each of which
+# says what it changes, why and when, and what the folder of them says.
+if ($pcsx2Changes.Count -gt 0) {
+    $pcsx2ChangesDir = Join-Path $licences 'PCSX2-changes'
+    New-Item -ItemType Directory -Force $pcsx2ChangesDir | Out-Null
+    foreach ($change in $pcsx2Changes) {
+        Copy-Item -LiteralPath (Join-Path $root "patches\pcsx2\$change.patch") -Destination $pcsx2ChangesDir
+    }
+    Copy-Item -LiteralPath (Join-Path $root 'patches\pcsx2\README.md') -Destination (Join-Path $pcsx2ChangesDir 'README.txt')
+}
 Copy-Item -LiteralPath (Join-Path $root 'deps\windows-x64\deps\licenses\SDL3\LICENSE.txt') -Destination (Join-Path $licences 'SDL3-LICENSE.txt')
 
 # Qt: its release and its source, as PCSX2's script for its dependency package names them.
@@ -390,8 +408,18 @@ $pcsx2Commit = "$(& git -C (Join-Path $root 'third_party\pcsx2') rev-parse HEAD 
 $ErrorActionPreference = 'Stop'
 if ($ps2nChanged) { Write-Host "Warning: the tree has changes not committed; licences\README.txt says so, and the folder is not for others." }
 $changedNote = if ($ps2nChanged) { ', with changes not committed when this folder was made' } else { '' }
+# Where the runtime's copy of PCSX2's core is not PCSX2's as released, the licences say so (the GPL's notice of a
+# modified version), and where the changes are.
+$pcsx2ChangedNote = @()
+if ($pcsx2Changes.Count -gt 0) {
+    $pcsx2ChangedNote = @(
+        "PS2Native changed it: the runtime's copy of PCSX2's core is built from that source with PS2Native's",
+        "$(if ($pcsx2Changes.Count -eq 1) { 'change' } else { "$($pcsx2Changes.Count) changes" }) to it, in PCSX2-changes\: $($pcsx2Changes -join ', ').",
+        "Each change says at its top what it changes, why, and when it was made. They are patches/pcsx2 in PS2Native's",
+        'source above.')
+}
 # (Each line one string: in an array, a comma binds before a +.)
-[IO.File]::WriteAllLines((Join-Path $licences 'README.txt'), [string[]]@(
+[IO.File]::WriteAllLines((Join-Path $licences 'README.txt'), [string[]](@(
         'The licences of what this folder holds',
         '======================================',
         '',
@@ -399,7 +427,7 @@ $changedNote = if ($ps2nChanged) { ', with changes not committed when this folde
         "commit $ps2nCommit$changedNote.",
         '',
         'PCSX2, whose core the runtime is built on: PCSX2-COPYING.GPLv3.txt (GNU General Public License, version 3).',
-        "Its source: https://github.com/PCSX2/pcsx2, $pcsx2Tag (commit $pcsx2Commit).",
+        "Its source: https://github.com/PCSX2/pcsx2, $pcsx2Tag (commit $pcsx2Commit).") + $pcsx2ChangedNote + @(
         '',
         'The libraries in runtime\ that come from PCSX2''s dependency package, and what PCSX2 builds into its core:',
         'PCSX2-ThirdPartyLicenses.html, PCSX2''s own list of them with their licences. The package is built by PCSX2''s',
@@ -413,7 +441,7 @@ $changedNote = if ($ps2nChanged) { ', with changes not committed when this folde
         "LLVM-LICENSE.TXT (Apache License 2.0 with LLVM exceptions). Their source: https://github.com/llvm/llvm-project,",
         "llvmorg-$llvmVersion.",
         '',
-        "Microsoft's C++ runtime: Microsoft-CPP-runtime.txt says where Microsoft's terms for it are."), $utf8)
+        "Microsoft's C++ runtime: Microsoft-CPP-runtime.txt says where Microsoft's terms for it are.")), $utf8)
 
 # The command and how to use it.
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'kit\make-game.ps1'), (Join-Path $PSScriptRoot 'kit\README.txt') -Destination $kit
@@ -423,6 +451,10 @@ Write-Host ("The folder is ready in {0}: {1:N0} bytes; runtime: {2}" -f $kit, $s
     ((Get-ChildItem $runtime -File -Filter *.dll | ForEach-Object Name) -join ', '))
 Write-Host ("Its runtime is built {0} link-time optimization and {1} a profile of play." -f $(if ($runtimeLto) { 'with' } else { 'without' }),
     $(if ($runtimePgo -eq 'use') { 'with' } else { 'without' }))
+Write-Host ("PCSX2's core in it {0}." -f $(if ($pcsx2Changes.Count -gt 0) { "has PS2Native's changes: $($pcsx2Changes -join ', ')" } else { "is as PCSX2 has it, with none of PS2Native's changes" }))
+if ((@($pcsx2Patches | Sort-Object) -join ', ') -ne (@($pcsx2Changes | Sort-Object) -join ', ')) {
+    Write-Host "Warning: the tree's runtime is not built with the changes of patches\pcsx2 as they are now ($($pcsx2Patches -join ', ')): a release's is (docs\adr\0050; build.ps1 -BuildDir $BuildDir -Pcsx2Patches on)."
+}
 if (-not ($runtimeLto -and $runtimePgo -eq 'use')) {
     Write-Host "Warning: a release's runtime is built with both (docs\adr\0047: scripts\windows\runtime-profile.ps1, then build.ps1 -RuntimeLto on -RuntimePgo use). Games play slower with this one."
 }

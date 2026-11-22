@@ -1,0 +1,104 @@
+PS2Native's change to PCSX2 number 1: the VU thread is not woken where it is
+not in use.
+
+Made on 2026-11-22 for PCSX2 v2.9.170 (docs/adr/0050 in PS2Native's
+repository). It is PS2Native's own, not PCSX2's: PCSX2's source as PCSX2
+released it is the submodule third_party/pcsx2, which this is applied to a
+copy of when PS2Native's runtime is built. Licence: PCSX2's, GPL-3.0-or-later.
+
+What it changes. PCSX2 can carry VU1 out on a thread of its own ("MTVU").
+VIF1's STROW and STCOL commands, and writes of its row and column registers,
+are mirrored into that thread's own copy of them whether the thread is in use
+or not: each of the ten calls below puts a command into the thread's queue
+and wakes it (VU_Thread::WriteRow and WriteCol, pcsx2/MTVU.cpp), and the
+thread copies 16 bytes and sleeps again. With this change they are mirrored
+only while the thread is in use (THREAD_VU1), as every other use of the
+thread in these two files already is.
+
+Why. PS2Native never uses that thread: VU1's micro code is compiled code's,
+on the CPU thread, and the setting is fixed off. A game that sends many of
+these commands paid for the wakes all the same: Jak and Daxter 9% of a run on
+Windows, and 28% inside WSL 2, where waking a thread costs six times as much
+(docs/app-log.md, "Linux's speed").
+
+What it does not change: any result of a run with the thread off. What it
+takes away: with it, the setting must not be switched on while a game runs,
+since the thread's copy of the row and column would be out of date. PS2Native
+offers no such switch. Loading a saved state still brings the copy up to date
+(SaveStateBase::mtvuFreeze).
+
+--- a/pcsx2/Vif.cpp
++++ b/pcsx2/Vif.cpp
+@@ -374,36 +374,44 @@
+ 
+ 		case caseVif(ROW0):
+ 			vif.MaskRow._u32[0] = value;
+-			vu1Thread.WriteRow(vif);
++			if (THREAD_VU1)
++				vu1Thread.WriteRow(vif);
+ 			return false;
+ 		case caseVif(ROW1):
+ 			vif.MaskRow._u32[1] = value;
+-			vu1Thread.WriteRow(vif);
++			if (THREAD_VU1)
++				vu1Thread.WriteRow(vif);
+ 			return false;
+ 		case caseVif(ROW2):
+ 			vif.MaskRow._u32[2] = value;
+-			vu1Thread.WriteRow(vif);
++			if (THREAD_VU1)
++				vu1Thread.WriteRow(vif);
+ 			return false;
+ 		case caseVif(ROW3):
+ 			vif.MaskRow._u32[3] = value;
+-			vu1Thread.WriteRow(vif);
++			if (THREAD_VU1)
++				vu1Thread.WriteRow(vif);
+ 			return false;
+ 
+ 		case caseVif(COL0):
+ 			vif.MaskCol._u32[0] = value;
+-			vu1Thread.WriteCol(vif);
++			if (THREAD_VU1)
++				vu1Thread.WriteCol(vif);
+ 			return false;
+ 		case caseVif(COL1):
+ 			vif.MaskCol._u32[1] = value;
+-			vu1Thread.WriteCol(vif);
++			if (THREAD_VU1)
++				vu1Thread.WriteCol(vif);
+ 			return false;
+ 		case caseVif(COL2):
+ 			vif.MaskCol._u32[2] = value;
+-			vu1Thread.WriteCol(vif);
++			if (THREAD_VU1)
++				vu1Thread.WriteCol(vif);
+ 			return false;
+ 		case caseVif(COL3):
+ 			vif.MaskCol._u32[3] = value;
+-			vu1Thread.WriteCol(vif);
++			if (THREAD_VU1)
++				vu1Thread.WriteCol(vif);
+ 			return false;
+ 	}
+ 
+--- a/pcsx2/Vif_Codes.cpp
++++ b/pcsx2/Vif_Codes.cpp
+@@ -642,7 +642,7 @@
+ 	pass2
+ 	{
+ 		const u32 ret = _vifCode_STColRow<idx>(data, &vifX.MaskCol._u32[vifX.tag.addr]);
+-		if (idx && vifX.tag.size == 0)
++		if (idx && vifX.tag.size == 0 && THREAD_VU1)
+ 			vu1Thread.WriteCol(vifX);
+ 		return ret;
+ 	}
+@@ -663,7 +663,7 @@
+ 	pass2
+ 	{
+ 		const u32 ret = _vifCode_STColRow<idx>(data, &vifX.MaskRow._u32[vifX.tag.addr]);
+-		if (idx && vifX.tag.size == 0)
++		if (idx && vifX.tag.size == 0 && THREAD_VU1)
+ 			vu1Thread.WriteRow(vifX);
+ 		return ret;
+ 	}

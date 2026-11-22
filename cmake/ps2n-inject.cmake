@@ -11,7 +11,8 @@
 # are declared by including a file instead, in the top-level directory's
 # scope. That file names its sources by absolute path.
 #
-# Nothing in the submodule is edited for this.
+# Nothing in the submodule is edited for this, nor for the changes PS2Native
+# makes to PCSX2's code (below: PS2N_PCSX2_PATCHES).
 
 if(NOT DEFINED PS2N_ROOT)
 	message(FATAL_ERROR "PS2N_ROOT is not set. Configure through scripts/windows/build.ps1 or scripts/linux/build.sh.")
@@ -120,6 +121,14 @@ function(ps2n_not_the_runtime)
 	endforeach()
 endfunction()
 
+# PS2Native's changes to PCSX2's code (docs/adr/0050): the patches of
+# patches/pcsx2, applied to copies of the files they change in the build
+# tree, which PCSX2's targets then compile in the place of those files
+# (cmake/ps2n-pcsx2-patches.cmake). The submodule is never edited. OFF builds
+# PCSX2 as it is: the tree stock PCSX2 is timed on is built so.
+option(PS2N_PCSX2_PATCHES "PCSX2's code built with PS2Native's changes to it (patches/pcsx2)" ON)
+
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL include "${PS2N_ROOT}/cmake/ps2n-pcsx2-patches.cmake")
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL include "${PS2N_ROOT}/runtime/targets.cmake")
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL include "${PS2N_ROOT}/host/targets.cmake")
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL include "${PS2N_ROOT}/tests/tests.cmake")

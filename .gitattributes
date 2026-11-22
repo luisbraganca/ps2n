@@ -14,3 +14,6 @@ tests/sdk/*.frame text eol=lf
 # The brand kit (assets/branding).
 *.png binary
 *.ico binary
+
+# PS2Native's changes to PCSX2 are applied as the same bytes on every platform.
+patches/pcsx2/*.patch text eol=lf

@@ -35,8 +35,9 @@ The session put four decisions to the maintainer, with its recommendation for
 each: whether PS2Native's builds leave those wakes out; whether PCSX2 is
 told; whether the day's work is committed and pushed; and whether the last 3%
 on Linux is looked for further or left. The maintainer's answers: "1. Yes"
-(with their reason, below), "2. Yes, write an issue as a guide I'll write it
-myself.", "3. Yes", "Stop."
+(the answer went on to give their reason, which point 1 has in the session's
+words), "2. Yes, write an issue as a guide I'll write it myself.", "3. Yes",
+"Stop."
 
 1. **PS2Native's builds leave those wakes out.** It is the first change
    PS2Native carries to PCSX2's code. The submodule stays as it is, never
@@ -98,11 +99,103 @@ myself.", "3. Yes", "Stop."
   it out. How a compiled game stands to stock PCSX2 with its VU thread on,
   as most of its users have it, has not been measured.
 
-It is put to the maintainer, with a measurement to come: what the comparison
-with stock PCSX2 is to be, and what the website says of it.
+It was measured the same day (below), and is put to the maintainer with the
+numbers: what the comparison with stock PCSX2 is to be, and what the website
+says of it.
 
-## The session's choices, for the maintainer to decide otherwise
+## How the change is carried
 
-- **How the patch is carried** (the folder it is in, how the copy is made
-  and kept, which builds are without it) is the session's to build, and is
-  listed here once it is.
+Built the same day ([docs/app-log.md](../app-log.md), "PS2Native's first
+change to PCSX2's code").
+[ADR 0010](0010-pcsx2-fix-goes-upstream-through-the-maintainer.md) had said
+that a first patch would change the decision "the machine is unmodified
+PCSX2" ([ADR 0002](0002-static-cpus-on-pcsx2-core.md)) and be recorded with
+how it is applied and how it is dropped again. This is that record: the core
+is PCSX2 as it was released, but for the changes of `patches/pcsx2`. The
+session's choices, for the maintainer to decide otherwise:
+
+- **Where a change is.** `patches/pcsx2`, one patch to a change, numbered:
+  `0001-the-vu-thread-is-not-woken-where-it-is-not-in-use.patch`. A patch
+  says at its top what it changes, why, and when it was made, and the
+  folder's README lists them.
+- **How it is applied.** When a build tree is configured
+  (`cmake/ps2n-pcsx2-patches.cmake`): each file a patch changes is copied
+  into the tree, the patches are applied to the copies by git, and PCSX2's
+  own targets are given the copies to compile in the place of the files they
+  came from. The submodule is not touched, and nothing else of PCSX2's build
+  changes. A patch that does not apply, or that changes a file no target
+  compiles, stops the configuration and says which. The assessment had it so
+  ("a patch queue ... applied at configure time").
+- **What it does not carry: a change to a header.** The files beside a header
+  include it by name from their own folder, and would not see a copy. A patch
+  that changes one stops the configuration; such a change would need PCSX2's
+  source copied whole.
+- **Which trees are without it.** One, the tree stock PCSX2 is timed on
+  (`build.ps1 -Pcsx2Patches off`, `build.sh --pcsx2-patches off`; the tree
+  remembers it). Every other tree has the changes, the trees the tests run in
+  among them: there the tests' "stock" configurations run PCSX2 with them.
+  This change alters no result of a run, and every test passes with it. A
+  change that would alter one goes to the maintainer for that as well.
+- **How a runtime says which it is.** The second line of `ps2n-host -help`
+  names the changes PCSX2's core in it was built with, or says that it is as
+  PCSX2 has it. A release's `licences` folder carries the patches
+  (`PCSX2-changes`), and its `README.txt` says that PCSX2's core in it is
+  changed, as the GPL asks of a changed version.
+- **How it is dropped again.** Its file and its line in the README are
+  deleted, when the PCSX2 pinned here no longer needs it or the maintainer
+  says so; a tree then builds PCSX2 as it is. Should the pin move to a PCSX2
+  that has changed those lines, the patch no longer applies, and the
+  configuration stops there.
+- **Stock PCSX2 can be timed with its VU thread on,** for the measurement
+  owed above: `ps2n-host -pcsx2-vu-thread` (`game.ps1 -Config stock-jit
+  -Pcsx2VuThread`). Every other run keeps VU1 on the CPU thread.
+
+## Measured (2026-11-22)
+
+Each game's timed session, three rounds in turns, the folders as 0.2 has
+them; every test passes with the change on Windows (532 and 534) and on Linux
+under WSL 2 (531 and 534). [docs/app-log.md](../app-log.md), "PS2Native's
+first change to PCSX2's code", has every round.
+
+- **What the change gives.** Jak and Daxter takes 9.2% less time on Windows
+  (50.23 s where 55.31 s) and 27.5% less under WSL 2 (57.34 s where 79.13 s),
+  each run still its session at every fingerprint. Gran Turismo 3, Agent
+  Under Fire and Killzone do not change.
+- **What stock PCSX2 takes with its VU thread on.** On Windows 40% less time
+  on Jak and Daxter's session (33.49 s where 55.90 s), 24% less on
+  Killzone's, 12% less on Gran Turismo 3's and 2% less on Agent Under Fire's;
+  under WSL 2, 36.13 s where 76.01 s on Jak and Daxter's. Agent Under Fire's
+  runs so left their session at frame 1,900, each another way: runs with the
+  thread on do not all repeat, which is why every run here has VU1 on the CPU
+  thread.
+- **PS2Native's VU provider cannot simply be put on PCSX2's VU thread:** it
+  follows PCSX2's VU recompiler as that behaves with the thread off.
+  Carrying VU1 out on a thread of its own is a step of its own.
+
+Where that leaves a compiled game, with the change, as a multiple of stock
+PCSX2's time:
+
+| | Stock PCSX2 with VU1 on the CPU thread | Stock PCSX2 with its VU thread on |
+|---|---:|---:|
+| Jak and Daxter, Windows | 0.90 | 1.50 |
+| Gran Turismo 3, Windows | 0.99 | 1.13 |
+| Agent Under Fire, Windows | 1.00 | 1.02 |
+| Killzone, Windows | 0.93 | 1.22 |
+| Jak and Daxter, Linux under WSL 2 | 0.75 | 1.59 |
+
+The first column is the comparison every log, the website and 0.2's notes
+have made: ADR 0046's goal was met in it. The second is stock PCSX2 as it is
+by default where there are three cores or more. Both are without a frame
+limiter: at the console's pace each game plays at full speed on this computer
+either way.
+
+## Put to the maintainer
+
+With the numbers above: whether the change and what was built for it are
+committed and pushed; whether the website, the README and 0.2's notes say
+which stock PCSX2 they compare with, and what it takes with its VU thread on;
+whether the next speed step is VU1 carried out on a thread of its own, held
+to stock PCSX2 with its VU thread on; and whether the maintainer's own game
+folders get the runtime with the change now, and a release is made with it
+now or with that step. Answered the same day:
+[ADR 0051](0051-the-comparison-with-stock-pcsx2-said-as-it-is-vu1-on-a-thread-of-its-own-next.md).

@@ -49,6 +49,10 @@
 #   --pcsx2-source <dir>       another PCSX2 source tree in the place of the pinned submodule, in
 #                              a build tree of its own (--build-dir): to try a newer PCSX2, or a
 #                              change to PCSX2, against the tests here
+#   --pcsx2-patches <on|off>   PCSX2's code built with PS2Native's changes to it (patches/pcsx2,
+#                              docs/adr/0050; applied to copies in the build tree, the submodule
+#                              never edited), as by default, or as it is: "off" for the tree
+#                              stock PCSX2 is timed on
 #
 # The default target is ps2n-host (with the modules, and the wizard, where the
 # tree builds them). Each game, BIOS and capture option is remembered by the
@@ -84,7 +88,7 @@ while [ "$#" -gt 0 ]; do
 		--tools-only) tools_only=1 ;;
 		--build-dir|--game|--game-more|--game-capture|--bios|--bios-capture|--vu-capture|--vu-selftest-capture|\
 		--iop-capture|--iop-selftest-capture|--pgo|--pgo-data|--lto|--module|--wizard|\
-		--runtime-lto|--runtime-pgo|--runtime-pgo-data|--pcsx2-source)
+		--runtime-lto|--runtime-pgo|--runtime-pgo-data|--pcsx2-source|--pcsx2-patches)
 			if [ "$#" -lt 2 ]; then
 				echo "$1 needs a value" >&2
 				exit 1
@@ -161,6 +165,13 @@ while [ "$#" -gt 0 ]; do
 						on) settings+=("-DPS2N_WIZARD=ON") ;;
 						off) settings+=("-DPS2N_WIZARD=OFF") ;;
 						*) echo "--wizard is on or off" >&2; exit 1 ;;
+					esac
+					;;
+				--pcsx2-patches)
+					case "$2" in
+						on) settings+=("-DPS2N_PCSX2_PATCHES=ON") ;;
+						off) settings+=("-DPS2N_PCSX2_PATCHES=OFF") ;;
+						*) echo "--pcsx2-patches is on or off" >&2; exit 1 ;;
 					esac
 					;;
 			esac

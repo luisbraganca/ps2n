@@ -58,12 +58,20 @@ work.
 - **Windows x64.** Everything measured was measured there, on Windows 11. On
   the maintainer's own sessions played back, a compiled game takes 0.98 to
   1.00 times the time stock PCSX2 takes with its recompilers (Killzone 0.92,
-  with counts of a session that is nearly the one timed).
+  with counts of a session that is nearly the one timed). That is against
+  stock PCSX2 with the console's second vector unit (VU1) on the main
+  processor thread, as PS2Native runs it. PCSX2 itself gives VU1 a thread of
+  its own by default, on a computer with three cores or more, and so set it
+  takes 2% to 40% less time on those sessions: a compiled game then takes
+  1.02 to 1.65 times its time. Carrying VU1 out on a thread of its own is
+  PS2Native's next step.
 - **Linux x64.** Built and tested only inside WSL 2 (Ubuntu 22.04) so far,
   every test passing there, and games made and played there. One game was
-  timed: 1.05 times stock PCSX2's time as 0.2 has it, with two causes found
-  since and put right for the next release. Nothing is known to work on a
-  Linux machine of its own yet.
+  timed, Jak and Daxter: as 0.2 has it, 1.05 times stock PCSX2's time, and
+  about 2.2 times the time of stock PCSX2 with its VU thread on. Most of what
+  it takes more there than on Windows was PCSX2 waking a thread PS2Native
+  does not use, which the next release leaves out (0.75 and 1.59 then).
+  Nothing is known to work on a Linux machine of its own yet.
 - **What a compiled game is held to.** A run on PS2Native is compared with
   the same run on stock PCSX2 at every point where the two can be compared,
   and with recordings made on a console: 534 tests.
@@ -81,6 +89,8 @@ and the application ([docs/app-log.md](docs/app-log.md)).
 
 PS2Native builds inside PCSX2's own CMake project, with PCSX2 `v2.9.170` as a
 submodule that is never edited (`git submodule update --init --depth 1`).
+What PS2Native changes of PCSX2's code is in [patches/pcsx2](patches/pcsx2/),
+applied to copies of the files concerned when it is built.
 
 - **Windows:** Visual Studio or its Build Tools with clang-cl, CMake and
   Ninja, and PCSX2's Windows dependency package in `deps\windows-x64`
@@ -115,9 +125,11 @@ a release is made from.
 
 PS2Native is free software under the GNU General Public License, version 3
 or later ([LICENSE](LICENSE)). It builds on PCSX2 (GPL-3.0 or later,
-Copyright PCSX2 Dev Team), which is included unmodified as a submodule under
-`third_party/pcsx2`. Each download's `licences` folder has the licence of
-everything in it, and where the source of each is.
+Copyright PCSX2 Dev Team), which is included as PCSX2 released it, as a
+submodule under `third_party/pcsx2`. PS2Native's own changes to PCSX2's code
+are the patches in [patches/pcsx2](patches/pcsx2/), each saying what it
+changes and why; 0.2 and 0.1 have none. Each download's `licences` folder has
+the licence of everything in it, and where the source of each is.
 
 PS2Native is an independent project. It is not affiliated with the PCSX2
 project or with Sony Interactive Entertainment.

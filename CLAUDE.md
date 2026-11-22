@@ -272,14 +272,38 @@ who answered the same day (ADR 0050: "1. Yes", "2. Yes, write an issue as a
 guide I'll write it myself.", "3. Yes", "Stop."): PS2Native's builds leave
 those wakes out, its first change to PCSX2's code, a patch applied to a copy
 of PCSX2's source when the runtime is built, the submodule as it is and stock
-PCSX2 timed as released (built next); the maintainer tells PCSX2 themselves
-(the session wrote no text for it, ADR 0010); committed and pushed; and the
-last 3% of Linux's distance is left for now. Found writing that down: PCSX2
-switches its VU thread on by default on a computer with three cores or more,
-and every run of `ps2n-host`, stock PCSX2's among them, has had it off, so
-"stock PCSX2's time" in every comparison here is PCSX2's recompilers with VU1
-on the CPU thread; against stock PCSX2 with its VU thread on no compiled game
-has been timed, which is put to the maintainer with a measurement to come.
+PCSX2 timed as released; the maintainer tells PCSX2 themselves (the session
+wrote no text for it, ADR 0010); committed and pushed; and the last 3% of
+Linux's distance is left for now. The change was built the same day
+(`patches/pcsx2`, applied to copies of the two files it changes when a tree
+is configured, `cmake/ps2n-pcsx2-patches.cmake`): every test passes with it
+on Windows and on Linux, and Jak and Daxter takes 9% less time with it on
+Windows and 27% less under WSL 2, the other three games the same. Found
+writing the answers down: PCSX2 switches its VU thread on by default on a
+computer with three cores or more, and every run of `ps2n-host`, stock
+PCSX2's among them, has had it off, so "stock PCSX2's time" in every
+comparison here is PCSX2's recompilers with VU1 on the CPU thread. Timed the
+same day with its VU thread on (`ps2n-host -pcsx2-vu-thread`), stock PCSX2
+takes 40% less time on Jak and Daxter's session, 24% less on Killzone's, 12%
+less on Gran Turismo 3's and 2% less on Agent Under Fire's (whose runs so
+left their session: runs with the thread on do not all repeat). The compiled
+games, with the change at 0.90 to 1.00 times the time of stock PCSX2 with VU1
+on the CPU thread, are at 1.02 to 1.50 times the time of stock PCSX2 as it is
+by default (under WSL 2, Jak and Daxter 0.75 and 1.59). What the website
+says of the comparison, and whether VU1 is next carried out on a thread of
+its own (PS2Native's VU provider cannot simply be put on PCSX2's VU thread),
+was put to the maintainer, whose answers the same day (ADR 0051: "1. Yes",
+"2. Yes", "3. Yes", "4. Yes", "5. Wait for that step", "6. Leave it as it
+is") were: the change committed and pushed; the public comparison corrected
+(the website's first chart has stock PCSX2 with its VU thread on as a third
+bar, and the page, the README and 0.2's notes on GitHub say that both sides
+of every ratio ran with VU1 on the main processor thread, and what a compiled
+game takes against stock PCSX2 as it is by default: 1.02 to 1.65 times its
+time as 0.2 has it); the maintainer's seven game folders given the runtime
+with the change; no release with the change alone; and the next speed step
+VU1 carried out on a thread of its own, on PCSX2's own VU thread, as PCSX2
+does by default, measured against stock PCSX2 with its VU thread on. A speed
+claim against stock PCSX2 says which of the two it is against.
 Of the compiled game's own distance to stock PCSX2 on Linux, 1.05 times its
 time, two parts were found and put right (1.03 now): the 128-bit
 instructions' lanes, which Linux's calling convention kept the compiler from
@@ -1047,18 +1071,60 @@ Decisions:
   result of a run. The maintainer tells PCSX2 themselves; asked for an issue
   written as a guide, the session wrote none (ADR 0010) and gave where it is,
   how it is seen and what limits it. Committed and pushed. The last 3% of the
-  compiled game's distance to stock PCSX2 on Linux is left for now. Found
-  writing it down, and put to the maintainer: PCSX2 switches its VU thread on
+  compiled game's distance to stock PCSX2 on Linux is left for now. How the
+  change is carried is the session's choice, listed there (it changes ADR
+  0002's "the machine is unmodified PCSX2", as ADR 0010 said a first patch
+  would): `patches/pcsx2`, applied by git to copies of the files a patch
+  changes when a tree is configured, PCSX2's targets compiling the copies;
+  compiled sources only, not headers; every tree but the one stock PCSX2 is
+  timed on, so the tests' "stock" configurations run PCSX2 with it; a
+  runtime's `-help` and a release's `licences` say so; dropped by deleting the
+  patch. Built and measured the same day: Jak and Daxter 9.2% less time on
+  Windows and 27.5% less under WSL 2, every test passing. Found writing it
+  down, measured, and put to the maintainer: PCSX2 switches its VU thread on
   by default on a computer with three cores or more, and every run of
-  `ps2n-host` has had it off, stock PCSX2's among them; no compiled game has
-  been timed against stock PCSX2 with it on.
+  `ps2n-host` has had it off, stock PCSX2's among them; with it on
+  (`ps2n-host -pcsx2-vu-thread`) stock PCSX2 takes 40% less time on Jak and
+  Daxter's session, 24%, 12% and 2% less on the other three games', and the
+  compiled games are at 1.02 to 1.50 times its time, where 0.90 to 1.00
+  against stock PCSX2 with VU1 on the CPU thread.
+- [ADR 0051](docs/adr/0051-the-comparison-with-stock-pcsx2-said-as-it-is-vu1-on-a-thread-of-its-own-next.md):
+  the maintainer's answers of 2026-11-22 to what ADR 0050 measured ("1. Yes",
+  "2. Yes", "3. Yes", "4. Yes", "5. Wait for that step", "6. Leave it as it
+  is"). ADR 0050's change is committed and pushed. The public comparison is
+  corrected: the website, the README and 0.2's notes on GitHub (edited by the
+  session at that word, two passages marked as corrections, nothing else of
+  the release touched) say that both sides ran with VU1 on the main processor
+  thread, and give what stock PCSX2 takes with its VU thread on; from now on
+  a speed claim against stock PCSX2 says which of the two it is against. The
+  next speed step is VU1 carried out on a thread of its own, as PCSX2 does by
+  default, measured against stock PCSX2 with its VU thread on. The
+  maintainer's seven game folders get the runtime with ADR 0050's change. No
+  release with that change alone: the next comes with the VU thread step.
+  ADR 0050's record of its first answer stays as it is. The step as the
+  session proposes to take it, for the maintainer to decide otherwise:
+  PS2Native's VU provider on PCSX2's own VU thread, with PCSX2's machinery
+  for it, following PCSX2's VU recompiler as it behaves with the thread on;
+  on by default as in PCSX2 (three cores or more, off where PCSX2's game
+  database says so), the user's to switch on PCSX2's own settings page; every
+  comparison that holds VU1's registers to a stock run keeps VU1 on the main
+  thread; a run with the thread on is held to the maintainer's sessions being
+  their sessions at every fingerprint wherever stock PCSX2's with its VU
+  thread on are; its criterion, no more than stock PCSX2's time with its VU
+  thread on, every test passing as before; measured on one game first and
+  put to the maintainer before it goes into a folder or a release.
 
 ## Layout, build and test
 
 ```
-third_party/pcsx2         PCSX2 v2.9.170, a pinned submodule. Never edit it; changes go in a patch queue (none so far)
+third_party/pcsx2         PCSX2 v2.9.170, a pinned submodule. Never edit it; what PS2Native changes of PCSX2's code is in patches/pcsx2
+patches/pcsx2             PS2Native's changes to PCSX2's code (ADR 0050), one patch to a change, each decided by the
+                          maintainer and saying at its top what it changes and why; its README lists them (one so far:
+                          PCSX2's VU thread is not woken where it is not in use)
 third_party/ps2autotests  hardware-verified PS2 test programs, a pinned submodule
-cmake/ps2n-inject.cmake   adds PS2Native's targets to PCSX2's own CMake project without touching it
+cmake/ps2n-inject.cmake   adds PS2Native's targets to PCSX2's own CMake project without touching it; and
+                          ps2n-pcsx2-patches.cmake, which applies patches/pcsx2 to copies of the files they change, in the
+                          build tree, and gives PCSX2's targets the copies to compile
 CMakeLists.txt, core/     build-time tools, a project of their own with no PCSX2 dependency: the
                           instruction decoder, disassembler, assembler, ELF/IRX/SNR2 readers, the reader of a
                           BIOS image's directory (romdir) and of a disc image's files (iso9660); for the
@@ -1138,7 +1204,21 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   it): to try a newer PCSX2, or a change someone made to PCSX2
   (`build.sh --pcsx2-source` on Linux). A change of the session's own to
   PCSX2 is tried so, on a copy of the submodule in the build tree, never in
-  the submodule (`build\measure\vif-trial.ps1` is one such trial).
+  the submodule (`build\measure\vif-trial.ps1` is one such trial). A change
+  the maintainer has decided PS2Native carries (ADR 0050) is a patch in
+  `patches\pcsx2`: when a tree is configured, each file a patch changes is
+  copied into it (`ps2n-pcsx2\src`), the patches are applied to the copies,
+  and PCSX2's targets compile the copies in the place of the files they came
+  from (`cmake/ps2n-pcsx2-patches.cmake`; a patch that does not apply, or
+  changes a file no target compiles, a header among them, stops the
+  configuration). Every tree has them but the one stock PCSX2 is timed on:
+  `build.ps1 -Pcsx2Patches off` (`build.sh --pcsx2-patches off`) builds PCSX2
+  as it is, and the build tree remembers it. `ps2n-host -help` says in its
+  second line which a runtime has, and a release's `licences` folder carries
+  the patches. So in every other tree the tests' "stock" configurations run
+  PCSX2 with PS2Native's changes: a change that would alter a result of a
+  run is not one to carry this way without the maintainer's word on that
+  too.
 - Test: `scripts\windows\test.ps1 -Bios <BIOS image>`, optionally
   `-Filter <regex>`. The BIOS is the maintainer's `SCPH-70004` dump in
   `Documents\PCSX2\bios`. Tests are skipped, not passed, without one.
@@ -1250,10 +1330,17 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   compiled with (what was compiled with two profiles does not link). `kit.ps1`
   and `kit.sh` say how the tree's runtime was built, and warn when it is not a
   release's. Stock PCSX2 is timed built as its releases are, on the runtime of
-  a tree of its own with link-time optimization and no profile (`build.ps1
-  -BuildDir build\windows-clang-stock -Module on -RuntimeLto on -RuntimePgo
-  off`; built so it takes 1.5 to 4% less time than built as the trees are by
-  default), never on the runtime with the profile. With a runtime built with
+  a tree of its own with link-time optimization, no profile and none of
+  PS2Native's changes to PCSX2's code (`build.ps1 -BuildDir
+  build\windows-clang-stock -Module on -RuntimeLto on -RuntimePgo off
+  -Pcsx2Patches off`; built with link-time optimization it takes 1.5 to 4%
+  less time than built as the trees are by default), never on the runtime
+  with the profile. Every run of `ps2n-host` has VU1 on the CPU thread, stock
+  PCSX2's too, so that runs repeat; PCSX2's own default where there are three
+  cores or more is its VU thread ("MTVU"), which `game.ps1 -Config stock-jit
+  -Pcsx2VuThread` (`ps2n-host -pcsx2-vu-thread`, `-DPCSX2_VU_THREAD=1`
+  through `tests/guest_test.cmake`) switches on, for timing stock PCSX2 as
+  its users mostly have it (ADR 0050). With a runtime built with
   link-time optimization the three comparisons of two runs of
   `dma/vif/stcycl` are disabled, for a defect of PCSX2's that makes its runs
   differ there (`tests/same-as-stock-known-differences.cmake`); they run in
@@ -1622,7 +1709,10 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   attempts, stop and reassess instead of trying variations.
 - Never invent test or benchmark results, and never skip a failing test
   silently. A performance or compatibility claim needs a reproducible
-  measurement.
+  measurement. A speed claim against stock PCSX2 says which stock PCSX2:
+  with VU1 on the main processor thread, as every comparison of two runs has
+  it, or with its VU thread on, PCSX2's default where there are three cores
+  or more, which is much faster on some games (ADR 0051).
 - Do not commit unless asked. Do not push to GitHub or delete repositories
   without explicit authorization. Ask before installing software.
 - Commit messages never reference Claude: leave out the `Co-Authored-By`

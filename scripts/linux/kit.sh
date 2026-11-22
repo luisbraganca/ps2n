@@ -74,6 +74,18 @@ if [ "$runtime_pgo" = "generate" ]; then
 	echo "$build has a runtime built to count what it runs (--runtime-pgo generate): that is for training runs, not for a folder." >&2
 	exit 1
 fi
+# PS2Native's changes to PCSX2's code that the tree's runtime is built with (docs/adr/0050), by name, as
+# cmake/ps2n-pcsx2-patches.cmake wrote them down: the licences say that PCSX2 is changed, and carry the changes.
+pcsx2_changes=()
+if [ -f "$build/ps2n-pcsx2/changes.txt" ]; then
+	IFS=',' read -r -a pcsx2_changes_read < <(head -1 "$build/ps2n-pcsx2/changes.txt" | tr -d '\r')
+	for change in ${pcsx2_changes_read[@]+"${pcsx2_changes_read[@]}"}; do
+		change="${change# }"
+		[ -n "$change" ] && pcsx2_changes+=("$change")
+	done
+fi
+pcsx2_changes_text="$(printf '%s, ' ${pcsx2_changes[@]+"${pcsx2_changes[@]}"} | sed 's/, $//')"
+pcsx2_patches_text="$(for p in "$root"/patches/pcsx2/*.patch; do if [ -f "$p" ]; then basename "$p" .patch; fi; done | sort | paste -sd, - | sed 's/,/, /g')"
 for tool in patchelf ldd readelf strip dpkg-query curl sha256sum xz; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		echo "Missing tool: $tool" >&2
@@ -216,6 +228,15 @@ cp "$root/runtime/module_entry.cpp" "$root/runtime/module_counts.cpp" "$toolchai
 cp "$root/LICENSE" "$licences/PS2Native-LICENSE.txt"
 cp "$pcsx2/COPYING.GPLv3" "$licences/PCSX2-COPYING.GPLv3.txt"
 cp "$pcsx2/bin/docs/ThirdPartyLicenses.html" "$licences/PCSX2-ThirdPartyLicenses.html"
+# PS2Native's changes to PCSX2's code, where the runtime is built with any: the patches themselves, each of which
+# says what it changes, why and when, and what the folder of them says.
+if [ "${#pcsx2_changes[@]}" -gt 0 ]; then
+	mkdir -p "$licences/PCSX2-changes"
+	for change in "${pcsx2_changes[@]}"; do
+		cp "$root/patches/pcsx2/$change.patch" "$licences/PCSX2-changes/"
+	done
+	cp "$root/patches/pcsx2/README.md" "$licences/PCSX2-changes/README.txt"
+fi
 cp "$deps/share/licenses/SDL3/LICENSE.txt" "$licences/SDL3-LICENSE.txt"
 llvm_licence="$llvm/LICENSE.TXT"
 if [ ! -f "$llvm_licence" ]; then
@@ -469,6 +490,17 @@ if [ -n "$(git -C "$root" status --porcelain --untracked-files=no 2>/dev/null)" 
 fi
 pcsx2_tag="$(git -C "$pcsx2" describe --tags --exact-match 2>/dev/null || true)"
 pcsx2_commit="$(git -C "$pcsx2" rev-parse HEAD 2>/dev/null)"
+# Where the runtime's copy of PCSX2's core is not PCSX2's as released, the licences say so (the GPL's notice of a
+# modified version), and where the changes are.
+pcsx2_changed=""
+if [ "${#pcsx2_changes[@]}" -gt 0 ]; then
+	if [ "${#pcsx2_changes[@]}" -eq 1 ]; then pcsx2_count="change"; else pcsx2_count="${#pcsx2_changes[@]} changes"; fi
+	pcsx2_changed="
+PS2Native changed it: the runtime's copy of PCSX2's core is built from that source with PS2Native's
+$pcsx2_count to it, in PCSX2-changes/: $pcsx2_changes_text.
+Each change says at its top what it changes, why, and when it was made. They are patches/pcsx2 in PS2Native's
+source above."
+fi
 system="$(. /etc/os-release && echo "$PRETTY_NAME")"
 cat > "$licences/README.txt" <<EOF
 The licences of what this folder holds
@@ -478,7 +510,7 @@ PS2Native $version: PS2Native-LICENSE.txt (GNU General Public License, version 3
 commit $commit$changed.
 
 PCSX2, whose core the runtime is built on: PCSX2-COPYING.GPLv3.txt (GNU General Public License, version 3).
-Its source: https://github.com/PCSX2/pcsx2, $pcsx2_tag (commit $pcsx2_commit).
+Its source: https://github.com/PCSX2/pcsx2, $pcsx2_tag (commit $pcsx2_commit).$pcsx2_changed
 
 The libraries in runtime/ that come from PCSX2's dependencies, and what PCSX2 builds into its core:
 PCSX2-ThirdPartyLicenses.html, PCSX2's own list of them with their licences. They are built by PCSX2's
@@ -504,6 +536,14 @@ echo "The folder is ready in $out:"
 du -sh "$runtime" "$toolchain" "$out" | sed "s|$root/||"
 echo "Taken from $system: $(printf '%s\n' "${!from_system[@]}" | sort | tr '\n' ' ')"
 echo "Its runtime is built $([ "$runtime_lto" = 1 ] && echo with || echo without) link-time optimization and $([ "$runtime_pgo" = "use" ] && echo with || echo without) a profile of play."
+if [ "${#pcsx2_changes[@]}" -gt 0 ]; then
+	echo "PCSX2's core in it has PS2Native's changes: $pcsx2_changes_text."
+else
+	echo "PCSX2's core in it is as PCSX2 has it, with none of PS2Native's changes."
+fi
+if [ "$pcsx2_changes_text" != "$pcsx2_patches_text" ]; then
+	echo "Warning: the tree's runtime is not built with the changes of patches/pcsx2 as they are now ($pcsx2_patches_text): a release's is (docs/adr/0050; build.sh --build-dir $build --pcsx2-patches on)."
+fi
 if [ "$runtime_lto" != 1 ] || [ "$runtime_pgo" != "use" ]; then
 	echo "Warning: a release's runtime is built with both (docs/adr/0047: scripts/linux/runtime-profile.sh, then build.sh --runtime-lto on --runtime-pgo use). Games play slower with this one."
 fi

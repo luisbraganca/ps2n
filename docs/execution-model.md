@@ -14,7 +14,9 @@ code is right and this file needs fixing.
 
 ## The parts
 
-- **The core** is PCSX2, unmodified: memory, the scheduler, every device, the
+- **The core** is PCSX2 as it was released, but for PS2Native's changes to
+  its code (`patches/pcsx2`, ADR 0050: one so far, which changes no result of
+  a run): memory, the scheduler, every device, the
   BIOS. It asks its EE provider to `Execute()` and expects it to keep
   `cpuRegs.cycle` moving and to call `_cpuEventTest_Shared()` when
   `cpuRegs.cycle` reaches `cpuRegs.nextEventCycle`.

@@ -18,6 +18,9 @@
 // PS2Native's version: version.txt at the repository's root, which the build
 // writes into this header (cmake/ps2n-inject.cmake).
 #include "ps2n_version.h"
+// PS2Native's changes to PCSX2's code this runtime is built with, by name
+// (patches/pcsx2; cmake/ps2n-pcsx2-patches.cmake writes the header).
+#include "ps2n_pcsx2_changes.h"
 #include "selftest.h"
 #include "game_settings.h"
 #include "session_record.h"
@@ -216,6 +219,7 @@ namespace
 		bool iop_static = true; // whether it runs the blocks compiled ahead of time that the host has
 		std::string iop_capture_path; // where the blocks it had to interpret are written, for the recompiler
 		bool vu_jit = true;
+		bool pcsx2_vu_thread = false; // PCSX2's own VU thread carries VU1 out (-pcsx2-vu-thread): stock PCSX2 as its users mostly have it
 		u32 vu_ps2n = 0; // bit 0 VU0, bit 1 VU1: PS2Native's VU provider in the place of the core's
 		std::string vu_programs_path; // where that provider writes a line for each program it records
 		bool vu_static = true; // whether it runs the blocks compiled ahead of time that the host has
@@ -367,8 +371,14 @@ namespace
 
 	void PrintUsage()
 	{
+		std::fputs("ps2n-host, the runtime of PS2Native " PS2N_VERSION "\n", stderr);
+		// How PCSX2's core in it was built (docs/adr/0050): a run that is timed as
+		// stock PCSX2 is one on a runtime that says "as PCSX2 has it".
+		if (PS2N_PCSX2_CHANGES[0] != '\0')
+			std::fputs("PCSX2's core in it has PS2Native's changes: " PS2N_PCSX2_CHANGES "\n", stderr);
+		else
+			std::fputs("PCSX2's core in it is as PCSX2 has it, with none of PS2Native's changes\n", stderr);
 		std::fputs(
-			"ps2n-host, the runtime of PS2Native " PS2N_VERSION "\n"
 			"\n"
 			"Usage: ps2n-host -bios <file> -data <dir> [options] <file.elf | disc image>\n"
 			"\n"
@@ -450,6 +460,12 @@ namespace
 			"                     compile the blocks of IOP code that had to be interpreted\n"
 			"                     (ps2n-recomp iop).\n"
 			"  -vu jit|interp     PCSX2's VU recompilers or interpreters (default jit).\n"
+			"  -pcsx2-vu-thread   Stock PCSX2 only: VU1 carried out on PCSX2's own VU thread\n"
+			"                     (its \"MTVU\" setting), which PCSX2 switches on by default\n"
+			"                     where there are three processor cores or more. Every\n"
+			"                     other run has VU1 on the CPU thread, so that runs repeat;\n"
+			"                     this is for timing stock PCSX2 as its users mostly have\n"
+			"                     it. Not with -vu-ps2n 1 or both.\n"
 			"  -vu-ps2n 0|1|both  Run VU0's, VU1's or both VUs' micro programs on\n"
 			"                     PS2Native's VU provider, which follows PCSX2's VU\n"
 			"                     recompiler (runtime/vu_interp.h): by the blocks compiled\n"
@@ -926,6 +942,8 @@ namespace
 				if (!ParseProvider("-vu", argv[++i], &o.vu_jit))
 					return false;
 			}
+			else if (is("-pcsx2-vu-thread"))
+				o.pcsx2_vu_thread = true;
 			else if (is("-vu-ps2n") && has_value)
 			{
 				const char* which = argv[++i];
@@ -1254,6 +1272,16 @@ namespace
 			o.patch_widescreen = true;
 			o.patch_fps = false;
 			o.patch_archive.clear();
+		}
+
+		// PCSX2's VU thread is for stock PCSX2's VU1: PS2Native's VU provider is
+		// held to the stock run with VU1 on the CPU thread, and has never run on
+		// another. (A session written down in a game's folder may be run again
+		// so: on stock PCSX2, it is still that game's settings.)
+		if (o.pcsx2_vu_thread && (o.vu_ps2n & 2) != 0)
+		{
+			std::fputs("ps2n-host: -pcsx2-vu-thread is for stock PCSX2's VU1: not with -vu-ps2n 1 or both\n", stderr);
+			return false;
 		}
 
 		// An archive named that is not there (a game's folder made where PCSX2
@@ -1685,7 +1713,10 @@ namespace
 		si.SetStringValue("Folders", "Bios", std::string(Path::GetDirectory(bios_path)).c_str());
 		si.SetStringValue("Filenames", "BIOS", std::string(Path::GetFileName(bios_path)).c_str());
 
-		// CPU providers. VU1 stays on the CPU thread so that runs repeat.
+		// CPU providers. VU1 stays on the CPU thread so that runs repeat: PCSX2's
+		// own default, on a computer with three cores or more, is its VU thread
+		// ("MTVU"), which only -pcsx2-vu-thread switches on here, for timing
+		// stock PCSX2 as its users mostly have it (docs/adr/0050).
 		//
 		// With PS2Native's EE provider the core is told its recompiler is in
 		// use: code shared by all providers then behaves as it does for the
@@ -1695,7 +1726,7 @@ namespace
 		si.SetBoolValue("EmuCore/CPU/Recompiler", "EnableIOP", o.iop_jit);
 		si.SetBoolValue("EmuCore/CPU/Recompiler", "EnableVU0", o.vu_jit);
 		si.SetBoolValue("EmuCore/CPU/Recompiler", "EnableVU1", o.vu_jit);
-		si.SetBoolValue("EmuCore/Speedhacks", "vuThread", false);
+		si.SetBoolValue("EmuCore/Speedhacks", "vuThread", o.pcsx2_vu_thread);
 
 		si.SetBoolValue("EmuCore", "HostFs", o.host_fs);
 

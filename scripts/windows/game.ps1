@@ -89,6 +89,10 @@ param(
     [switch]$TimeProfile,
     # With -TimeProfile: look from this frame on (ps2n-host -profile-from), to leave the game's startup out.
     [int]$ProfileFrom = 0,
+    # With -Config stock-jit: VU1 carried out on PCSX2's own VU thread, as PCSX2 has it by default where there are
+    # three processor cores or more (ps2n-host -pcsx2-vu-thread; docs\adr\0050). For timing stock PCSX2 as its users
+    # mostly have it: every other run has VU1 on the CPU thread.
+    [switch]$Pcsx2VuThread,
     # Also write vu-report.txt among the run's files: what was written into the VUs' micro memory and what
     # they ran, with the counts frame by frame and the contents written beside it (ps2n-host -vu-report).
     [switch]$VuReport,
@@ -378,6 +382,10 @@ if ($markList.Count -gt 0) { $arguments += "-DMARKS=$($markList -join ';')" }
 # Every run here is timed, so it is kept on the processor's fastest cores:
 # left to the system, the same run took between 75 and 150 s.
 $arguments += '-DFAST_CORES=1'
+if ($Pcsx2VuThread) {
+    if ($Config -ne 'stock-jit') { throw "-Pcsx2VuThread is for -Config stock-jit: PCSX2's VU thread knows nothing of PS2Native's VU provider." }
+    $arguments += '-DPCSX2_VU_THREAD=1'
+}
 if ($Config -eq 'lockstep') { $arguments += '-DLOCKSTEP=1' }
 # A game is held to the stock run in place and time at every sync point, and
 # in what it shows; where its registers differ, the host says which and how
