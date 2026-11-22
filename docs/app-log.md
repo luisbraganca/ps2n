@@ -2776,7 +2776,10 @@ the game's runs; three rounds in turns, means in seconds:
 26.71. Killzone 44.00, 43.56, 44.08; 43.78, 44.22, 44.42; 43.78, 44.01, 44.16;
 43.63, 44.08, 43.81.)
 
-The sparse profile gives what the whole one gives, to within the rounds. **With
+The sparse profile gives what the whole one gives, to within the rounds, and
+one taken without a game's runs gives that game from 1.1% less to 1.2% more
+time than one that had them (in the second set, from 0.5% less to 0.7% more).
+**With
 it and link-time optimization, compiled games take 0.99 (Jak and Daxter), 1.00
 (Gran Turismo 3), 0.99 (Agent Under Fire) and 1.00 (Killzone) times the time
 of stock PCSX2 built as its releases are**; in the second set, with the whole
@@ -2914,3 +2917,375 @@ sparse profile of the measurement above, the whole tree compiled again in
 Every test in it: 532 of 532 pass, the three comparisons of `dma/vif/stcycl`
 not run (190 s). The development tree with the compiled code in the host
 stays as it was, and runs them.
+
+**The maintainer's game folders given that runtime**
+(`build\measure\runtime-into-folders.ps1`). The kit made again from the tree
+built so. First on a copy of the Jak and Daxter folder: given the kit's
+`ps2n-host.exe` and nothing else, its own `ps2n-remake --before-play` found
+nothing to compile ("nothing new: the modules have all the sessions met", its
+modules untouched), and 900 frames of one of its sessions run again were the
+session at every one of 18 fingerprints compared. Then the six folders on
+Windows, the same way: in each the runtime of 15,674,880 bytes in the place of
+the one of 11,337,216, nothing compiled again (the modules those of
+2026-11-21), and the start of one of its sessions run again the session at
+every fingerprint compared (Silent Hill 3's sessions are of a few seconds: 90
+frames, one fingerprint). The second Agent Under Fire folder interprets 1.01%
+of the EE's cycles, the BIOS's program loader, as before (its one session is
+older than the BIOS's captures in folders). A seventh folder there,
+`SLES_505.39`, one of the session's own early checks with programs of its
+time, was left as it is.
+
+### Three minutes of the game's own time (2026-11-22)
+
+The maintainer's "6. Yes". A folder counted its profile after a session of
+10,800 frames, 3 minutes at 60 frames a second. A European game is shown at
+50 unless a patch of it puts the console in its 60 mode: of the maintainer's,
+Killzone and Agent Under Fire are shown at 50, for which 10,800 frames are
+3.6 minutes, and Killzone's two sessions (9,300 frames, 3.1 minutes) never
+counted; Gran Turismo 3 with its "60 FPS" patch, and Jak and Daxter with its
+"NTSC Mode" patch enabled, are shown at 60.
+
+- **The runtime writes a session's frames a second down** when the session
+  ends (`host/session_record.cpp`): `frames-a-second 50` or `60` in the
+  session's `input.txt`, what the console showed most of the session's frames
+  at, by the video mode the game had it in (50 in its PAL modes, 60 in every
+  other; the frames before the BIOS has set a mode are neither). A session run
+  again reads the line and has no use for it.
+- **A folder counts by it** (`wizard/remake_main.cpp`, `CountFrames`): a
+  session of 180 times that many frames at least, its first 3 minutes run
+  again, 9,000 frames at 50. A session written down before the runtime wrote
+  the line is taken for one at 60, as before: the maintainer's own folders
+  count after their next session of 3 minutes.
+
+Tried: a session of 700 frames in a window of Gran Turismo 3, out of sight,
+from a folder brought up to date (below), wrote `frames-a-second 60`, and ran
+again as the session at every fingerprint. In the measurement folders of
+2026-11-22 (below) the copies of the maintainer's sessions, written down
+before the runtime wrote the line, were given it by hand, by what each count
+run's EE cycles a frame say (5,897,588 at 50, 4,944,695 at 60): 50 for Jak
+and Daxter's session (played before its "NTSC Mode" patch was enabled), Agent
+Under Fire's and Killzone's, which counted on 9,000 frames, Killzone's folder
+for the first time, on 9,000 of its session's 9,300; 60 for Gran Turismo 3's,
+10,800 frames. (Gran Turismo 3's was first given 50, the session's mistake,
+and its folder counted on 9,000 frames, 2.5 minutes: counted again and timed
+again, below.)
+
+### The runtime's profile made again, by the repository's own scripts (2026-11-22)
+
+The maintainer's "2. Yes": what the trial of 2026-11-21 did by hand is
+`scripts\windows\runtime-profile.ps1` (`scripts/linux/runtime-profile.sh`). It
+builds the runtime to count in a tree of its own (`build\windows-clang-count`),
+runs the training runs named in a file of the build tree
+(`build\pgo\training.txt`: a run's name, the disc image, the game's folder
+whose modules it runs, the session run again or none, how many frames), each
+through `game.ps1` with the modules of the game's own folder (`game.ps1
+-Modules`, `ps2n-host -modules`), and puts the counts together without the
+functions no run ran. A run of a session that is not the session at every
+fingerprint compared stops it.
+
+**The training runs** are those of 2026-11-21 but one: the first 10,800 frames
+of a session of Jak and Daxter (`20261118-120316`), of Gran Turismo 3
+(`20261118-102727`) and of Agent Under Fire (`20261117-103006`); Killzone's
+other session whole (9,300 frames); Silent Hill 3's first 3,000 frames from
+boot; and, from folders made from the disc alone, where the game's code is
+interpreted, 3,000 frames of each of those sessions of Jak and Daxter and of
+Gran Turismo 3. (On 2026-11-21 the folder of Jak and Daxter made from the disc
+alone ran the game's first session, which is timed below and so is no longer
+trained on.) The folders are those of the measurement below, with their
+counts.
+
+**On Windows:** 604 s in all, the tree built whole to count and the seven
+runs, each the session at every fingerprint compared; the profile 1,427,352
+bytes, 5,093 functions (5,087 on 2026-11-21).
+
+**A profile made again under the same name was not compiled with.** The module
+tree, built with the profile of 2026-11-21 under
+`build\pgo\runtime-windows.profdata`, did not link once the new one was
+written there: nothing told the build that the file had changed, one file of
+PCSX2's that is compiled at every configuration took the new profile, and the
+linker refuses modules whose profile summaries differ ("linking module flags
+'ProfileSummary': IDs have conflicting values"). The build now gives the
+compiler a copy of the profile in the build tree named after what it holds
+(`cmake/ps2n-inject.cmake`): another profile is another file to every compile
+command, everything the runtime is built from is compiled again with it, and
+CMake runs again when the profile changes. Built so, the whole module tree in
+125 s; its runtime 15,617,024 bytes; every test: 532 of 532 pass, the three
+comparisons of `dma/vif/stcycl` not run.
+
+**On Linux** (WSL 2, half the processors). The training runs need each game's
+folder made on Linux. Seven were made in a folder of the build tree of their
+own (`build/kit-measure`), each by the Linux wizard as a user makes it
+(`--auto`), without a window (Qt's offscreen platform): two from the disc
+alone (Jak and Daxter 18 s, Gran Turismo 3 13 s), and five that found in
+their captures folder what the maintainer's sessions of the game met on
+Windows, which is PS2 code, the same on both systems (Jak and Daxter 75 s,
+Gran Turismo 3 63 s, Killzone 147 s, Silent Hill 3 169 s, Agent Under Fire,
+all nine of its executables, 810 s). The same seven runs, the sessions the
+maintainer's own from their Windows folders, drawn by OpenGL: 1,053 s with the
+tree built whole to count; **every session written down on Windows, run again
+on Linux with modules compiled on Linux, is the session at every fingerprint
+compared**; the profile 1,216,368 bytes, 4,750 functions. The module tree
+built with it and link-time optimization in 110 s; every test: 531 of 531
+pass, the same three not run, and 534 of 534 in the development tree. Nothing
+was timed on Linux.
+
+### As the release has it (2026-11-22)
+
+Everything measured again as 0.2 has it (`build\measure\batch26.ps1`): the
+runtime built with link-time optimization and the profile the repository's
+script made from this tree; each game's folder (kit13) made from the
+maintainer's captures and counted by its own `ps2n-remake` on a session other
+than the one timed, the first 3 minutes of it (9,000 frames, Gran Turismo 3's
+10,800), Killzone's too; two folders made from the disc alone, for first
+sessions. Stock PCSX2 is `stock-jit` on the runtime
+of a tree of its own built with link-time optimization and no profile
+(`build\windows-clang-stock`: 234 s to build, 13,075,968 bytes). Jak and
+Daxter with nothing drawn, the others on Vulkan at the console's resolution.
+Three rounds in turns, the order turned round every second round, nothing
+else running; every one of the 57 runs, and of the 12 of Gran Turismo 3's
+second set, the session at every fingerprint written down. Means, in seconds:
+
+| Game, the session timed | Stock PCSX2, built as released | Compiled, as 0.2 has it | Times stock PCSX2's time |
+|---|---:|---:|---:|
+| Jak and Daxter, `20261119-110909` (8,357 frames) | 55.74 | 54.75 | 0.98 |
+| Gran Turismo 3, `20261118-095532` (8,678 frames) | 21.08 | 20.99 | 1.00 |
+| Agent Under Fire, `20261117-185759` (9,000 frames) | 27.09 | 26.78 | 0.99 |
+| Killzone, `20261117-221825` (9,300 frames) | 43.91 | 40.54 | 0.92 |
+
+(The rounds: Jak and Daxter 56.03, 55.77, 55.43; 54.85, 54.55, 54.85. Gran
+Turismo 3 21.08, 21.12, 21.03; 21.13, 21.02, 20.83. Agent Under Fire 26.81,
+27.29, 27.17; 26.51, 26.88, 26.94. Killzone 43.55, 44.27, 43.90; 40.19, 40.67,
+40.75.)
+
+Gran Turismo 3's row is from a second set of turns
+(`build\measure\batch26-gt3.ps1`), its folder counted again on 10,800 frames,
+the session's first 3 minutes at 60 frames a second. In the first set, its
+folder counted on 9,000 frames (above: "Three minutes of the game's own
+time"), it took 20.92 s (20.74, 21.13, 20.89) against stock PCSX2's 20.81 s
+(20.58, 20.96, 20.88), 1.01.
+
+**Killzone's counts fit the session timed better than a user's would:** its
+two sessions are two runs of one controller script, so the session it counted
+on is nearly the play it is timed on. Without counts its folder takes 44.12 s
+(44.14, 43.78, 44.45), 1.00 times stock PCSX2's time, as on 2026-11-21.
+
+**What a folder's own counts give** with this runtime (the same folders
+compiled again without their counts, in the same turns): Jak and Daxter 58.46
+s without (58.45, 57.76, 59.17), 6.3% less with; Gran Turismo 3 21.48 s
+(21.49, 21.46, 21.48, the second set), 2.3% less; Agent Under Fire 27.05 s
+(27.15, 27.02, 26.99), 1.0% less; Killzone 8.1% less.
+
+**A game's first session,** from a folder made from the disc alone, the game's
+code interpreted (31.83% and 31.84% of the EE's cycles), no training run of
+the runtime's profile having run either session:
+
+| First session | Stock PCSX2, built as released | PS2Native 0.2 | On 2026-11-20 | Before the speed work |
+|---|---:|---:|---:|---:|
+| Jak and Daxter, `20261118-120020` (2,564 frames) | 13.09 | 44.83 | 52.5 | 59.8 |
+| Gran Turismo 3, `20261118-095532` (8,678 frames) | 20.81 | 69.59 | 77.5 | 108.8 |
+
+(The rounds: Jak and Daxter 12.90, 13.15, 13.21; 44.65, 45.35, 44.49. Gran
+Turismo 3 20.62, 20.98, 20.83; 69.09, 69.73, 69.96.) Against 2026-11-20, Jak
+and Daxter's first session takes 14.6% less time and Gran Turismo 3's 10.2%
+less; against stock PCSX2, which compiles as it meets, 3.4 and 3.3 times its
+time.
+
+## 0.2: a game's folder brought up to date (ADR 0048)
+
+The maintainer's "7. Ok do it" (ADR 0047): 0.2, with a way to bring the game
+folders of an earlier version up to date. A game's folder has its own copy of
+PS2Native's programs, so a game made with 0.1 would stay on 0.1's.
+
+### What was built (2026-11-22)
+
+- **The wizard's first step** has a line and a button, "Games made
+  earlier...": the line says how many games of this PS2Native's own `games`
+  folder have an earlier PS2Native's programs.
+- **The window it opens** (`wizard/update_window.cpp`) lists those games, and
+  those of any folder added (a game's folder, or one that holds games: an
+  earlier PS2Native's folder, or its `games` folder), each with how its
+  programs stand: up to date, made with an earlier PS2Native, or made with a
+  later one. Those made earlier are ticked; "Bring up to date" does it.
+- **Bringing a folder up to date** (`BringUpToDate`, `wizard/package.cpp`,
+  which shares the copying with the making of a folder) gives it every file
+  of the runtime a game's folder has, the launcher under the game's name and
+  the toolchain in the place of its own, and writes `programs.txt`: the
+  version, and a fingerprint of the files the programs were copied from.
+  Nothing else of the folder is touched. It is refused while a program of the
+  folder runs or its recompile compiles, and for a folder a later PS2Native
+  made. Where PCSX2's GameDB plays the game with FullVU0SyncHack, `make.txt`
+  gets the line a folder made before 2026-11-21 lacks.
+- **The folder's own recompile** (`wizard/remake_main.cpp`) then finds
+  everything left to compile before the game next starts, the toolchain being
+  another, and its window says why: "Compiling <game> again with PS2Native
+  0.2" (`work\brought-up-to-date.txt`, which the wizard leaves and the compile
+  takes away).
+- **For checks:** `ps2n-wizard --update <folder>` without a window, and
+  `--updates <folder> --shots <folder> [--auto]` through the window.
+- **The version** is 0.2 (`version.txt`).
+
+### Tried on a folder made by 0.1 as released (2026-11-22)
+
+`build\measure\update-from-01.ps1` and `update-more.ps1`, with the programs as
+they are now in a folder of their own (kit14), everything out of sight.
+
+- **A 0.1 folder.** 0.1 as released (the folder its download was made from)
+  copied; its own wizard made Gran Turismo 3 from the maintainer's disc image
+  (`--auto`, 12 s); the first session the maintainer played of the game
+  (`20261118-095532`, 8,678 frames) put into the folder's sessions; and 0.1's
+  own `ps2n-remake`, as after a session, compiled what the session met (54 of
+  128 files, 22 s).
+- **Brought up to date** by the new wizard without a window: 3.3 s. The
+  runtime of 15,617,024 bytes in the place of 0.1's of 11,272,192, the
+  toolchain of 331 files in the place of 328, `programs.txt` saying 0.2; its
+  session and its captures as they were.
+- **Its own `ps2n-remake --before-play`,** as its launcher runs it before the
+  game starts: "the folder was brought up to date (PS2Native 0.2)", all 128
+  files compiled, 30 s.
+- **Its session run again whole:** the session at every one of 173
+  fingerprints; nothing of the executable's code interpreted, no block of the
+  IOP's or of the vector units'; 4.40% of the EE's cycles interpreted
+  (1,891,555,820), the BIOS's kernel, to the cycle what the same folder
+  interprets with 0.1's programs and the modules 0.1 compiled (the session is
+  older than the BIOS's captures in folders, and a folder alone has no other
+  game's beside it).
+- **Through the window** (`--updates --auto`, a copy of the 0.1 folder as it
+  was): listed as "Made with an earlier PS2Native.", ticked, brought up to
+  date in 3.0 s, then "Brought up to date: it compiles its game again before
+  it next starts."
+- **A second time:** "Up to date.", and no file of the folder's root changed.
+- **A folder whose runtime is in use:** refused ("is running (ps2n-host.exe):
+  close it first."), nothing changed.
+- **A session in its window** from a folder brought up to date (700 frames,
+  muted, out of sight): written down with `frames-a-second 60`, and run again
+  the session at every one of 14 fingerprints.
+
+### A folder's counts after it was brought up to date (2026-11-22)
+
+ADR 0046's point 6, put to the maintainer with this. A folder's counts are of
+the code the recompiler made when it counted; where a later recompiler makes
+other code for a function, the compiler drops that function's counts. Measured
+with the counts the folders of 2026-11-21 took before that day's two changes
+(`build\measure\kit9`: before the COP2 information was decided when the code
+is generated), given to today's folders in the place of their own and each
+compiled again whole by its own `ps2n-remake`; in the same turns as above,
+means in seconds:
+
+| Game | Its own counts | An earlier recompiler's counts | No counts |
+|---|---:|---:|---:|
+| Jak and Daxter | 54.75 | 56.54 | 58.46 |
+| Gran Turismo 3 (the second set) | 20.99 | 21.04 | 21.48 |
+| Agent Under Fire | 26.78 | 26.85 | 27.05 |
+
+(The rounds with the earlier counts: Jak and Daxter 56.53, 56.60, 56.48; Gran
+Turismo 3 21.12, 21.05, 20.96; Agent Under Fire 26.87, 26.77, 26.91.) Jak and
+Daxter, whose hot functions are full of COP2 instructions, keeps about half of
+what its counts give (3.3% more time than with its own); the other two keep
+all of it, to within the rounds.
+
+**Built so, for the maintainer to decide otherwise:** a folder brought up to
+date with another toolchain is compiled with the counts it has, and counts
+once more after a session (`work\count-again.txt`, which the wizard leaves
+where the folder's toolchain changed and the folder has counts; its window
+says "Once more, now that its folder was brought up to date"). A game an
+earlier PS2Native could not count for is tried again. Tried on a copy of a
+folder with its counts, given a toolchain of another time and brought up to
+date: its `ps2n-remake` after a session compiled the game again, counted on
+its session (the run the session at every fingerprint compared) and compiled
+with the new counts, 111 s in all; after the next session it found nothing to
+do.
+
+### On Linux (2026-11-22)
+
+Under WSL 2, half the processors, nothing shown (Qt's offscreen platform).
+
+- **The Linux folder** made from the module tree, its runtime built as a
+  release's (`scripts/linux/kit.sh`, which says so).
+- **A 0.1 folder.** 0.1's Linux download unpacked; its own wizard made Gran
+  Turismo 3 from the maintainer's disc image (19 s); the same session of the
+  maintainer's put into its sessions; 0.1's own `ps2n-remake`, as after a
+  session, compiled what it met (128 files, ten at a time, 34 s).
+- **Brought up to date** by the new wizard without a window: 2.1 s;
+  `programs.txt` saying 0.2, the toolchain of 336 files in the place of 333.
+- **Its own `ps2n-remake --before-play`:** "the folder was brought up to date
+  (PS2Native 0.2)", all 128 files compiled, 24 s.
+- **Its session run again whole,** drawn by OpenGL: the session at every one
+  of 173 fingerprints, in 47 s; no block of the IOP's or of the vector units'
+  interpreted. (With nothing drawn the run of this game does not reach its
+  end, on any PS2Native: PCSX2's null renderer stops at an assertion of its
+  own, `GSState::IsCoverageAlphaSupported(): Not implemented`, some way in.
+  Its first 900 frames, twice: the session at every fingerprint compared.)
+- **A second time:** "Up to date.", the folder unchanged.
+
+**The maintainer's game folders given the final runtime** (their "3. Yes").
+On Windows, the six folders again, the same way as in the morning
+(`build\measure\runtime-into-folders.ps1`, tried on a copy first): the
+runtime built with the profile made again, 15,617,024 bytes, in the place of
+the morning's; nothing compiled again; the start of a session of each run
+again the session at every fingerprint compared. Their Windows PS2Native
+folder (`build\kit`) made again from the same tree: its wizard is the one
+with "Games made earlier...". On Linux, their PS2Native folder made again,
+and their one game folder, Jak and Daxter: first a copy given the runtime
+alone (its `ps2n-remake --before-play` found nothing to compile, 600 frames
+of a session the session at every one of 12 fingerprints compared), then the
+folder itself, the same. Their folders have the runtime of 0.2 and, of the
+rest, the programs of 2026-11-21: they count by the game's own frame rate
+once they are brought up to date, which is theirs to do or to ask for.
+
+### Times on Linux, under WSL 2 (2026-11-22)
+
+Nothing had been timed on Linux. Under WSL 2 Windows places the processors
+where it will, and a run's time was not expected to repeat; it does, to
+about 1% here. Jak and Daxter's session `20261119-110909` (8,357 frames) run
+again with nothing drawn, the folder the one made on Linux for the training
+runs, in turns, three rounds, every run the session at every fingerprint
+written down; stock PCSX2 is `stock-jit` on the runtime of a tree built with
+link-time optimization and no profile (`build/linux-clang-stock`, 209 s to
+build). Means, in seconds:
+
+| Jak and Daxter on Linux | Seconds | Times stock PCSX2's time |
+|---|---:|---:|
+| Stock PCSX2, built as released | 76.53 | 1.00 |
+| Compiled, without counts, the runtime built without either (as 0.1's) | 94.05 | 1.23 |
+| Compiled, without counts, the runtime as 0.2 has it | 85.57 | 1.12 |
+| Compiled, with the folder's own counts, the runtime as 0.2 has it (a second set: stock PCSX2 75.85) | 79.38 | 1.05 |
+
+(The rounds: 77.05, 76.76, 75.77; 94.22, 94.36, 93.58; 85.15, 85.65, 85.90;
+and, the folder counted by its own `ps2n-remake` on 9,000 frames of the
+maintainer's session `20261118-120316`, 406 s in all for the round, stock
+PCSX2 76.71, 75.69, 75.15 and the compiled game 79.44, 79.47, 79.24.)
+
+- **The runtime as 0.2 has it takes 9.0% off the compiled game's time on
+  Linux,** and the folder's own counts 7.2% more.
+- **On Linux the compiled game is not at PCSX2's time:** 1.05 times it as 0.2
+  has it, where 0.98 on Windows for the same session. Without counts the two
+  systems are further apart (1.12 on Linux with the runtime as 0.2 has it,
+  1.05 on Windows). Why is not known yet: the compiled code is the same C++
+  on both, compiled for another calling convention and into shared objects.
+  One game, one session, inside WSL: it says where Linux stands, and that it
+  is worth measuring on its own.
+
+### The maintainer's answers, and the release (2026-11-22)
+
+The session put five decisions to the maintainer with what this chapter and
+the one before it measured, with its recommendation for each. Their answers:
+"1. Yes", "2. Yes, prepare the release", "3. Yes", "4. Do all seven",
+"5. After"
+([ADR 0049](adr/0049-0-2-is-released-a-folder-brought-up-to-date-counts-once-more-linuxs-speed-after-it.md)):
+
+1. **Committed and pushed.**
+2. **0.2 is released from that commit:** both downloads made from it, and the
+   release a draft on GitHub with its notes, for the maintainer to read and
+   publish.
+3. **A folder brought up to date with another toolchain counts its profile
+   once more after a session,** as it was built.
+4. **The session brings the maintainer's own game folders up to date,** the
+   six on Windows and the one inside WSL, with the release's programs.
+5. **Linux's speed after 0.2:** why a compiled game takes more than stock
+   PCSX2's time there is looked for once the release is out.
+
+Neither system's profile of play is made again for the release: the runtime's
+source is as it was when each was made. Of `host`, `runtime`, `core` and
+`cmake`, the one file newer than the profiles is `cmake/ps2n-inject.cmake`,
+changed in how the build hands the profile to the compiler (a copy named
+after what it holds), not in what the compiler is given.

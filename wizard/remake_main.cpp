@@ -168,9 +168,9 @@ namespace
 
 	// ---- How the user plays the game, counted (docs/adr/0045) -------------------
 
-	// The session counted: its first 3 minutes at 60 frames a second, of one at
-	// least that long.
-	constexpr int kCountFrames = 10800;
+	// The session counted: its first 3 minutes, of one at least that long in
+	// the game's own time (docs/adr/0047).
+	constexpr int kCountSeconds = 180;
 
 	QString ReadText(const QString& path)
 	{
@@ -187,8 +187,17 @@ namespace
 		return match.hasMatch() ? match.captured(1).trimmed() : QString();
 	}
 
-	// The newest session in the folder that ended and lasted kCountFrames frames
-	// at least: the one counted. Nothing when there is none.
+	// How many frames a session's first 3 minutes are: 9,000 where the console
+	// showed the game at 50 frames a second, as the runtime wrote down when the
+	// session ended (its frames-a-second line), and 10,800 at 60, which a
+	// session written down before the runtime wrote that line is taken for.
+	int CountFrames(const QString& session)
+	{
+		return kCountSeconds * (SessionLine(session, QStringLiteral("frames-a-second")).toInt() == 50 ? 50 : 60);
+	}
+
+	// The newest session in the folder that ended and lasted 3 minutes at
+	// least: the one counted. Nothing when there is none.
 	QString CountableSession(const QDir& folder)
 	{
 		const QDir sessions(folder.filePath(QStringLiteral("sessions")));
@@ -198,7 +207,7 @@ namespace
 		{
 			bool ok = false;
 			const int frames = SessionLine(sessions.filePath(name), QStringLiteral("end")).toInt(&ok);
-			if (ok && frames >= kCountFrames)
+			if (ok && frames >= CountFrames(sessions.filePath(name)))
 				return sessions.filePath(name);
 		}
 		return QString();
@@ -274,7 +283,7 @@ namespace
 			QDir::toNativeSeparators(r.filePath(QStringLiteral("guest.txt"))), QStringLiteral("-memcards"),
 			QDir::toNativeSeparators(r.filePath(QStringLiteral("memcards"))), QStringLiteral("-input"),
 			QDir::toNativeSeparators(QDir(session).filePath(QStringLiteral("input.txt"))), QStringLiteral("-frames"),
-			QString::number(kCountFrames), QStringLiteral("-seconds"), QStringLiteral("7200"), QStringLiteral("-upscale"), QStringLiteral("1"),
+			QString::number(CountFrames(session)), QStringLiteral("-seconds"), QStringLiteral("7200"), QStringLiteral("-upscale"), QStringLiteral("1"),
 			QStringLiteral("-progress")};
 		// The renderer a window has when the folder's options name none: a run
 		// without one draws nothing, which not every game's drawing allows.
@@ -552,7 +561,22 @@ int main(int argc, char* argv[])
 
 	const QString log_path = QDir::toNativeSeparators(QStringLiteral("work/remake.log"));
 	CompileWindow window(recipe.title, OwnIcon());
-	if (before_play)
+	// A folder a later PS2Native's wizard brought up to date (wizard/package.cpp,
+	// BringUpToDate, which leaves this file with its version) compiles its game
+	// again whole before it next starts, with the programs it was given: the
+	// window says that, once.
+	const QString brought_up_to_date = work.filePath(QStringLiteral("brought-up-to-date.txt"));
+	if (before_play && QFileInfo::exists(brought_up_to_date))
+	{
+		const QString version = ReadText(brought_up_to_date).trimmed();
+		say(QStringLiteral("the folder was brought up to date (PS2Native %1)").arg(version));
+		window.Compiling(QObject::tr("Compiling %1 again with PS2Native %2").arg(recipe.title, version),
+			QObject::tr("Its folder was brought up to date, and the game is compiled again with the newer programs, once. %1 starts "
+						"when it is done. Every processor is at work: it takes several minutes.")
+				.arg(recipe.title),
+			QObject::tr("Later: %1 does not start now, and compiles this first when it next starts.").arg(recipe.title));
+	}
+	else if (before_play)
 	{
 		window.Compiling(QObject::tr("Compiling what your last session met for the first time"),
 			QObject::tr("%1 starts when it is done. Every processor is at work: it takes a few minutes.").arg(recipe.title),
@@ -625,11 +649,19 @@ int main(int argc, char* argv[])
 	bool profiling = false;
 	QTimer stop_watch;
 
-	// Once for a game, after a session: not when it has its counts, nor when
-	// they could not be made; when a session was long enough, or the counts
-	// were made before and not yet compiled with.
+	// A folder brought up to date with another toolchain (wizard/package.cpp,
+	// BringUpToDate, which leaves this file): its counts are of the code the
+	// earlier one made, so it counts once more (docs/adr/0048).
+	const QString count_again = work.filePath(QStringLiteral("count-again.txt"));
+
+	// Once for a game, after a session, and once more after its folder was
+	// brought up to date: not when it has its counts, nor when they could not
+	// be made; when a session was long enough, or the counts were made before
+	// and not yet compiled with.
 	const auto profile_wanted = [&]() {
-		if (before_play || QFileInfo::exists(own_profile) || QFileInfo::exists(count_failed) || QFileInfo::exists(stop_profile))
+		if (before_play || QFileInfo::exists(count_failed) || QFileInfo::exists(stop_profile))
+			return false;
+		if (QFileInfo::exists(own_profile) && !QFileInfo::exists(count_again))
 			return false;
 		return QFileInfo::exists(counted) || !CountableSession(folder).isEmpty();
 	};
@@ -744,9 +776,13 @@ int main(int argc, char* argv[])
 	const auto start_profile = [&]() {
 		profiling = true;
 		window.Compiling(QObject::tr("Compiling %1 for how you play it").arg(recipe.title),
-			QObject::tr("Once for this game: the first 3 minutes of a session of yours are run again out of sight, counting what the "
-						"game's code does most, and the game is compiled again with what was counted. Every processor is at work: it "
-						"takes several minutes."),
+			QFileInfo::exists(count_again) ?
+				QObject::tr("Once more, now that its folder was brought up to date: the first 3 minutes of a session of yours are run "
+							"again out of sight, counting what the game's code does most, and the game is compiled again with what "
+							"was counted. Every processor is at work: it takes several minutes.") :
+				QObject::tr("Once for this game: the first 3 minutes of a session of yours are run again out of sight, counting what the "
+							"game's code does most, and the game is compiled again with what was counted. Every processor is at work: it "
+							"takes several minutes."),
 			QObject::tr("Later: %1 starts as it is, and does this after another session.").arg(recipe.title));
 		window.Busy();
 		window.Bring();
@@ -795,7 +831,8 @@ int main(int argc, char* argv[])
 		step = QObject::tr("2 of 3: ");
 		window.Stage(step + QObject::tr("running the first 3 minutes of your session of %1 again, counting")
 								.arg(began.isValid() ? QLocale().toString(began, QLocale::ShortFormat) : QDir(counted_session).dirName()));
-		window.Progress(0, kCountFrames, QObject::tr("%v of %m frames"));
+		const int count_frames = CountFrames(counted_session);
+		window.Progress(0, count_frames, QObject::tr("%v of %m frames"));
 		const QString program = folder.filePath(ps2n::wizard::platform::Program(QStringLiteral("ps2n-host")));
 		say(QStringLiteral("run again, counting: %1 %2").arg(QDir::toNativeSeparators(program), arguments.join(QLatin1Char(' '))));
 		runner = new QProcess(&app);
@@ -804,7 +841,7 @@ int main(int argc, char* argv[])
 		runner->setProgram(program);
 		runner->setArguments(arguments);
 		auto pending = std::make_shared<QByteArray>();
-		QObject::connect(runner, &QProcess::readyRead, &app, [&, pending]() {
+		QObject::connect(runner, &QProcess::readyRead, &app, [&, pending, count_frames]() {
 			static const QRegularExpression frame_line(QStringLiteral("^ps2n-host: frame (\\d+) of \\d+$"));
 			*pending += runner->readAll();
 			for (qsizetype end; (end = pending->indexOf('\n')) >= 0;)
@@ -813,7 +850,7 @@ int main(int argc, char* argv[])
 				pending->remove(0, end + 1);
 				const QRegularExpressionMatch frame = frame_line.match(line);
 				if (frame.hasMatch())
-					window.Progress(frame.captured(1).toInt(), kCountFrames, QObject::tr("%v of %m frames"));
+					window.Progress(frame.captured(1).toInt(), count_frames, QObject::tr("%v of %m frames"));
 				else if (!line.isEmpty())
 					say(line);
 			}
@@ -941,6 +978,8 @@ int main(int argc, char* argv[])
 		const bool objects = QDir(work).rename(QStringLiteral("objects-profiled"), QStringLiteral("objects"));
 		QFile::remove(own_profile);
 		const bool kept = QFile::rename(counted, own_profile);
+		if (kept)
+			QFile::remove(count_again);
 		say(QStringLiteral("compiled for how the game is played: ready for the game's next start%1")
 				.arg(objects && kept ? QString() : QStringLiteral(" (the objects or the counts could not be moved: the next compile compiles "
 																  "everything again)")));
@@ -977,6 +1016,7 @@ int main(int argc, char* argv[])
 		if (pipeline.nothingNew())
 		{
 			say(QStringLiteral("nothing new: the modules have all the sessions met"));
+			QFile::remove(brought_up_to_date);
 			done();
 			return;
 		}
@@ -988,6 +1028,7 @@ int main(int argc, char* argv[])
 			return;
 		}
 		say(QStringLiteral("ready for the game's next start"));
+		QFile::remove(brought_up_to_date);
 		// A session that ended while this round compiled.
 		const QDateTime last = LastSession(folder);
 		if (last.isValid() && last > round_started)

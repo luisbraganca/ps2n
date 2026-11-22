@@ -224,8 +224,34 @@ folders get that runtime; the maintainer tells PCSX2 of the defect themselves
 (the session wrote no text for it, ADR 0010); what was measured is committed
 and pushed; a folder counts its profile after a session of 3 minutes of the
 game's own time (9,000 frames at 50 frames a second); and 0.2 is next, with a
-way to bring the game folders of an earlier version up to date.
-docs/app-log.md, "Compiled games against PCSX2, as users get them".**
+way to bring the game folders of an earlier version up to date. Built the
+same day: the runtime writes a session's frames a second down and a folder
+counts by them (a measurement folder of Killzone counted for the first time;
+the maintainer's own counts after its next session of 3 minutes, once it has
+the new programs); the profile is
+made by the repository's own scripts (`runtime-profile.ps1`, `.sh`), on Linux
+too, where every session of the maintainer's written down on Windows runs
+again as the session; and, measured again as 0.2 has it, compiled games take
+0.98 (Jak and Daxter), 1.00 (Gran Turismo 3), 0.99 (Agent Under Fire) and 0.92
+(Killzone, whose counts fit its timed session better than a user's would)
+times the time of stock PCSX2 as released, and a first session 10 to 15% less
+than on 2026-11-20. Timed on Linux for the first time, under WSL 2, where a
+run's time repeats to about 1%: Jak and Daxter 1.05 times stock PCSX2's time
+as 0.2 has it (1.23 as 0.1 had it), not at PCSX2's time there, why not known
+yet. The wizard brings a game's folder made with an earlier
+PS2Native up to date (ADR 0048, "Games made earlier..." in its first step): the
+folder is given this version's programs and compiles its game again before it
+next starts; tried on a folder made by 0.1 as released, on Windows and on
+Linux. The version is 0.2 (`version.txt`). The maintainer's answers the same
+day (ADR 0049: "1. Yes", "2. Yes, prepare the release", "3. Yes", "4. Do all
+seven", "5. After"): committed and pushed; 0.2 released from that commit, both
+downloads made from it and the release a draft on GitHub that the maintainer
+reads and publishes; a folder brought up to date with another toolchain counts
+its profile once more after a session; the session brings the maintainer's own
+seven game folders up to date; and why a compiled game takes more than stock
+PCSX2's time on Linux is looked for after 0.2 is out. docs/app-log.md,
+"Compiled games against PCSX2, as users get them" and "0.2: a game's folder
+brought up to date".**
 What follows is Phase 3's history. [docs/game-log.md](docs/game-log.md) has its steps, their pass
 criteria and what has been measured; its status table at the top says where
 things stand. On 2026-11-12 every step was done as far as the game's first
@@ -913,7 +939,7 @@ Decisions:
   committed and pushed; the new programs into their game folders; next the
   runtime itself built with a profile of play, measured first, against stock
   PCSX2 built without one. What becomes of a folder's counts after an update
-  is still to be put to them.
+  was put to them on 2026-11-22 (ADR 0048) and answered (ADR 0049).
 - [ADR 0047](docs/adr/0047-the-runtime-built-as-pcsx2s-releases-are-and-with-a-profile-of-play.md):
   the maintainer's answers of 2026-11-22 to what that measurement found
   ("1. Yes", "2. Yes", "3. Yes", "4. Yes, write the text, I'll change it",
@@ -933,6 +959,40 @@ Decisions:
   to date. The session's choices, for the maintainer to decide otherwise: the
   tree the folder is made from is built so, the development tree as before;
   stock PCSX2 is timed on a runtime of a tree of its own.
+- [ADR 0048](docs/adr/0048-a-games-folder-of-an-earlier-version-is-brought-up-to-date-by-the-wizard.md):
+  how a game's folder made with an earlier PS2Native is brought up to date
+  (the maintainer's "7. Ok do it", ADR 0047; the rest the session's choices,
+  for the maintainer to decide otherwise). The wizard does it, at the user's
+  word: "Games made earlier..." in its first step lists the games of its own
+  `games` folder and of any folder the user adds, with how each one's programs
+  stand to this PS2Native's, and gives those ticked this version's runtime,
+  launcher and toolchain, nothing else of the folder touched. The game then
+  compiles itself again before it next starts, by its own recompile, whose
+  window says why. `programs.txt` in a folder says which PS2Native's its
+  programs are (0.1's folders do not say, and are earlier ones; a later
+  version's folder is left as it is); nothing is changed while the game runs
+  or compiles. The version is 0.2 from this work on. Put to the maintainer
+  with a measurement (ADR 0046's point 6), and answered "3. Yes" (ADR 0049):
+  a folder brought up to date with another toolchain counts its profile once
+  more after a session.
+- [ADR 0049](docs/adr/0049-0-2-is-released-a-folder-brought-up-to-date-counts-once-more-linuxs-speed-after-it.md):
+  the maintainer's answers of 2026-11-22 to what was built for 0.2 ("1. Yes",
+  "2. Yes, prepare the release", "3. Yes", "4. Do all seven", "5. After").
+  Committed and pushed. 0.2 is released from that commit as ADR 0042 has a
+  release made: both downloads from the committed and pushed tree, the runtime
+  built with link-time optimization and the profile of play, the release a
+  draft on GitHub with its notes, which the maintainer reads and publishes. A
+  folder brought up to date with another toolchain counts its profile once
+  more after a session. The session brings the maintainer's own game folders
+  up to date, the six on Windows and the one inside WSL. Why a compiled game
+  takes more than stock PCSX2's time on Linux (Jak and Daxter 1.05 under WSL
+  2) is looked for after 0.2 is out. The session's choices, for the maintainer
+  to decide otherwise: 0.2 is a pre-release, as 0.1 is; the profile of play is
+  the one made on 2026-11-22, the runtime's source unchanged since; the
+  maintainer's folders get the release's own programs, the session has each
+  compile its game and runs the start of a session again, and what each counts
+  waits for a session of the maintainer's; the website's downloads stay 0.1's
+  until 0.2 is published.
 
 ## Layout, build and test
 
@@ -978,7 +1038,8 @@ host/                     ps2n-host: console frontend for the PCSX2 core, the te
 wizard/                   ps2n-wizard, the application a game is made with (Phase 4, step P4.5; ADR 0032):
                           its five steps (wizard_window.cpp), the recompile (pipeline.cpp), the game's folder
                           (package.cpp), PCSX2's archive of patches fetched or given where PCSX2 is not installed
-                          (patches.cpp; step P4.8); and ps2n-remake (remake_main.cpp; step P4.6, ADR 0034), the same
+                          (patches.cpp; step P4.8), the games made with an earlier PS2Native brought up to date
+                          (update_window.cpp; ADR 0048); and ps2n-remake (remake_main.cpp; step P4.6, ADR 0034), the same
                           recompile in a small window of its own, with which a game's folder compiles what its
                           sessions met for the first time itself, after a session and before the game starts (ADR
                           0040); a game's launcher on Linux (launcher_main.cpp, Qt's
@@ -1006,7 +1067,7 @@ docs/                     brief, assessment, decisions (adr/), proof-of-concept 
                           proposal and log (app-log.md); and the website,
                           which GitHub Pages serves from this folder: index.html, 404.html, .nojekyll, site/
                           (site/README.md says what belongs to it and where each of its numbers comes from)
-version.txt               PS2Native's version (0.1), which the build gives the programs as ps2n_version.h (ADR 0042;
+version.txt               PS2Native's version (0.2), which the build gives the programs as ps2n_version.h (ADR 0042;
                           not VERSION: the root is on the include path, and Windows would find it for <version>)
 build/, deps/             build trees and downloaded dependency packages; git-ignored
 ```
@@ -1103,17 +1164,31 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   playing games and stay in the build tree. At the maintainer's word (ADR
   0047) a release's runtime is built with both, so the tree the folder is
   made from is: `build.ps1 -BuildDir build\windows-clang-module -RuntimeLto on
-  -RuntimePgo use -RuntimePgoData build\pgo\runtime-windows.profdata` (the
-  profile of 2026-11-21, to be made again for a release from the tree
-  released); the development tree, `build\windows-clang`, stays without
-  either. Stock PCSX2 is timed built as its releases are, on a runtime of a
-  tree of its own with link-time optimization and no profile (built so it
-  takes 1.5 to 4% less time than built as the trees are by default), never on
-  the runtime with the profile. With a runtime built with link-time
-  optimization the three comparisons of two runs of `dma/vif/stcycl` are
-  disabled, for a defect of PCSX2's that makes its runs differ there
-  (`tests/same-as-stock-known-differences.cmake`); they run in the
-  development tree. `build\measure\rpgo.ps1` is the trial that measured both.
+  -RuntimePgo use -RuntimePgoData build\pgo\runtime-windows.profdata`; the
+  development tree, `build\windows-clang`, stays without either. The profile
+  is made again for a release, from the tree released, by
+  `scripts\windows\runtime-profile.ps1 -Bios <BIOS image>`
+  (`scripts/linux/runtime-profile.sh`): the runtime built to count in
+  `build\windows-clang-count`, the training runs of `build\pgo\training.txt`
+  (one to a line: a name, the disc image, a game's folder whose modules the
+  run takes, a session to run again or `-`, the frames; a session that is
+  timed against stock PCSX2 never among them) each through `game.ps1
+  -Modules <game folder>`, and the counts merged sparse; about 10 minutes on
+  Windows, 18 on Linux under WSL 2, where each game's folder has to be one
+  made on Linux. The build gives the compiler a copy of the profile named
+  after what it holds, so a profile made again under the same name is
+  compiled with (what was compiled with two profiles does not link). `kit.ps1`
+  and `kit.sh` say how the tree's runtime was built, and warn when it is not a
+  release's. Stock PCSX2 is timed built as its releases are, on the runtime of
+  a tree of its own with link-time optimization and no profile (`build.ps1
+  -BuildDir build\windows-clang-stock -Module on -RuntimeLto on -RuntimePgo
+  off`; built so it takes 1.5 to 4% less time than built as the trees are by
+  default), never on the runtime with the profile. With a runtime built with
+  link-time optimization the three comparisons of two runs of
+  `dma/vif/stcycl` are disabled, for a defect of PCSX2's that makes its runs
+  differ there (`tests/same-as-stock-known-differences.cmake`); they run in
+  the development tree. `build\measure\rpgo.ps1` is the trial that measured
+  both, `build\measure\batch26.ps1` the measurement as 0.2 has it.
 - The compiled code in modules of its own (Phase 4, steps P4.1 and P4.2):
   `scripts\windows\build.ps1 -BuildDir build\windows-clang-module -Module on`
   with the main tree's game settings builds everything the host would hold
@@ -1197,7 +1272,10 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   modules in that order (ADR 0044: `/ORDER` on Windows,
   `--symbol-ordering-file` on Linux), a session that ran new ones having
   the modules linked again. Once for a game, after a session of at least
-  3 minutes (10,800 frames), `ps2n-remake` then compiles the game for how its
+  3 minutes of the game's own time (9,000 frames where the console shows the
+  game at 50 frames a second, 10,800 at 60: the runtime writes a session's
+  `frames-a-second` down when it ends, ADR 0047; a session written down before
+  it did is taken for one at 60), `ps2n-remake` then compiles the game for how its
   user plays it, in the same window (ADR 0045): the modules compiled to count
   (`work\count`), the session's first 3 minutes run again with them by the
   folder's runtime without a window (`-modules`, `-module-counts`,
@@ -1207,7 +1285,21 @@ build/, deps/             build trees and downloaded dependency packages; git-ig
   folder's objects), the counts kept in `captures\profile.profdata`, which
   every compile after takes. Later puts it off to another session's end; a
   game started meanwhile stops it (`work\stop-profile`); when it fails,
-  `work\count\failed.txt` says why and it is not tried again. The game never starts with anything left to compile: before the
+  `work\count\failed.txt` says why and it is not tried again. A game's folder
+  made with an earlier PS2Native is brought up to date by the wizard (ADR
+  0048; `wizard/update_window.cpp`, `BringUpToDate` in `wizard/package.cpp`):
+  "Games made earlier..." in its first step lists the games of the folder's
+  own `games` and of any folder added, and gives those ticked this
+  PS2Native's runtime, launcher and toolchain; `programs.txt` in a game's
+  folder says which PS2Native's its programs are (the version, and a
+  fingerprint of the runtime and toolchain they were copied from; a folder
+  `make-game.ps1` made says nothing, and is listed as an earlier one's). The
+  folder's own recompile then compiles the game again before its next start
+  (the toolchain being another), saying why (`work\brought-up-to-date.txt`),
+  and, where the folder had its counts, counts once more after a session
+  (`work\count-again.txt`). For checks, `ps2n-wizard --update <folder>` does
+  it without a window, a line written for each game, and `--updates <folder>
+  --shots <folder> [--auto]` opens the window and saves it as a picture. The game never starts with anything left to compile: before the
   runtime, the launcher runs `ps2n-remake --before-play`, which compiles
   what is left in the same window (and waits for a compile already
   running), and starts the game only when it ends with 0; Later there

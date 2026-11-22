@@ -158,7 +158,11 @@ param(
     # The runtime of a game's folder (scripts\windows\kit\make-game.ps1: games\<name>\ps2n-host.exe, the
     # game's modules beside it) in the place of the build tree's, to run a packaged game as it is, a session
     # run again among them (step P4.4). The run's files are in the build tree all the same.
-    [string]$Runtime = ''
+    [string]$Runtime = '',
+    # A folder the host loads the modules of compiled code from, in the place of its own (ps2n-host -modules): a
+    # game's folder, for the host of a build tree that makes modules, as the runtime built to count what it runs
+    # (scripts\windows\runtime-profile.ps1). Nothing is written into that folder.
+    [string]$Modules = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -351,6 +355,7 @@ if ($Replay) {
         $arguments = $arguments | ForEach-Object { if ($_ -like '-DFRAMES=*') { "-DFRAMES=$Frames" } else { $_ } }
     }
 }
+if ($Modules) { $arguments += "-DMODULES=$(ForCMake (Resolve-Path -LiteralPath $Modules).Path)" }
 if ($TimeProfile) { $arguments += '-DPROFILE=1' }
 if ($FunctionsRan) { $arguments += '-DFUNCTIONS_RAN=1' }
 if ($SampleProfile) { $arguments += '-DSAMPLE_PROFILE=1' }

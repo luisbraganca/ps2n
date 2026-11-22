@@ -9,6 +9,7 @@
 //   ps2n-wizard [--kit <folder>] [--image <disc image>] [--bios <BIOS image>]
 //               [--shots <folder>] [--auto [--until <step>]]
 //               [--without-pcsx2 [--fetch-patches]]
+//               [--update <folder> | --updates <folder>]
 //
 // --kit names the folder kit.ps1 made, where this program is not in it (a
 // build tree). --image and --bios fill the first two steps in; --shots saves
@@ -17,9 +18,16 @@
 // the step --until names (1 to 5); --without-pcsx2 does not look for an
 // installed PCSX2's archive of patches, as on a computer without PCSX2, and
 // --fetch-patches then fetches it as if the user had asked: for checks.
+// --update brings the games made earlier at a folder (a game's folder, or one
+// that holds games) up to date without a window, a line written for each, and
+// ends with 0 when none failed; --updates opens the window of the games made
+// earlier with those of that folder listed too, saved into --shots, and with
+// --auto brings them up to date, saves it again and closes: for checks
+// (update_window.h, docs/adr/0048).
 
 #include "game_settings.h"
 #include "platform.h"
+#include "update_window.h"
 #include "wizard_window.h"
 
 #include "common/MemorySettingsInterface.h"
@@ -52,7 +60,7 @@ int main(int argc, char* argv[])
 	QIcon::setThemeName(QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark ? QStringLiteral("white") :
 																									QStringLiteral("black"));
 
-	QString kit_root, image, bios, shots;
+	QString kit_root, image, bios, shots, update, updates;
 	bool automatic = false;
 	bool without_pcsx2 = false;
 	bool fetch_patches = false;
@@ -78,6 +86,10 @@ int main(int argc, char* argv[])
 			without_pcsx2 = true;
 		else if (arg == QStringLiteral("--fetch-patches"))
 			fetch_patches = true;
+		else if (arg == QStringLiteral("--update") && has_value)
+			update = arguments[++i];
+		else if (arg == QStringLiteral("--updates") && has_value)
+			updates = arguments[++i];
 	}
 
 	// The core's resources (its databases of games and of patches) beside this
@@ -105,10 +117,18 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
+	// For checks: the games made earlier at a folder brought up to date, without
+	// a window.
+	if (!update.isEmpty())
+		return ps2n::wizard::UpdateWithoutWindow(kit, QDir(update).absolutePath());
+
 	ps2n::wizard::WizardWindow window(kit);
 	if (without_pcsx2)
 		window.WithoutPcsx2(fetch_patches);
 	window.show();
-	window.Prepare(image, bios, shots, automatic, until);
+	if (!updates.isEmpty())
+		window.ShowUpdates(QDir(updates).absolutePath(), shots, automatic);
+	else
+		window.Prepare(image, bios, shots, automatic, until);
 	return app.exec();
 }

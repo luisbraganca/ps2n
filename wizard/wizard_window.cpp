@@ -7,6 +7,7 @@
 #include "patches.h"
 #include "pipeline.h"
 #include "platform.h"
+#include "update_window.h"
 
 #include "Settings/SettingsWindow.h"
 
@@ -66,15 +67,6 @@ namespace ps2n::wizard
 		QString Html(const QString& text)
 		{
 			return text.toHtmlEscaped();
-		}
-
-		// Whether PCSX2's GameDB has the game played with FullVU0SyncHack (a
-		// gamefix, which PS2Native fixes at what the GameDB says), which the
-		// recompiler decides the game's COP2 instructions with (ADR 0046).
-		bool FullVu0Sync(const std::string& serial)
-		{
-			const GameDatabaseSchema::GameEntry* game = GameDatabase::findGame(serial);
-			return game && std::find(game->gameFixes.begin(), game->gameFixes.end(), Fix_FullVU0Sync) != game->gameFixes.end();
 		}
 
 		// A path chooser: a line to type or paste a path into, and Browse.
@@ -236,6 +228,21 @@ namespace ps2n::wizard
 				form->addRow(tr("Its folder:"), m_folder);
 				layout->addLayout(form);
 				layout->addStretch(1);
+				// Games made with an earlier PS2Native, which keep the programs they
+				// were made with until they are brought up to date (docs/adr/0048).
+				auto* earlier = new QHBoxLayout;
+				m_earlier = new QLabel(this);
+				m_earlier->setWordWrap(true);
+				auto* show_earlier = new QPushButton(tr("Games made earlier..."), this);
+				earlier->addWidget(m_earlier, 1);
+				earlier->addWidget(show_earlier);
+				layout->addLayout(earlier);
+				SayEarlier();
+				connect(show_earlier, &QPushButton::clicked, this, [this]() {
+					UpdateDialog dialog(s().kit, this);
+					dialog.exec();
+					SayEarlier();
+				});
 
 				connect(browse, &QPushButton::clicked, this, [this]() {
 					const QString file = QFileDialog::getOpenFileName(this, tr("The game's disc image"), QString(),
@@ -373,6 +380,18 @@ namespace ps2n::wizard
 				emit completeChanged();
 			}
 
+			// How many of this folder's games have an earlier PS2Native's programs.
+			void SayEarlier()
+			{
+				const int earlier = GamesMadeEarlier(s().kit, QDir(s().kit.root).filePath(QStringLiteral("games")));
+				m_earlier->setText(
+					earlier == 0 ? tr("A game made with an earlier PS2Native can be brought up to date with this one.") :
+					earlier == 1 ? tr("<b>One game in this folder was made with an earlier PS2Native.</b> It can be brought up to date.") :
+								   tr("<b>%1 games in this folder were made with an earlier PS2Native.</b> They can be brought up to date.")
+									   .arg(earlier));
+			}
+
+			QLabel* m_earlier;
 			QLineEdit* m_path;
 			QString m_chosen; // what m_path had when it was last recognized
 			QLabel* m_found;
@@ -757,6 +776,18 @@ namespace ps2n::wizard
 	{
 		m_state.patch_archive = QDir(m_state.kit.root).filePath(QStringLiteral("patches/patches.zip"));
 		m_state.fetch_patches_unasked = fetch_patches;
+	}
+
+	void WizardWindow::ShowUpdates(const QString& add, const QString& shots, bool automatic)
+	{
+		auto* dialog = new UpdateDialog(m_state.kit, this);
+		dialog->setAttribute(Qt::WA_DeleteOnClose);
+		if (!add.isEmpty())
+			dialog->Add(add);
+		dialog->Check(shots, automatic);
+		if (automatic)
+			connect(dialog, &QDialog::finished, this, []() { QApplication::exit(0); });
+		dialog->open();
 	}
 
 	void WizardWindow::Prepare(const QString& image, const QString& bios, const QString& shots, bool automatic, int until)

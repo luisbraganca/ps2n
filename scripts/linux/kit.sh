@@ -67,6 +67,13 @@ if [ ! -x "$llvm/bin/clang" ] || [ ! -x "$llvm/bin/ld.lld" ]; then
 	echo "LLVM's own $llvm_version is not in $llvm (scripts/linux/build.sh says where it comes from)." >&2
 	exit 1
 fi
+# How the tree's runtime was built: a release's has link-time optimization and a profile of play (docs/adr/0047).
+runtime_lto="$(grep -cE '^PS2N_RUNTIME_LTO:BOOL=ON$' "$build/CMakeCache.txt" || true)"
+runtime_pgo="$(sed -nE 's/^PS2N_RUNTIME_PGO:[A-Z]+=(.*)$/\1/p' "$build/CMakeCache.txt" | head -1)"
+if [ "$runtime_pgo" = "generate" ]; then
+	echo "$build has a runtime built to count what it runs (--runtime-pgo generate): that is for training runs, not for a folder." >&2
+	exit 1
+fi
 for tool in patchelf ldd readelf strip dpkg-query curl sha256sum xz; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		echo "Missing tool: $tool" >&2
@@ -496,6 +503,10 @@ cp "$root/scripts/linux/kit/README.txt" "$out/README.txt"
 echo "The folder is ready in $out:"
 du -sh "$runtime" "$toolchain" "$out" | sed "s|$root/||"
 echo "Taken from $system: $(printf '%s\n' "${!from_system[@]}" | sort | tr '\n' ' ')"
+echo "Its runtime is built $([ "$runtime_lto" = 1 ] && echo with || echo without) link-time optimization and $([ "$runtime_pgo" = "use" ] && echo with || echo without) a profile of play."
+if [ "$runtime_lto" != 1 ] || [ "$runtime_pgo" != "use" ]; then
+	echo "Warning: a release's runtime is built with both (docs/adr/0047: scripts/linux/runtime-profile.sh, then build.sh --runtime-lto on --runtime-pgo use). Games play slower with this one."
+fi
 
 if [ "$archive" = 1 ]; then
 	jobs="$(( ($(nproc) + 1) / 2 ))"

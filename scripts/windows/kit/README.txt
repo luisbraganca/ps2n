@@ -69,6 +69,23 @@ nothing and shows nothing. Making the game again with PS2Native.exe from the
 same disc image compiles it too, and keeps the folder's settings, its memory
 cards and its sessions.
 
+Once for a game, after a session of at least 3 minutes, the game also compiles
+itself for how you play it, in the same window: the first 3 minutes of that
+session are run again out of sight, counting what the game's code does most,
+and the game is compiled again with what was counted (several minutes, every
+processor at work). Later there puts it off to the end of another session; it
+never keeps the game from starting.
+
+A game made with an earlier PS2Native keeps the programs it was made with: its
+folder has its own copy of them. To bring it up to date, start this
+PS2Native.exe and choose "Games made earlier..." in its first step. It lists
+the games in this folder's games\, and those of any folder you add (the earlier
+PS2Native's folder, or a game's folder wherever it is), and gives those you
+tick this version's programs: the runtime, the launcher and the toolchain. The
+game then compiles itself again before it next starts, a few minutes; its
+saves, its settings and its sessions stay as they are. programs.txt in a
+game's folder says which PS2Native's its programs are.
+
 In the window: the keyboard and the first controller play; F11 or Alt+Enter
 covers the screen; closing the window ends the session.
 

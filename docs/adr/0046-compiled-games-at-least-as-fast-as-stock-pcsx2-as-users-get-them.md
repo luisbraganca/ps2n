@@ -123,7 +123,12 @@ maintainer's answers: "1. Yes", "2. Yes", "3. Ok".
 Point 6 is still open. No folder has counts that an update could make stale
 yet, and users have no way to bring a folder up to date. It is put to the
 maintainer with a measurement of what counts taken before an update are still
-worth after it.
+worth after it. (Put on 2026-11-22 with that measurement,
+[ADR 0048](0048-a-games-folder-of-an-earlier-version-is-brought-up-to-date-by-the-wizard.md),
+and answered:
+[ADR 0049](0049-0-2-is-released-a-folder-brought-up-to-date-counts-once-more-linuxs-speed-after-it.md).
+A folder brought up to date with another toolchain counts once more after a
+session.)
 
 What the third answer's measurement found, and what the maintainer decided
 with it on 2026-11-22, is

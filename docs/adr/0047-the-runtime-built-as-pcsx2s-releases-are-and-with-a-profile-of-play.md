@@ -26,7 +26,8 @@ itself: link-time optimization, and a profile of play") found:
   no run ran (`llvm-profdata merge -sparse`), which the compiler then takes as
   it does without a profile.
 - **A game the profile never saw gets nearly all of it:** trained without a
-  game's runs, the runtime gave that game within 1% of the same time.
+  game's runs, the runtime gave that game from 1.1% less to 1.2% more time
+  than trained with them, which is the spread of the rounds.
 - **A game's first session,** where its code is interpreted, takes 11.1% less
   time (Gran Turismo 3's: 68.7 s where 77.2 s).
 - **What it costs:** about 8 minutes for a release on each system, on the

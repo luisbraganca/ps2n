@@ -37,12 +37,18 @@
 //                                 replay runs packaged with them in its data folder
 //   41 pad FFFF7F7F7F7F00000000000000000000FF00   at frame 41, the 18 bytes
 //   50 state 0123456789ABCDEF     at the start of frame 50, the registers' fingerprint
+//   frames-a-second 50            what the console showed most of its frames at, in the
+//                                 mode the game had it in: 50 (PAL) or 60. With it a
+//                                 game's folder tells how long the session was in the
+//                                 game's own time (ps2n-remake, docs/adr/0047)
 //   end 8358                      the number of frames the session ran
 //
 // A session written down before the patches were (2026-11-15) has no
 // patches line: it is run again with none unless it is given them. One
 // written down before the BIOS's images were (2026-11-17) has no bios-roms
-// line: it is run again with whatever is beside the BIOS image given.
+// line: it is run again with whatever is beside the BIOS image given. One
+// written down before the frames a second were (2026-11-22) has no such
+// line: a game's folder takes it for one at 60.
 #pragma once
 
 #include <array>

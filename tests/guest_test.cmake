@@ -138,6 +138,9 @@
 #              (ps2n-host -mark, once each), a list: to time parts of a run
 #   FAST_CORES keep the run on the processor's fastest cores, so that its time
 #              repeats (ps2n-host -fast-cores): for runs that are timed
+#   MODULES    a folder the host loads the modules of compiled code from, in the
+#              place of its own (ps2n-host -modules): a game's folder, for a host
+#              of a build tree that makes modules
 #   SYNC       also write sync.txt in the scratch directory: the run's record of
 #              sync points (ps2n-host -sync), which a stock run can write too
 #   SYNC_AGAINST  the sync.txt of an earlier run, to compare this run with; what
@@ -481,6 +484,11 @@ if(DEFINED MARKS)
 endif()
 if(DEFINED FAST_CORES AND FAST_CORES)
 	list(APPEND limits -fast-cores)
+endif()
+# The modules of compiled code from another folder than the host's own (a
+# game's folder, with another runtime than its own: game.ps1 -Modules).
+if(DEFINED MODULES AND NOT "${MODULES}" STREQUAL "")
+	list(APPEND limits -modules "${MODULES}")
 endif()
 
 # PS2Native's VU provider, in the runs PS2Native makes (never the stock run

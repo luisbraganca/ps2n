@@ -88,6 +88,8 @@ add_executable(ps2n-wizard WIN32
 	"${CMAKE_CURRENT_LIST_DIR}/platform.h"
 	"${CMAKE_CURRENT_LIST_DIR}/settings_window.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/stand_ins.cpp"
+	"${CMAKE_CURRENT_LIST_DIR}/update_window.cpp"
+	"${CMAKE_CURRENT_LIST_DIR}/update_window.h"
 	"${CMAKE_CURRENT_LIST_DIR}/wizard_window.cpp"
 	"${CMAKE_CURRENT_LIST_DIR}/wizard_window.h"
 	"${CMAKE_CURRENT_LIST_DIR}/pcsx2-qt/MainWindow.h"

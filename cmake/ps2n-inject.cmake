@@ -66,8 +66,25 @@ elseif(PS2N_RUNTIME_PGO STREQUAL "use")
 	if(NOT EXISTS "${PS2N_RUNTIME_PGO_DATA}")
 		message(FATAL_ERROR "PS2N_RUNTIME_PGO=use needs PS2N_RUNTIME_PGO_DATA, a merged profile: ${PS2N_RUNTIME_PGO_DATA}")
 	endif()
+	# The compiler is given a copy of the profile in the build tree, named
+	# after what it holds: a profile made again under the same name is then
+	# another file to every compile command, and everything the runtime is
+	# built from is compiled again with it. (What was compiled with two
+	# profiles does not link: with link-time optimization the linker refuses
+	# modules whose profile summaries differ.) The copy also has CMake run
+	# again when the profile changes.
+	file(SHA256 "${PS2N_RUNTIME_PGO_DATA}" ps2n_runtime_pgo_hash)
+	string(SUBSTRING "${ps2n_runtime_pgo_hash}" 0 16 ps2n_runtime_pgo_hash)
+	set(ps2n_runtime_pgo_copy "${CMAKE_BINARY_DIR}/ps2n-runtime-profile/${ps2n_runtime_pgo_hash}.profdata")
+	file(GLOB ps2n_runtime_pgo_copies "${CMAKE_BINARY_DIR}/ps2n-runtime-profile/*.profdata")
+	foreach(copy IN LISTS ps2n_runtime_pgo_copies)
+		if(NOT copy STREQUAL ps2n_runtime_pgo_copy)
+			file(REMOVE "${copy}")
+		endif()
+	endforeach()
+	configure_file("${PS2N_RUNTIME_PGO_DATA}" "${ps2n_runtime_pgo_copy}" COPYONLY)
 	set(PS2N_RUNTIME_COMPILE_OPTIONS
-		"$<$<COMPILE_LANGUAGE:C,CXX>:-fprofile-use=${PS2N_RUNTIME_PGO_DATA}>"
+		"$<$<COMPILE_LANGUAGE:C,CXX>:-fprofile-use=${ps2n_runtime_pgo_copy}>"
 		"$<$<COMPILE_LANGUAGE:C,CXX>:-Wno-profile-instr-unprofiled>"
 		"$<$<COMPILE_LANGUAGE:C,CXX>:-Wno-profile-instr-out-of-date>")
 elseif(NOT PS2N_RUNTIME_PGO STREQUAL "")
@@ -83,7 +100,7 @@ if(PS2N_RUNTIME_LINK_OPTIONS)
 	add_link_options(${PS2N_RUNTIME_LINK_OPTIONS})
 endif()
 if(PS2N_RUNTIME_LTO OR PS2N_RUNTIME_PGO)
-	message(STATUS "PS2Native: the runtime is built with link-time optimization: ${PS2N_RUNTIME_LTO}; with a profile: ${PS2N_RUNTIME_PGO} ${PS2N_RUNTIME_PGO_DATA}")
+	message(STATUS "PS2Native: the runtime is built with link-time optimization: ${PS2N_RUNTIME_LTO}; with a profile: ${PS2N_RUNTIME_PGO} ${PS2N_RUNTIME_PGO_DATA} ${ps2n_runtime_pgo_hash}")
 endif()
 
 # Takes a target that is not the runtime out of what the runtime is built

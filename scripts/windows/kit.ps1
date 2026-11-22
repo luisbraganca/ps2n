@@ -57,6 +57,10 @@ $remakeExe = Join-Path $build 'ps2n\bin\ps2n-remake.exe'
 $implib = Join-Path $build 'ps2n-host.lib'
 $recomp = Join-Path $root 'build\tools-windows\bin\ps2n-recomp.exe'
 foreach ($needed in $hostExe, $launcherExe, $implib, $recomp) { if (-not (Test-Path $needed)) { throw "Build first: $needed is missing." } }
+# How the tree's runtime was built: a release's has link-time optimization and a profile of play (docs\adr\0047).
+$runtimeLto = [bool](Select-String -LiteralPath $cache -Pattern '^PS2N_RUNTIME_LTO:BOOL=ON$' -Quiet)
+$runtimePgo = "$(Select-String -LiteralPath $cache -Pattern '^PS2N_RUNTIME_PGO:[A-Z]+=(.*)$' | Select-Object -First 1 | ForEach-Object { $_.Matches[0].Groups[1].Value })"
+if ($runtimePgo -eq 'generate') { throw "$BuildDir has a runtime built to count what it runs (-RuntimePgo generate): that is for training runs, not for a folder." }
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -417,3 +421,8 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'kit\make-game.ps1'), (Join-Path
 $size = (Get-ChildItem $kit -Recurse -File | Where-Object { $_.FullName -notlike (Join-Path $kit 'games*') } | Measure-Object Length -Sum).Sum
 Write-Host ("The folder is ready in {0}: {1:N0} bytes; runtime: {2}" -f $kit, $size,
     ((Get-ChildItem $runtime -File -Filter *.dll | ForEach-Object Name) -join ', '))
+Write-Host ("Its runtime is built {0} link-time optimization and {1} a profile of play." -f $(if ($runtimeLto) { 'with' } else { 'without' }),
+    $(if ($runtimePgo -eq 'use') { 'with' } else { 'without' }))
+if (-not ($runtimeLto -and $runtimePgo -eq 'use')) {
+    Write-Host "Warning: a release's runtime is built with both (docs\adr\0047: scripts\windows\runtime-profile.ps1, then build.ps1 -RuntimeLto on -RuntimePgo use). Games play slower with this one."
+}

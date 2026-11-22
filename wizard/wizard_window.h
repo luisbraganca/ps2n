@@ -61,6 +61,12 @@ namespace ps2n::wizard
 		// if the user had asked.
 		void WithoutPcsx2(bool fetch_patches);
 
+		// For checks: the window of the games made earlier (update_window.h)
+		// opened as its button opens it, the game folders at `add` listed with
+		// this folder's own; saved as a picture into `shots`, and with `automatic`
+		// those ticked brought up to date, saved again, and the wizard closed.
+		void ShowUpdates(const QString& add, const QString& shots, bool automatic);
+
 	private:
 		State m_state;
 	};

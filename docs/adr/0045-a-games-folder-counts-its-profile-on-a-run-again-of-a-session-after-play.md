@@ -97,7 +97,12 @@ otherwise:
   time counting (above).
 - **Which 3 minutes.** 10,800 frames (3 minutes at 60 a second); the session
   counted is the newest that lasted that long, its first 10,800 frames run
-  again.
+  again. (Changed on 2026-11-22 at the maintainer's word,
+  [ADR 0047](0047-the-runtime-built-as-pcsx2s-releases-are-and-with-a-profile-of-play.md):
+  3 minutes of the game's own time, 9,000 frames where the console shows the
+  game at 50 frames a second, as a European game's. The runtime writes a
+  session's frames a second down when it ends; a session written down before
+  it did is taken for one at 60.)
 - **How it is run again.** By the folder's own runtime with the folder's own
   options but a window's, on copies of what the session began with (memory
   cards, the console's NVRAM, the BIOS's images, the game's settings and

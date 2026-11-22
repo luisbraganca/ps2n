@@ -5,6 +5,7 @@
 #include "pcsx2/PrecompiledHeader.h"
 
 #include "pcsx2/Common.h"
+#include "pcsx2/GS.h"
 #include "pcsx2/R3000A.h"
 #include "pcsx2/R5900.h"
 #include "pcsx2/Recording/PadData.h"
@@ -42,6 +43,11 @@ namespace ps2n::host::session
 		bool s_have_last = false;
 		uint32_t s_changes = 0;
 		uint32_t s_written_fingerprints = 0;
+		// How many of the session's frames the console showed at 50 a second
+		// (its PAL modes) and at 60 (every other mode); those before the BIOS
+		// has set a mode are neither.
+		uint32_t s_frames_at_50 = 0;
+		uint32_t s_frames_at_60 = 0;
 
 		bool s_replaying = false;
 		std::string s_replay_path;
@@ -238,6 +244,12 @@ namespace ps2n::host::session
 				info->packaged = true;
 				good = true;
 			}
+			else if (words[0] == "frames-a-second" && words.size() == 2)
+			{
+				// How long the session was, for a game's folder (ps2n-remake): a
+				// replay has no use for it.
+				good = StringUtil::FromChars<u32>(words[1]).has_value();
+			}
 			else if (words.size() == 3)
 			{
 				const std::optional<u32> frame = StringUtil::FromChars<u32>(words[0]);
@@ -274,6 +286,24 @@ namespace ps2n::host::session
 	{
 		if (s_record)
 		{
+			// The console's frames a second in the mode the game has it in (the
+			// rates of pcsx2/Counters.cpp, GetVerticalFrequency, as the console
+			// has them, whatever the user's own frame-rate settings).
+			switch (gsVideoMode)
+			{
+				case GS_VideoMode::Uninitialized:
+				case GS_VideoMode::Unknown:
+					break;
+				case GS_VideoMode::PAL:
+				case GS_VideoMode::DVD_PAL:
+				case GS_VideoMode::SDTV_576P:
+					s_frames_at_50++;
+					break;
+				default:
+					s_frames_at_60++;
+					break;
+			}
+
 			// Taken in at the previous frame boundary, read by the game since.
 			PadBytes now;
 			if (ReadPad(&now) && (!s_have_last || now != s_last))
@@ -324,6 +354,11 @@ namespace ps2n::host::session
 		std::vector<std::string> lines;
 		if (s_record)
 		{
+			// What most of its frames were shown at: how long the session was
+			// in the game's own time (a game's folder counts its profile after
+			// one of 3 minutes, docs/adr/0047).
+			if (s_frames_at_50 != 0 || s_frames_at_60 != 0)
+				std::fprintf(s_record, "frames-a-second %d\n", s_frames_at_50 > s_frames_at_60 ? 50 : 60);
 			std::fprintf(s_record, "end %u\n", frames);
 			std::fclose(s_record);
 			s_record = nullptr;
