@@ -55,6 +55,30 @@ The session's choices, for the maintainer to decide otherwise:
   everything of them.
 - **Linux is moved and tested too,** inside WSL, as every change is.
 
+## Done the same morning
+
+[docs/app-log.md](../app-log.md), "Moved", "The tree a release is made from,
+built again whole" and "The maintainer's three new games made ready", has
+every number.
+
+- Moved on both systems, every test passing (543 and 541 on Windows, 543 and
+  540 on Linux, none skipped), committed and pushed; ADR 0053's worktrees and
+  branch removed.
+- Found on the way: after the dependency package was swapped under the
+  existing trees, their builds mixed objects compiled against both packages,
+  and the wizard so built crashed on every new game. The trees were built
+  again from nothing; the wizard then ran clean. The maintainer's PS2Native
+  folder was made again from that tree.
+- The three games made by that wizard into the maintainer's folder, with every
+  default: Resident Evil – Code: Veronica X, Secret Agent Clank, SSX Tricky.
+  On copies of their folders, each played as its launcher plays it, compiled
+  what its first session met, and played again on compiled code; each went
+  from its first screens into its menus (two of them into a new game and a
+  race); and against stock PCSX2 over their first 1,800 frames, two are the
+  stock run at every sync point, and Secret Agent Clank at the same place at
+  the same time at every one, VU0's FBRST aside, where PS2Native follows the
+  console on purpose, as for Agent Under Fire.
+
 ## Consequences
 
 - PS2Native no longer reproduces a defect of PCSX2's: the count register's

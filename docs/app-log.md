@@ -4683,4 +4683,84 @@ they're all ready" (ADR 0054). In the main tree (`build\measure\p189-03.ps1`):
 - **Both trees built again and tested:** the development tree in 234 s, 543
   of 543; the IOP self-test's capture made again (19 s); the tree a release is
   made from in 272 s, 541 of 544, the three comparisons of `dma/vif/stcycl`
-  disabled as before. None skipped.
+  disabled as before. None skipped. (Both were built again whole after the
+  commit: below.)
+- **Committed and pushed** at the maintainer's "2. Yes" (`6bc8a40`).
+- **Inside WSL** (`build\measure\p189-move.sh`): `~/ps2n` at the commit, its
+  PCSX2 at v2.9.189 (fetched from the worktree's clone of it); its Linux
+  dependencies as they were. The development tree 543 of 543, the IOP
+  self-test's capture made again, the tree a release is made from 540 of 543
+  (the same three disabled); none skipped.
+- **ADR 0053's worktrees and branch removed** on both systems, once the main
+  trees had everything of them (on Windows its two links to the main tree's
+  LLVM and Qt sources taken away first, by themselves).
+
+### The tree a release is made from, built again whole (2026-11-23)
+
+The wizard of the maintainer's PS2Native folder, made again from that tree,
+crashed (heap corruption, 0xC0000374) on all three new games: at or after its
+settings step, Resident Evil – Code: Veronica X's folder made before it did,
+the other two leaving empty folders. 0.3's own wizard took the same disc
+through its settings step without a fault, the new one crashed there on Jak
+and Daxter too, and the wizard built the night before in ADR 0053's worktree
+had made Jak and Daxter whole. The cause was the build, not PCSX2: swapping
+the dependency package under the existing trees recompiled only what PCSX2 or
+PS2Native had changed (ninja does not track the package's headers, and 7-Zip
+gives its files the archive's dates, older than the objects), so the trees
+mixed objects compiled against both packages. The tests still passed; the
+wizard did not. Windows' crash dumps, read with dbghelp
+(`build\measure\dumpstack.ps1`), showed the corruption found when one of the
+wizard's group boxes was deleted at a change of step.
+
+Built again from nothing with its settings (`build\measure\p189-06.ps1`), the
+tree passes 541 of 544 again; the development tree, cleaned and built again,
+543 of 543. (A `cmake --build --target clean` had lost the release tree's
+settings, and the build after it had made a default tree; that one went
+nowhere.) The new wizard then takes Secret Agent Clank and Jak and Daxter
+through its settings step without a fault. The maintainer's PS2Native folder
+was made again from that tree; the three folders the crashed runs had left in
+its `games` were removed, and the crash dumps Windows had kept of them.
+Nothing in the commit changes: no binary is in the repository.
+
+### The maintainer's three new games made ready (2026-11-23)
+
+Each made by the wizard of their PS2Native folder (`build\kit`) from its disc
+image with every default, as they would make it (`build\measure\games3.ps1`):
+
+| Game | Serial | Made in | PCSX2's patches |
+|---|---|---:|---|
+| Resident Evil – Code: Veronica X | `SLUS-20184` | 43 s | its widescreen patch, applied; three other groups, not |
+| Secret Agent Clank | `SCUS-97623` | 58 s | none |
+| SSX Tricky | `SLUS-20326` | 61 s | none; PCSX2's game database rounds its EE's FPU to nearest |
+
+They are the first discs from the USA PS2Native has run, on the maintainer's
+European BIOS. Their folders are as the wizard made them; each was checked on
+a copy (`build\measure\kit-new3`):
+
+- **Played as its launcher plays it** (its own settings: a window, Vulkan,
+  VU1 on PCSX2's VU thread), muted, out of sight, 5,400 frames, a controller
+  script pressing START and then CROSS every 300 frames
+  (`build\measure\press-start.pad`): each ran to its end. Its first session
+  interpreted what a first session does (the IOP's code; Secret Agent Clank's
+  code it loads from its data, 4.7% of the EE's cycles, as Gran Turismo 3's);
+  the folder's own compile took it in (9, 58 and 10 s); the second session ran
+  on compiled code, the notice "code met for the first time" in none of its
+  half seconds.
+- **Pictures** (no window, every 450 frames): Resident Evil – Code: Veronica X
+  from its memory card notice through its logos, its intro film and title
+  screen to a new game's opening text; Secret Agent Clank through its logos
+  and title screen to its main menu, then a notice that a new game needs a
+  memory card (the run has none); SSX Tricky through its intro film and title
+  screen, the choice of rider, event, difficulty and venue, to a race's
+  loading screen.
+- **Against stock PCSX2** (same-as-stock, the first 1,800 frames, the same
+  input): Resident Evil – Code: Veronica X and SSX Tricky the stock run at
+  every sync point (SSX Tricky's 11,370,788), with the same picture and sound
+  hardware. Secret Agent Clank at the same place at the same time at every
+  sync point, and in every register but one: VU0's FBRST, from sync point
+  2,623,746 on, `0x404` in the stock run and `0` in the compiled one, as in
+  Agent Under Fire (docs/game-log.md, "G13"). The game resets VU0 and VU1 the
+  way Sony's library does while the register's two D-bit enables are set, and
+  PS2Native follows the console there (ADR 0005). Written out on both sides at
+  that sync point and at the run's last (`build\measure\syncdetail.ps1`), it
+  is the only register that differs.

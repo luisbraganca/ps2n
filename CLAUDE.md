@@ -377,10 +377,19 @@ will, after. Make sure they're all ready") PS2Native moved to it on
 tree, PCSX2's Windows dependency package of 2026-11-21 in `deps` (the earlier
 one beside it as `deps\windows-x64-2.9.170`), the places that name the version
 PS2Native follows saying v2.9.189, every test passing in the main trees as in
-the branch's; committed and pushed. The maintainer's three games PS2Native
-had never run (Resident Evil – Code: Veronica X, Secret Agent Clank, SSX
-Tricky) are to be made ready for them to try, each with the wizard into their
-own PS2Native folder and checked on a copy.
+the branch's; committed and pushed; inside WSL the same. The maintainer's three
+games PS2Native had never run (Resident Evil – Code: Veronica X, Secret Agent
+Clank, SSX Tricky, the first discs from the USA it has run) were made ready
+for them to try the same morning: each made by the wizard of their PS2Native
+folder with every default; on a copy, each played as its launcher plays it,
+compiled what its first session met and played again on compiled code, went
+from its first screens into its menus, and over its first 1,800 frames is
+the stock run at every sync point (Secret Agent Clank in place and time, VU0's
+FBRST aside, where PS2Native follows the console as for Agent Under Fire).
+Found on the way: the trees built after the dependency package was swapped
+under them mixed objects compiled against both packages, and the wizard so
+built crashed on every new game; built again from nothing, it runs clean
+(docs/app-log.md, "The tree a release is made from, built again whole").
 docs/app-log.md,
 "Compiled games against PCSX2, as users get them" and "0.2: a game's folder
 brought up to date".**
