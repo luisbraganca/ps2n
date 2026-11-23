@@ -298,8 +298,9 @@ namespace
 					case 4: c.words[i + 1] = R(d, ValueOrZero(rng), PICK(rng, kValues), 0, 33); break; // addu x, d, y
 					default: c.words[i + 1] = Plain(rng); break;
 				}
-				// Not a pair at which PCSX2's recompiler loses the jump's target,
-				// which the provider refuses (r3000a::shape).
+				// Not a pair the provider refuses (r3000a::shape). Since PCSX2
+				// v2.9.183 there is none here: the pairs at which its recompiler
+				// lost the jump's target are among the programs now.
 				while (ps2n::r3000a::shape(&c.words[i], 2).refused)
 					c.words[i + 1] = Plain(rng);
 				i += 2;

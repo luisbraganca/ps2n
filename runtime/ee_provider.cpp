@@ -11,7 +11,7 @@
 // interpreter carries those blocks out instruction by instruction; compiled
 // code asks at every label where the block it is in ends. Each function here
 // that stands for a part of the recompiler's generated code names it (PCSX2
-// v2.9.170, pcsx2/x86, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+).
+// v2.9.189, pcsx2/x86, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+).
 //
 // An instruction is carried out with PS2Native's own semantics where those
 // exist (runtime/include/ps2n/ops_*.h). Every other instruction is carried
@@ -1104,8 +1104,11 @@ namespace
 		// How far the EE is ahead of VU0.
 		const auto ahead = []() {
 			s64 cycles = static_cast<s64>(cpuRegs.cycle - VU0.cycle);
+			// The recompiler reads 64 bits there (xSUB(rax, ptr64[&VU0.nextBlockCycles])):
+			// the field, 32 bits since PCSX2 v2.9.174, and the four bytes of padding
+			// after it, which nothing writes. So the field, zero-extended.
 			if (EmuConfig.Gamefixes.VUSyncHack || EmuConfig.Gamefixes.FullVU0SyncHack)
-				cycles -= VU0.nextBlockCycles;
+				cycles -= static_cast<u32>(VU0.nextBlockCycles);
 			return cycles;
 		};
 
@@ -2587,7 +2590,7 @@ namespace
 		cpuRegs.branch = 0;
 
 		// Compiled code continues with the next instruction unconditionally.
-		// Nothing delegated in PCSX2 v2.9.170 redirects the PC; if that ever
+		// Nothing delegated in PCSX2 v2.9.189 redirects the PC; if that ever
 		// changes, it must not go unnoticed.
 		if (cpuRegs.pc != pc + 4) [[unlikely]]
 		{

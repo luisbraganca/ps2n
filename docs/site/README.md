@@ -54,7 +54,7 @@ page.
 
 | On the page | From |
 |---|---|
-| The phases and their states | `CLAUDE.md`, "Status"; Phase 3's end and Phase 4's start, [ADR 0027](../adr/0027-phase-3-ends-phase-4-begins-with-a-design-proposal.md); Phase 4's design, [ADR 0028](../adr/0028-phase-4s-design-a-shipped-compiler-and-game-modules.md) |
+| The phases and their states | `CLAUDE.md`, "Status"; Phase 3's end and Phase 4's start, [ADR 0027](../adr/0027-phase-3-ends-phase-4-begins-with-a-design-proposal.md); Phase 4's design, [ADR 0028](../adr/0028-phase-4s-design-a-shipped-compiler-and-game-modules.md); Phase 5's start and its first check, PCSX2 2.9.189, [ADR 0053](../adr/0053-ps2native-tried-on-pcsx2s-newest-version-2-9-189.md) and app-log.md, "PCSX2 2.9.189 tried" |
 | Phase 4's first step: a game's code as a module costs no time that shows, Agent Under Fire as long as built in, every test passing | [app-log.md](../app-log.md), "P4.1" |
 | Phase 4's second step: the compiled code needs only a compiler and PS2Native's own headers, four modules, every test passing, Agent Under Fire the stock run at every point compared | [app-log.md](../app-log.md), "P4.2" |
 | Phase 4's third step: LLVM's own compiler, a folder of 254 MB, Agent Under Fire compiled from its disc image on a Windows 10 laptop with nothing else installed in about 8 minutes, the same code as the development build's, played at close to the console's pace (within 3% over the session) | [app-log.md](../app-log.md), "P4.3"; [ADR 0030](../adr/0030-the-wizards-compiler-is-llvms-own-release.md) |
@@ -108,7 +108,7 @@ page.
 | "A few percent from one build to the next" (the six loops) | game-log.md, "G10", "Where it stands (main tree, 2026-11-13)" and "The website's two charts, measured again" |
 | The six loops in the proof of concept: 1.47 and 1.15 | poc-log.md, "P4 Measurement" |
 | 63 test programs, compiled and interpreted the same | poc-log.md, the table at the top, P1 |
-| PCSX2 `v2.9.170` | [ADR 0004](../adr/0004-proof-of-concept-environment.md) |
+| PCSX2 `v2.9.189` | [ADR 0004](../adr/0004-proof-of-concept-environment.md) (`v2.9.170`), [ADR 0054](../adr/0054-ps2native-moves-to-pcsx2-2-9-189-and-the-maintainers-three-new-games-are-made-ready.md) (`v2.9.189`) |
 
 The code under "One loop, both sides" is real. The left side is what
 `ps2n-recomp disasm <bench.elf> --at 0x001000CC --count 7` prints for

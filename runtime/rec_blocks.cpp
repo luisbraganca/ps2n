@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // See rec_blocks.h. Each part names the function of PCSX2's recompiler it
-// transcribes (PCSX2 v2.9.170, pcsx2/x86, Copyright 2002-2026 PCSX2 Dev Team,
+// transcribes (PCSX2 v2.9.189, pcsx2/x86, Copyright 2002-2026 PCSX2 Dev Team,
 // GPL-3.0+).
 
 #include "rec_blocks.h"

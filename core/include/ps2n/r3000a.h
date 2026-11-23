@@ -3,7 +3,7 @@
 // The I/O processor's instructions (a MIPS R3000A), as PCSX2's IOP
 // recompiler treats them: which instruction an encoding is to it, which
 // encodings it has none for, what ends a block, and what a block costs.
-// Transcribed from PCSX2 v2.9.170 (pcsx2/x86/iR3000A.cpp, iR3000Atables.cpp,
+// Transcribed from PCSX2 v2.9.189 (pcsx2/x86/iR3000A.cpp, iR3000Atables.cpp,
 // iR3000A.h; Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+).
 //
 // Shared by PS2Native's IOP provider (runtime/iop_provider.h), which forms
@@ -362,23 +362,15 @@ namespace ps2n::r3000a
 				s.refused = "a branch or jump in a delay slot";
 			else if (slot == Op::SYSCALL || slot == Op::BREAK)
 				s.refused = "SYSCALL or BREAK in a delay slot";
-			else if (op == Op::JR || op == Op::JALR)
-			{
-				// Where the recompiler keeps the jump's target in a host register
-				// across the delay slot, and the delay slot's instruction is one
-				// for which it gives up every host register (it calls the core for
-				// it), it writes the target to the EE's registers and reads it
-				// back from the IOP's, where nothing wrote it: the IOP goes on at
-				// address 0 (rpsxJR, rpsxJALR: X86TYPE_PCWRITEBACK for
-				// X86TYPE_PSX_PCWRITEBACK). Neither that nor a guess is carried
-				// out.
-				const uint32_t jrs = rs(words[i]);
-				const uint32_t jrd = op == Op::JALR ? rd(words[i]) : 0;
-				const bool swap = op == Op::JR ? swapsDelaySlot(jrs, 0, 0, words[i + 1]) : (jrd != jrs && swapsDelaySlot(jrs, 0, jrd, words[i + 1]));
-				if (!swap && (slot == Op::LWL || slot == Op::LWR || slot == Op::SWL || slot == Op::SWR || slot == Op::GTE))
-					s.refused = "a jump through a register whose delay slot, an unaligned load or store or an instruction of the GTE's, comes "
-								"after the jump's target is taken: PCSX2's IOP recompiler loses the target there";
-			}
+			// Until PCSX2 v2.9.183 its recompiler lost a JR's or JALR's target
+			// where it kept it in a host register across the delay slot and the
+			// delay slot's instruction gave up every host register (an unaligned
+			// load or store, an instruction of the GTE's): it wrote the target
+			// to the EE's registers and read it back from the IOP's
+			// (X86TYPE_PCWRITEBACK for X86TYPE_PSX_PCWRITEBACK in rpsxJR and
+			// rpsxJALR), and the IOP went on at address 0. PS2Native refused
+			// such a pair. Corrected there, the target is the one taken before
+			// the delay slot, as everywhere else.
 			s.valid = true;
 			return s;
 		}

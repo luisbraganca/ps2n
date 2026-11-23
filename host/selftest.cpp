@@ -563,8 +563,7 @@ namespace
 		if (op == Op::MFC0 && oracle == Oracle::Interpreter && fs == 12)
 			return true;
 		// Its interpreter never lets a read of the count register find it
-		// unchanged, and does not carry the register's overflow into EntryHi as
-		// its recompiler does.
+		// unchanged.
 		if (op == Op::MFC0 && oracle == Oracle::Interpreter && fs == 9)
 			return true;
 

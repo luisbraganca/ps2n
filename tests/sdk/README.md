@@ -16,7 +16,7 @@ IOP's modules through SIF RPC, on the BIOS kernel.
 | `iop_sd` | `sdtest.irx` driving libsd | no: on a real BIOS `sdtest.irx` does not load, because nothing loads `rom0:LIBSD` first. The old project's runtime faked that module. Needs the program changed and rebuilt |
 
 Their expected outputs (`<name>.expected`) are what stock PCSX2 `v2.9.170`
-printed with its recompilers and the `SCPH-70004` BIOS: the whole output of
+printed (and `v2.9.189` prints the same) with its recompilers and the `SCPH-70004` BIOS: the whole output of
 the machine, the BIOS's own lines included, up to the program's last line.
 The old project's expected outputs are not used: they recorded what its own
 high-level runtime printed.

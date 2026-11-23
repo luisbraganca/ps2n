@@ -5,7 +5,7 @@
 // without a window.
 //
 // The Windows part follows GSRunner::CreatePlatformWindow and its message pump
-// in pcsx2-gsrunner/Main.cpp of PCSX2 v2.9.170, Copyright 2002-2026 PCSX2 Dev
+// in pcsx2-gsrunner/Main.cpp of PCSX2 v2.9.189, Copyright 2002-2026 PCSX2 Dev
 // Team, GPL-3.0+. Changes for PS2Native: the window is PS2Native's (its class,
 // its icon, its title), it follows the display's scaling, it can cover the
 // screen, and it passes on the keyboard, its size and its closing. And a

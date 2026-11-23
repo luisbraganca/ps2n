@@ -11,7 +11,7 @@
 // recompiler's code is recMFC0 and recMTC0 in pcsx2/x86/iCOP0.cpp and recSYNC,
 // recPREF and recCACHE in pcsx2/x86/iR5900Misc.cpp; the interpreter's is in
 // pcsx2/COP0.cpp, pcsx2/R5900OpcodeImpl.cpp and pcsx2/Cache.cpp (PCSX2
-// v2.9.170, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+).
+// v2.9.189, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+).
 //
 // Following the recompiler, where PCSX2's interpreter differs:
 //  - MFC0 of the status register gives the register as it was written. The
@@ -21,14 +21,14 @@
 //    processor's cache, which nothing else uses unless PCSX2's cache emulation
 //    is switched on (no configuration here does that), and for two of the
 //    cache operations it loads COP0's TagLo register from that model.
-//  - MFC0 of the count register brings the register up to date with a 64-bit
-//    addition, of which the register is the low half. The high half is the
-//    register after it, EntryHi: when the count overflows, about every
-//    fourteen seconds, EntryHi goes up by one. That is a defect of the
-//    recompiler (xADD(ptr[&cpuRegs.CP0.n.Count], rax) in recMFC0), not of
-//    the console, and the interpreter does not have it. It is reproduced
-//    because games are tested against it, and so that a run can be compared
-//    with a stock run register for register (ADR 0011).
+//  - MFC0 of the count register brings the register up to date with a 32-bit
+//    addition, as the interpreter does too. Until PCSX2 v2.9.173 the
+//    recompiler's addition was a 64-bit one, of which the count register was
+//    the low half and EntryHi, the register after it, the high half: when the
+//    count overflowed, about every fourteen seconds, EntryHi went up by one.
+//    PS2Native reproduced that defect until the PCSX2 it is built on had the
+//    correction (ADR 0013); tests/programs/countcarry.s holds it to the 32-bit
+//    addition now.
 //  - The interpreter never lets MFC0 find the count register unchanged: read
 //    twice at one cycle count, it has moved on by one. The recompiler has no
 //    such rule, and needs none: see below.
@@ -77,11 +77,9 @@ namespace ps2n::ee::ops
 		if (rd == 9)
 		{
 			// The count register is brought up to date when it is read, whether
-			// or not the value goes anywhere. The recompiler: a 64-bit addition
-			// over the count register and EntryHi, which follows it.
-			const uint64_t sum = (static_cast<uint64_t>(cpuRegs.CP0.n.EntryHi) << 32 | cpuRegs.CP0.n.Count) + (cpuRegs.cycle - cpuRegs.lastCOP0Cycle);
-			cpuRegs.CP0.n.Count = static_cast<uint32_t>(sum);
-			cpuRegs.CP0.n.EntryHi = static_cast<uint32_t>(sum >> 32);
+			// or not the value goes anywhere. The recompiler: a 32-bit addition
+			// (xADD(ptr32[&cpuRegs.CP0.n.Count], eax) in recMFC0).
+			cpuRegs.CP0.n.Count += static_cast<uint32_t>(cpuRegs.cycle - cpuRegs.lastCOP0Cycle);
 			cpuRegs.lastCOP0Cycle = cpuRegs.cycle;
 		}
 

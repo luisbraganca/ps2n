@@ -3,7 +3,7 @@
 // What compiled code reaches of PCSX2's core, described by PS2Native itself:
 // the layout of the structures it reads and writes, the numbers it uses and
 // the types of the functions of the core it calls. Transcribed from PCSX2
-// v2.9.170 (pcsx2/R5900.h, VU.h, R3000A.h, MemoryTypes.h, vtlb.h, Vif.h,
+// v2.9.189 (pcsx2/R5900.h, VU.h, R3000A.h, MemoryTypes.h, vtlb.h, Vif.h,
 // IopBios.h, Config.h, common/FPControl.h; Copyright 2002-2026 PCSX2 Dev
 // Team, GPL-3.0+), field for field, with nothing of the core's code.
 //
@@ -267,7 +267,7 @@ namespace ps2n::pcsx2
 		uint32_t macflag;
 		uint32_t statusflag;
 		uint32_t clipflag;
-		int64_t nextBlockCycles;
+		int32_t nextBlockCycles; // 32 bits since PCSX2 v2.9.174, four bytes of padding after it
 		uint8_t* Mem;
 		uint8_t* Micro;
 		uint32_t xgkickaddr;

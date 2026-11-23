@@ -18,7 +18,7 @@
 // cpu/vu0_macro/transfer; the recompiler's code is recCFC2, recCTC2,
 // recQMFC2, recQMTC2, recLQC2 and recSQC2 in pcsx2/x86/microVU_Macro.inl, the
 // interpreter's functions of those names are in pcsx2/VU0.cpp (PCSX2
-// v2.9.170, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+).
+// v2.9.189, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+).
 //
 // Following the recompiler, where PCSX2's interpreter differs:
 //  - The integer registers VI1 to VI15 are 16 bits wide. CTC2 writes 16 bits

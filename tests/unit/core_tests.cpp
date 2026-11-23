@@ -572,11 +572,11 @@ TEST_CASE(an_iop_block_is_known_by_its_words) {
     CHECK(r3000a::shape(twice, 2).refused != nullptr);
     const uint32_t call[] = {0x03E00008, 0x0000000C};
     CHECK(r3000a::shape(call, 2).refused != nullptr);
-    // jalr $t6, $t6 with swr in its delay slot: PCSX2's recompiler loses the
-    // jump's target there. With jr $ra the store goes first, and nothing is
-    // lost.
+    // jalr $t6, $t6 with swr in its delay slot: PCSX2's recompiler lost the
+    // jump's target there until v2.9.183, and PS2Native refused the pair. It
+    // is carried out now, as is jr $ra with the same store, which goes first.
     const uint32_t lost[] = {0x01C07009, 0xB921FFE8};
-    CHECK(r3000a::shape(lost, 2).refused != nullptr);
+    CHECK(r3000a::shape(lost, 2).valid && r3000a::shape(lost, 2).refused == nullptr);
     const uint32_t kept[] = {0x03E00008, 0xB921FFE8};
     CHECK(r3000a::shape(kept, 2).valid && r3000a::shape(kept, 2).refused == nullptr);
 

@@ -3,7 +3,7 @@
 // The callbacks the PCSX2 core requires of a frontend, for a frontend that has
 // no window, no settings interface and no user interaction.
 //
-// Derived from pcsx2-gsrunner/Main.cpp of PCSX2 v2.9.170,
+// Derived from pcsx2-gsrunner/Main.cpp of PCSX2 v2.9.189,
 // Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+. Changes for PS2Native:
 // the render window is the host's own when it has one (ps2n-host -window)
 // and surfaceless otherwise, functions for the CPU thread are queued instead

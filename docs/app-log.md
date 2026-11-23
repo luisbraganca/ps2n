@@ -4506,3 +4506,181 @@ README moved to 0.3, and the record committed and pushed?": "1. Publish",
   release", and its "VU1 on a thread of its own" gives the numbers 0.3's notes
   give; the platforms' notes name 0.3. The README's Download and Status the
   same.
+
+## PCSX2 2.9.189 tried (ADR 0053)
+
+### What PCSX2 changed since the pinned version (2026-11-22)
+
+At the maintainer's "Do 2" (ADR 0053), PS2Native was built and tested on PCSX2
+v2.9.189 (`5977c525`, 2026-11-21), the newest when they were asked, nineteen
+nightly versions after the pinned v2.9.170 (`a886f8ef`, 2026-11-10). PCSX2's
+39 commits between the two were read in a clone of PCSX2 in the build tree
+(`build\pcsx2-2.9.189`, its last 300 commits). Most are its renderers'
+(depth buffers as targets and depth feedback in the Vulkan renderer, the
+texture cache's choice of a target, Direct3D 12 and Metal), its interface's
+(the big-picture interface's controller settings, the achievements' sidebar),
+its game database's (699 lines; none of the five games' entries, nor those of
+the maintainer's three untried games) and its translations'. What reaches
+what PS2Native follows:
+
+- **The count register** (`recMFC0`, `pcsx2/x86/iCOP0.cpp`), from v2.9.173,
+  PCSX2's pull request 15187, its correction of the maintainer's issue 15186:
+  a 32-bit addition, nothing carried into EntryHi.
+- **`VURegs::nextBlockCycles`** (`pcsx2/VU.h`), from v2.9.174: 32 bits again,
+  "an offset, not an absolute cycle" (save states of earlier versions refused).
+  microVU writes it 32 bits wide, as before; its macro mode still reads 64 bits
+  there (`xSUB(rax, ptr64[&VU0.nextBlockCycles])`, `microVU_Macro.inl`): the
+  field and the four bytes of padding after it, which nothing writes.
+- **microVU's XGKICK under the "XGKick Sync" game fix** (`microVU_Lower.inl`),
+  from v2.9.174: the cycle it began at kept in 64 bits. PS2Native's VU provider
+  refuses that game fix, so nothing follows from it.
+- **PCSX2's VU1 interpreter** (`VU1microInterp.cpp`), from v2.9.174: its
+  stalls counted against a 64-bit cycle. PS2Native follows microVU; only the
+  tests' `stock-interp` runs have that interpreter.
+- **The IOP recompiler's JR and JALR** (`rpsxJR`, `rpsxJALR`,
+  `pcsx2/x86/iR3000Atables.cpp`), from v2.9.183, PCSX2's pull request 15198,
+  which closed the maintainer's issue 15192 (ADR 0023): the jump's target kept
+  in a host register of the IOP's own kind, so a delay slot that gives up every
+  host register no longer loses it.
+- **Its Windows dependencies:** DirectX-Headers and the Agility SDK 1.620.2,
+  its CMake asking for DirectX-Headers 1.620.1 or later; Qt the same 6.12.0.
+  Its Linux dependencies did not change.
+
+### The branch (2026-11-22)
+
+A git worktree beside the repository, `..\ps2n-pcsx2-189`, on a branch of its
+own, `pcsx2-2.9.189`, from `4126455`; inside WSL the same as
+`~/ps2n-pcsx2-189`. There the submodule is moved to `5977c525`, and on
+Windows `deps\windows-x64` is PCSX2's rolling dependency package of
+2026-11-21 (SHA-256 `c74f3608e7aba8f10aea7b71e829667de2d282ab1d98ca4e8ba04749697a4da6`,
+the digest GitHub gives for it); inside WSL `~/ps2n`'s dependencies are used.
+The main tree and its build trees are as 0.3 left them. PS2Native's changes,
+ten files, nothing committed (`build\measure\p189.patch`):
+
+- `runtime/include/ps2n/pcsx2_layout.h`: `nextBlockCycles` an `int32_t`,
+  which the build's check against PCSX2's own structure holds
+  (`runtime/pcsx2_check.cpp`).
+- `runtime/ee_provider.cpp`: where microVU's macro mode reads 64 bits of it,
+  the field zero-extended, which is what that read gives. The values
+  PS2Native's VU provider writes there are never negative, so it gives what
+  it gave.
+- `runtime/include/ps2n/ops_cop0.h`: MFC0 of the count register a 32-bit
+  addition. `tests/programs/countcarry.s` now expects "EntryHi moved by 0"
+  under every configuration, and its known difference under PCSX2's
+  interpreter is gone (`tests/programs-known-differences.cmake`);
+  `host/selftest.cpp`'s note follows.
+- `core/include/ps2n/r3000a.h`: the refusal of a JR or JALR whose delay slot
+  gives up every host register taken out. PS2Native's IOP provider and the
+  code it compiles already take the target before the delay slot, as the
+  corrected recompiler does. The unit test that held the refusal holds the
+  pair carried out (`tests/unit/core_tests.cpp`), and the IOP self-test's
+  random programs include such pairs now (`host/selftest_iop.cpp`), so its
+  capture for `selftest/iop-compiled` is made again on each system.
+
+PS2Native's own change to PCSX2 (`patches/pcsx2/0001-…`) applies to v2.9.189
+as it is. The runtime's profile of play, made with v2.9.170, is taken as it
+is: the compiler sets aside what it has of 23 functions whose code changed, all
+of them in PCSX2's Vulkan renderer and texture cache. A release on v2.9.189
+would make the profile again, as every release does.
+
+### Built and tested (2026-11-22)
+
+`build\measure\p189-01.ps1` on Windows, `p189-linux.sh` inside WSL (a copy
+kept as `build\measure\p189-linux.sh`):
+
+| Tree | Built in | Tests |
+|---|---:|---|
+| Windows, development | 258 s | 543 of 543 |
+| Windows, the one a release is made from | 393 s | 541 of 544: the three comparisons of `dma/vif/stcycl` disabled, as in 0.3's |
+| Linux, development | 474 s | 543 of 543 |
+| Linux, the one a release is made from | 264 s | 540 of 543: the same three disabled |
+
+None skipped: the counts 0.3's trees give. The IOP self-test's capture made
+again in 29 s on Windows, 25 s on Linux. `programs/stock-interp/countcarry`
+passes as an ordinary test now, where it was an expected difference.
+
+### The maintainer's sessions played back (2026-11-22)
+
+The folder for others made from the Windows tree (`kit.ps1 -Out build\kit189`;
+inside WSL `kit.sh`), and with it, as a user's computer would have it
+(`build\measure\p189-02.ps1`):
+
+- **A game made fresh:** its wizard made Jak and Daxter from its disc image
+  with every default in 23 s, and asked again, found it up to date. The
+  maintainer's session `20261119-110909` run again whole from that folder, as
+  a first session, is the session at every one of its 167 fingerprints
+  (330 s).
+- **0.3's measurement folders brought up to date:** copies of the five
+  folders 0.3's timing used (`build\measure\kit15\games`: the VU thread step's
+  programs on PCSX2 v2.9.170, each with its own counts but Silent Hill 3's),
+  given the new programs by the new wizard and compiled again by their own
+  `ps2n-remake` before they play: Jak and Daxter 128 files in 86 s, Gran
+  Turismo 3 128 in 41 s, Agent Under Fire 221 in 163 s, Killzone 138 in 108 s,
+  Silent Hill 3 128 in 100 s. Inside WSL the Linux measurement folder of Jak
+  and Daxter likewise, 128 files in 160 s.
+- **Each game's timed session run again whole,** stock PCSX2 and the compiled
+  game, from the folder on v2.9.170 and from its copy on v2.9.189, VU1 on the
+  CPU thread and then with PCSX2's VU thread on (Agent Under Fire not with the
+  thread: its runs with it do not repeat). Inside WSL, Jak and Daxter's: all
+  eight runs the session at every one of its 167 fingerprints, the EE's
+  cycles the same on both versions (41,554,654,904), and with the thread on
+  all 27,162,857 of VU1's runs on PCSX2's VU thread on both. On Windows every
+  run likewise:
+
+  | Game | Session | Fingerprints | Runs | The session at every one |
+  |---|---|---:|---:|---:|
+  | Jak and Daxter (nothing drawn) | `20261119-110909` | 167 | 8 | 8 |
+  | Gran Turismo 3 | `20261118-095532` | 173 | 8 | 8 |
+  | Agent Under Fire | `20261117-185759` | 180 | 4 | 4 |
+  | Killzone | `20261117-221825` | 186 | 8 | 8 |
+  | Silent Hill 3 | `20261118-171819` | 1 | 8 | 8 |
+
+  The compiled games' EE cycles are the same on both versions, to the cycle
+  (Jak and Daxter 41,554,654,904, Gran Turismo 3 42,919,556,668, Agent Under
+  Fire 53,078,292,439, Killzone 54,847,762,075). Silent Hill 3's session is a
+  few seconds long, one fingerprint: it says little. Not a timing: one run of
+  each, the computer busy with the other system's work meanwhile.
+
+The kit's runtime started from the kit's own `runtime` folder with `-help`
+says it cannot load `ps2n-game.dll` (`.so` on Linux): there is no game there.
+0.3's download says the same; from a game's folder it answers, and says that
+PCSX2's core in it has PS2Native's change 0001.
+
+### Where it stands, and what is put to the maintainer (2026-11-23)
+
+On PCSX2 v2.9.189, with the branch's ten changes, PS2Native passes every test
+it passes on v2.9.170, on both systems; a game's folder is made and brought up
+to date as before; and the maintainer's sessions run again on it are the
+sessions at every fingerprint, stock PCSX2's runs and the compiled games', with
+VU1 on the CPU thread and on PCSX2's VU thread, as on v2.9.170. Nothing was
+timed.
+
+Moving would take: the submodule moved to v2.9.189 and the branch's changes
+into the main tree; PCSX2's newer Windows dependency package in `deps` (and
+`docs/poc-log.md`'s record of it); and the places that name v2.9.170 as the
+version PS2Native is built on brought up to date (52 files name it, 35 of them
+code and tests whose notes say which PCSX2 a semantic follows; the logs and
+decisions keep it where it was true). A release on it makes its profile of
+play again and is timed, as 0.3 was. Put to the maintainer: whether PS2Native
+moves to v2.9.189.
+
+### Moved (2026-11-23)
+
+The maintainer's answers: "1. Yes", "2. Yes", "3. I will, after. Make sure
+they're all ready" (ADR 0054). In the main tree (`build\measure\p189-03.ps1`):
+
+- **The branch's ten changes** applied (`build\measure\p189.patch`, the patch
+  the Linux worktree had); **the submodule** moved to v2.9.189 (`5977c525`,
+  fetched from the clone in the build tree); **PCSX2's dependency package of
+  2026-11-21** in `deps\windows-x64`, the earlier one kept as
+  `deps\windows-x64-2.9.170`, its archive beside it.
+- **The version named where PS2Native says which PCSX2 it follows:** v2.9.189
+  in the notes of 26 files (the code's, the README's, the website's), in the
+  tests' notes on what stock PCSX2 gives, in the execution model's two lists
+  of rules and in what it says the IOP provider does not carry out, in
+  `docs/poc-log.md`'s record of the dependency package and in
+  `docs/site/README.md`. The logs and decisions keep v2.9.170 where it was so.
+- **Both trees built again and tested:** the development tree in 234 s, 543
+  of 543; the IOP self-test's capture made again (19 s); the tree a release is
+  made from in 272 s, 541 of 544, the three comparisons of `dma/vif/stcycl`
+  disabled as before. None skipped.

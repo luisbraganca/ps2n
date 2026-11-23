@@ -7,7 +7,7 @@
 //
 // What they agree with is PCSX2's IOP recompiler, as docs/adr/0005 has every
 // family follow PCSX2's recompiler (pcsx2/x86/iR3000A.cpp, iR3000Atables.cpp;
-// PCSX2 v2.9.170, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+): no overflow
+// PCSX2 v2.9.189, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+): no overflow
 // exceptions, no load delay, a division by zero that gives what its code
 // gives, loads that read RAM wherever bit 28 of the address is clear, and a
 // block's time added where the block ends.

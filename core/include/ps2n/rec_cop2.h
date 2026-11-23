@@ -8,7 +8,7 @@
 // block's end stops, the range both passes look at. The rules are those of
 // pcsx2/x86/iR5900Analysis.cpp, the instruction recompilers of
 // pcsx2/x86/microVU_Macro.inl and recRecompile() in
-// pcsx2/x86/ix86-32/iR5900.cpp (PCSX2 v2.9.170, Copyright 2002-2026 PCSX2 Dev
+// pcsx2/x86/ix86-32/iR5900.cpp (PCSX2 v2.9.189, Copyright 2002-2026 PCSX2 Dev
 // Team, GPL-3.0+).
 //
 // The passes look at a block's whole range, from its start to where the scan

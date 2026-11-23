@@ -19,8 +19,9 @@ set(PS2AUTOTESTS_NO_STOCK_RUN
 	cpu/ee_fpu/branchdelay      # the recompiler crashes: endless recursion in recBC1T (x86/iFPU.cpp)
 )
 
-# Stock PCSX2 v2.9.170 with its recompilers, BIOS SCPH-70004 v2.00, 2026-11-10:
-# 39 of 55 programs match the console.
+# Stock PCSX2 with its recompilers, BIOS SCPH-70004 v2.00 (v2.9.170 on
+# 2026-11-10, v2.9.189 the same on 2026-11-22): 39 of 55 programs match the
+# console.
 set(PS2AUTOTESTS_DIFFERS_stock-jit
 	cpu/ee/branchdelay          # a branch in a branch's delay slot
 	cpu/ee/lsu                  # LWR leaves the upper half zero where the console sign-extends
@@ -41,7 +42,7 @@ set(PS2AUTOTESTS_DIFFERS_stock-jit
 	                            # vu0DenormalizeMicroStatus described at this program's entry further down
 )
 
-# Stock PCSX2 v2.9.170 with its interpreters, same BIOS and date:
+# Stock PCSX2 with its interpreters, the same BIOS, versions and dates:
 # 38 of 55 programs match the console.
 #
 # Against the recompilers: cpu/ee/lsu and vu/lower/integer match the console

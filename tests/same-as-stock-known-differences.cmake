@@ -51,7 +51,7 @@ set(PROGRAMS_DIFFERS_same-as-stock)
 # lists them as not run; without link-time optimization they run and pass.
 # Found on 2026-11-21 (docs/app-log.md, "The runtime itself").
 #
-# dma/vif/stcycl: a defect of PCSX2's (v2.9.170, x86). An UNPACK with masks
+# dma/vif/stcycl: a defect of PCSX2's (v2.9.170 to v2.9.189, x86). An UNPACK with masks
 # that would run past the end of a VU's memory is carried out by PCSX2's
 # interpreted unpack routines (dVifUnpack, pcsx2/x86/Vif_Dynarec.cpp, falls
 # back to them). Their masked write (VifUnpackSSE_Simple::doMaskWrite,

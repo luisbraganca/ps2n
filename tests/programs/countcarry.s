@@ -4,23 +4,21 @@
 #
 # The count register (COP0 register 9) is 32 bits wide and goes up by one
 # every cycle. The register that follows it in PCSX2's memory is EntryHi (COP0
-# register 10). PCSX2's recompiler brings the count register up to date, when
-# it is read, with a 64-bit addition, so that when the count overflows the
-# carry goes into EntryHi: it goes up by one (recMFC0, pcsx2/x86/iCOP0.cpp,
-# PCSX2 v2.9.170). PCSX2's interpreter adds 32 bits and leaves EntryHi alone,
-# and nothing says a console does otherwise.
+# register 10). Until PCSX2 v2.9.173 its recompiler brought the count register
+# up to date, when it is read, with a 64-bit addition, so that when the count
+# overflowed the carry went into EntryHi: it went up by one (recMFC0,
+# pcsx2/x86/iCOP0.cpp), and PS2Native reproduced that on purpose
+# (docs/adr/0013-pcsx2s-count-register-carry-mirrored-until-fixed.md). Since
+# then its recompiler adds 32 bits and leaves EntryHi alone, as its
+# interpreter always did, and nothing says a console does otherwise.
 #
 # This program writes a value of its own to EntryHi, sets the count register
 # one short of overflowing, reads it, and prints how far EntryHi moved. All of
 # that is in one block of instructions with no branch in it, so that no
 # interrupt comes in between and nothing else touches either register.
 #
-# There is no console recording of this program: what it prints is what
-# PCSX2's recompiler makes of it, which PS2Native reproduces on purpose
-# (docs/adr/0013-pcsx2s-count-register-carry-mirrored-until-fixed.md).
-# PCSX2's interpreter prints 0, which tests/programs-known-differences.cmake
-# records. The day the pinned PCSX2 no longer has the defect, this test fails
-# and says so.
+# There is no console recording of this program: what it prints, 0, is what
+# PCSX2's recompiler and its interpreter make of it.
 #
 # It talks to nothing but the EE's serial port, so ps2n-recomp assemble makes
 # the executable.

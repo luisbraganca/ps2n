@@ -101,7 +101,8 @@ record the recompiler keeps, without the code: `blocks::Form(pc)` is its
 
 ### What a block is
 
-The rules, each transcribed from PCSX2 v2.9.170 (`pcsx2/x86/ix86-32/iR5900.cpp`
+The rules, each transcribed from PCSX2 v2.9.170 and the same in v2.9.189, the
+version PS2Native is built on since ADR 0054 (`pcsx2/x86/ix86-32/iR5900.cpp`
 unless another file is named):
 
 1. **Where it ends.** From the block's first instruction the recompiler
@@ -1174,8 +1175,8 @@ carried out on paper, `Clear()` its `recClearIOP()`, `Reset()` its
 
 ### What a block of the IOP's is
 
-The rules, each transcribed from PCSX2 v2.9.170 (`pcsx2/x86/iR3000A.cpp`,
-`iR3000Atables.cpp`, `BaseblockEx.h`):
+The rules, each transcribed from PCSX2 v2.9.170 and the same in v2.9.189
+(`pcsx2/x86/iR3000A.cpp`, `iR3000Atables.cpp`, `BaseblockEx.h`):
 
 1. **Where it ends.** From the block's first instruction the recompiler
    looks ahead and stops after a branch or jump and its delay slot; at an
@@ -1300,18 +1301,19 @@ game on the console); a branch or jump, a `SYSCALL` or a `BREAK` in a delay
 slot; an import the core has a function for, in a block longer than its
 stub (the recompiler writes the registers back before that call, but not
 one whose value the rest of the block never reads, which only its
-allocation of host registers says); a jump through a register whose delay
-slot is an unaligned load or store (`LWL`, `LWR`, `SWL`, `SWR`) or an
-instruction of the GTE's that the recompiler does not carry out before the
-jump (rule 11): PCSX2's recompiler loses the jump's target there (it keeps
-it in a host register, gives every host register up for the call the delay
-slot's instruction is, writes the target to the EE's registers and reads
-it back from the IOP's), and the IOP goes on at address 0, which is
-neither followed nor guessed at; a block of more than 16,384 instructions;
+allocation of host registers says); a block of more than 16,384 instructions;
 a jump to an address that is not a multiple of four or where the IOP has
 no memory, at which PCSX2 stops the machine too; code run through a mirror
 of RAM above its size and then written. A run that reaches one stops with
-an error that names it. The game and the test programs reach none.
+an error that names it. The game and the test programs reach none. Until
+PS2Native moved to PCSX2 v2.9.189 (ADR 0054), a jump through a register
+whose delay slot is an unaligned load or store (`LWL`, `LWR`, `SWL`, `SWR`)
+or an instruction of the GTE's that the recompiler does not carry out
+before the jump (rule 11) was refused too: PCSX2's recompiler lost the
+jump's target there until v2.9.183 (it wrote it to the EE's registers and
+read it back from the IOP's), and the IOP went on at address 0. Corrected
+there, the target is the one taken before the delay slot, as everywhere
+else.
 
 **What is not reproduced.** PCSX2's IOP recompiler throws its record away
 when its 32 MB of host code are full, which the provider cannot know (the

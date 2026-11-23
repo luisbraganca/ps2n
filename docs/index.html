@@ -298,7 +298,7 @@
 			<div class="machine__head">
 				<p class="flow__label" style="margin-bottom:12px">When the game runs</p>
 				<h3>The machine is PCSX2's core</h3>
-				<p>PCSX2 <span class="nowrap">v2.9.170</span>, a pinned submodule that is never edited: what PS2Native changes of its code is a patch, applied to a copy when it is built. PS2Native owns no model of the hardware.</p>
+				<p>PCSX2 <span class="nowrap">v2.9.189</span>, a pinned submodule that is never edited: what PS2Native changes of its code is a patch, applied to a copy when it is built. PS2Native owns no model of the hardware.</p>
 			</div>
 			<div class="socket">
 				<span class="socket__label">Both processors, vector units</span>
@@ -704,7 +704,7 @@
 		<div class="section__head" data-reveal>
 			<p class="eyebrow"><span data-scramble>09 &middot; Roadmap</span></p>
 			<h2>From a feasibility study to a release</h2>
-			<p class="section__lead">Five phases. Each one ends with a stop, and the next begins only with the maintainer's approval. Every step of the fourth, the application, is done, and its first release is out.</p>
+			<p class="section__lead">Five phases. Each one ends with a stop, and the next begins only with the maintainer's approval. Every step of the fourth, the application, is done, its third release is out, and the fifth, maintenance, has begun.</p>
 		</div>
 
 		<ol class="timeline" data-timeline>
@@ -744,8 +744,8 @@
 					<li class="is-done"><b><span class="g">G18</span>A second game</b>Done: Agent Under Fire, a game made of four programs that load one another without the console's loader, all four compiled ahead of time, the one in memory told by its code. Into its first mission nothing of it is interpreted, it is still the stock run, and it keeps the console's pace in the window. The maintainer then played its first five missions. A wait loop in the fourth, whose blocks check their own code at every run, took 7.6 times stock PCSX2's time; since compiled code makes that check itself it takes 1.8, 0.27 of the console's time</li>
 				</ul>
 			</li>
-			<li class="phase is-now" data-reveal>
-				<div class="phase__top"><span class="phase__n">Phase 4</span><span class="badge badge--now">Every step done &middot; 2026-11-19</span></div>
+			<li class="phase is-done" data-reveal>
+				<div class="phase__top"><span class="phase__n">Phase 4</span><span class="badge badge--done">Every step done &middot; 2026-11-19</span></div>
 				<h3>The application</h3>
 				<p>A wizard that takes a game you own and gives back a folder that plays it: the game's code compiled on your own computer, by the compiler PS2Native brings, into modules a ready-made runtime loads, every setting fixed when the game is made, and no emulator's interface. The maintainer decided its design on 2026-11-16, and published the first release on 2026-11-19. The design: <a href="https://github.com/luisbraganca/ps2n/blob/main/docs/phase4-proposal.md" rel="noopener">docs/phase4-proposal.md</a>; what was measured: <a href="https://github.com/luisbraganca/ps2n/blob/main/docs/app-log.md" rel="noopener">docs/app-log.md</a>.</p>
 				<ul class="gsteps">
@@ -774,10 +774,10 @@
 					<li>The game's folder</li>
 				</ol>
 			</li>
-			<li class="phase" data-reveal>
-				<div class="phase__top"><span class="phase__n">Phase 5</span><span class="badge">Later</span></div>
+			<li class="phase is-now" data-reveal>
+				<div class="phase__top"><span class="phase__n">Phase 5</span><span class="badge badge--now">Begun &middot; 2026-11-22</span></div>
 				<h3>Maintenance</h3>
-				<p>Automated regression tests, compatibility reports, and checks against each new version of PCSX2 before it is taken up.</p>
+				<p>Automated regression tests, compatibility reports, and checks against each new version of PCSX2 before it is taken up. Begun at the maintainer's word with the first such check, by hand: PCSX2 2.9.189, the newest, nineteen versions after the one PS2Native is built on, with the corrections of two defects the maintainer reported to PCSX2. On it every test passes on Windows and on Linux as before, and the maintainer's sessions play back the same at every point compared, stock PCSX2's and the compiled games'. At the maintainer's word PS2Native moved to it on 2026-11-23.</p>
 			</li>
 		</ol>
 
@@ -893,7 +893,7 @@
 		<p>PS2Native is free software under the GNU General Public License, version 3 or later. It builds on PCSX2 (GPL-3.0 or later, Copyright PCSX2 Dev Team), which is included as PCSX2 released it, as a submodule; PS2Native's own changes to PCSX2's code are the patches in the repository's <code>patches/pcsx2</code>.</p>
 		<p>PS2Native is an independent project. It is not affiliated with the PCSX2 project or with Sony Interactive Entertainment. PlayStation and PS2 are trademarks of Sony Interactive Entertainment Inc. Other names belong to their owners and are used here only to say what the project works with.</p>
 		<div class="footer__end">
-			<span>The state of the project on 2026-11-22.</span>
+			<span>The state of the project on 2026-11-23.</span>
 			<button class="motion-switch" type="button" data-motion-switch aria-pressed="true"><i aria-hidden="true"></i>Motion</button>
 		</div>
 	</div>

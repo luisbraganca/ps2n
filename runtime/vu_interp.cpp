@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// See vu_interp.h. The names in the comments are microVU's (PCSX2 v2.9.170,
+// See vu_interp.h. The names in the comments are microVU's (PCSX2 v2.9.189,
 // pcsx2/x86/microVU*.{cpp,h,inl}, Copyright 2002-2026 PCSX2 Dev Team,
 // GPL-3.0+), so that each piece can be read beside the code it follows.
 

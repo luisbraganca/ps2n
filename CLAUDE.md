@@ -358,7 +358,29 @@ session's start run again the session, their memory cards unchanged; and 0.3
 a draft pre-release on GitHub, which the maintainer published the same day at
 their word ("1. Publish"; the tag `v0.3` on `d10604d`), the website's
 downloads and the README then moved to it ("2. Yes"). docs/app-log.md, "0.3
-(ADR 0052)".
+(ADR 0052)". Phase 5, Maintenance, began at the maintainer's "Do 2"
+(2026-11-22, ADR 0053) with PCSX2's newest version tried, v2.9.189, in a git
+worktree and on a branch of their own (`..\ps2n-pcsx2-189`, `pcsx2-2.9.189`;
+the submodule moved there only, PCSX2's newer Windows dependency package
+there only). There PS2Native follows what PCSX2 changed of what it follows:
+the count register's addition 32 bits wide (PCSX2's correction of the
+maintainer's issue 15186, so the carry ADR 0013 mirrored is gone),
+`nextBlockCycles` 32 bits again, and the IOP recompiler's JR and JALR keeping
+their target (the maintainer's issue 15192: the pair PS2Native refused is
+carried out). Every test passes on it as on v2.9.170 on both systems, a
+game's folder is made and brought up to date as before, and the maintainer's
+sessions run again on it are the sessions at every fingerprint, stock
+PCSX2's runs and the compiled games' (docs/app-log.md, "PCSX2 2.9.189
+tried"). At the maintainer's answers (ADR 0054: "1. Yes", "2. Yes", "3. I
+will, after. Make sure they're all ready") PS2Native moved to it on
+2026-11-23: the submodule at v2.9.189, the branch's ten changes in the main
+tree, PCSX2's Windows dependency package of 2026-11-21 in `deps` (the earlier
+one beside it as `deps\windows-x64-2.9.170`), the places that name the version
+PS2Native follows saying v2.9.189, every test passing in the main trees as in
+the branch's; committed and pushed. The maintainer's three games PS2Native
+had never run (Resident Evil – Code: Veronica X, Secret Agent Clank, SSX
+Tricky) are to be made ready for them to try, each with the wizard into their
+own PS2Native folder and checked on a copy.
 docs/app-log.md,
 "Compiled games against PCSX2, as users get them" and "0.2: a game's folder
 brought up to date".**
@@ -553,7 +575,7 @@ Decisions:
   temporary, labeled stand-ins; its EE recompiler is never one. Unseen code
   is interpreted once, reported, captured and rebuilt.
 - [ADR 0004](docs/adr/0004-proof-of-concept-environment.md): PCSX2 `v2.9.170`
-  as a submodule; the `SCPH-70004` BIOS read in place; Linux is built and
+  as a submodule (`v2.9.189` since ADR 0054); the `SCPH-70004` BIOS read in place; Linux is built and
   tested by the maintainer on their own machine, so never report Linux as
   working without their run.
 - [ADR 0005](docs/adr/0005-never-further-from-the-console-than-pcsx2.md):
@@ -605,7 +627,8 @@ Decisions:
   issue been ignored for 30 days, the correction would have been carried
   locally; it was confirmed instead.) `tests/programs/countcarry.s` shows
   it. PCSX2 corrected it on 2026-11-12, first in `v2.9.173`; PS2Native
-  still pins `v2.9.170`, and moving the pin is a decision of its own.
+  pinned `v2.9.170` until it moved to `v2.9.189` on 2026-11-23 (ADR 0054),
+  and reproduces it no more: the program holds both to the 32-bit addition.
 - [ADR 0014](docs/adr/0014-the-website-is-served-from-docs.md): the project
   has a website, one page that GitHub Pages serves from `docs/` as it is
   (`docs/.nojekyll`). The documentation stays where it is; the site is
@@ -1201,11 +1224,42 @@ Decisions:
   same day (the ADR's "Done the same day"), and 0.3 published at the
   maintainer's word ("1. Publish"), the website's downloads and the README
   moved to it ("2. Yes").
+- [ADR 0053](docs/adr/0053-ps2native-tried-on-pcsx2s-newest-version-2-9-189.md):
+  Phase 5, Maintenance, begins at the maintainer's "Do 2" (2026-11-22), with
+  PS2Native tried on PCSX2's newest version, v2.9.189: built and tested on it,
+  and the maintainer's sessions run again on it; whether the submodule moves
+  is the maintainer's to decide after the results. The session's choices, for
+  the maintainer to decide otherwise: the work in a git worktree beside the
+  repository and on a branch of its own (`..\ps2n-pcsx2-189`,
+  `pcsx2-2.9.189`), where the submodule is moved, nothing committed or pushed;
+  PCSX2's newer Windows dependency package (DirectX-Headers 1.620.2) in that
+  worktree only; what PCSX2 changed of what PS2Native follows followed there
+  (the count register's 32-bit addition, v2.9.173; `nextBlockCycles` 32 bits
+  again, v2.9.174; the IOP recompiler's JR and JALR keeping their target,
+  v2.9.183); no timing. Results the same night: every test passes as on
+  v2.9.170 on both systems, and every session run again is the session at
+  every fingerprint, the compiled games' EE cycles the same to the cycle.
+  PS2Native moved to it (ADR 0054).
+- [ADR 0054](docs/adr/0054-ps2native-moves-to-pcsx2-2-9-189-and-the-maintainers-three-new-games-are-made-ready.md):
+  the maintainer's answers of 2026-11-23 to what ADR 0053 found ("1. Yes",
+  "2. Yes", "3. I will, after. Make sure they're all ready"). PS2Native moves
+  to PCSX2 v2.9.189: the submodule, ADR 0053's ten changes, PCSX2's Windows
+  dependency package of 2026-11-21 in `deps` (the earlier one kept beside it),
+  the places that name the version PS2Native follows; on Windows and inside
+  WSL; committed and pushed. The maintainer's three games PS2Native has never
+  run (Resident Evil – Code: Veronica X, Secret Agent Clank, SSX Tricky) are
+  made ready for them to try: each with the wizard, every default, into their
+  own PS2Native folder made again from the committed tree, and checked on a
+  copy, their folders left as the wizard made them. The session's choices,
+  for the maintainer to decide otherwise: no release for the move alone (the
+  next makes the profile of play again and is timed); their seven existing
+  game folders keep their programs (not asked); ADR 0053's worktree and
+  branch removed once the main tree has everything of them.
 
 ## Layout, build and test
 
 ```
-third_party/pcsx2         PCSX2 v2.9.170, a pinned submodule. Never edit it; what PS2Native changes of PCSX2's code is in patches/pcsx2
+third_party/pcsx2         PCSX2 v2.9.189 (ADR 0054), a pinned submodule. Never edit it; what PS2Native changes of PCSX2's code is in patches/pcsx2
 patches/pcsx2             PS2Native's changes to PCSX2's code (ADR 0050), one patch to a change, each decided by the
                           maintainer and saying at its top what it changes and why; its README lists them (one so far:
                           PCSX2's VU thread is not woken where it is not in use)

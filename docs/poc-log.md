@@ -53,7 +53,12 @@ skipped.
   the digest GitHub publishes for it. It is a rolling release; this hash is
   the record of what was used. Extracted to `deps/windows-x64` (git-ignored).
   The package carries one license file for all of its libraries; auditing
-  them is still open.
+  them is still open. Since PS2Native moved to PCSX2 v2.9.189 (2026-11-23,
+  ADR 0054), which asks for DirectX-Headers 1.620.1 or later, the package is
+  that release as of 2026-11-21, 165.7 MB, SHA-256
+  `c74f3608e7aba8f10aea7b71e829667de2d282ab1d98ca4e8ba04749697a4da6` (the
+  digest GitHub gives for it); the earlier one is kept beside it as
+  `deps/windows-x64-2.9.170`.
 - **Toolchain:** Visual Studio Build Tools 2026, clang-cl 22.1.3, CMake
   4.3.1, Ninja 1.13.2, with the flags of PCSX2's own "CMake Clang" CI job
   minus the Qt interface and link-time optimization. A full build of the core

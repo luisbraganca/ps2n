@@ -16,7 +16,7 @@
 // (the interpreter's, runtime/vu_interp.cpp) carries the instructions out
 // with that.
 //
-// Derived from PCSX2 v2.9.170: pcsx2/x86/microVU_Compile.inl (mVUcompile's
+// Derived from PCSX2 v2.9.189: pcsx2/x86/microVU_Compile.inl (mVUcompile's
 // first pass, mVUsetCycles, mVUincCycles, mVUoptimizePipeState),
 // microVU_Analyze.inl, microVU_Flags.inl (mVUsetFlags, mVUflagPass,
 // mVUsetFlagInfo), the first-pass parts of microVU_Upper.inl and

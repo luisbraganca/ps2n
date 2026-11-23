@@ -7,7 +7,7 @@
 // SSE unit, and games are tested against that approximation, so this file
 // reproduces it instruction for instruction: the same SSE operations, in the
 // same order, under the same control register, as the code PCSX2's EE
-// recompiler emits (pcsx2/x86/iFPU.cpp, PCSX2 v2.9.170, Copyright 2002-2026
+// recompiler emits (pcsx2/x86/iFPU.cpp, PCSX2 v2.9.189, Copyright 2002-2026
 // PCSX2 Dev Team, GPL-3.0+). The host's -selftest compares every function
 // here with that recompiler on random and boundary operands.
 //

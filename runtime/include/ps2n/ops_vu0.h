@@ -9,7 +9,7 @@
 // macro mode: REC_COP2_mVU0, setupMacroOp and endMacroOp in
 // pcsx2/x86/microVU_Macro.inl, the instructions in microVU_Upper.inl and
 // microVU_Lower.inl, the clamps in microVU_Clamp.inl, the arithmetic in
-// microVU_Misc.inl, the register allocator in microVU_IR.h (PCSX2 v2.9.170,
+// microVU_Misc.inl, the register allocator in microVU_IR.h (PCSX2 v2.9.189,
 // Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+). The host's SSE instructions
 // are those microVU emits, in the same order on the same operands, under the
 // same control register (the EE's), so that a result is the recompiler's to
