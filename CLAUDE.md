@@ -390,6 +390,38 @@ Found on the way: the trees built after the dependency package was swapped
 under them mixed objects compiled against both packages, and the wizard so
 built crashed on every new game; built again from nothing, it runs clean
 (docs/app-log.md, "The tree a release is made from, built again whole").
+The same day, after a session of Jak and Daxter that lagged in its boss fight
+with no notice shown, at the maintainer's word (ADR 0055: "Yes record. Yes
+the notice should show for any new code."): a session in the window writes
+down the pace it kept (`pace.txt`, every 300 frames: the frames a second, the
+longest frames, what the game itself drew a second, how much was
+interpreted; any run with `-pace`), and the notice over the picture shows for
+any code met for the first time. Their session run again with it was the
+session at every fingerprint and showed the lag as the game's own: from
+minute 39½ the game drew about 30 pictures a second in bursts, the emulation
+never behind and nothing interpreted that weighed, the game shown at 60 frames
+a second by its "NTSC Mode" patch. Found with it: the move to v2.9.189 had
+changed what a module and the runtime share (`Mem` and what follows it eight
+bytes nearer) but not the module version, so a folder's modules compiled by
+0.3 crashed on the new runtime; the version is 5 since. microVU's macro mode
+reads 64 bits at the 32-bit `nextBlockCycles`, taking in the low half of `Mem`
+where PCSX2's VUSyncHack or FullVU0SyncHack game fix is on (none of the
+maintainer's games), so that its comparison depends on where the system put
+PCSX2's memory. And part of the code Jak and Daxter loads from its data stays
+interpreted however often its folder compiles (in 80% of the session's
+stretches run again), so the notice for any new code would show about once a
+minute there (docs/app-log.md, "The pace a session kept, and the notice for
+any new code").
+
+The maintainer's answers the same day (ADR 0056: "1. Ok 2. Yes 3. Agree 4.
+Commit and push."):
+
+- their Jak and Daxter folder plays the game at a 130% EE cycle rate, brought
+  up to date to write its pace down;
+- PS2Native keeps `nextBlockCycles` alone;
+- committed and pushed;
+- next, why part of Jak and Daxter's loaded code stays interpreted after its
+  folder compiles it.
 docs/app-log.md,
 "Compiled games against PCSX2, as users get them" and "0.2: a game's folder
 brought up to date".**
@@ -927,8 +959,8 @@ Decisions:
   PCSX2's on-screen display, which ADR 0012 keeps off. The session's
   choices, for the maintainer to decide otherwise: when over the last half
   second at least 1% of the EE's, the IOP's or the VUs' work was
-  interpreted; five seconds; at most once a minute; top left; the brand's
-  colours.
+  interpreted (any of it since ADR 0055, the BIOS's at boot aside); five
+  seconds; at most once a minute; top left; the brand's colours.
 - [ADR 0036](docs/adr/0036-the-folder-for-others-how-p4-8-is-done.md):
   P4.8, the folder for others, is next, before P4.7 (the maintainer's
   "Yep", 2026-11-18), its `.chd` the maintainer's Silent Hill 3 ("I do,
@@ -1264,6 +1296,40 @@ Decisions:
   next makes the profile of play again and is timed); their seven existing
   game folders keep their programs (not asked); ADR 0053's worktree and
   branch removed once the main tree has everything of them.
+- [ADR 0055](docs/adr/0055-a-session-writes-down-the-pace-it-kept-and-the-notice-shows-for-any-new-code.md):
+  the maintainer's answers of 2026-11-23 ("Yes record. Yes the notice should
+  show for any new code."), after a session of Jak and Daxter that lagged
+  ("laggy as hell, specially during boss fight") with no notice shown: its run
+  again showed the emulation never behind (its slowest 30 seconds 0.29 of the
+  console's time), its code met for the first time at most 0.37% of the EE's
+  cycles in a half second, under ADR 0035's 1%. A session in the window writes
+  down the pace it kept in `pace.txt` beside its `input.txt`, every 300 frames:
+  the frames a second, the longest frame on the CPU thread and the longest
+  PCSX2 showed, what the game itself drew a second (at the console's pace, so
+  a run without a window says it too: `ps2n-host -pace <file>`, `game.ps1
+  -Pace`), and how much of each processor's work was interpreted; the report
+  says the worst. The notice shows for any code met for the first time, the
+  BIOS's instructions at boot aside, still at most once a minute. The
+  maintainer then wrote that the boss fight lagged on compiled code too ("So
+  maybe that was the reason"), read as the game itself drawing fewer pictures
+  there, which a session run again with `-pace` can show.
+- [ADR 0056](docs/adr/0056-jak-and-daxter-at-a-130-ee-cycle-rate-its-interpreted-code-looked-for-next-nextblockcycles-kept-alone.md):
+  the maintainer's answers of 2026-11-23 to what ADR 0055's work found ("1. Ok
+  2. Yes 3. Agree 4. Commit and push."):
+  - **Jak and Daxter at a 130% EE cycle rate.** Their folder (on Windows) plays
+    the game so (`EECycleRate = 1` in its game's settings file), brought up to
+    date so that its next session writes its pace down. The boss fight, where
+    the game drew about 30 pictures a second, is to be played again.
+  - **Why part of the code Jak and Daxter loads from its data stays
+    interpreted after its folder compiles it is the next step.** The notice
+    for any new code stays meanwhile, about once a minute in that game.
+  - **PS2Native keeps `nextBlockCycles` alone.** PCSX2 v2.9.189's 64-bit read
+    there (under VUSyncHack or FullVU0SyncHack) depends on where the system put
+    its memory. It is listed in the execution model's "What is not reproduced",
+    and telling PCSX2 is the maintainer's.
+  - **Committed and pushed.**
+  - **Not answered:** their other earlier folders keep their programs until
+    the next step is done.
 
 ## Layout, build and test
 

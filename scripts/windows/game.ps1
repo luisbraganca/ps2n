@@ -127,6 +127,9 @@ param(
     [int]$FrameEvery = 0,
     # A script of controller input for port 1 (ps2n-host -help has the format; tests\games has some).
     [string]$Pad = '',
+    # A file for the pace the run keeps, every 300 frames (ps2n-host -pace; docs\adr\0055): run again without a window,
+    # what the game itself drew a second at the console's pace, and how much was interpreted.
+    [string]$Pace = '',
     # A session played in the window, run again without one (step G13): its folder under
     # build\game\<name>\play\sessions. The run gets the session's controller, clock, memory cards and
     # NVRAM, as many frames as it had unless -Frames says otherwise, and the patches it was played with
@@ -253,6 +256,7 @@ if ($Play) {
     if ($Mute) { $hostArgs += '-mute' }
     if ($Osd) { $hostArgs += '-osd' }
     if ($Pad) { $hostArgs += @('-pad', (Resolve-Path -LiteralPath $Pad).Path) }
+    if ($Pace) { $hostArgs += @('-pace', [IO.Path]::GetFullPath($Pace)) }
     if ($PSBoundParameters.ContainsKey('Frames')) { $hostArgs += @('-frames', "$Frames") }
     if ($PSBoundParameters.ContainsKey('Seconds')) { $hostArgs += @('-seconds', "$Seconds") }
     if ($FrameEvery -gt 0) { $hostArgs += @('-frame-every', "$FrameEvery") }
@@ -344,6 +348,7 @@ $arguments = @(
     "-DFRAMES=$Frames", "-DSECONDS=$Seconds", '-DUNTIL=@@ no such line @@', '-DEXPECT_EXIT=2', '-DWHOLE=1', '-DTIMES=1')
 if ($Renderer -ne 'null') { $arguments += @("-DRENDERER=$Renderer", "-DUPSCALE=$Upscale", "-DFRAME_EVERY=$FrameEvery") }
 if ($Pad) { $arguments += "-DPAD=$(ForCMake (Resolve-Path -LiteralPath $Pad).Path)" }
+if ($Pace) { $arguments += "-DPACE=$(ForCMake ([IO.Path]::GetFullPath($Pace)))" }
 if ($Patches) { $arguments += "-DPATCHES=$Patches" }
 # The archive the game's patch file is taken from: for -Patches, and for a session run again, which has
 # the patches it was played with.

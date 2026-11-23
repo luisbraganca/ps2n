@@ -4531,6 +4531,9 @@ what PS2Native follows:
   microVU writes it 32 bits wide, as before; its macro mode still reads 64 bits
   there (`xSUB(rax, ptr64[&VU0.nextBlockCycles])`, `microVU_Macro.inl`): the
   field and the four bytes of padding after it, which nothing writes.
+  (*Corrected on 2026-11-23:* there is no padding after it. The four bytes
+  that read takes past the field are the low half of `Mem`: "The 64-bit read
+  of nextBlockCycles", below.)
 - **microVU's XGKICK under the "XGKick Sync" game fix** (`microVU_Lower.inl`),
   from v2.9.174: the cycle it began at kept in 64 bits. PS2Native's VU provider
   refuses that game fix, so nothing follows from it.
@@ -4563,7 +4566,9 @@ ten files, nothing committed (`build\measure\p189.patch`):
 - `runtime/ee_provider.cpp`: where microVU's macro mode reads 64 bits of it,
   the field zero-extended, which is what that read gives. The values
   PS2Native's VU provider writes there are never negative, so it gives what
-  it gave.
+  it gave. (*Corrected on 2026-11-23:* that read gives the field and the low
+  half of `Mem`, not the field alone: "The 64-bit read of nextBlockCycles",
+  below.)
 - `runtime/include/ps2n/ops_cop0.h`: MFC0 of the count register a 32-bit
   addition. `tests/programs/countcarry.s` now expects "EntryHi moved by 0"
   under every configuration, and its known difference under PCSX2's
@@ -4694,6 +4699,23 @@ they're all ready" (ADR 0054). In the main tree (`build\measure\p189-03.ps1`):
 - **ADR 0053's worktrees and branch removed** on both systems, once the main
   trees had everything of them (on Windows its two links to the main tree's
   LLVM and Qt sources taken away first, by themselves).
+- **The module version, found missing the same afternoon:** the move changed
+  what a module of compiled code and the runtime share, the place of what
+  follows `VURegs::nextBlockCycles`, but not `kGameModuleVersion`. At 32 bits
+  the field follows `clipflag` directly, so `Mem`, the address of the VU's
+  memory, and everything after it are eight bytes nearer: byte 1200 of the
+  structure, where 1208 (PS2Native's description of both versions, compiled
+  and printed; the build's check holds each to its PCSX2). `pcsx2_layout.h`'s
+  comment had said the field had four bytes of padding after it, which is why
+  the version was left. A copy of the maintainer's Jak and Daxter folder, its
+  modules compiled by 0.3, given the new runtime for a measurement, stopped
+  within 300 frames (with VU1 on PCSX2's VU thread and without; stock PCSX2
+  from the same copy ran on). With this morning's runtime beside the libraries
+  it was built with, those modules stopped the same way
+  (`build\measure\jakmix.ps1`), so it was the modules, not the libraries. The
+  runtime should have refused them. No folder of the maintainer's met it: a
+  folder brought up to date compiles its game again before it next plays. The
+  version is 5 since (`runtime/game_module.h`).
 
 ### The tree a release is made from, built again whole (2026-11-23)
 
@@ -4764,3 +4786,190 @@ a copy (`build\measure\kit-new3`):
   PS2Native follows the console there (ADR 0005). Written out on both sides at
   that sync point and at the run's last (`build\measure\syncdetail.ps1`), it
   is the only register that differs.
+
+### The 64-bit read of nextBlockCycles (2026-11-23)
+
+Found while looking for why the module version had not changed ("Moved",
+above). Since v2.9.174 PCSX2's `VURegs` has `u32 clipflag; s32
+nextBlockCycles; u8* Mem;`, the field at byte 1196 and `Mem`, the address of
+VU0's memory, at 1200. In v2.9.170 the field was 64 bits, at 1200 after four
+bytes of padding, and `Mem` at 1208. These offsets come from PS2Native's
+description of both versions, compiled and printed; the build's check holds
+each to its PCSX2 (`runtime/pcsx2_check.cpp`, `clipflag`, `nextBlockCycles`,
+`Mem`, `Micro`).
+
+microVU's macro mode reads 64 bits at the field in two places (`COP2_Interlock`
+and `mVUSyncVU0`, `pcsx2/x86/microVU_Macro.inl`, the same lines in both
+versions). Where PCSX2's VUSyncHack or FullVU0SyncHack game fix is on, it
+subtracts them from how far the EE is ahead of VU0 (`cpuRegs.cycle` and
+`VU0.cycle`, both 64 bits) and compares the whole result with 4, to decide
+whether VU0 runs on before a COP2 instruction. In v2.9.170 that was the field.
+In v2.9.189 it is the field with the low half of `Mem` as its high half.
+Unless that half is zero, the comparison then comes out the same whatever the
+cycles: always under 4 where the half is below 2^31, never where it is above.
+So it depends on where the system put PCSX2's memory. That is a defect of
+PCSX2's since v2.9.174, in how its recompiler reads the field, not in what it
+computes with it.
+
+PS2Native's runtime subtracts the field alone, zero-extended (`Cop2Prologue`,
+`runtime/ee_provider.cpp`). That is what v2.9.170's code gave, not what
+v2.9.189's gives. It was written so on the belief that the four bytes after
+the field were padding nothing writes; the comments now say what is there,
+and the code is as it was.
+
+Which games: PCSX2's game database gives VUSyncHack to 25 entries and
+FullVU0SyncHack to 3, and none of them is one of the maintainer's eight games
+(`SLES-50539`, `SCES-50294`, `SCES-50361`, `SCES-52004`, `SLES-51434`,
+`SLUS-20184`, `SLUS-20326`, `SCUS-97623`). No test program has an entry in
+it, so no test and no session has run that path on either side. Put to the
+maintainer: whether PS2Native reads the field as v2.9.189 does (as it
+reproduced the count register's carry, ADR 0013) or keeps the field alone,
+and whether PCSX2 is told, which is theirs to do (ADR 0010).
+
+Where the system put that memory, as PCSX2's log of three runs here gives it
+(the area that holds the EE's, the IOP's and the VUs' memory): VU0's and
+VU1's memory began at `0x0000022511000000`, `0x0000012311000000` and
+`0x000002AB94740000`. So that half was below 2^31 in two runs and above it in
+the third: in stock PCSX2 v2.9.189, under those game fixes, the comparison
+would have come out one way in two of the runs and the other way in the
+third.
+
+Decided the same day (ADR 0056, "Agree"): PS2Native keeps the field alone,
+listed in the execution model's "What is not reproduced". Telling PCSX2 is
+the maintainer's.
+
+## The pace a session kept, and the notice for any new code (ADR 0055)
+
+### Built (2026-11-23)
+
+At the maintainer's answers (ADR 0055), in `host/main.cpp`:
+
+- **The pace written down** (`KeepPace`): for a session in the window in
+  `pace.txt` beside its `input.txt`, and for any run in the file `-pace`
+  names (`game.ps1 -Pace`; `PACE` in `tests/guest_test.cmake`). Every 300
+  frames a line: the frame; the seconds since the first frame; the frames a
+  second over the stretch; its longest frame on the CPU thread; the longest
+  frame PCSX2 showed (its performance figures' maximum over each half second,
+  read every 30 frames); what the game itself drew a second, at the console's
+  pace; and the part of the EE's cycles, of the IOP's blocks and of the vector
+  units' blocks an interpreter carried out. What the game drew is PCSX2's count
+  of the game's new pictures (`PerformanceMetrics::GetInternalFPS`) to each
+  frame shown (`GetFPS`), over the same half second, averaged over the stretch
+  and multiplied by the console's frames a second, so that a run without a
+  window says it too; -1 where PCSX2 cannot tell. The run's report gives the
+  worst: the stretches under 99% of the console's frames a second, the
+  slowest, the longest frames and the fewest pictures the game drew, each
+  with where.
+- **The notice for any new code** (`WatchNewCode`): shown when in the last
+  half second the EE interpreted any instruction but the BIOS's at boot, or
+  the IOP or a vector unit any block; still for five seconds, at most once a
+  minute. The report's line says in how many half seconds such code ran, the
+  most of each processor's work in one, and how often the notice was shown.
+- **The module version** 5 (`runtime/game_module.h`; "Moved", above).
+
+Every test passes: on Windows 543, and 541 with the same three disabled; on
+Linux, inside WSL, 543 and 540; none skipped.
+
+### Jak and Daxter's session run again with its pace (2026-11-23)
+
+The maintainer's session of 09:47 UTC (44½ minutes, "laggy as hell,
+specially during boss fight"; then "the boss fight was laggy even when
+playing complied") was run again whole from a copy of their folder brought up
+to date (`build\measure\jaklag`, `jakpace.ps1`). It ran as played (VU1 on
+PCSX2's VU thread, Vulkan at three times the console's resolution), with
+`-pace`, and was the session at every one of its 3,205 fingerprints, in 563
+s.
+
+What the game itself drew a second, at the console's 59.94:
+
+- **Minutes 1 to 38:** 60 in every minute (one stretch of 300 frames at 51.9,
+  at minute 31.8).
+- **Minute 39.4 to the end:** about 30, in bursts of 15 to 30 seconds (minutes
+  40.2 to 40.6, 41.0 to 41.5, 42.0 to 42.6, 44.0 to 44.5), and 35 to 50
+  between them; minute 43 at 59.
+
+Of the 534 stretches:
+
+| Pictures a second | Stretches |
+|---|---:|
+| 59 or more | 484 |
+| 50 to 59 | 21 |
+| 40 to 50 | 4 |
+| 30 to 40 | 15 |
+| under 30 | 10 (the boot's two, the intro's one, seven in those bursts) |
+
+The emulation never fell behind: no stretch ran slower than 2.7 times the
+console's pace. Nothing interpreted weighed: at most 0.205% of the EE's
+cycles in a stretch.
+
+The game's settings enable PCSX2's patch "NTSC Mode", which shows this
+European game at 60 frames a second where a European console shows it at 50.
+A picture so has a sixtieth of a second of the console's time; where one
+takes longer, the game shows it for two frames, 30 a second. That is the
+boss fight's lag: the game's own, in the console's time as PCSX2 counts it,
+which the compiled game counts as stock PCSX2 does. Stock PCSX2 was not run
+on the session.
+
+### The window check (2026-11-23)
+
+Copies of two folders were given the new runtime and run in a window on the
+measurement's hidden desktop, muted, 3,600 frames each, with the START and
+CROSS script (`build\measure\pacecheck.ps1`).
+
+- **Secret Agent Clank, as the wizard made it (never played):**
+  - Pace: 59.87 frames a second where the console shows 59.93; its first
+    stretch, its start, at 59.14.
+  - New code: met in all 119 half seconds. It is its first session: up to
+    10.1% of the EE's cycles, and all of the IOP's and the micro code's
+    blocks, none of them compiled yet.
+  - The notice: shown once (the run lasted a minute).
+  - The game drew about 30 pictures a second in its menus, which is its own
+    rate.
+- **Jak and Daxter's copy:**
+  - Pace: 58.37 frames a second; its first two stretches, its start, at 49.5
+    and 54.5.
+  - New code: met in 113 of 119 half seconds, at most 0.04% of the EE's
+    cycles. The script took the game where the maintainer's sessions had not.
+  - The notice: shown once.
+
+Each session's `pace.txt` was written beside it, 12 lines. It could not be
+read while the session ran ("being used by another process": the C runtime's
+`fopen_s` opens it unshared), so the runtime now opens it with
+`FileSystem::OpenSharedCFile`, letting others read. Built again with that
+(`build\measure\p55-03.ps1`), both sessions' files were read while they ran,
+and each run was otherwise the same as before, to the EE cycle (17,707,512,539
+and 18,149,644,064). The three games the maintainer has not played yet were
+then brought up to date from that tree, each compiling its game again (39,
+54 and 58 s).
+
+### Code Jak and Daxter keeps interpreting (2026-11-23)
+
+The run again of the maintainer's session used modules compiled from
+everything the folder's sessions met, that session among them
+(`captures\merged.txt`). It still interpreted EE code in 427 of its 534
+stretches: none in minutes 13 to 20, at most 0.205% of the EE's cycles in
+one.
+
+It wrote a capture of 1,006 pieces of code; its session's had 4,162:
+
+- 531 of them are in the folder's capture word for word, so the folder's
+  compile had taken them in.
+- The other 475 are not, although the run is the session.
+
+So part of what Jak and Daxter loads from its data stays interpreted however
+often its folder compiles. Why has not been looked for. With the notice for
+any new code, a session of it would show the notice about once a minute
+through most of its length. Put to the maintainer, who made finding out why
+the next step (ADR 0056: "2. Yes").
+
+### The maintainer's answers (2026-11-23)
+
+ADR 0056: "1. Ok 2. Yes 3. Agree 4. Commit and push."
+
+- Their Jak and Daxter folder is to play the game at a 130% EE cycle rate,
+  brought up to date so that its next session writes its pace down.
+- Why part of Jak and Daxter's loaded code stays interpreted is the next
+  step.
+- PS2Native keeps `nextBlockCycles` alone.
+- Their other earlier folders keep their programs until then (not answered,
+  as recommended).

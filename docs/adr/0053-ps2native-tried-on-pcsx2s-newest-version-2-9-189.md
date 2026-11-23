@@ -62,6 +62,15 @@ The session's choices, for the maintainer to decide otherwise:
     Where microVU's macro mode still reads 64 bits there (the field and the
     padding after it, which nothing writes), PS2Native reads the field
     zero-extended, which is what that read gives.
+    *Corrected on 2026-11-23:* there is no padding after the field. In
+    v2.9.170 it was 64 bits, after four bytes of padding; at 32 bits it
+    follows `clipflag` directly, and the four bytes after it are the low half
+    of `Mem`, the address of VU0's memory. That read gives the field and that
+    half, so where PCSX2's VUSyncHack or FullVU0SyncHack game fix is on,
+    PS2Native's zero-extended field is not what it gives. And what follows
+    the field is eight bytes nearer, which the module version should have
+    said ([ADR 0054](0054-ps2native-moves-to-pcsx2-2-9-189-and-the-maintainers-three-new-games-are-made-ready.md);
+    docs/app-log.md, "The 64-bit read of nextBlockCycles").
   - The IOP recompiler keeps a JR's or JALR's target across a delay slot that
     gives up every host register (v2.9.183; PCSX2's pull request 15198, which
     closed the maintainer's issue 15192 of

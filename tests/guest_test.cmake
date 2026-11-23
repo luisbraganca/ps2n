@@ -87,6 +87,7 @@
 #   UPSCALE    internal resolution multiplier for a hardware renderer
 #   SETTLE     frames to run on after the program's last line
 #   PAD        a script of controller input for port 1 (ps2n-host -pad)
+#   PACE       a file for the pace the run keeps, every 300 frames (ps2n-host -pace)
 #   PATCHES    the game's patches to apply (ps2n-host -patches: widescreen,
 #              fps, or both)
 #   PATCH_ARCHIVE  PCSX2's archive of patches to take the game's file from
@@ -446,6 +447,9 @@ if(DEFINED FRAME_EVERY AND NOT "${FRAME_EVERY}" STREQUAL "0")
 endif()
 if(DEFINED PAD AND NOT "${PAD}" STREQUAL "")
 	list(APPEND limits -pad "${PAD}")
+endif()
+if(DEFINED PACE AND NOT "${PACE}" STREQUAL "")
+	list(APPEND limits -pace "${PACE}")
 endif()
 set(ps2n_packaged FALSE)
 if(DEFINED INPUT AND NOT "${INPUT}" STREQUAL "")

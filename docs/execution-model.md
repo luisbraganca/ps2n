@@ -464,6 +464,16 @@ record keeps such a block usable until the next event test
   `VOPMULA` with a single component computes depends on what it holds
   ([ops_vu0.h](../runtime/include/ps2n/ops_vu0.h)). PS2Native's VU0
   instructions are the recompiler's for a block of that instruction alone.
+- Where PCSX2's VUSyncHack or FullVU0SyncHack game fix is on: how far the EE
+  is ahead of VU0 before a COP2 instruction, which decides whether VU0 runs on
+  first.
+  - microVU's macro mode subtracts 64 bits read at `VU0.nextBlockCycles` and
+    compares the whole with 4 (`x86/microVU_Macro.inl`). Since v2.9.174 that
+    field is 32 bits, followed by the low half of `VU0.Mem`. Unless that half
+    is zero, the comparison comes out the same whatever the cycles: one way or
+    the other, depending on where the system put PCSX2's memory.
+  - PS2Native subtracts the field alone (`Cop2Prologue`,
+    [ADR 0056](adr/0056-jak-and-daxter-at-a-130-ee-cycle-rate-its-interpreted-code-looked-for-next-nextblockcycles-kept-alone.md)).
 - The status register in microVU's own layout between two VU0 instructions
   of a block (rule 16). Should VU0 run its micro program in between, when
   the block brings VU0 up to date, microVU writes the register in the

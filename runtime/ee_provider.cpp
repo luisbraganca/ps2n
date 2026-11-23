@@ -1104,9 +1104,13 @@ namespace
 		// How far the EE is ahead of VU0.
 		const auto ahead = []() {
 			s64 cycles = static_cast<s64>(cpuRegs.cycle - VU0.cycle);
-			// The recompiler reads 64 bits there (xSUB(rax, ptr64[&VU0.nextBlockCycles])):
-			// the field, 32 bits since PCSX2 v2.9.174, and the four bytes of padding
-			// after it, which nothing writes. So the field, zero-extended.
+			// The recompiler reads 64 bits there (xSUB(rax, ptr64[&VU0.nextBlockCycles])),
+			// and compares all 64 with 4. The field is 32 bits since PCSX2 v2.9.174,
+			// and the four bytes after it are the low half of VU0.Mem, the address of
+			// VU0's memory. PS2Native subtracts the field alone, zero-extended, which
+			// is what the recompiler did while the field was 64 bits (v2.9.170).
+			// Where one of these two game fixes is on, the two comparisons differ unless
+			// that half is zero (docs/app-log.md, "The 64-bit read of nextBlockCycles").
 			if (EmuConfig.Gamefixes.VUSyncHack || EmuConfig.Gamefixes.FullVU0SyncHack)
 				cycles -= static_cast<u32>(VU0.nextBlockCycles);
 			return cycles;

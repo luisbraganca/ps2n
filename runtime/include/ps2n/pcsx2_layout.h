@@ -267,7 +267,10 @@ namespace ps2n::pcsx2
 		uint32_t macflag;
 		uint32_t statusflag;
 		uint32_t clipflag;
-		int32_t nextBlockCycles; // 32 bits since PCSX2 v2.9.174, four bytes of padding after it
+		// 32 bits since PCSX2 v2.9.174. In v2.9.170 a 64-bit field, with four
+		// bytes of padding before it: Mem and everything after it are eight
+		// bytes nearer since (kGameModuleVersion 5). Mem's low half follows it.
+		int32_t nextBlockCycles;
 		uint8_t* Mem;
 		uint8_t* Micro;
 		uint32_t xgkickaddr;

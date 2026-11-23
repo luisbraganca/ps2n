@@ -86,6 +86,7 @@
 #include "pcsx2/ImGui/ImGuiManager.h"
 #include "pcsx2/Input/InputManager.h"
 #include "pcsx2/MTGS.h"
+#include "pcsx2/PerformanceMetrics.h"
 #include "pcsx2/R3000A.h"
 #include "pcsx2/R5900.h"
 #include "pcsx2/SIO/Pad/Pad.h"
@@ -256,6 +257,7 @@ namespace
 		std::string frame_path; // where the last displayed frame is written, as an image
 		u32 frame_every = 0; // when not zero: the frame on display is also fingerprinted every so many frames
 		std::string pad_path; // a script of controller input for port 1
+		std::string pace_path; // -pace: the pace written down in a run without a window too (KeepPace)
 		std::string profile_path; // where the report of where the CPU thread's time went is written
 		std::string sample_profile_path; // where the same samples are written as a sampled profile of the compiled code, for clang
 		std::string code_size_path; // where the report of how much host code the compiled images became is written
@@ -347,9 +349,9 @@ namespace
 
 	// What WatchNewCode saw of code met for the first time, interpreted, for the
 	// run's report: how many half seconds it looked at, in how many of them a
-	// processor's work interpreted was over the notice's line and the first of
-	// those, the most of each processor's work interpreted in one, and how often
-	// the notice was shown. CPU thread only.
+	// processor ran such code and the first of those, the most of each
+	// processor's work interpreted in one, and how often the notice was shown.
+	// CPU thread only.
 	struct NewCodeSeen
 	{
 		u32 halves = 0;
@@ -358,6 +360,47 @@ namespace
 		double most_ee = 0.0, most_iop = 0.0, most_vu = 0.0; // fractions of the work
 		u32 shown = 0;
 	} s_new_code;
+
+	// What the processors have done since the start, and how much of it was
+	// interpreted (NewCodeCounts): for the notice and for the pace a session
+	// kept. CPU thread only.
+	struct NewCodeCounts
+	{
+		u64 ee = 0, ee_interpreted = 0; // EE cycles
+		u64 ee_new = 0; // EE instructions interpreted, but the BIOS's at boot, which no compile takes in
+		u64 iop = 0, iop_interpreted = 0; // blocks begun
+		u64 vu = 0, vu_interpreted = 0; // blocks carried out
+	};
+
+	// With a session written down in a window: the pace it kept (KeepPace),
+	// written every kPaceEvery frames into pace.txt beside its input.txt, and the
+	// worst of it for the run's report (docs/adr/0055). CPU thread only.
+	constexpr u32 kPaceEvery = 300;
+	struct Pace
+	{
+		std::FILE* file = nullptr;
+		std::string path;
+		// The stretch being measured: where it began, the frame before, the
+		// longest frame of the CPU thread and the longest PCSX2 showed, and what
+		// the processors had done when it began.
+		std::chrono::steady_clock::time_point start, previous;
+		u32 start_frame = 0;
+		double longest = 0.0; // milliseconds
+		float longest_shown = 0.0f; // milliseconds (PerformanceMetrics: the GS thread's frames)
+		double game_pictures = 0.0; // the game's own new pictures to each frame shown, summed over the samples
+		u32 game_samples = 0;
+		NewCodeCounts counts;
+		// The worst of the session.
+		u32 stretches = 0, behind = 0; // behind: under 99% of the console's frames a second
+		double slowest = 0.0;
+		u32 slowest_at = 0;
+		double fewest_pictures = 0.0; // the game's own, a second, at the console's pace
+		u32 fewest_pictures_at = 0;
+		double longest_all = 0.0;
+		u32 longest_at = 0;
+		float longest_shown_all = 0.0f;
+		u32 longest_shown_at = 0;
+	} s_pace;
 
 	// When the host started, when the profile began looking (-profile-from),
 	// and the wall-clock time at the frames asked for with -mark, in seconds
@@ -569,6 +612,11 @@ namespace
 			"                     at the same frames, and always at the last one.\n"
 			"  -settle <n>        Run this many frames on after the marker line before\n"
 			"                     stopping, so that what was drawn last is displayed.\n"
+			"  -pace <file>       Write down the pace the run keeps, every 300 frames, as a\n"
+			"                     session in the window does beside itself (pace.txt): in a\n"
+			"                     run without a window, which goes as fast as it can, what\n"
+			"                     the game itself drew a second, at the console's pace, and\n"
+			"                     the interpreted parts mean what they say; not the rest.\n"
 			"  -pad <file>        Controller input for port 1, from a script: one line for\n"
 			"                     each press, \"<frame> <input> [<frames held> [<value>]]\".\n"
 			"                     Inputs: up down left right triangle circle cross square\n"
@@ -742,6 +790,8 @@ namespace
 				o.times_path = argv[++i];
 			else if (is("-pad") && has_value)
 				o.pad_path = argv[++i];
+			else if (is("-pace") && has_value)
+				o.pace_path = argv[++i];
 			else if (is("-record") && has_value)
 				o.record_dir = argv[++i];
 			else if (is("-sessions") && has_value)
@@ -1215,7 +1265,7 @@ namespace
 		// forward slashes, so every path is put in the platform's form here.
 		for (std::string* path : {&o.boot_path, &o.bios_path, &o.data_dir, &o.out_path, &o.times_path, &o.log_path, &o.capture_path,
 				 &o.bios_capture_path, &o.functions_ran_path, &o.trace_path, &o.trace_against_path, &o.sync_path, &o.sync_against_path,
-				 &o.frame_path, &o.pad_path,
+				 &o.frame_path, &o.pad_path, &o.pace_path,
 				 &o.profile_path, &o.sample_profile_path, &o.vu_report_path, &o.iop_report_path, &o.vu_programs_path, &o.vu_capture_path,
 				 &o.iop_capture_path,
 				 &o.record_dir, &o.sessions_dir, &o.input_path, &o.memcards_dir, &o.patch_archive})
@@ -2894,16 +2944,36 @@ namespace
 						s_frames - 1, seconds, seconds > 0.0 ? static_cast<double>(s_frames - 1) / seconds : 0.0,
 						static_cast<double>(GetVerticalFrequency()));
 				}
+				if (s_pace.file)
+				{
+					// The worst of the pace the session kept (KeepPace), and where.
+					std::fclose(s_pace.file);
+					s_pace.file = nullptr;
+					if (s_pace.stretches > 0)
+					{
+						const std::string drew = s_pace.fewest_pictures_at != 0 ?
+							fmt::format("; the game itself drew {:.1f} pictures a second at the fewest, in the stretch to frame {}",
+								s_pace.fewest_pictures, s_pace.fewest_pictures_at) :
+							std::string();
+						std::fprintf(stderr,
+							"ps2n-host: the pace, every %u frames: %u stretches, %u of them under 99%% of the console's frames a second; "
+							"the slowest %.2f a second, to frame %u; the longest frame %.1f ms, in the stretch to frame %u; the longest "
+							"PCSX2 showed %.1f ms, in the stretch to frame %u%s (%s)\n",
+							kPaceEvery, s_pace.stretches, s_pace.behind, s_pace.slowest, s_pace.slowest_at, s_pace.longest_all,
+							s_pace.longest_at, static_cast<double>(s_pace.longest_shown_all), s_pace.longest_shown_at, drew.c_str(),
+							s_pace.path.c_str());
+					}
+				}
 				if (s_new_code.halves > 0)
 				{
-					// How near the notice's line code met for the first time came
-					// (WatchNewCode), and how often the notice was shown.
+					// When code met for the first time ran interpreted (WatchNewCode),
+					// how much of the work it was at most, and how often the notice
+					// was shown.
 					const std::string first =
 						s_new_code.over > 0 ? fmt::format(", the first at frame {}", s_new_code.first_over) : std::string();
 					std::fprintf(stderr,
-						"ps2n-host: code met for the first time, interpreted: over the notice's line (1%% of a processor's work in half a "
-						"second) in %u of %u half seconds%s; at most %.2f%% of the EE's cycles, %.2f%% of the IOP's blocks and %.2f%% of "
-						"the vector units' blocks in one; the notice shown %u times\n",
+						"ps2n-host: code met for the first time, interpreted: in %u of %u half seconds%s; at most %.2f%% of the EE's "
+						"cycles, %.2f%% of the IOP's blocks and %.2f%% of the vector units' blocks in one; the notice shown %u times\n",
 						s_new_code.over, s_new_code.halves, first.c_str(), s_new_code.most_ee * 100.0, s_new_code.most_iop * 100.0,
 						s_new_code.most_vu * 100.0, s_new_code.shown);
 				}
@@ -3192,6 +3262,31 @@ namespace
 				s_options.ee_cycle_rate_given ? std::optional<int>(s_options.ee_cycle_rate) : std::nullopt,
 				ps2n::host::session::BiosRoms(s_options.bios_path), s_options.packaged))
 			return EXIT_ERROR;
+		if (!s_options.pace_path.empty() || (!s_options.record_dir.empty() && s_options.window))
+		{
+			// The pace the run keeps (KeepPace; docs/adr/0055): beside a session in
+			// the window, or where -pace says.
+			s_pace.path = !s_options.pace_path.empty() ? s_options.pace_path : Path::Combine(s_options.record_dir, "pace.txt");
+			// Others may read it while the run writes it (OpenCFile's file is not shared on Windows).
+			s_pace.file = FileSystem::OpenSharedCFile(s_pace.path.c_str(), "wb", FileSystem::FileShareMode::DenyWrite);
+			if (!s_pace.file)
+			{
+				std::fprintf(stderr, "ps2n-host: cannot write %s\n", s_pace.path.c_str());
+				return EXIT_ERROR;
+			}
+			std::fprintf(s_pace.file,
+				"# The pace this run kept, every %u frames (ps2n-host; docs/adr/0055)%s. Each line: the frame; the seconds\n"
+				"# since the first frame; the frames a second over the stretch that ends there (the console shows about 59.94\n"
+				"# or 50); the longest frame of the stretch on the CPU thread, in milliseconds; the longest frame PCSX2 showed\n"
+				"# in it (its GS thread's, as its performance figures measure them each half second); what the game itself drew\n"
+				"# a second in it, at the console's pace (new pictures, as PCSX2 counts them; -1 where it cannot tell); and\n"
+				"# the part of the EE's cycles, of the IOP's blocks and of the vector units' blocks carried out by an\n"
+				"# interpreter in it, in percent (code met for the first time, which closing the window compiles).\n",
+				kPaceEvery,
+				s_options.window ? " in the window" :
+								   ", without a window: as fast as the machine goes, so only what the game drew and the "
+								   "interpreted parts mean what they say");
+		}
 		if (!s_options.pad_path.empty() && !LoadPadScript(s_options.pad_path))
 			return EXIT_ERROR;
 
@@ -3478,33 +3573,20 @@ void ps2n::host::OnInputDeviceConnected(std::string_view identifier)
 	s_queue.push_back([]() { MapFirstController(); });
 }
 
-// The notice over the picture while the game runs code it met for the first
-// time interpreted, code that closing its window has compiled (docs/adr/0035):
-// in a game's folder (-sessions in a window, which the wizard and make-game.ps1
-// write into its settings), when over the last half second at least 1% of the
-// EE's, the IOP's or the vector units' work was interpreted; for five seconds,
-// at most once a minute. What it sees is kept for the run's report
-// (s_new_code), in a session run again (-input) too, where there is no notice
-// to show. CPU thread, where the providers count.
-static void WatchNewCode()
+// What the processors have done since the start, and how much of it was
+// interpreted. CPU thread, where the providers count.
+static NewCodeCounts ReadNewCodeCounts()
 {
-	struct Counts
-	{
-		u64 ee = 0, ee_interpreted = 0; // EE cycles
-		u64 iop = 0, iop_interpreted = 0; // blocks begun
-		u64 vu = 0, vu_interpreted = 0; // blocks carried out
-	};
-	static Counts s_last;
-	static bool s_have_last = false;
-	static std::optional<std::chrono::steady_clock::time_point> s_shown;
-	if ((s_options.sessions_dir.empty() && s_options.input_path.empty()) || s_frames % 30 != 0)
-		return;
-
-	Counts now;
+	NewCodeCounts now;
 	if (s_options.ee == EEProvider::Ps2n)
 	{
+		const ps2n::ee::Stats& ee = ps2n::ee::GetStats();
 		now.ee = cpuRegs.cycle;
-		now.ee_interpreted = ps2n::ee::GetStats().interpreted_cycles;
+		now.ee_interpreted = ee.interpreted_cycles;
+		u64 boot = 0;
+		for (const u64 n : ee.bios_interpreted[0])
+			boot += n;
+		now.ee_new = ee.interpreted - boot;
 	}
 	if (s_options.iop_ps2n)
 	{
@@ -3523,22 +3605,46 @@ static void WatchNewCode()
 			now.vu_interpreted += interpreted;
 		}
 	}
-	const Counts last = s_last;
+	return now;
+}
+
+// A part of a processor's work, from two readings.
+static double InterpretedShare(u64 all, u64 interpreted)
+{
+	return all > 0 ? static_cast<double>(interpreted) / static_cast<double>(all) : 0.0;
+}
+
+// The notice over the picture while the game runs code it met for the first
+// time interpreted, code that closing its window has compiled (docs/adr/0035):
+// in a game's folder (-sessions in a window, which the wizard and make-game.ps1
+// write into its settings), when over the last half second any of the EE's,
+// the IOP's or the vector units' work was such code, the BIOS's instructions at
+// boot aside, which no compile takes in (docs/adr/0055; until then at least 1%
+// of a processor's work); for five seconds, at most once a minute. What it sees
+// is kept for the run's report (s_new_code), in a session run again (-input)
+// too, where there is no notice to show. CPU thread, where the providers count.
+static void WatchNewCode()
+{
+	static NewCodeCounts s_last;
+	static bool s_have_last = false;
+	static std::optional<std::chrono::steady_clock::time_point> s_shown;
+	if ((s_options.sessions_dir.empty() && s_options.input_path.empty()) || s_frames % 30 != 0)
+		return;
+
+	const NewCodeCounts now = ReadNewCodeCounts();
+	const NewCodeCounts last = s_last;
 	s_last = now;
 	if (!std::exchange(s_have_last, true))
 		return;
 
-	const auto share = [](u64 all, u64 interpreted) {
-		return all > 0 ? static_cast<double>(interpreted) / static_cast<double>(all) : 0.0;
-	};
-	const double ee = share(now.ee - last.ee, now.ee_interpreted - last.ee_interpreted);
-	const double iop = share(now.iop - last.iop, now.iop_interpreted - last.iop_interpreted);
-	const double vu = share(now.vu - last.vu, now.vu_interpreted - last.vu_interpreted);
+	const double ee = InterpretedShare(now.ee - last.ee, now.ee_interpreted - last.ee_interpreted);
+	const double iop = InterpretedShare(now.iop - last.iop, now.iop_interpreted - last.iop_interpreted);
+	const double vu = InterpretedShare(now.vu - last.vu, now.vu_interpreted - last.vu_interpreted);
 	s_new_code.halves++;
 	s_new_code.most_ee = std::max(s_new_code.most_ee, ee);
 	s_new_code.most_iop = std::max(s_new_code.most_iop, iop);
 	s_new_code.most_vu = std::max(s_new_code.most_vu, vu);
-	if (ee < 0.01 && iop < 0.01 && vu < 0.01)
+	if (now.ee_new == last.ee_new && now.iop_interpreted == last.iop_interpreted && now.vu_interpreted == last.vu_interpreted)
 		return;
 	s_new_code.over++;
 	if (s_new_code.first_over == 0)
@@ -3552,6 +3658,91 @@ static void WatchNewCode()
 	s_new_code.shown++;
 	ps2n::host::window::ShowNotice("Running code met for the first time, interpreted",
 		"It may be slower now. PS2Native compiles it when you close the game.", 5);
+}
+
+// The pace a session in the window keeps (docs/adr/0055), or any run given
+// -pace, at every frame: the time since the frame before, the longest of a
+// stretch of kPaceEvery frames; every half second the longest frame PCSX2
+// showed and the game's own new pictures to each frame shown (PerformanceMetrics,
+// which measures the GS thread's frames each half second); and at the end of
+// each stretch a line in pace.txt: the frame, the seconds since the first
+// frame, the frames a second over the stretch, its longest frame on the CPU
+// thread and the longest shown, what the game itself drew a second at the
+// console's pace, and the part of each processor's work interpreted. CPU
+// thread only.
+static void KeepPace()
+{
+	if (!s_pace.file)
+		return;
+	const auto now = s_latest_frame_time;
+	if (s_pace.start_frame == 0)
+	{
+		s_pace.start = s_pace.previous = now;
+		s_pace.start_frame = s_frames;
+		s_pace.counts = ReadNewCodeCounts();
+		return;
+	}
+	s_pace.longest = std::max(s_pace.longest, std::chrono::duration<double, std::milli>(now - s_pace.previous).count());
+	s_pace.previous = now;
+	if (s_frames % 30 == 0)
+	{
+		s_pace.longest_shown = std::max(s_pace.longest_shown, PerformanceMetrics::GetMaximumFrameTime());
+		// The game's own new pictures to each frame shown, over PCSX2's last half
+		// second: what it draws a second at the console's pace, however fast the
+		// run goes.
+		const float shown = PerformanceMetrics::GetFPS();
+		if (shown > 0.0f && PerformanceMetrics::IsInternalFPSValid())
+		{
+			s_pace.game_pictures += static_cast<double>(PerformanceMetrics::GetInternalFPS() / shown);
+			s_pace.game_samples++;
+		}
+	}
+	if (s_frames % kPaceEvery != 0 || s_frames == s_pace.start_frame)
+		return;
+
+	const double seconds = std::chrono::duration<double>(now - s_pace.start).count();
+	const double rate = seconds > 0.0 ? static_cast<double>(s_frames - s_pace.start_frame) / seconds : 0.0;
+	const double console = static_cast<double>(GetVerticalFrequency());
+	const double pictures = s_pace.game_samples > 0 ? s_pace.game_pictures / s_pace.game_samples * console : -1.0;
+	const NewCodeCounts counts = ReadNewCodeCounts();
+	const double ee = InterpretedShare(counts.ee - s_pace.counts.ee, counts.ee_interpreted - s_pace.counts.ee_interpreted);
+	const double iop = InterpretedShare(counts.iop - s_pace.counts.iop, counts.iop_interpreted - s_pace.counts.iop_interpreted);
+	const double vu = InterpretedShare(counts.vu - s_pace.counts.vu, counts.vu_interpreted - s_pace.counts.vu_interpreted);
+	std::fprintf(s_pace.file, "%u %.1f %.2f %.1f %.1f %.1f %.3f %.3f %.3f\n", s_frames,
+		std::chrono::duration<double>(now - s_first_frame_time).count(), rate, s_pace.longest,
+		static_cast<double>(s_pace.longest_shown), pictures, ee * 100.0, iop * 100.0, vu * 100.0);
+	std::fflush(s_pace.file);
+
+	s_pace.stretches++;
+	if (rate < 0.99 * console)
+		s_pace.behind++;
+	if (s_pace.slowest_at == 0 || rate < s_pace.slowest)
+	{
+		s_pace.slowest = rate;
+		s_pace.slowest_at = s_frames;
+	}
+	if (pictures >= 0.0 && (s_pace.fewest_pictures_at == 0 || pictures < s_pace.fewest_pictures))
+	{
+		s_pace.fewest_pictures = pictures;
+		s_pace.fewest_pictures_at = s_frames;
+	}
+	if (s_pace.longest > s_pace.longest_all)
+	{
+		s_pace.longest_all = s_pace.longest;
+		s_pace.longest_at = s_frames;
+	}
+	if (s_pace.longest_shown > s_pace.longest_shown_all)
+	{
+		s_pace.longest_shown_all = s_pace.longest_shown;
+		s_pace.longest_shown_at = s_frames;
+	}
+	s_pace.start = now;
+	s_pace.start_frame = s_frames;
+	s_pace.longest = 0.0;
+	s_pace.longest_shown = 0.0f;
+	s_pace.game_pictures = 0.0;
+	s_pace.game_samples = 0;
+	s_pace.counts = counts;
 }
 
 void ps2n::host::OnGuestFrame()
@@ -3598,8 +3789,10 @@ void ps2n::host::OnGuestFrame()
 	ps2n::host::vureport::Frame(s_frames);
 	ps2n::host::iopreport::Frame(s_frames);
 
-	// Code met for the first time, interpreted: said over the picture.
+	// Code met for the first time, interpreted: said over the picture. And the
+	// pace a session in the window keeps, written down beside it.
 	WatchNewCode();
+	KeepPace();
 
 	// Never run on with a provider other than the one that was asked for. The
 	// VU report's watch stands in front of the VU interpreter when both are

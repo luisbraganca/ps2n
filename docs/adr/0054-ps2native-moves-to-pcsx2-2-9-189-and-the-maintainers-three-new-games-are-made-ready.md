@@ -79,6 +79,23 @@ every number.
   the same time at every one, VU0's FBRST aside, where PS2Native follows the
   console on purpose, as for Agent Under Fire.
 
+Found the same afternoon: the move changed what a module of compiled code and
+the runtime share, but not the version that says so (`kGameModuleVersion`).
+At 32 bits, `VURegs::nextBlockCycles` follows `clipflag` directly, so `Mem`,
+the address of the VU's memory, and everything after it are eight bytes nearer
+(byte 1200 of the structure, where 1208). `pcsx2_layout.h`'s comment had said
+the field had four bytes of padding after it, which is why the version was
+left. A copy of the maintainer's Jak and Daxter folder, its modules compiled
+by 0.3, stopped within 300 frames on the new runtime, and on this morning's
+runtime beside the libraries it was built with; the runtime should have
+refused the modules, as it refuses a module of another version. A folder
+brought up to date compiles its game again before it next plays, so none of
+the maintainer's met it. The version is 5 since (`runtime/game_module.h`).
+Found with it, and put to the maintainer: microVU's macro mode reads 64 bits
+at that field, which in v2.9.189 takes in the low half of `Mem`, where PCSX2's
+VUSyncHack or FullVU0SyncHack game fix is on ([docs/app-log.md](../app-log.md),
+"The 64-bit read of nextBlockCycles").
+
 ## Consequences
 
 - PS2Native no longer reproduces a defect of PCSX2's: the count register's
