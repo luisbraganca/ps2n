@@ -1614,8 +1614,10 @@ TEST_CASE(code_run_outside_the_executable_makes_an_image_of_its_own) {
     capture.code.push_back({0x80076000u, {0x03E00008u, 0x00000000u}});
     capture.code.push_back({0x00100000u, {0x27BDFFF0u}});
     std::vector<Note> notes;
-    std::vector<uint32_t> starts;
-    const ElfFile pieces = codeOutside(elf, capture, notes, starts);
+    const std::vector<OutsideImage> images = codeOutside(elf, capture, notes);
+    CHECK_EQ(images.size(), size_t{1});
+    const ElfFile& pieces = images.front().image;
+    const std::vector<uint32_t>& starts = images.front().starts;
     CHECK(starts == (std::vector<uint32_t>{0x80075000u, 0x80075008u, 0x80076000u}));
     CHECK_EQ(pieces.codeRanges().size(), size_t{2});
     if (pieces.codeRanges().size() == 2) {
@@ -1664,12 +1666,98 @@ TEST_CASE(code_run_outside_the_executable_makes_an_image_of_its_own) {
     CHECK_EQ(empty.size(), size_t{5});
     if (!empty.empty()) CHECK_CONTAINS(empty[0].text, "{0, 0, nullptr, 0, 0, 0, 0},   // (none)");
 
-    // Two different words captured at one address: the first is kept, and said.
+    // Two different words captured at one address: the first is kept, and said
+    // (once, for every piece that disagrees).
     capture.code.push_back({0x80076004u, {0x24020002u}});
     notes.clear();
-    starts.clear();
-    codeOutside(elf, capture, notes, starts);
+    CHECK_EQ(codeOutside(elf, capture, notes).size(), size_t{1});
     CHECK_EQ(notes.size(), size_t{1});
+}
+
+// ADR 0057: blocks a program ran outside its executable where memory held
+// other code at the same addresses at other times. Each version is compiled,
+// in an image of its own where it disagrees with the first, which lists them.
+TEST_CASE(other_versions_of_code_run_outside_the_executable_make_images_of_their_own) {
+    const ElfFile elf = assemble(kCallsAndBranches);
+    Capture capture;
+    capture.blocks.push_back({0x80080000u, {0x24020041u, 0x03E00008u, 0x00000000u}});               // li $v0, 0x41; jr $ra; nop
+    capture.blocks.push_back({0x80080000u, {0x24020042u, 0x03E00008u, 0x00000000u}});               // li $v0, 0x42; ...
+    capture.blocks.push_back({0x80080000u, {0x24020043u, 0x24420001u, 0x03E00008u, 0x00000000u}});  // li $v0, 0x43; addiu ...
+    capture.blocks.push_back({0x80080004u, {0x03E00008u, 0x00000000u}});    // agrees with the first version
+    capture.blocks.push_back({0x8008000Cu, {0x24030001u, 0x03E00008u, 0x00000000u}});   // where no version has words
+    capture.blocks.push_back({0x00100000u, {0x27BDFFF0u}});                 // inside the executable: not this image's
+    capture.normalize();
+    std::vector<Note> notes;
+    const std::vector<OutsideImage> images = codeOutside(elf, capture, notes);
+    CHECK_EQ(images.size(), size_t{3});
+    CHECK_EQ(notes.size(), size_t{1});
+    if (images.size() != 3) return;
+    CHECK(images[0].starts == (std::vector<uint32_t>{0x80080000u, 0x80080004u, 0x8008000Cu}));
+    CHECK(images[1].starts == (std::vector<uint32_t>{0x80080000u}));
+    CHECK(images[2].starts == (std::vector<uint32_t>{0x80080000u}));
+    CHECK_EQ(images[0].image.codeRanges().size(), size_t{1});
+    if (!images[0].image.codeRanges().empty()) CHECK_EQ(images[0].image.codeRanges()[0].end, 0x80080018u);
+    CHECK_EQ(images[2].image.codeRanges().size(), size_t{1});
+    if (!images[2].image.codeRanges().empty()) CHECK_EQ(images[2].image.codeRanges()[0].end, 0x80080010u);
+
+    // Each analysed and generated as an image of code run outside the
+    // executable; the first lists the others.
+    std::vector<Program> programs;
+    for (const OutsideImage& image : images) {
+        Options o;
+        o.useSymbols = false;
+        o.followCode = true;
+        o.capture.entries = image.starts;
+        programs.push_back(analyze(image.image, o));
+    }
+    for (const Program& p : programs) CHECK(p.functionAt(0x80080000u) != nullptr);
+    CHECK_EQ(programs[1].word(0x80080000u), 0x24020042u);
+    CHECK_EQ(programs[2].word(0x80080004u), 0x24420001u);
+    GenerateOptions go;
+    go.id = "t_outside";
+    go.kind = 2;
+    go.crc = pcsx2Crc(elf);
+    go.layerIds = {"t_outside_2", "t_outside_3"};
+    const std::string first = generate(programs[0], go);
+    CHECK_CONTAINS(first, "namespace ps2n_image_t_outside_2 { extern const ps2n::ee::ImageInfo image; }\n");
+    CHECK_CONTAINS(first, "\t&::ps2n_image_t_outside_3::image,\n");
+    CHECK_CONTAINS(first, "\tlayers, 2,\n");
+    go.id = "t_outside_2";
+    go.layerIds.clear();
+    const std::string second = generate(programs[1], go);
+    CHECK_CONTAINS(second, "\tnullptr,   // (none)\n};\n\nconst ImageInfo image = {");
+    CHECK_CONTAINS(second, "\tlayers, 0,\n");
+    go.layerIds = {"not an identifier"};
+    CHECK_THROWS(generate(programs[0], go));
+
+    // Blocks that all agree make one image, as before.
+    Capture agreeing;
+    agreeing.blocks.push_back({0x80080000u, {0x24020041u, 0x03E00008u, 0x00000000u}});
+    agreeing.blocks.push_back({0x80080004u, {0x03E00008u, 0x00000000u}});
+    notes.clear();
+    CHECK_EQ(codeOutside(elf, agreeing, notes).size(), size_t{1});
+    CHECK(notes.empty());
+}
+
+TEST_CASE(a_capture_holds_every_version_of_a_block_run_outside_the_executable) {
+    const Capture capture = parseCapture("[[block]]\nstart = 0x00180000\nwords = [ 0x24020042, 0x03e00008, 0 ]\n"
+                                         "[[block]]\nstart = 0x00180000\nwords = [ 0x24020041, 0x03e00008, 0 ]\n"
+                                         "[[code]]\nstart = 0x00100080\nwords = [ 0x03e00008, 0x24020002 ]\n",
+                                         "blocks.toml");
+    CHECK_EQ(capture.blocks.size(), size_t{2});
+    CHECK_EQ(capture.code.size(), size_t{1});
+    Capture all = capture;
+    all.add(capture);
+    all.normalize();
+    CHECK_EQ(all.blocks.size(), size_t{2});
+    if (all.blocks.size() == 2) CHECK_EQ(all.blocks[0].words[0], 0x24020041u);
+    const Capture again = parseCapture(writeCapture(all, "a comment"), "written.toml");
+    CHECK_EQ(again.blocks.size(), size_t{2});
+    CHECK_EQ(again.code.size(), size_t{1});
+    if (again.blocks.size() == 2) CHECK(again.blocks[1].words == (std::vector<uint32_t>{0x24020042u, 0x03E00008u, 0u}));
+    CHECK_THROWS(parseCapture("[[block]]\nprogram = 0x10\nstart = 0x10\nwords = [ 1 ]\n", "x"));   // a block is no executable's
+    CHECK_THROWS(parseCapture("[[block]]\nwords = [ 1 ]\n", "x"));                                 // no start
+    CHECK_THROWS(parseCapture("[[block]]\nstart = 0x10\n", "x"));                                  // no words
 }
 
 // ---- the I/O processor's code (docs/game-log.md, "G12") --------------------------

@@ -367,7 +367,7 @@ namespace
 	struct NewCodeCounts
 	{
 		u64 ee = 0, ee_interpreted = 0; // EE cycles
-		u64 ee_new = 0; // EE instructions interpreted, but the BIOS's at boot, which no compile takes in
+		u64 ee_new = 0; // pieces of the EE's code met for the first time, recorded for the next compile (ee::Stats::new_code)
 		u64 iop = 0, iop_interpreted = 0; // blocks begun
 		u64 vu = 0, vu_interpreted = 0; // blocks carried out
 	};
@@ -2209,14 +2209,15 @@ namespace
 				" code nothing was compiled from %llu; times compiled code was told to run a block %llu (%llu of them with an answer"
 				" kept from the time before; asked by the record of a block of a page that is not write-protected %llu, by a"
 				" variant's label %llu), times the interpreter carried one out at a label instead %llu, times it was a timeout"
-				" loop's turn %llu; calls passed on to a variant %llu; frames abandoned: %llu for another executable, %llu for stack"
-				" depth; blocks finished by the interpreter %llu\n",
+				" loop's turn %llu; calls passed on to a variant %llu, to another version of code run outside the executable %llu"
+				" (blocks found in one %llu); frames abandoned: %llu for another executable, %llu for stack depth; blocks finished by"
+				" the interpreter %llu\n",
 				stats.image->name, s_options.static_code ? "in use" : "switched off", static_cast<ull>(stats.static_entries),
 				static_cast<ull>(stats.blocks_checked), static_cast<ull>(stats.blocks_unknown), static_cast<ull>(stats.blocks_compiled),
 				static_cast<ull>(stats.blocks_compiled_known), static_cast<ull>(stats.checked_runs), static_cast<ull>(stats.variant_asks),
 				static_cast<ull>(stats.blocks_interpreted_at_labels), static_cast<ull>(stats.timeout_loop_entries),
-				static_cast<ull>(stats.redirected), static_cast<ull>(stats.forced_unwinds), static_cast<ull>(stats.stack_unwinds),
-				static_cast<ull>(stats.left));
+				static_cast<ull>(stats.redirected), static_cast<ull>(stats.redirected_versions), static_cast<ull>(stats.blocks_other_versions),
+				static_cast<ull>(stats.forced_unwinds), static_cast<ull>(stats.stack_unwinds), static_cast<ull>(stats.left));
 			if (stats.cop2_differs)
 			{
 				std::fprintf(stderr,
@@ -2480,12 +2481,14 @@ namespace
 				}
 
 				// The program's code that ran outside its executable and the
-				// BIOS's files (ps2n-recomp compile --outside).
+				// BIOS's files where no compiled code ran it, each block as the
+				// interpreter carried it out, every version of it (ps2n-recomp
+				// compile --outside; docs/adr/0057).
 				for (const ps2n::ee::CapturedCode& code : outside)
 				{
 					std::fprintf(fp,
-						"\n# A block of the program's run at 0x%08x, outside its executable, where nothing was compiled.\n"
-						"[[code]]\n"
+						"\n# A block run at 0x%08x outside the executable, where no compiled code ran it.\n"
+						"[[block]]\n"
 						"start = 0x%08x\n"
 						"words = [",
 						code.start, code.start);
@@ -3583,10 +3586,11 @@ static NewCodeCounts ReadNewCodeCounts()
 		const ps2n::ee::Stats& ee = ps2n::ee::GetStats();
 		now.ee = cpuRegs.cycle;
 		now.ee_interpreted = ee.interpreted_cycles;
-		u64 boot = 0;
-		for (const u64 n : ee.bios_interpreted[0])
-			boot += n;
-		now.ee_new = ee.interpreted - boot;
+		// Code met for the first time: what the run recorded for the next
+		// compile. Not every instruction interpreted: code compiled code cannot
+		// carry out for other reasons, the BIOS's at boot among it, is
+		// interpreted every time, and no compile takes it in (docs/adr/0057).
+		now.ee_new = ee.new_code;
 	}
 	if (s_options.iop_ps2n)
 	{
@@ -3617,10 +3621,11 @@ static double InterpretedShare(u64 all, u64 interpreted)
 // The notice over the picture while the game runs code it met for the first
 // time interpreted, code that closing its window has compiled (docs/adr/0035):
 // in a game's folder (-sessions in a window, which the wizard and make-game.ps1
-// write into its settings), when over the last half second any of the EE's,
-// the IOP's or the vector units' work was such code, the BIOS's instructions at
-// boot aside, which no compile takes in (docs/adr/0055; until then at least 1%
-// of a processor's work); for five seconds, at most once a minute. What it sees
+// write into its settings), when over the last half second the EE met code the
+// run records for the next compile (ee::Stats::new_code, not every instruction
+// interpreted: docs/adr/0057), or the IOP or a vector unit ran a block of such
+// code, however little (docs/adr/0055; until then at least 1% of a processor's
+// work); for five seconds, at most once a minute. What it sees
 // is kept for the run's report (s_new_code), in a session run again (-input)
 // too, where there is no notice to show. CPU thread, where the providers count.
 static void WatchNewCode()

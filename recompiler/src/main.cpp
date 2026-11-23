@@ -14,6 +14,7 @@
 #include "ps2n/util.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <filesystem>
 #include <map>
@@ -282,50 +283,113 @@ int compile(const Args& a) {
                 stats.tailInstructions, stats.leaves, stats.guards, stats.variants);
     for (const Note& n : prog.notes) std::printf("  note: %s\n", n.message.c_str());
 
-    // The code the executable ran outside its own, as the captures hold it: an
-    // image of its own, with the executable's CRC, which the runtime uses
-    // with the executable's (ImageInfo::kind).
+    // The code the executable ran outside its own, as the captures hold it:
+    // images of their own, with the executable's CRC, which the runtime uses
+    // with the executable's (ImageInfo::kind). The first, and one for each
+    // further version of code at the same addresses, which the first lists
+    // (ImageInfo::layers; ADR 0057).
     if (!a.outside.empty()) {
         Capture captured;
         for (const auto& file : a.captures) captured.add(loadCaptureFile(file));
         captured.normalize();
         std::vector<Note> notes;
-        std::vector<uint32_t> starts;
-        const ElfFile pieces = codeOutside(elf, captured, notes, starts);
-        Program other;
-        other.elf = &pieces;
-        if (!starts.empty()) {
-            Options o;
-            o.useSymbols = false;
-            o.followCode = true;
-            o.capture.entries = starts;
-            other = analyze(pieces, o);
+        const std::vector<OutsideImage> images = codeOutside(elf, captured, notes);
+        std::vector<Program> programs(images.size());
+        std::vector<std::string> ids;
+        for (size_t k = 0; k < images.size(); ++k) {
+            ids.push_back(k == 0 ? go.id + "_outside" : strprintf("%s_outside_%zu", go.id.c_str(), k + 1));
+            programs[k].elf = &images[k].image;
+            if (!images[k].starts.empty()) {
+                Options o;
+                o.useSymbols = false;
+                o.followCode = true;
+                o.capture.entries = images[k].starts;
+                programs[k] = analyze(images[k].image, o);
+            }
         }
-        GenerateOptions og;
-        og.id = go.id + "_outside";
-        og.comments = a.comments;
-        og.cop2Decide = a.cop2Decide;
-        og.cop2FullSync = a.cop2FullSync;
-        og.kind = 2;
-        og.name = pieces.name();
-        og.crc = pcsx2Crc(elf);
+
         // In parts as the executable's code is, when it is asked for: a game
         // that loads its code from its data has all of it here (Gran Turismo
-        // 3's, 28.7 MB of C++, took 146 s to compile as one file).
-        og.parts = a.outsideParts;
-        if (og.parts > 1) og.headerName = a.outside.stem().string() + ".h";
-        GenerateStats otherStats;
-        const std::vector<GeneratedFile> otherFiles = generateFiles(other, og, &otherStats);
-        if (a.outside.has_parent_path()) std::filesystem::create_directories(a.outside.parent_path());
-        for (const GeneratedFile& file : otherFiles) {
-            const std::filesystem::path path =
-                file.suffix == ".cpp" ? a.outside : a.outside.parent_path() / (a.outside.stem().string() + file.suffix);
-            writeFileIfChanged(path, file.text);
+        // 3's, 28.7 MB of C++, took 146 s to compile as one file). Then each
+        // further version is a file of its own, named after the first with its
+        // number (<stem>_2.cpp), in parts of its own where it is large; with
+        // one part, all of them are in the one file.
+        const std::filesystem::path dir = a.outside.parent_path();
+        const std::string stem = a.outside.stem().string();
+        if (!dir.empty()) std::filesystem::create_directories(dir);
+        const bool apart = a.outsideParts > 1;
+        std::string together;
+        std::vector<unsigned> partsOf(images.size(), 1);
+        size_t functions[2] = {}, instructions[2] = {};
+        for (size_t k = 0; k < images.size(); ++k) {
+            GenerateOptions og;
+            og.id = ids[k];
+            og.comments = a.comments;
+            og.cop2Decide = a.cop2Decide;
+            og.cop2FullSync = a.cop2FullSync;
+            og.kind = 2;
+            og.name = images[k].image.name();
+            og.crc = pcsx2Crc(elf);
+            if (k == 0) og.layerIds.assign(ids.begin() + 1, ids.end());
+            const std::string fileStem = k == 0 ? stem : strprintf("%s_%zu", stem.c_str(), k + 1);
+            if (apart) {
+                og.parts = k == 0 ? a.outsideParts
+                                  : static_cast<unsigned>(std::clamp<size_t>(programs[k].instructionCount / 10000 + 1, 1, a.outsideParts));
+                if (og.parts > 1) og.headerName = fileStem + ".h";
+            }
+            partsOf[k] = og.parts;
+            GenerateStats stats;
+            const std::vector<GeneratedFile> files = generateFiles(programs[k], og, &stats);
+            functions[k ? 1 : 0] += stats.functions;
+            instructions[k ? 1 : 0] += stats.instructions;
+            if (apart) {
+                for (const GeneratedFile& file : files) writeFileIfChanged(dir / (fileStem + file.suffix), file.text);
+            } else {
+                together += files.front().text;
+            }
         }
-        std::printf("%s: %zu functions, %zu instructions of the code it ran outside its executable\n", og.id.c_str(), otherStats.functions,
-                    otherStats.instructions);
+        if (!apart) writeFileIfChanged(a.outside, together);
+
+        // The files of versions an earlier compile made that this one did not,
+        // and of parts it no longer has: else a game's own compile, which takes
+        // every file of its game's code it finds, would build them into it.
+        std::error_code error;
+        for (const auto& entry : std::filesystem::directory_iterator(dir.empty() ? std::filesystem::path(".") : dir, error)) {
+            const std::string file = entry.path().filename().string();
+            if (file.size() <= stem.size() + 1 || file.compare(0, stem.size() + 1, stem + "_") != 0) continue;
+            size_t at = stem.size() + 1;
+            size_t number = 0;
+            const size_t digits = at;
+            while (at < file.size() && std::isdigit(static_cast<unsigned char>(file[at]))) number = number * 10 + (file[at++] - '0');
+            if (at == digits) continue; // <stem>_part001.cpp: the first image's own
+            const std::string rest = file.substr(at);
+            size_t part = 0;
+            if (rest.compare(0, 5, "_part") == 0 && rest.size() > 9 && rest.compare(rest.size() - 4, 4, ".cpp") == 0) {
+                for (size_t i = 5; i + 4 < rest.size(); ++i) {
+                    if (!std::isdigit(static_cast<unsigned char>(rest[i]))) {
+                        part = 0;
+                        break;
+                    }
+                    part = part * 10 + (rest[i] - '0');
+                }
+                if (part == 0) continue;
+            } else if (rest != ".cpp" && rest != ".h") {
+                continue;
+            }
+            const bool made = apart && number >= 2 && number <= images.size() &&
+                              (part == 0 ? (rest == ".cpp" || partsOf[number - 1] > 1) : part <= partsOf[number - 1] && partsOf[number - 1] > 1);
+            if (!made) std::filesystem::remove(entry.path(), error);
+        }
+
+        std::printf("%s: %zu functions, %zu instructions of the code it ran outside its executable", ids.front().c_str(), functions[0],
+                    instructions[0]);
+        if (images.size() > 1)
+            std::printf("; other versions of it at the same addresses: %zu images, %zu functions, %zu instructions", images.size() - 1,
+                        functions[1], instructions[1]);
+        std::printf("\n");
         for (const Note& n : notes) std::printf("  note: %s\n", n.message.c_str());
-        for (const Note& n : other.notes) std::printf("  note: %s\n", n.message.c_str());
+        for (const Program& p : programs)
+            for (const Note& n : p.notes) std::printf("  note: %s\n", n.message.c_str());
     }
     return 0;
 }
@@ -503,8 +567,9 @@ int capture(const Args& a) {
 
     if (a.out.has_parent_path()) std::filesystem::create_directories(a.out.parent_path());
     writeFileIfChanged(a.out, writeCapture(all, "What runs of a program reported for the recompiler, put together by ps2n-recomp capture."));
-    std::printf("%s: %zu addresses at which a block was interpreted, %zu pieces of code found in memory\n", a.out.string().c_str(),
-                all.entries.size(), all.code.size());
+    std::printf("%s: %zu addresses at which a block was interpreted, %zu pieces of code found in memory, %zu blocks run outside the "
+                "executable\n",
+                a.out.string().c_str(), all.entries.size(), all.code.size(), all.blocks.size());
     return 0;
 }
 

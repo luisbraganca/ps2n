@@ -1,0 +1,48 @@
+# What PS2Native had to interpret of overlay.elf (CRC 3C968F8F).
+# Give this file to the recompiler (ps2n-recomp compile --capture) to have it compiled.
+
+# Addresses at which a block was interpreted.
+entries = [
+]
+
+# A block run at 0x00180000 outside the executable, where no compiled code ran it.
+[[block]]
+start = 0x00180000
+words = [
+  0x24020000, 0x24080003,
+]
+
+# A block run at 0x00180000 outside the executable, where no compiled code ran it.
+[[block]]
+start = 0x00180000
+words = [
+  0x24020003, 0x24420004, 0x03e00008, 0x00000000,
+]
+
+# A block run at 0x00180000 outside the executable, where no compiled code ran it.
+[[block]]
+start = 0x00180000
+words = [
+  0x24020003, 0x24420004,
+]
+
+# A block run at 0x00180008 outside the executable, where no compiled code ran it.
+[[block]]
+start = 0x00180008
+words = [
+  0x00481021, 0x2508ffff, 0x1500fffd, 0x00000000,
+]
+
+# A block run at 0x00180008 outside the executable, where no compiled code ran it.
+[[block]]
+start = 0x00180008
+words = [
+  0x03e00008, 0x00000000,
+]
+
+# A block run at 0x00180018 outside the executable, where no compiled code ran it.
+[[block]]
+start = 0x00180018
+words = [
+  0x03e00008, 0x00000000,
+]

@@ -52,6 +52,11 @@ struct GenerateOptions {
     // Whether to decide that at all (off: every COP2 instruction asks the
     // runtime, as before ADR 0046).
     bool cop2Decide = true;
+    // For the first image of the code an executable ran outside its own
+    // (kind 2): the ids of the images that hold other versions of that code
+    // at the same addresses (ImageInfo::layers; ADR 0057), generated
+    // beside it.
+    std::vector<std::string> layerIds;
 };
 
 // One generated file. `suffix` tells which, and names it once put after the

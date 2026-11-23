@@ -39,8 +39,10 @@ namespace ps2n
 	// 0046); 4, where compiled micro code reads its VIF's TOP and ITOP and
 	// FBRST (vu::Ctx, ADR 0051); 5, PCSX2 v2.9.189 (ADR 0054), whose
 	// VURegs::nextBlockCycles is 32 bits again: what follows it, the address of
-	// the VU's memory among them, is eight bytes nearer.
-	inline constexpr uint32_t kGameModuleVersion = 5;
+	// the VU's memory among them, is eight bytes nearer; 6, the images of
+	// other versions of code run outside an executable (ee::ImageInfo::layers,
+	// ADR 0057).
+	inline constexpr uint32_t kGameModuleVersion = 6;
 
 	// The lists of the compiled code a module holds, each ending with a null
 	// entry, as the recompiler writes them.

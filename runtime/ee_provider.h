@@ -184,6 +184,20 @@ namespace ps2n::ee
 		/// Times a function was entered while one of its variants was the code
 		/// in RAM (or the reverse), and that ran in its place.
 		uint64_t redirected = 0;
+		/// The same where another image of code run outside the executable held
+		/// the version of it in RAM (ImageInfo::layers; docs/adr/0057).
+		uint64_t redirected_versions = 0;
+		/// Blocks of code run outside the executable that one of those other
+		/// images was found to hold.
+		uint64_t blocks_other_versions = 0;
+		/// Code met for the first time that the run recorded for the recompiler,
+		/// which the next compile takes in: a block start in an executable's
+		/// code it had to interpret, code in the place of a function, a version
+		/// of a block run outside the executable (the BIOS's block starts are
+		/// not counted). Code compiled code cannot carry out for other reasons
+		/// is interpreted without being recorded, every time; this does not
+		/// count it (the notice over the picture: docs/adr/0055, 0057).
+		uint64_t new_code = 0;
 		/// Times compiled frames were abandoned because another executable started.
 		uint64_t forced_unwinds = 0;
 		/// Times they were abandoned because the host stack had grown too deep.

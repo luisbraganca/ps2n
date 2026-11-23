@@ -2010,7 +2010,20 @@ std::vector<GeneratedFile> generateFiles(const Program& prog, const GenerateOpti
     cop2 += "};\n\n";
     const uint32_t cop2Settings = (options.cop2FlagHack ? 1u : 0u) | (options.cop2FullSync ? 2u : 0u);
 
-    std::string tables = table + leaders + hashes + variantHashes + variants + cop2;
+    // The images of other versions of the code at the same addresses, for the
+    // first image of code run outside an executable (ImageInfo::layers).
+    std::string layerDeclarations;
+    std::string layers = "static const ImageInfo* const layers[] = {\n";
+    for (const std::string& layer : options.layerIds) {
+        if (layer.empty() || identifierFor(layer) != layer) throw Error("'" + layer + "' cannot name a generated namespace");
+        layerDeclarations += "namespace ps2n_image_" + layer + " { extern const ps2n::ee::ImageInfo image; }\n";
+        layers += "\t&::ps2n_image_" + layer + "::image,\n";
+    }
+    if (options.layerIds.empty()) layers += "\tnullptr,   // (none)\n";
+    layers += "};\n\n";
+    if (!layerDeclarations.empty()) layerDeclarations += "\n";
+
+    std::string tables = table + leaders + hashes + variantHashes + variants + cop2 + layers;
     tables += "const ImageInfo image = {\n";
     tables += "\t" + cstring(options.id) + ",\n";
     tables += "\t" + cstring(name) + ",\n";
@@ -2025,6 +2038,7 @@ std::vector<GeneratedFile> generateFiles(const Program& prog, const GenerateOpti
     if (options.kind > 3) throw Error(strprintf("an image of kind %u", options.kind));
     tables += strprintf("\t%s, %s,\n", kKinds[options.kind], hex(options.kind == 3 ? options.programCrc : 0).c_str());
     tables += strprintf("\tcop2_decided, %zu, %u,\n", stats.cop2Decided.size(), cop2Settings);
+    tables += strprintf("\tlayers, %zu,\n", options.layerIds.size());
     tables += "};\n\n";
 
     // What the runtime knows of the block that begins at each leader
@@ -2035,7 +2049,7 @@ std::vector<GeneratedFile> generateFiles(const Program& prog, const GenerateOpti
     if (!split) {
         std::string out = banner;
         out += "#include \"ps2n/recomp.h\"\n\n";
-        out += usings + open;
+        out += layerDeclarations + usings + open;
         out += "extern const ImageInfo image;\n";
         out += blocks;
         out += declarations + "\n";
@@ -2045,7 +2059,7 @@ std::vector<GeneratedFile> generateFiles(const Program& prog, const GenerateOpti
     } else {
         const std::string include = "#include " + cstring(options.headerName) + "\n\n";
 
-        std::string main = banner + include + usings + open;
+        std::string main = banner + include + layerDeclarations + usings + open;
         main += blocks;
         main += tables + close;
         files.push_back({".cpp", std::move(main)});

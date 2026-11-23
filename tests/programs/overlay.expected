@@ -1,0 +1,6 @@
+-- TEST BEGIN
+answer = 6
+answer = 7
+answer = 6
+answer = 7
+-- TEST END

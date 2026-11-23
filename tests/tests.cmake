@@ -444,9 +444,13 @@ foreach(source IN LISTS program_sources)
 	if(EXISTS "${capture}")
 		# The first build: correct output, with the changed code interpreted and
 		# reported exactly as the capture file in the repository has it (for a
-		# program that loads others, in their code).
+		# program that loads others, in their code; for one that runs code
+		# outside its executable, as the blocks that ran there: ADR 0057).
+		file(READ "${capture}" capture_text)
 		if(loaded_names)
 			set(first_build_report "the executables it loads itself: .* [1-9][0-9]* block starts in its code interpreted")
+		elseif(capture_text MATCHES "\\[\\[block\\]\\]")
+			set(first_build_report "[1-9][0-9]* blocks of the program's ran outside its executable and the BIOS's files")
 		else()
 			set(first_build_report "in the place of [1-9][0-9]* functions memory held code that nothing was compiled from")
 		endif()
@@ -456,12 +460,13 @@ foreach(source IN LISTS program_sources)
 			"-DCAPTURE_EXPECTED=${capture}"
 			"-DREQUIRE_REPORT=${first_build_report}")
 
-		# The build with the capture: nothing of the program is interpreted.
+		# The build with the capture: nothing of the program is interpreted,
+		# inside its executable or outside it.
 		ps2n_add_guest_test("programs/rebuilt/${name}" 120 "programs;capture"
 			"-DELF=${elf}" "-DEXPECTED=${PS2N_PROGRAMS_ROOT}/${name}.expected"
 			-DEE=ps2n -DIOP=jit -DVU=jit -DSTATIC=on "-DIMAGE=${name}"
 			"-DREQUIRE_REPORT=instructions \\(0 inside the executable's code\\)"
-			"-DREQUIRE_REPORT_2=ps2n-host: 0 block starts inside the executable's code had to be interpreted. in the place of 0 functions")
+			"-DREQUIRE_REPORT_2=ps2n-host: 0 block starts inside the executable's code had to be interpreted. in the place of 0 functions memory held code that nothing was compiled from. 0 blocks of the program's ran outside its executable")
 	endif()
 
 	if(loaded_names)

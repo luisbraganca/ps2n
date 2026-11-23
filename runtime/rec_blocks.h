@@ -94,6 +94,7 @@ namespace ps2n::ee::blocks
 		                     // one instruction a cycle
 		uint8_t body = kBodyUnknown; // which compiled code its words are, for the provider: not looked at yet, none,
 		                             // or a number the provider gives
+		const void* owner = nullptr; // for the provider: the image whose code `body` names (ee_provider.cpp)
 		uint32_t* cache = nullptr; // where compiled code keeps what it knows of the block; zeroed when the block goes
 		std::vector<Step> steps;
 		std::vector<uint32_t> words; // of a manual block: [start, nominal_end) as it was when formed

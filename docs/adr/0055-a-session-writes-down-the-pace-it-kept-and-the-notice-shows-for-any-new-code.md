@@ -110,6 +110,12 @@ for any new code", has every number.
   date with these programs, each compiling its game again.
 - **The maintainer's answers** to what was put to them are
   [ADR 0056](0056-jak-and-daxter-at-a-130-ee-cycle-rate-its-interpreted-code-looked-for-next-nextblockcycles-kept-alone.md).
+- **What the notice counts of the EE**, since
+  [ADR 0057](0057-code-run-outside-an-executable-every-version-compiled-picked-by-what-memory-holds.md)
+  the same evening, is the code a run records for the next compile, not every
+  instruction interpreted. Known code that compiled code cannot carry out
+  exactly is interpreted every time without being new; counted, it would have
+  shown the notice in games that meet nothing new.
 
 ## Consequences
 

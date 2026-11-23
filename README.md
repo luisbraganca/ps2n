@@ -71,7 +71,7 @@ work.
   to work on a Linux machine of its own yet.
 - **What a compiled game is held to.** A run on PS2Native is compared with
   the same run on stock PCSX2 at every point where the two can be compared,
-  and with recordings made on a console: 543 tests.
+  and with recordings made on a console: 556 tests.
 - **No recompiler for PS2 code is in a game's folder.** Code a session meets
   for the first time (some games load theirs from their data) runs
   interpreted, slower, with a notice over the picture, and is compiled when

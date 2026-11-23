@@ -70,6 +70,13 @@ struct Capture {
     };
     std::vector<Code> code;
 
+    // Blocks it ran outside the executable, the BIOS's files and the
+    // executables the program loaded itself, where no compiled code ran them:
+    // each as the interpreter carried it out, every version of it where
+    // memory held other code at the same address at another time (ADR 0057).
+    // `program` is zero.
+    std::vector<Code> blocks;
+
     void add(const Capture& other);
     // Sorts the lists and drops what is there twice.
     void normalize();
@@ -126,12 +133,25 @@ Program analyze(const ElfFile& elf, const Options& options = {});
 // Whether `addr` lies in the executable's code.
 bool inCodeRanges(const ElfFile& elf, uint32_t addr);
 
-// The code a capture holds outside the executable's code (code it copied
-// elsewhere and ran there, into kernel memory for one), its blocks put
-// together where they adjoin or overlap: the pieces an image of the code it
-// ran outside its own is made of. `starts` gets where the blocks begin, and
-// `notes` what could not be kept.
-ElfFile codeOutside(const ElfFile& elf, const Capture& capture, std::vector<Note>& notes, std::vector<uint32_t>& starts);
+// The code a capture holds outside the executable's code (code it copied or
+// loaded elsewhere and ran there, into kernel memory for one), as images of
+// their own (ADR 0057):
+//
+//  - the first holds a word at every address any of it holds, put together
+//    where pieces adjoin or overlap, the first piece's word where two
+//    disagree: every [[code]] piece, and every block that agrees with them;
+//  - each further one holds blocks that disagree with the first, other
+//    versions of code at the same addresses (a game that loads other code
+//    into memory it ran code from before), each block put into the first of
+//    them it agrees with.
+//
+// `starts` is where the blocks of each begin, what the analysis follows its
+// code from; `notes` gets what could not be kept.
+struct OutsideImage {
+    ElfFile image;
+    std::vector<uint32_t> starts;
+};
+std::vector<OutsideImage> codeOutside(const ElfFile& elf, const Capture& capture, std::vector<Note>& notes);
 
 // Reads a capture file written by ps2n-host:
 //
@@ -145,6 +165,10 @@ ElfFile codeOutside(const ElfFile& elf, const Capture& capture, std::vector<Note
 //   program = 0x7F9AA984          only for that executable's code
 //   start = 0x00100098
 //   words = [ 0x03e00008, 0x24020002, ... ]
+//
+//   [[block]]                     a block run outside the executable
+//   start = 0x00180000
+//   words = [ 0x24020041, 0x03e00008, 0x00000000 ]
 //
 // '#' starts a comment. Throws ps2n::Error on anything else.
 Capture loadCaptureFile(const std::filesystem::path& file);

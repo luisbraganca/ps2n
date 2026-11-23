@@ -182,9 +182,12 @@ namespace
 	std::unordered_set<u32> s_bios_starts;
 	std::vector<ps2n::ee::BiosFileCheck> s_bios_at_entry;
 
-	// The words of the blocks the interpreter ran where no image in use has
-	// code, as they were then, by the block's start.
-	std::map<u32, std::vector<u32>> s_unheld;
+	// The words of the blocks the interpreter ran outside the executable, the
+	// BIOS's files and the executables the program loaded itself, where no
+	// compiled code ran them, as they were then, by the block's start: every
+	// version of each, where memory held other code there at other times
+	// (docs/adr/0057).
+	std::map<u32, std::vector<std::vector<u32>>> s_unheld;
 
 	// The ROM's directory (ps2n/romdir.h) places the files the EE runs from RAM
 	// where PCSX2 has them.
@@ -327,6 +330,10 @@ namespace
 		u32 index;
 		u32 body;
 		u32 answer;
+		// Where another image holds the version of code run outside the
+		// executable that memory holds (docs/adr/0057): its function, which
+		// runs in this one's place.
+		StaticFn other = nullptr;
 	};
 	constexpr u32 kKnownSize = 1u << 10;
 	Known s_known[kKnownSize];
@@ -467,11 +474,22 @@ namespace
 		Console.WriteLn(Color_StrongGreen, "ps2n: %s compiled code of %s (CRC %08X): %u functions at %08X-%08X, by %s",
 			s_dispatching ? "using" : "NOT using (switched off)", s_image->name, crc, s_image->function_count, s_image->text_start,
 			s_image->text_end, s_image->generator);
-		if (outside && outside->function_count)
+		if (outside && (outside->function_count || outside->layer_count))
 		{
 			Use(*outside);
-			Console.WriteLn(Color_StrongGreen, "ps2n: and of the code it ran outside its executable: %u functions at %08X-%08X",
-				outside->function_count, outside->text_start, outside->text_end);
+			// And the images of other versions of that code at the same
+			// addresses, after it (docs/adr/0057).
+			u32 other_functions = 0;
+			for (u32 i = 0; i < outside->layer_count; i++)
+			{
+				Use(*outside->layers[i]);
+				other_functions += outside->layers[i]->function_count;
+			}
+			Console.WriteLn(Color_StrongGreen, "ps2n: and of the code it ran outside its executable: %u functions at %08X-%08X%s",
+				outside->function_count, outside->text_start, outside->text_end,
+				outside->layer_count ?
+					fmt::format("; other versions of it at the same addresses: {} images, {} functions", outside->layer_count, other_functions).c_str() :
+					"");
 		}
 		for (const ImageInfo* loaded : s_loaded)
 		{
@@ -634,6 +652,19 @@ namespace
 		return false;
 	}
 
+	// Whether an executable the program loaded itself, in use, has a function
+	// that holds `pc`: what runs there is that executable's, which its own
+	// capture names (CaptureCode, RecordMissing).
+	bool HeldByLoaded(u32 pc)
+	{
+		for (const InUse& u : s_in_use)
+		{
+			if (u.image->kind == ps2n::ee::kImageLoaded && FunctionOf(*u.image, pc))
+				return true;
+		}
+		return false;
+	}
+
 	void RecordMissing(u32 pc);
 
 	// RecordMissing() for the block about to be interpreted at `pc`, `block`
@@ -658,7 +689,10 @@ namespace
 			if (offset < u.image->text_end - u.image->text_start)
 			{
 				const u32 bit = offset / 4;
-				s_missing[u.image][bit / 64] |= 1ull << (bit % 64);
+				u64& bits = s_missing[u.image][bit / 64];
+				if (!(bits & (1ull << (bit % 64))) && u.image->kind != ps2n::ee::kImageBios)
+					s_stats.new_code++;
+				bits |= 1ull << (bit % 64);
 				return;
 			}
 		}
@@ -712,6 +746,7 @@ namespace
 				return;
 		}
 		s_captured.push_back(std::move(code));
+		s_stats.new_code++;
 	}
 
 	// Whether memory holds `image`'s code at `pc`: the words of the segment
@@ -1533,18 +1568,33 @@ namespace
 			s_stats.other_mirror++;
 
 		// The BIOS's block starts the interpreter carries out, for the
-		// recompiler; and the words of every block it carries out where no
-		// image in use has code, for whichever image the code belongs to.
+		// recompiler; and the words of every block it carries out outside the
+		// executable, the BIOS's files and the executables the program loaded
+		// itself that no compiled code ran (none held it, or none held what
+		// memory holds), every version of it (docs/adr/0057).
 		if (!(block.flags & blocks::kInterpreted)) [[unlikely]]
 		{
 			block.flags |= blocks::kInterpreted;
 			if (BiosPlaceOf(block.start) < ps2n::ee::kBiosPlaces)
 				s_bios_starts.insert(block.start);
-			if (!InImage(block.start) && !InBiosFile(block.start) && !HeldByImage(block.start) && !s_unheld.count(block.start))
+			if ((block.body == kBodyNone || block.body == kBodyUnknown) && !InImage(block.start) && !InBiosFile(block.start) &&
+				!HeldByLoaded(block.start))
 			{
-				std::vector<u32>& words = s_unheld[block.start];
-				for (u32 i = 0; i < block.size; i++)
-					words.push_back(memRead32(block.start + i * 4));
+				// The words the runtime compares with memory before compiled code
+				// runs the block (IdentifyBody): from its start to where the scan
+				// for its end stopped, past a block cut short there, or to its last
+				// instruction where that is further.
+				const u32 end = std::max(block.nominal_end, block.start + block.size * 4);
+				std::vector<u32> words;
+				words.reserve((end - block.start) / 4);
+				for (u32 at = block.start; at < end; at += 4)
+					words.push_back(memRead32(at));
+				std::vector<std::vector<u32>>& versions = s_unheld[block.start];
+				if (std::find(versions.begin(), versions.end(), words) == versions.end())
+				{
+					versions.push_back(std::move(words));
+					s_stats.new_code++;
+				}
 			}
 		}
 
@@ -1987,8 +2037,11 @@ const std::vector<ps2n::ee::BiosFileCheck>& ps2n::ee::GetBiosFilesAtEntry()
 std::vector<ps2n::ee::CapturedCode> ps2n::ee::GetCodeOutside()
 {
 	std::vector<CapturedCode> code;
-	for (const auto& [start, words] : s_unheld)
-		code.push_back({start, words});
+	for (const auto& [start, versions] : s_unheld)
+	{
+		for (const std::vector<u32>& words : versions)
+			code.push_back({start, words});
+	}
 	return code;
 }
 
@@ -2157,6 +2210,12 @@ uint32_t ps2n::ee::blockStart(const ImageInfo& image, uint32_t index, uint32_t b
 	if (known.epoch == blocks::epoch && known.image == &image && known.index == index && known.body == body && s_dispatching) [[likely]]
 	{
 		cpuRegs.pc = addr;
+		if (known.other)
+		{
+			// Another image's version of the code runs here, as below.
+			s_stats.redirected_versions++;
+			return known.other(addr);
+		}
 		if (!(known.block->flags & blocks::kManual) || blocks::EnterManual(*known.block))
 		{
 			*out = known.answer;
@@ -2186,30 +2245,88 @@ uint32_t ps2n::ee::blockStart(const ImageInfo& image, uint32_t index, uint32_t b
 				return kUnwind;
 		}
 
+		// What the block's words are was decided against an image no longer in
+		// use: decided again.
+		if (block->body != kBodyUnknown && block->owner && block->owner != &image &&
+			!InUseImage(static_cast<const ImageInfo*>(block->owner))) [[unlikely]]
+			block->body = kBodyUnknown;
+
 		if (block->body == kBodyUnknown)
 		{
-			block->body = (block->start == addr) ? IdentifyBody(image, *block, index) : kBodyNone;
+			const ImageInfo* owner = &image;
+			u8 found = (block->start == addr) ? IdentifyBody(image, *block, index) : kBodyNone;
+			// Code run outside the executable: where this image's is not what
+			// memory holds, another version of it at the same addresses may be
+			// (ImageInfo::layers; docs/adr/0057). So may the program's own
+			// version of code in a place of the BIOS's, which it patched there
+			// (the program loader's, in Gran Turismo 3).
+			if (found == kBodyNone && block->start == addr &&
+				(image.kind == ps2n::ee::kImageOutside || image.kind == ps2n::ee::kImageBios))
+			{
+				for (const InUse& u : s_in_use)
+				{
+					if (u.image == &image || u.image->kind != ps2n::ee::kImageOutside)
+						continue;
+					const s32 i = LeaderIndex(*u.image, addr);
+					if (i < 0)
+						continue;
+					const u8 other_body = IdentifyBody(*u.image, *block, static_cast<u32>(i));
+					if (other_body != kBodyNone)
+					{
+						found = other_body;
+						owner = u.image;
+						s_stats.blocks_other_versions++;
+						break;
+					}
+				}
+			}
+			block->body = found;
+			block->owner = owner;
 			s_stats.blocks_checked++;
 			if (block->body == kBodyNone && block->start == addr)
 			{
-				// Memory holds code nothing was compiled from: kept for the recompiler.
+				// Memory holds code nothing was compiled from: kept for the
+				// recompiler. In an executable's function's place, the
+				// function's words; outside the executable, the blocks that
+				// run there, as the interpreter carries them out (RunRecBlock;
+				// docs/adr/0057).
 				s_stats.blocks_unknown++;
-				if (const FunctionInfo* f = FunctionOf(image, addr))
-					CaptureCode(image, *f);
+				if (image.kind != ps2n::ee::kImageOutside)
+				{
+					if (const FunctionInfo* f = FunctionOf(image, addr))
+						CaptureCode(image, *f);
+				}
 				RecordMissing(addr);
 			}
 		}
 
-		if (block->body != kBodyNone && CompiledCodeCanRun(image, *block))
+		const ImageInfo& holder = block->owner ? *static_cast<const ImageInfo*>(block->owner) : image;
+		if (block->body != kBodyNone && CompiledCodeCanRun(holder, *block))
 		{
-			if (block->body != body)
+			if (&holder != &image || block->body != body)
 			{
 				// Other compiled code is in this function's place: its variant
-				// when the function itself was entered, or the reverse. That
-				// runs; its own label will ask here again.
-				s_stats.redirected++;
-				const FunctionInfo& f = *FunctionOf(image, addr);
-				const StaticFn other = (block->body == kBodyFunction) ? f.fn : image.variants[f.first_variant + block->body - 1].fn;
+				// when the function itself was entered, or the reverse; or
+				// another image's version of code run outside the executable.
+				// That runs; its own label will ask here again.
+				const FunctionInfo& f = *FunctionOf(holder, addr);
+				const StaticFn other = (block->body == kBodyFunction) ? f.fn : holder.variants[f.first_variant + block->body - 1].fn;
+				if (&holder != &image)
+				{
+					// Kept, so that this label does not look the block up again
+					// while nothing changes; and the dispatcher enters the other
+					// image here from now on.
+					s_stats.redirected_versions++;
+					known = {&image, blocks::epoch, block, index, body, 0, other};
+					const s32 entry = FindEntry(holder, addr);
+					CacheEntry& e = s_cache[(addr >> 2) & (kCacheSize - 1)];
+					if (entry >= 0 && e.pc == addr)
+						e = {addr, entry, &holder};
+				}
+				else
+				{
+					s_stats.redirected++;
+				}
 				return other(addr);
 			}
 

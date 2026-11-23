@@ -4973,3 +4973,192 @@ ADR 0056: "1. Ok 2. Yes 3. Agree 4. Commit and push."
 - PS2Native keeps `nextBlockCycles` alone.
 - Their other earlier folders keep their programs until then (not answered,
   as recommended).
+
+### Why Jak and Daxter's loaded code stays interpreted (2026-11-23)
+
+Looked for the same afternoon, at the maintainer's word (ADR 0056, "2. Yes").
+
+The runtime captures the code a game runs outside its executables in two
+ways:
+
+- **A block run where no image has compiled code** ("outside its executable,
+  where nothing was compiled").
+- **The words over a compiled function's whole range,** where that function
+  is in memory's place but memory holds other words ("in the place of the
+  function").
+
+The recompile puts every piece captured outside the executable into one image
+of its own, a word at each address (`codeOutside`,
+`recompiler/src/analysis.cpp`). Where two pieces disagree, "the first is
+kept": the piece with the lowest start. That image has no variants. Each of
+the executable's functions can have up to 253 versions, chosen at run time by
+what memory holds; the code outside it can have one.
+
+Jak and Daxter puts different code at the same addresses as it goes through
+its world. Here is each folder's capture, translated as its compile
+translates it, into a scratch folder (`build\measure\outside-conflicts.ps1`):
+
+| Folder | Sessions | Pieces captured | Code outside the executable | Words captured with another value |
+|---|---:|---:|---|---:|
+| Jak and Daxter | 15 | 65,322 | 9,356 functions, 447,935 instructions | 1,006,464 notes at 83,085 addresses |
+| Gran Turismo 3 | 2 | 26,274 | 6,297 functions, 158,869 instructions | 0 |
+| Killzone, Silent Hill 3 | 3, 7 | 9, 8 | 2 functions, 24 instructions each | 0 |
+| Agent Under Fire (two folders) | 1, 1 | 1, 4 | none | 0 |
+
+Gran Turismo 3 loads its code from its data too, and leaves it where it put
+it.
+
+In Jak and Daxter, every version at those 83,085 addresses (about 330 KB)
+but the first runs interpreted:
+
+- it is captured again at the end of each session;
+- it makes the folder compile after the session, for nothing. Its own log
+  has a compile after nearly every session since 2026-11-21.
+
+So its captures grow with every session.
+
+Compiling every captured version would not settle it. A piece "in the place
+of the function" holds the whole range of the function compiled there
+before, most of it memory around the code that ran:
+
+- At `0x011a13e4`, the busiest start, 419 versions were captured, 417 of
+  them 752 words long.
+- By their first eight words they fall into 16 groups, most of which are not
+  code at all: zeros, colours, tags for the graphics hardware.
+- Within the largest group, only the first 59 words agree.
+
+All the pieces together hold 1.65 million words, against the 0.45 million
+instructions compiled outside the executable now. Put to the maintainer: how
+to fix it.
+
+## Code run outside an executable, every version compiled (ADR 0057)
+
+### Built (2026-11-23)
+
+At the maintainer's "Yes implement the recommendation" (ADR 0057):
+
+- **What is captured.** A block the interpreter runs outside the executable,
+  the BIOS's files and the executables a program loads itself, where no
+  compiled code ran it, goes into the capture as a `[[block]]`
+  (`RunRecBlock`; `host/main.cpp`). It holds the words the runtime compares
+  with memory before compiled code runs that block: from its start to where
+  the scan for its end stopped, past a block PCSX2 cut short there. Where
+  memory held other code at the same address at other times, every version
+  is captured.
+  - Before, such code was captured as the words over the whole range of the
+    compiled function in its place (`[[code]]`), most of it memory around the
+    code that ran, and only one version a run.
+- **What is compiled** (`codeOutside`, `ps2n-recomp compile --outside`):
+  - The first image of code run outside the executable is what it was: every
+    `[[code]]` piece of earlier captures, the first word kept where two
+    disagree, and the blocks that agree with it.
+  - A block that disagrees goes into the first further image it agrees with
+    (`<id>_outside_2` and on). Its end is followed from as well as its start,
+    so that what the runtime compares for a block never runs on into another
+    version's words.
+  - The first image lists the others (`ImageInfo::layers`, module version 6).
+  - With parts, as a folder's compile asks, each further image is a file of
+    its own. Without them (the development build), all are in the one file.
+- **What runs** (`blockStart`):
+  - Every image is in use. A block the image compiled code asked from does
+    not hold is identified against the others, and run by the one that holds
+    it (`Block::owner`).
+  - The label that asked keeps that answer (`Known::other`), and the
+    dispatcher enters that image there from then on.
+  - The same is tried where a BIOS image's code is not what memory holds, for
+    the program's own version of code in a place of the BIOS's.
+- **The notice over the picture** (ADR 0055) counts what a run records for
+  the next compile (`ee::Stats::new_code`): a block start an executable's
+  compiled code missed, code in the place of a function, a version of a
+  block run outside the executable. The BIOS's own block starts are not
+  counted.
+  - It no longer counts every instruction interpreted. Code compiled code
+    cannot carry out exactly as PCSX2's would is interpreted every time
+    without being new, and no compile takes it in.
+- **Tests.**
+  - `tests/programs/overlay.s` copies two routines in turns to the same
+    address outside its executable. Its first build reports what
+    `overlay.capture.toml` holds: six blocks, two versions at one address,
+    since PCSX2 had formed one routine's first block shorter where the
+    other's had begun. Rebuilt with it, nothing is interpreted
+    (`programs/rebuilt/overlay`).
+  - Every rebuilt test program must now interpret nothing outside its
+    executable either.
+  - Unit tests of the layering and of `[[block]]`.
+  - Every test passes: on Windows 556, and 554 with the same three disabled;
+    on Linux, inside WSL, 556 and 553; none skipped.
+
+### Measured on Jak and Daxter (2026-11-23)
+
+The maintainer's session of 09:47 UTC (44½ minutes) was run again whole from
+copies of their folder (`build\measure\jak57`, `p57-03.ps1` to
+`p57-05.ps1`, a PS2Native folder of its own, `build\measure\kit57`). Each
+ran as played (VU1 on PCSX2's VU thread, Vulkan at three times), and each run
+was the session at every one of its 3,205 fingerprints.
+
+| Programs, and what the folder had compiled | EE cycles interpreted | Instructions interpreted outside the executable | Recorded for the next compile |
+|---|---:|---:|---|
+| These, from its captures as they were | 580,691,693 (0.07%) | 389,564,108 | 23,549 blocks |
+| ... with those blocks (the first round) | 87,583 | 63,445 | 761 blocks, all of them recorded before |
+| ... with those blocks (as built) | 48,071 | 32,929 | nothing |
+
+- **5eade8c's programs on the folder as it was** (the run of the afternoon)
+  had interpreted code in 427 of the 534 five-second stretches and recorded
+  894 pieces in a function's place and 112 blocks. The second row's run did
+  the same in its stretches. Neither of the last two had code interpreted in
+  any stretch, to the thousandth of a percent.
+- **The first round's 761 blocks** were blocks PCSX2 had cut short, compared
+  past their last instruction. They were found once a block was captured over
+  the span compared and its end made a boundary.
+- **What is left** is known code the runtime interprets because compiled code
+  cannot carry it out exactly as PCSX2's would: 14,750 times a label handed
+  its block to the interpreter, at 377 places. It is never recorded, and the
+  notice does not count it. Counted as interpreted instructions, as this
+  afternoon's rule counted, it would have shown the notice's code in 435 of
+  the session's 5,341 half seconds; counted as what is recorded, in none.
+- **The code:** 205 further images, 17 MB of C++ against the first image's
+  75 MB. The game's module grew from 36.5 MB to 44.0 MB. The copy compiled
+  them in 62 s (225 of its 336 files).
+- **Times:** the runs took 546 to 583 s, and 848 s while Linux built beside
+  them. That is not a timing.
+
+### Gran Turismo 3, Killzone and Agent Under Fire (2026-11-23)
+
+- **Gran Turismo 3.**
+  - Its folder's captures (26,274 pieces) were translated by 5eade8c's
+    recompiler and by the new one. The code it ran outside its executable is
+    the same 6,297 functions and 158,869 instructions. Of the 82 C++ files,
+    two differ, by the table of further images (five lines each, empty).
+  - Its session of 2026-11-18 09:55 was run again from a copy brought up to
+    date, on Vulkan at the console's resolution (PCSX2's null renderer
+    asserts on its AA1 drawing).
+  - The run was the session at every one of its 173 fingerprints, recorded
+    nothing, and found no new code in any of its 288 half seconds.
+  - The code it patches into the BIOS's program loader (`00082000`) had been
+    interpreted every session, 10,135 instructions in this one, and captured
+    again every time. Now it runs compiled from the game's own image, and the
+    run interprets only the BIOS's 51 instructions at boot.
+- **Killzone:** its session of 2026-11-17 22:18, run again from a copy, was
+  the session at every one of its 186 fingerprints. It recorded nothing, and
+  interpreted the BIOS's 51 instructions at boot.
+- **Agent Under Fire** (the folder with all nine of its executables): its
+  session of 2026-11-17 22:44 was the session at every one of its 180
+  fingerprints, and recorded nothing.
+  - It interpreted 0.56% of the EE's cycles, 219 million instructions of the
+    BIOS's kernel after boot, as the folder's own last session did on 0.3's
+    programs (the same count). That folder has no capture of what was
+    interpreted of the BIOS (`captures\bios-capture.toml`). The maintainer's
+    other Agent Under Fire folder and Killzone's have one (22,374 bytes), and
+    their runs interpret only the 51 instructions at boot.
+  - Under this afternoon's rule the notice would have counted that; now it
+    does not.
+
+### The maintainer's answers (2026-11-23)
+
+ADR 0058: "1. Yes", "2. Yes", "3. Yes".
+
+- Committed and pushed.
+- Their game folders are brought up to date with these programs, their
+  PS2Native folders made again from the committed tree first.
+- 0.4 is prepared once they have played a session or two with the updated
+  folders.

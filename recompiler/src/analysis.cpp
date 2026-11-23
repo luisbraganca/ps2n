@@ -57,6 +57,7 @@ void Capture::add(const Capture& other) {
         mine.insert(mine.end(), list.begin(), list.end());
     }
     code.insert(code.end(), other.code.begin(), other.code.end());
+    blocks.insert(blocks.end(), other.blocks.begin(), other.blocks.end());
 }
 
 const Function* Program::functionAt(uint32_t start) const {
@@ -620,34 +621,121 @@ bool inCodeRanges(const ElfFile& elf, uint32_t addr) {
     return false;
 }
 
-ElfFile codeOutside(const ElfFile& elf, const Capture& capture, std::vector<Note>& notes, std::vector<uint32_t>& starts) {
-    std::map<uint32_t, uint32_t> words;
-    for (const Capture::Code& c : capture.code) {
-        // An executable the program loaded itself has its own image.
-        if (c.program != 0 || inCodeRanges(elf, c.start)) continue;
-        starts.push_back(c.start);
+std::vector<OutsideImage> codeOutside(const ElfFile& elf, const Capture& capture, std::vector<Note>& notes) {
+    using Words = std::map<uint32_t, uint32_t>;
+    const auto addressOf = [](const Capture::Code& c, size_t i) { return c.start + 4 * static_cast<uint32_t>(i); };
+    // Whether every word of `c` is the one `words` holds at its address, where
+    // it holds one.
+    const auto agrees = [&](const Words& words, const Capture::Code& c) {
         for (size_t i = 0; i < c.words.size(); ++i) {
-            const uint32_t at = c.start + 4 * static_cast<uint32_t>(i);
-            const auto [it, inserted] = words.try_emplace(at, c.words[i]);
-            if (!inserted && it->second != c.words[i])
-                notes.push_back({at, "two different words were captured at " + hex32(at) + " outside the executable; the first is kept"});
+            const auto it = words.find(addressOf(c, i));
+            if (it != words.end() && it->second != c.words[i]) return false;
         }
+        return true;
+    };
+    const auto add = [&](Words& words, const Capture::Code& c) {
+        for (size_t i = 0; i < c.words.size(); ++i) words.try_emplace(addressOf(c, i), c.words[i]);
+    };
+
+    // The first image: what it has always been, a word at every address any
+    // [[code]] piece holds, the first piece's where two disagree. An
+    // executable the program loaded itself has its own image.
+    Words first;
+    std::vector<uint32_t> firstStarts;
+    std::set<uint32_t> disputed;
+    size_t disagreeing = 0;
+    for (const Capture::Code& c : capture.code) {
+        if (c.program != 0 || inCodeRanges(elf, c.start)) continue;
+        firstStarts.push_back(c.start);
+        bool differs = false;
+        for (size_t i = 0; i < c.words.size(); ++i) {
+            const auto [it, inserted] = first.try_emplace(addressOf(c, i), c.words[i]);
+            if (!inserted && it->second != c.words[i]) {
+                differs = true;
+                disputed.insert(it->first);
+            }
+        }
+        if (differs) ++disagreeing;
     }
-    std::vector<ElfFile::Piece> pieces;
-    for (const auto& [at, w] : words) {
-        if (pieces.empty() || pieces.back().address + pieces.back().bytes.size() != at) pieces.push_back({hex32(at), at, {}});
-        for (int i = 0; i < 4; ++i) pieces.back().bytes.push_back(static_cast<uint8_t>(w >> (8 * i)));
+    if (disagreeing) {
+        notes.push_back({0, strprintf("%zu pieces of code captured outside the executable disagree with others at %zu addresses: the first "
+                                      "word captured at each is kept, and what runs there is captured as blocks from now on",
+                                      disagreeing, disputed.size())});
     }
-    return ElfFile::fromPieces(elf.name() + ", the code it ran outside its executable", 0, pieces);
+
+    // The blocks, as the interpreter ran them: into the first image where
+    // they agree with it, into the first of the others they agree with where
+    // they do not (other versions of code at the same addresses). A block's
+    // words are what the runtime compares with memory before compiled code
+    // runs it; its end is followed from too, so that a block of compiled code
+    // begins there, and the words the runtime compares for it never run on
+    // into another block's of another version.
+    std::vector<Words> others;
+    std::vector<std::vector<uint32_t>> otherStarts;
+    std::vector<uint32_t> firstEnds;
+    std::vector<std::vector<uint32_t>> otherEnds;
+    for (const Capture::Code& c : capture.blocks) {
+        if (inCodeRanges(elf, c.start)) {
+            notes.push_back({c.start, "a block captured at " + hex32(c.start) + " is inside the executable's code; ignored"});
+            continue;
+        }
+        const uint32_t end = addressOf(c, c.words.size());
+        if (agrees(first, c)) {
+            add(first, c);
+            firstStarts.push_back(c.start);
+            firstEnds.push_back(end);
+            continue;
+        }
+        size_t k = 0;
+        while (k < others.size() && !agrees(others[k], c)) ++k;
+        if (k == others.size()) {
+            others.emplace_back();
+            otherStarts.emplace_back();
+            otherEnds.emplace_back();
+        }
+        add(others[k], c);
+        otherStarts[k].push_back(c.start);
+        otherEnds[k].push_back(end);
+    }
+    // Where an image holds the word at a block's end.
+    const auto endsHeld = [](const Words& words, std::vector<uint32_t>& starts, const std::vector<uint32_t>& ends) {
+        for (uint32_t end : ends)
+            if (words.count(end)) starts.push_back(end);
+    };
+    endsHeld(first, firstStarts, firstEnds);
+    for (size_t k = 0; k < others.size(); ++k) endsHeld(others[k], otherStarts[k], otherEnds[k]);
+
+    const auto image = [&](const Words& words, const std::string& name) {
+        std::vector<ElfFile::Piece> pieces;
+        for (const auto& [at, w] : words) {
+            if (pieces.empty() || pieces.back().address + pieces.back().bytes.size() != at) pieces.push_back({hex32(at), at, {}});
+            for (int i = 0; i < 4; ++i) pieces.back().bytes.push_back(static_cast<uint8_t>(w >> (8 * i)));
+        }
+        return ElfFile::fromPieces(name, 0, pieces);
+    };
+    const auto sorted = [](std::vector<uint32_t> list) {
+        std::sort(list.begin(), list.end());
+        list.erase(std::unique(list.begin(), list.end()), list.end());
+        return list;
+    };
+    std::vector<OutsideImage> images;
+    images.reserve(1 + others.size());
+    const std::string name = elf.name() + ", the code it ran outside its executable";
+    images.push_back({image(first, name), sorted(firstStarts)});
+    for (size_t k = 0; k < others.size(); ++k)
+        images.push_back({image(others[k], name + strprintf(", other versions (%zu)", k + 2)), sorted(otherStarts[k])});
+    return images;
 }
 
 Capture parseCapture(const std::string& text, const std::string& fileName) {
     Capture capture;
     enum class List { None, Entries, Words } list = List::None;
-    // What the lines belong to: the file itself, a [[code]] block, or a
-    // [[program]] block (an executable the program loaded itself).
-    enum class Section { Top, Code, Program } section = Section::Top;
+    // What the lines belong to: the file itself, a [[code]] block, a [[block]]
+    // block (a block run outside the executable), or a [[program]] block (an
+    // executable the program loaded itself).
+    enum class Section { Top, Code, Block, Program } section = Section::Top;
     bool haveStart = false;
+    Capture::Code* current = nullptr; // the [[code]] or [[block]] being read
     std::vector<uint32_t>* entries = &capture.entries; // where an entries list goes; none in a [[program]] before its crc
 
     std::istringstream in(text);
@@ -660,9 +748,10 @@ Capture parseCapture(const std::string& text, const std::string& fileName) {
         return static_cast<uint32_t>(*v);
     };
     const auto endSection = [&]() {
-        if (section == Section::Code) {
-            if (!haveStart || capture.code.back().words.empty()) throw fail("a [[code]] block needs a start and words");
-            if (capture.code.back().start & 3) throw fail("a [[code]] block starts at an address that is not a multiple of 4");
+        if (section == Section::Code || section == Section::Block) {
+            const char* name = section == Section::Code ? "[[code]]" : "[[block]]";
+            if (!haveStart || current->words.empty()) throw fail(std::string("a ") + name + " block needs a start and words");
+            if (current->start & 3) throw fail(std::string("a ") + name + " block starts at an address that is not a multiple of 4");
         }
         if (section == Section::Program && !entries) throw fail("a [[program]] block needs a crc");
     };
@@ -674,10 +763,13 @@ Capture parseCapture(const std::string& text, const std::string& fileName) {
         if (rest.empty()) continue;
 
         if (list == List::None) {
-            if (rest == "[[code]]") {
+            if (rest == "[[code]]" || rest == "[[block]]") {
                 endSection();
-                capture.code.emplace_back();
-                section = Section::Code;
+                const bool block = rest == "[[block]]";
+                std::vector<Capture::Code>& list = block ? capture.blocks : capture.code;
+                list.emplace_back();
+                current = &list.back();
+                section = block ? Section::Block : Section::Code;
                 haveStart = false;
                 continue;
             }
@@ -692,14 +784,14 @@ Capture parseCapture(const std::string& text, const std::string& fileName) {
             const std::string_view key = trim(rest.substr(0, eq));
             rest = trim(rest.substr(eq + 1));
             if (key == "start") {
-                if (section != Section::Code) throw fail("'start' outside a [[code]] block");
-                capture.code.back().start = number(rest);
+                if (section != Section::Code && section != Section::Block) throw fail("'start' outside a [[code]] or [[block]] block");
+                current->start = number(rest);
                 haveStart = true;
                 continue;
             }
             if (key == "program") {
                 if (section != Section::Code) throw fail("'program' outside a [[code]] block");
-                capture.code.back().program = number(rest);
+                current->program = number(rest);
                 continue;
             }
             if (key == "crc") {
@@ -707,11 +799,11 @@ Capture parseCapture(const std::string& text, const std::string& fileName) {
                 entries = &capture.programEntries[number(rest)];
                 continue;
             }
-            if (key == "entries" && section != Section::Code) {
+            if (key == "entries" && (section == Section::Top || section == Section::Program)) {
                 if (!entries) throw fail("a [[program]] block's crc comes before its entries");
                 list = List::Entries;
             }
-            else if (key == "words" && section == Section::Code) list = List::Words;
+            else if (key == "words" && (section == Section::Code || section == Section::Block)) list = List::Words;
             else throw fail("unexpected '" + std::string(key) + "'");
             if (rest.empty() || rest[0] != '[') throw fail("expected '[' after '" + std::string(key) + " ='");
             rest.remove_prefix(1);
@@ -724,7 +816,7 @@ Capture parseCapture(const std::string& text, const std::string& fileName) {
             if (!token.empty()) {
                 const uint32_t v = number(token);
                 if (list == List::Entries) entries->push_back(v);
-                else capture.code.back().words.push_back(v);
+                else current->words.push_back(v);
             }
             if (cut == std::string_view::npos) break;
             if (rest[cut] == ']') {
@@ -757,6 +849,8 @@ void Capture::normalize() {
     const auto same = [](const Code& a, const Code& b) { return a.program == b.program && a.start == b.start && a.words == b.words; };
     std::sort(code.begin(), code.end(), before);
     code.erase(std::unique(code.begin(), code.end(), same), code.end());
+    std::sort(blocks.begin(), blocks.end(), before);
+    blocks.erase(std::unique(blocks.begin(), blocks.end(), same), blocks.end());
 }
 
 std::string writeCapture(const Capture& capture, const std::string& comment) {
@@ -777,6 +871,12 @@ std::string writeCapture(const Capture& capture, const std::string& comment) {
     for (const Capture::Code& c : capture.code) {
         out += strprintf("\n# Code found in memory in the place of the function at 0x%08x.\n[[code]]\n", c.start);
         if (c.program) out += strprintf("program = 0x%08x\n", c.program);
+        out += strprintf("start = 0x%08x\nwords = [", c.start);
+        for (size_t i = 0; i < c.words.size(); ++i) out += strprintf("%s0x%08x,", (i % 8) ? " " : "\n  ", c.words[i]);
+        out += "\n]\n";
+    }
+    for (const Capture::Code& c : capture.blocks) {
+        out += strprintf("\n# A block run at 0x%08x outside the executable, where no compiled code ran it.\n[[block]]\n", c.start);
         out += strprintf("start = 0x%08x\nwords = [", c.start);
         for (size_t i = 0; i < c.words.size(); ++i) out += strprintf("%s0x%08x,", (i % 8) ? " " : "\n  ", c.words[i]);
         out += "\n]\n";

@@ -134,6 +134,13 @@ namespace ps2n::ee
 		const Cop2Decided* cop2 = nullptr; // sorted by address
 		uint32_t cop2_count = 0;
 		uint32_t cop2_settings = 0;
+		// For the first image of the code an executable ran outside its own:
+		// the images of other versions of that code at the same addresses, of
+		// the same kind, used with it (a game that loads other code into
+		// memory it ran code from before; docs/adr/0057). The runtime runs a
+		// block with whichever of them holds what memory holds.
+		const ImageInfo* const* layers = nullptr;
+		uint32_t layer_count = 0;
 	};
 
 	// ---- time ---------------------------------------------------------------

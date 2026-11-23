@@ -618,21 +618,61 @@ build with it interprets nothing of the program.
 
 ### Code an executable runs outside its own
 
-Code where no image has a function at all: an overlay loaded into memory
-the executable does not fill, or code a program's libraries copy into
-kernel memory and install as system calls (the game and the test programs
-built with ps2sdk do, at `80075000` and `80076000`). The first run
-interprets it, and the capture file holds the words of each block it ran
-there (`[[code]]`, as they were then; outside the executable's code and the
-BIOS's files, so that nothing of the BIOS's ends up with a program's).
-Given that file, `ps2n-recomp compile --outside` makes an image of its own
-from those words, put together where blocks adjoin, followed from where
-they ran as a BIOS image is (`<id>_outside`, with the executable's CRC), and
-the runtime uses it with the executable's. Its blocks are checked against
-memory like any other's, so other code in that place later is interpreted
-and captured again. The build does this for a program built with a capture
-(the game; `ps2n_add_image ... CAPTURE`); the test programs are built from
-their executables alone and interpret such code.
+Code where no image has a function at all:
+
+- an overlay loaded into memory the executable does not fill;
+- code a game loads from its data (Gran Turismo 3's and Jak and Daxter's are
+  mostly so);
+- code a program's libraries copy into kernel memory and install as system
+  calls (the game and the test programs built with ps2sdk do, at `80075000`
+  and `80076000`).
+
+A run interprets it, and the capture file holds each block it ran there, as
+the interpreter carried it out (`[[block]]`). Where memory held other code
+at the same address at another time, it holds every version of it. Only
+blocks outside the executable's code, the BIOS's files and the executables
+the program loads itself are captured, so that nothing of the BIOS's ends up
+with a program's.
+
+Given that file, `ps2n-recomp compile --outside` makes images of their own,
+with the executable's CRC, which the runtime uses with the executable's
+([ADR 0057](adr/0057-code-run-outside-an-executable-every-version-compiled-picked-by-what-memory-holds.md)):
+
+- **The first** (`<id>_outside`) holds a word at every address the blocks
+  hold, put together where they adjoin, followed from where they ran as a
+  BIOS image is.
+  - Captures written before ADR 0057 held, where a function of it was in
+    memory's place, the words over that function's whole range (`[[code]]`).
+    They go into it as they always did, the first word captured at an
+    address kept where two disagree.
+- **Each further one** (`<id>_outside_2` and on) holds blocks that disagree
+  with the first: other versions of code at the same addresses.
+  - Each block goes into the first of them it agrees with. The first image
+    lists them (`ImageInfo::layers`).
+  - With `--outside-parts`, each is a file of its own beside the first
+    (`<stem>_2.cpp`, in parts of its own where it is large). Without, all
+    are in the one file.
+
+The runtime puts all of them in use. A block in such code is identified as
+any other, against the image compiled code asked from:
+
+- Where that image's code is not what memory holds, it is identified against
+  the others, and run by the one that holds it.
+  - The block's record keeps which image that is.
+  - The label that asked passes the block on to that image, as to a variant,
+    and keeps that answer.
+  - The dispatcher enters that image there from then on.
+- Where none holds it, the block is interpreted and captured, as a block.
+
+So a game that loads other code into memory it ran code from before (Jak and
+Daxter, through its levels) runs compiled any version it met before, and a
+session that meets nothing new captures nothing.
+
+The build does this for a program built with a capture (the game, and a
+test program with a capture file beside it; `ps2n_add_image ... CAPTURE`).
+`tests/programs/overlay.s` copies two routines in turns to the same address
+outside its executable (`programs/first-build/overlay`,
+`programs/rebuilt/overlay`).
 
 ### Executables a program loads itself
 
@@ -641,8 +681,8 @@ loads and starts itself, without the BIOS's loader (Agent Under Fire loads
 its films, its missions and its driving missions so, through the IOP's
 `SifLoadElf`, over the same addresses; ADR 0026). The core sees only the
 first: its CRC stays the boot executable's, so the runtime cannot choose the
-others' code by it, and an image of captured words keeps one word for each
-address, so it cannot hold two of them.
+others' code by it, and captured blocks would hold only what a run met of
+them.
 
 Each is compiled as an image of its own instead (`ps2n-recomp compile
 --loaded-by <boot executable>`, `ImageInfo::kImageLoaded`, tied to the boot

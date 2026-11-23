@@ -422,6 +422,48 @@ Commit and push."):
 - committed and pushed;
 - next, why part of Jak and Daxter's loaded code stays interpreted after its
   folder compiles it.
+
+Found the same day: a folder's compile kept one version of the code its game
+ran outside its executable at each address, the first captured, and Jak and
+Daxter loads other code into memory it ran code from before (83,085 such
+addresses in the maintainer's folder).
+
+At the maintainer's word (ADR 0057: "Yes implement the recommendation"),
+every version is compiled:
+
+- **Captured:** each block run there, as a block (`[[block]]`), every version
+  of it.
+- **Compiled:** the versions that disagree with the first image go into
+  further images, which the first lists (`ImageInfo::layers`, module version
+  6).
+- **Run:** the runtime runs a block with whichever image holds what memory
+  holds. Where a BIOS image's code is not memory's, the game's images are
+  tried too, which made Gran Turismo 3's patched program loader run compiled.
+- **The notice** counts what a run records for the next compile, not every
+  instruction interpreted.
+
+Measured the same evening (docs/app-log.md, "Code run outside an executable,
+every version compiled"):
+
+- **Jak and Daxter:** the maintainer's 44-minute session, run again on a copy
+  of their folder with the blocks its first run recorded compiled, recorded
+  nothing new and interpreted 48,071 EE cycles where 580,691,693. Its notice
+  found new code in none of its half seconds; it would have found some in 435
+  counting interpreted instructions.
+- **Gran Turismo 3, Killzone and Agent Under Fire:** each run again recorded
+  nothing. Gran Turismo 3's C++ differs only by the empty table of further
+  images.
+- **Every run** was its session at every fingerprint.
+- **Tests:** every test passes, 556 and 554 on Windows, 556 and 553 on Linux.
+
+The maintainer's answers the same day (ADR 0058: "1. Yes", "2. Yes", "3.
+Yes"):
+
+- committed and pushed;
+- their game folders brought up to date with these programs, their PS2Native
+  folders made again from the committed tree;
+- 0.4 prepared once they have played a session or two with the updated
+  folders.
 docs/app-log.md,
 "Compiled games against PCSX2, as users get them" and "0.2: a game's folder
 brought up to date".**
@@ -959,7 +1001,8 @@ Decisions:
   PCSX2's on-screen display, which ADR 0012 keeps off. The session's
   choices, for the maintainer to decide otherwise: when over the last half
   second at least 1% of the EE's, the IOP's or the VUs' work was
-  interpreted (any of it since ADR 0055, the BIOS's at boot aside); five
+  interpreted (any of it since ADR 0055, the BIOS's at boot aside; of the
+  EE's, since ADR 0057, what a run records for the next compile); five
   seconds; at most once a minute; top left; the brand's colours.
 - [ADR 0036](docs/adr/0036-the-folder-for-others-how-p4-8-is-done.md):
   P4.8, the folder for others, is next, before P4.7 (the maintainer's
@@ -1309,7 +1352,8 @@ Decisions:
   a run without a window says it too: `ps2n-host -pace <file>`, `game.ps1
   -Pace`), and how much of each processor's work was interpreted; the report
   says the worst. The notice shows for any code met for the first time, the
-  BIOS's instructions at boot aside, still at most once a minute. The
+  BIOS's instructions at boot aside, still at most once a minute (of the
+  EE's, since ADR 0057, what a run records for the next compile). The
   maintainer then wrote that the boss fight lagged on compiled code too ("So
   maybe that was the reason"), read as the game itself drawing fewer pictures
   there, which a session run again with `-pace` can show.
@@ -1330,6 +1374,48 @@ Decisions:
   - **Committed and pushed.**
   - **Not answered:** their other earlier folders keep their programs until
     the next step is done.
+- [ADR 0057](docs/adr/0057-code-run-outside-an-executable-every-version-compiled-picked-by-what-memory-holds.md):
+  the maintainer's "Yes implement the recommendation" (2026-11-23), after the
+  next step of ADR 0056 found why part of Jak and Daxter's loaded code stays
+  interpreted. A folder's compile kept one version of the code a game ran
+  outside its executable at each address, the first captured, and Jak and
+  Daxter loads other code into memory it ran code from before (83,085 such
+  addresses in the maintainer's folder).
+  - **Captured.** A block run outside the executable, the BIOS's files and the
+    executables a program loads itself, where no compiled code ran it, is
+    captured as the interpreter carried it out (`[[block]]`), every version
+    of it.
+  - **Compiled.** The first image of code run outside the executable is what
+    it was (`<id>_outside`, every `[[code]]` piece of earlier captures, and
+    the blocks that agree with it). Blocks that disagree go into further
+    images (`<id>_outside_2` and on), each into the first it agrees with,
+    which the first lists (`ImageInfo::layers`; module version 6).
+  - **Run.** The runtime puts them all in use and runs a block with whichever
+    holds what memory holds (`blockStart`, `Block::owner`).
+  - **Tests.** `tests/programs/overlay.s` and its capture test it, and every
+    rebuilt test program must interpret nothing outside its executable either.
+  - **Measured on Jak and Daxter first,** with Gran Turismo 3 checked to come
+    out unchanged, before a folder or a release.
+    - Jak and Daxter's session, run again with what it met compiled,
+      recorded nothing new.
+    - Gran Turismo 3's C++ differs only by the empty table of further images.
+  - **Found with it:**
+    - a block is captured over the span the runtime compares (past a block
+      PCSX2 cut short), its end a boundary in its image;
+    - where a BIOS image's code is not memory's, the game's images are tried
+      (Gran Turismo 3's patched program loader);
+    - the notice counts what a run records for the next compile
+      (`ee::Stats::new_code`), not every instruction interpreted.
+- [ADR 0058](docs/adr/0058-every-version-compiled-committed-the-maintainers-folders-brought-up-to-date-0-4-after-their-play.md):
+  the maintainer's answers of 2026-11-23 to what ADR 0057's work measured
+  ("1. Yes", "2. Yes", "3. Yes"):
+  - **Committed and pushed.**
+  - **Their game folders brought up to date:** every folder in their
+    PS2Native folder's `games`, and the one inside WSL, compiling its game
+    again. Their PS2Native folders are made again from the committed tree
+    first, each game's own settings kept.
+  - **0.4 prepared after their play:** once they have played a session or two
+    with the updated folders, as 0.3 was made.
 
 ## Layout, build and test
 
@@ -1397,9 +1483,10 @@ tests/disc/               a small disc of our own in three formats, for the runt
 tests/                    CTest registration for programs booted on the core, the driver script, the recorded
                           baselines; recompiles the test programs into the build tree and links them into the host
 tests/programs/           our own test programs, in assembly for core's assembler: selfmod (rewrites its code), bench,
-                          timeout (a delay loop that PCSX2 does not run), countcarry (a defect of PCSX2's
-                          recompiler that PS2Native reproduces), loader (loads the two programs in loader/ itself,
-                          over the same addresses, as a game of several executables does)
+                          timeout (a delay loop that PCSX2 does not run), countcarry (the count register's addition,
+                          32 bits wide since PCSX2 corrected its recompiler), loader (loads the two programs in loader/
+                          itself, over the same addresses, as a game of several executables does), overlay (copies two
+                          routines in turns to one address outside its executable, as Jak and Daxter loads code: ADR 0057)
 tests/sdk/                C test programs built with ps2sdk (prebuilt in bin/), their sources, what stock PCSX2 prints
 tests/games/              controller scripts for runs of a game (button presses we wrote; nothing from a game)
 scripts/windows, linux    build and test entry points
