@@ -5216,3 +5216,151 @@ It is made as 0.3 was:
    date among the tries.
 5. The release's runtime timed again.
 6. A draft for the maintainer to publish.
+
+### Made and tried (2026-11-25)
+
+From `a243df4` (`build\measure\release-04.ps1`, `release-04-all.ps1` and
+`release-04-time.ps1` on Windows; the scratchpad's `wsl\release-04.sh` in WSL).
+
+**The training folders.**
+- **Windows:** kit15's seven were brought up to date by `build\kit`'s wizard and
+  compiled by their own `ps2n-remake --before-play`, in 14 to 161 s each. That
+  wizard is `2cc8125`'s, whose programs are this tree's but for the version they
+  say. The folders' modules had been module version 4.
+- **Linux:** `build/kit-measure`'s seven, with `build/kit-linux` made at the
+  commit, in 8 to 802 s each. Agent Under Fire's nine executables took the 802 s,
+  on ten threads beside the Windows build.
+
+**The runtime's profile of play.**
+- **Windows:** 925 s. Its counting tree, last built before PCSX2's dependency
+  package changed under it (ADR 0054), was moved aside as
+  `build\windows-clang-count-2.9.170` and built from nothing within those 925 s.
+- **Linux:** 959 s. Its dependencies had not changed, so its counting tree was
+  built on from where it was.
+- **Every training run of a session** was the session at every fingerprint
+  compared: 216 over 10,800 frames, 186 over Killzone's whole session, and 60
+  over 3,000 frames of the first sessions.
+- **The release trees** compiled every object again with the new profiles: 754 on
+  Windows, 736 on Linux.
+
+**The tests,** none skipped:
+- Windows' release tree, 554 of 554;
+- Linux's release tree, 553 of 553; its development tree, 556 of 556;
+- with the runtime built with link-time optimization, the three comparisons of
+  `dma/vif/stcycl` are disabled and did not run.
+
+**The downloads.**
+
+| File | Bytes | SHA-256 |
+|---|---:|---|
+| `PS2Native-0.4-windows-x64.zip` | 115,300,159 | `d957095a1d00fe908ac1c14f60feb65ea2e0e2443b720661d281fb08bab70402` |
+| `PS2Native-0.4-linux-x64.tar.xz` | 144,266,640 | `808596f90de792320b5d6c49e80e111eccd9127b1d7fafdbc8468504f2c7801b` |
+
+Their licences name PS2Native 0.4, commit `a243df4`, and PCSX2 v2.9.189 with
+PS2Native's one change.
+
+**Each download, unpacked elsewhere:**
+- **Its runtime** read Silent Hill 3's `.chd` with nothing but the system on
+  `PATH`.
+- **Its wizard** made Jak and Daxter from the disc image (15 s on Windows, 11 s on
+  Linux, the executable alone), and then found that folder up to date.
+- **The maintainer's session `20261119-110909`,** run again whole from that
+  folder, was the session at every one of its 167 fingerprints on both systems:
+  - 202 s on Windows, 215 s on Linux;
+  - the same 41,554,654,904 EE cycles on both, 58.6% of them interpreted, as in a
+    first session.
+- **The pace record on Linux:** that run wrote down its pace (`-pace`), the first
+  Linux run of ADR 0055's record. It wrote 27 stretches and the runtime's summary
+  of the worst of them. A run without a window goes as fast as the machine does,
+  so only what the game drew and the interpreted parts mean what they say.
+- **The update path:** a copy of the Jak and Daxter folder 0.3's own download made
+  was brought up to date by 0.4's wizard and compiled again (9 s on Windows, 7 s
+  on Linux). The start of the session run again from it was the session at every
+  fingerprint compared (18 over 900 frames, 12 over 600), and the wizard, asked
+  again, found it up to date.
+
+**The maintainer's PS2Native folders,** `build\kit` and inside WSL
+`build/PS2Native`, were made again from the release's tree. Their game folders
+are as they were, with `2cc8125`'s programs:
+- on Windows, by their programs and their files' dates;
+- inside WSL, by fingerprints of their programs, modules and memory cards.
+
+**Since the update of 2026-11-23,** the maintainer's one session is SSX Tricky's
+of the morning:
+- 90,377 frames, with VU1 on PCSX2's VU thread;
+- 59.93 frames a second over its 301 stretches, the lowest 58.95 in the first;
+- nothing interpreted in any stretch;
+- after it, the folder counted its profile once more (ADR 0049) and compiled the
+  game with the counts.
+
+**The release's runtime, timed.**
+
+Stock PCSX2's trees were built as PCSX2's releases are, at v2.9.189: link-time
+optimization, no profile, none of PS2Native's changes. Windows' was built from
+nothing, the earlier one, v2.9.170's, kept as `build\windows-clang-stock-2.9.170`.
+
+The comparisons:
+- **On Windows:** copies of kit15's four folders, with their own counts as taken
+  for 0.3, ran on the release's runtime (`<game>-r4`) and on stock PCSX2's
+  (`<game>-s4`).
+- **Inside WSL:** both took `jak-vut`'s modules.
+- **How:** two rounds in turns, both sides with VU1 on PCSX2's VU thread, the
+  maintainer's timed sessions, alone on the computer.
+
+| Game | Stock PCSX2 v2.9.189 | 0.4 | Ratio | 0.3's (against v2.9.170) |
+|---|---:|---:|---:|---:|
+| Jak and Daxter | 34.38, 33.69 s | 31.84, 31.69 s | 0.93 | 0.97 |
+| Gran Turismo 3 | 18.10, 18.80 s | 18.28, 18.65 s | 1.00 | 1.00 |
+| Agent Under Fire | 26.28, 26.56 s | 25.58, 25.80 s | 0.97 | 0.95 |
+| Killzone | 33.06, 33.75 s | 31.09, 31.41 s | 0.94 | 0.94 |
+| Jak and Daxter, under WSL 2 | 37.45, 37.50 s | 36.21, 36.05 s | 0.96 | 0.99 |
+
+- **Agent Under Fire's runs,** on both sides, part from the session at frame
+  1,900: its runs with the thread on do not repeat (ADR 0051).
+- **Every other run** was the session at every fingerprint.
+- **Killzone's counts** were taken on a run of the same controller script as its
+  timed session, so they fit it better than a user's would.
+
+**The draft.** `gh release create v0.4 --draft --prerelease` on `a243df4`, with
+both files and `build\release\notes-0.4.md`; the tag is made when it is
+published.
+
+### Published, and the maintainer's folders given its programs (2026-11-25)
+
+The maintainer's answers: "1. Yes, publish yourself", "2. Yes do that", "3. Yes
+please. When you say my game folders you mean build/kit/games?"
+
+- **Published** at 12:42 UTC (`gh release edit v0.4 --draft=false`), a
+  pre-release, the tag `v0.4` on `a243df4`. GitHub gives the files' sizes as
+  110 MB and 138 MB.
+- **The website and the README** moved to it: the downloads, the eight games
+  tried, Phase 5's paragraph, the platforms' lines and the games tile. The charts
+  are dated measurements and stay as they were.
+- **Their game folders:** on Windows, the nine of `build\kit\games`
+  (`SLES_505.39` aside, a folder a session made for P4.4's check, which no round
+  has updated); inside WSL, Jak and Daxter's in `build/PS2Native/games`. Each was
+  given 0.4's programs by the wizard of their PS2Native folder, made from the
+  release's tree, and compiled its game again (`build\measure\folders-59.ps1`;
+  the scratchpad's `wsl\p59-linux.sh`, kept in `build\measure`).
+
+| Folder | Compiled in | Its start run again |
+|---|---:|---|
+| Jak and Daxter | 66 s | 900 frames, 18 of 18 fingerprints |
+| Killzone | 115 s | 900 frames, 18 of 18 |
+| Silent Hill 3 | 88 s | 90 frames, 1 of 1 |
+| Gran Turismo 3 | 23 s | 900 frames, 18 of 18 |
+| Agent Under Fire | 95 s | 900 frames, 18 of 18 |
+| 007 - Agent Under Fire (nine executables) | 317 s | 900 frames, 18 of 18 |
+| Resident Evil – Code: Veronica X | 38 s | no session yet |
+| Secret Agent Clank | 55 s | no session yet |
+| SSX Tricky | 58 s | its sessions played with VU1 on PCSX2's VU thread |
+| Jak and Daxter, inside WSL | 27 s | 600 frames, 12 of 12 |
+
+- **Asked again,** the wizard found every folder up to date and changed nothing.
+- **Memory cards and sessions** are as they were.
+- **Counting once more:** Jak and Daxter's folder on Windows and SSX Tricky's had
+  counted their profiles; each counts once more after a session of 3 minutes
+  (ADR 0049).
+- **Jak and Daxter inside WSL,** not played since 2026-11-23, still ran 15,157
+  blocks outside its executable by interpreter in those 600 frames. Its next
+  session records them, and the compile after it takes them in.

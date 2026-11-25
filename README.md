@@ -28,20 +28,21 @@ and nothing generated from them is.
 
 ## Download
 
-**PS2Native 0.3**, a pre-release, published on 2026-11-22:
-[the release, with its notes](https://github.com/luisbraganca/ps2n/releases/tag/v0.3).
+**PS2Native 0.4**, a pre-release, published on 2026-11-25:
+[the release, with its notes](https://github.com/luisbraganca/ps2n/releases/tag/v0.4).
 
 | | File | Runs on |
 |---|---|---|
-| Windows | `PS2Native-0.3-windows-x64.zip` | Windows 10 (version 1803 or later) or Windows 11, 64-bit |
-| Linux | `PS2Native-0.3-linux-x64.tar.xz` | 64-bit Linux with glibc 2.35 or later (Ubuntu 22.04, Linux Mint 21 and later) |
+| Windows | `PS2Native-0.4-windows-x64.zip` | Windows 10 (version 1803 or later) or Windows 11, 64-bit |
+| Linux | `PS2Native-0.4-linux-x64.tar.xz` | 64-bit Linux with glibc 2.35 or later (Ubuntu 22.04, Linux Mint 21 and later) |
 
 Nothing to install: unpack it and start **PS2Native**. Its wizard takes five
 steps: the game's disc image, in any format PCSX2 plays; the BIOS; the
 settings, which are PCSX2's own pages for the game; the recompile, a few
 minutes; and the game's folder, which plays the game from then on. A game
-made with 0.1 or 0.2 is brought up to date from the wizard's first step
-("Games made earlier..."), and compiles itself again before it next starts.
+made with an earlier version is brought up to date from the wizard's first
+step ("Games made earlier..."), and compiles itself again before it next
+starts.
 
 It needs a processor with SSE4.1, a graphics driver with Vulkan (or another
 renderer chosen in the game's settings), and about 1 GB of disk for each game
@@ -50,25 +51,28 @@ compiler.
 
 ## Status
 
-A preview. It has been tried with five games, the European releases of
+A preview. It has been tried with eight games: the European releases of
 Killzone, 007: Agent Under Fire, Gran Turismo 3: A-Spec, Jak and Daxter: The
-Precursor Legacy and Silent Hill 3. Every other game is untried and may not
-work.
+Precursor Legacy and Silent Hill 3, and the American releases of SSX Tricky,
+Resident Evil – Code: Veronica X and Secret Agent Clank, the last two as far
+as their menus. Every other game is untried and may not work.
 
 - **Windows x64.** Everything measured was measured there, on Windows 11.
   PCSX2 gives the console's second vector unit (VU1) a thread of its own by
-  default, on a computer with three cores or more, and 0.3 does too, wherever
-  PCSX2 would. On the maintainer's own sessions played back, a compiled game
-  as 0.3 has it takes 0.94 to 1.00 times the time of stock PCSX2 with its VU
-  thread on, built as PCSX2's releases are (Jak and Daxter 0.97, Gran Turismo
-  3 1.00, Agent Under Fire 0.95, Killzone 0.94). 0.2, which kept VU1 on the
-  main processor thread, took 1.02 to 1.65 times that (and 0.98 to 1.00 times
-  the time of stock PCSX2 with VU1 on its main thread too).
+  default, on a computer with three cores or more, and PS2Native does too
+  since 0.3, wherever PCSX2 would. On the maintainer's own sessions played
+  back, a compiled game as 0.4 has it takes 0.93 to 1.00 times the time of
+  stock PCSX2 2.9.189 with its VU thread on, built as PCSX2's releases are
+  (Jak and Daxter 0.93, Gran Turismo 3 1.00, Agent Under Fire 0.97, Killzone
+  0.94). 0.3 took 0.94 to 1.00 times the time of stock PCSX2 2.9.170 so. 0.2,
+  which kept VU1 on the main processor thread, took 1.02 to 1.65 times it
+  (and 0.98 to 1.00 times the time of stock PCSX2 with VU1 on its main thread
+  too).
 - **Linux x64.** Built and tested only inside WSL 2 (Ubuntu 22.04) so far,
   every test passing there, and games made and played there. One game was
-  timed, Jak and Daxter: as 0.3 has it, 0.99 times the time of stock PCSX2
-  with its VU thread on, where 0.2 took about 2.2 times it. Nothing is known
-  to work on a Linux machine of its own yet.
+  timed, Jak and Daxter: as 0.4 has it, 0.96 times the time of stock PCSX2
+  with its VU thread on, where 0.3 took 0.99 times it and 0.2 about 2.2 times.
+  Nothing is known to work on a Linux machine of its own yet.
 - **What a compiled game is held to.** A run on PS2Native is compared with
   the same run on stock PCSX2 at every point where the two can be compared,
   and with recordings made on a console: 556 tests.
@@ -125,7 +129,7 @@ or later ([LICENSE](LICENSE)). It builds on PCSX2 (GPL-3.0 or later,
 Copyright PCSX2 Dev Team), which is included as PCSX2 released it, as a
 submodule under `third_party/pcsx2`. PS2Native's own changes to PCSX2's code
 are the patches in [patches/pcsx2](patches/pcsx2/), each saying what it
-changes and why; 0.3 has the first, 0.2 and 0.1 none. Each download's
+changes and why; 0.3 and 0.4 have the first, 0.2 and 0.1 none. Each download's
 `licences` folder has
 the licence of everything in it, and where the source of each is.
 

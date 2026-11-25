@@ -478,6 +478,29 @@ Done the same evening:
 On 2026-11-25 the maintainer, having played: "I did some play tests,
 everything looks smooth. Let's release 0.4." (ADR 0059). 0.4 is made as 0.3
 was. The version is 0.4 (`version.txt`).
+
+Done the same day:
+
+- committed and pushed (`a243df4`);
+- the training folders brought up to date, and the runtime's profile of play
+  made again on both systems;
+- stock PCSX2's trees built again at v2.9.189, as its releases are, Windows'
+  from nothing;
+- every test passing in the trees the downloads are made from (554 on Windows;
+  553 on Linux, and 556 in its development tree), none skipped;
+- both downloads made and tried: the session at every fingerprint from a folder
+  each wizard made, a folder of 0.3's download brought up to date, the pace
+  record's first run on Linux;
+- their PS2Native folders made again, their game folders unchanged;
+- timed against stock PCSX2 v2.9.189 with its VU thread on: Jak and Daxter
+  0.93, Gran Turismo 3 1.00, Agent Under Fire 0.97, Killzone 0.94; under WSL 2,
+  Jak and Daxter 0.96;
+- a draft pre-release on GitHub for the maintainer to publish.
+
+At the maintainer's answers ("1. Yes, publish yourself", "2. Yes do that", "3.
+Yes please"), 0.4 was published the same day (12:42 UTC, the tag `v0.4`), the
+website and the README moved to it, and their game folders were given its
+programs, each compiling its game again.
 docs/app-log.md,
 "Compiled games against PCSX2, as users get them" and "0.2: a game's folder
 brought up to date".**
@@ -1443,6 +1466,11 @@ Decisions:
   - **The session's choices:** their game folders keep `2cc8125`'s programs
     unless they say otherwise; the website and the README move to 0.4 once it
     is published.
+  - **The maintainer's answers to the draft** ("1. Yes, publish yourself", "2.
+    Yes do that", "3. Yes please"): published by the session (the tag `v0.4`
+    on `a243df4`); the website and the README moved to 0.4; their game folders
+    (`build\kit\games` on Windows, `build/PS2Native/games` inside WSL) given
+    0.4's programs.
 
 ## Layout, build and test
 
