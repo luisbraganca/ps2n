@@ -5162,3 +5162,57 @@ ADR 0058: "1. Yes", "2. Yes", "3. Yes".
   PS2Native folders made again from the committed tree first.
 - 0.4 is prepared once they have played a session or two with the updated
   folders.
+
+### The maintainer's folders brought up to date (2026-11-23)
+
+From `2cc8125`, the wizard's own way (`build\measure\folders-58.ps1`; inside
+WSL the scratchpad's `wsl\p58-linux.sh`, after `release-03-linux.sh theirs`):
+
+- **Their PS2Native folders,** on Windows and inside WSL, were made again from
+  the tree, their games kept.
+- **The nine game folders on Windows** were given its programs and compiled
+  their games again. Agent Under Fire's folder with all nine of its
+  executables took 319 s, the others 23 to 163 s.
+- **Six of them have a session played with VU1 on the CPU thread.** Its first
+  900 frames (Silent Hill 3's 90), run again with the new programs, were the
+  session at every fingerprint compared.
+- **Resident Evil – Code: Veronica X and Secret Agent Clank** have no session
+  yet. SSX Tricky's one session was played with VU1 on PCSX2's VU thread.
+- **Asked again,** the wizard found every folder up to date and changed nothing.
+  The memory cards are as they were, and every session is there.
+- **Jak and Daxter inside WSL:** brought up to date and compiled in 34 s. The
+  first 600 frames of its longest session were the session at every
+  fingerprint compared.
+  - Those 600 frames ran 15,157 blocks outside the executable by
+    interpreter, which its earlier captures could not keep as versions. They
+    are recorded as blocks now.
+- **The maintainer's next Jak and Daxter session,** on either system, records
+  them, shows the notice, and compiles once more after it.
+- **`SLES_505.39`,** a folder a session made for P4.4's check, is left as it
+  is.
+
+## 0.4 (ADR 0059)
+
+### What it holds, and how it is made (2026-11-25)
+
+The maintainer, having played with their folders brought up to date: "I did
+some play tests, everything looks smooth. Let's release 0.4."
+
+Since 0.3, 0.4 holds:
+
+- PCSX2 v2.9.189 (ADR 0054);
+- the pace a session keeps written down, and the notice for any new code
+  (ADR 0055);
+- every version of code run outside an executable compiled, the runtime
+  picking the one memory holds (ADR 0057; module version 6).
+
+It is made as 0.3 was:
+
+1. The version 0.4, committed and pushed.
+2. The runtime's profile of play made again on each system, the training
+   folders brought up to date first.
+3. The trees the downloads come from built with it and tested.
+4. Both downloads made and tried, a folder of 0.3's download brought up to
+   date among the tries.
+5. The release's runtime timed again.
+6. A draft for the maintainer to publish.

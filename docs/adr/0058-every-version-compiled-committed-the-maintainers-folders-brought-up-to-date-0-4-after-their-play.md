@@ -53,6 +53,37 @@ The maintainer's answers: "1. Yes", "2. Yes", "3. Yes".
    - both downloads made from the committed and pushed tree and tried;
    - a draft on GitHub, which the maintainer publishes.
 
+## Done the same evening
+
+- **Committed and pushed:** `2cc8125`.
+- **Their PS2Native folders made again from it**, their games kept: on Windows
+  (`build\kit`) and inside WSL (`build/PS2Native`).
+- **Nine folders on Windows** given its programs, each compiling its game
+  again (23 to 319 s; `build\measure\folders-58.ps1`, as `folders-02.ps1`):
+  - Jak and Daxter;
+  - Killzone;
+  - Silent Hill 3;
+  - Gran Turismo 3;
+  - both Agent Under Fire folders;
+  - Resident Evil – Code: Veronica X;
+  - Secret Agent Clank;
+  - SSX Tricky.
+- **Checking them:**
+  - Where a folder has a session played with VU1 on the CPU thread, its start
+    was run again with the new programs and was the session at every
+    fingerprint compared.
+  - Asked again, the wizard found every folder up to date and changed
+    nothing.
+  - Every folder's memory cards are as they were, and every session is
+    there.
+  - `SLES_505.39`, a folder a session made for P4.4's check, which no round
+    has updated, is left as it is.
+- **Inside WSL:** their Jak and Daxter folder the same, the start of its
+  longest session run again and the session at every fingerprint compared.
+- **What to expect:** Jak and Daxter's next session, on either system, still
+  meets versions of code its old captures could not keep. It records them,
+  shows the notice, and compiles once more after the session.
+
 ## Consequences
 
 - **Their sessions now.** The maintainer's next sessions run on what was

@@ -464,6 +464,20 @@ Yes"):
   folders made again from the committed tree;
 - 0.4 prepared once they have played a session or two with the updated
   folders.
+
+Done the same evening:
+
+- committed and pushed (`2cc8125`);
+- their PS2Native folders made again from it;
+- their nine game folders on Windows and the one inside WSL brought up to
+  date, each compiling its game again;
+- where a session can be run again as itself, its start run again with the
+  new programs: the session at every fingerprint;
+- memory cards unchanged.
+
+On 2026-11-25 the maintainer, having played: "I did some play tests,
+everything looks smooth. Let's release 0.4." (ADR 0059). 0.4 is made as 0.3
+was. The version is 0.4 (`version.txt`).
 docs/app-log.md,
 "Compiled games against PCSX2, as users get them" and "0.2: a game's folder
 brought up to date".**
@@ -1416,6 +1430,19 @@ Decisions:
     first, each game's own settings kept.
   - **0.4 prepared after their play:** once they have played a session or two
     with the updated folders, as 0.3 was made.
+- [ADR 0059](docs/adr/0059-0-4-is-released.md): the maintainer's words of
+  2026-11-25, "I did some play tests, everything looks smooth. Let's release
+  0.4."
+  - **Made as 0.3 was:** the version 0.4, committed and pushed. The runtime's
+    profile of play is made again on each system from that tree, the training
+    folders brought up to date first (module version 6).
+  - **The downloads:** both made from that tree and tried, a folder of 0.3's
+    download brought up to date among the tries.
+  - **The draft:** the release's runtime timed again before the notes quote a
+    number, then a draft pre-release on GitHub for the maintainer to publish.
+  - **The session's choices:** their game folders keep `2cc8125`'s programs
+    unless they say otherwise; the website and the README move to 0.4 once it
+    is published.
 
 ## Layout, build and test
 
@@ -1496,7 +1523,7 @@ docs/                     brief, assessment, decisions (adr/), proof-of-concept 
                           proposal and log (app-log.md); and the website,
                           which GitHub Pages serves from this folder: index.html, 404.html, .nojekyll, site/
                           (site/README.md says what belongs to it and where each of its numbers comes from)
-version.txt               PS2Native's version (0.3), which the build gives the programs as ps2n_version.h (ADR 0042;
+version.txt               PS2Native's version (0.4), which the build gives the programs as ps2n_version.h (ADR 0042;
                           not VERSION: the root is on the include path, and Windows would find it for <version>)
 build/, deps/             build trees and downloaded dependency packages; git-ignored
 ```
