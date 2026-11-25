@@ -67,6 +67,12 @@ namespace ps2n::host::window
 		void (*focus_lost)(); // the keys that were down will not be seen coming up
 		void (*close_requested)();
 		void (*shot_requested)(uint32_t number); // a check asks for the picture on display (window-check.ps1)
+		// The pointer over the picture, in its pixels; its buttons (0 left, 1
+		// right, 2 middle); its wheel, in notches. For PS2Native's menu over the
+		// game (host/menu.h), which alone uses them.
+		void (*pointer_moved)(float x, float y);
+		void (*pointer_button)(uint32_t button, bool pressed);
+		void (*wheel)(float dx, float dy);
 	};
 
 	/// The message by which another program asks for the picture on display,
@@ -112,6 +118,11 @@ namespace ps2n::host::window
 	/// Alt+Enter and F11 switch as well.
 	bool IsFullscreen();
 	void SetFullscreen(bool enabled);
+
+	/// Closes the window as its close button does: the runner is told
+	/// (Listener::close_requested), and the window goes when the machine has
+	/// stopped. Any thread. The menu's Quit.
+	void RequestClose();
 
 	/// A notice over the picture, PS2Native's own (docs/adr/0035), never the
 	/// core's on-screen display: `title` on a line above `text`, in the

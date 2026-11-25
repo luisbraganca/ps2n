@@ -8,7 +8,8 @@
 // in pcsx2-gsrunner/Main.cpp of PCSX2 v2.9.189, Copyright 2002-2026 PCSX2 Dev
 // Team, GPL-3.0+. Changes for PS2Native: the window is PS2Native's (its class,
 // its icon, its title), it follows the display's scaling, it can cover the
-// screen, and it passes on the keyboard, its size and its closing. And a
+// screen, and it passes on the keyboard, the pointer (for PS2Native's menu
+// over the game, docs/adr/0060), its size and its closing. And a
 // notice of PS2Native's own can show over the picture (docs/adr/0035). The
 // Linux part is PS2Native's, the same window drawn as PCSX2's renderers draw
 // into an X11 one (common/WindowInfo.h).
@@ -386,6 +387,46 @@ namespace ps2n::host::window
 						return 0;
 					break;
 
+				// The pointer, for PS2Native's menu over the game (host/menu.h).
+				case WM_MOUSEMOVE:
+					if (s_listener.pointer_moved)
+						s_listener.pointer_moved(static_cast<float>(static_cast<short>(LOWORD(lParam))),
+							static_cast<float>(static_cast<short>(HIWORD(lParam))));
+					return 0;
+
+				case WM_LBUTTONDOWN:
+				case WM_RBUTTONDOWN:
+				case WM_MBUTTONDOWN:
+				case WM_LBUTTONUP:
+				case WM_RBUTTONUP:
+				case WM_MBUTTONUP:
+				{
+					const bool down = (message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN);
+					const uint32_t button = (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP) ? 0 :
+											(message == WM_RBUTTONDOWN || message == WM_RBUTTONUP) ? 1 :
+																										  2;
+					// Held, the pointer stays the window's until let go, outside it too.
+					if (down)
+						SetCapture(hwnd);
+					else if (!(wParam & (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON)))
+						ReleaseCapture();
+					if (s_listener.pointer_button)
+						s_listener.pointer_button(button, down);
+					return 0;
+				}
+
+				case WM_MOUSEWHEEL:
+				case WM_MOUSEHWHEEL:
+					if (s_listener.wheel)
+					{
+						const float notches = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / static_cast<float>(WHEEL_DELTA);
+						if (message == WM_MOUSEWHEEL)
+							s_listener.wheel(0.0f, notches);
+						else
+							s_listener.wheel(notches, 0.0f);
+					}
+					return 0;
+
 				case WM_KILLFOCUS:
 					if (s_listener.focus_lost)
 						s_listener.focus_lost();
@@ -590,6 +631,13 @@ namespace ps2n::host::window
 	{
 		if (const HWND hwnd = s_window.load())
 			PostMessageW(hwnd, kMessageSetFullscreen, enabled ? 1 : 0, 0);
+	}
+
+	void RequestClose()
+	{
+		// The close button's own message, which the window's thread takes up.
+		if (const HWND hwnd = s_window.load())
+			PostMessageW(hwnd, WM_CLOSE, 0, 0);
 	}
 
 	void ShowNotice(const std::string& title, const std::string& text, uint32_t seconds)
@@ -1101,6 +1149,38 @@ namespace ps2n::host::window
 					break;
 				}
 
+				// The pointer, for PS2Native's menu over the game (host/menu.h).
+				case MotionNotify:
+					if (event.xmotion.window == window && s_listener.pointer_moved)
+						s_listener.pointer_moved(static_cast<float>(event.xmotion.x), static_cast<float>(event.xmotion.y));
+					break;
+
+				case ButtonPress:
+				case ButtonRelease:
+				{
+					if (event.xbutton.window != window)
+						break;
+					const bool down = (event.type == ButtonPress);
+					const unsigned int button = event.xbutton.button;
+					if (button >= Button4 && button <= 7)
+					{
+						// The wheel: a press for each notch (4 and 5 up and down, 6 and 7
+						// left and right).
+						if (down && s_listener.wheel)
+						{
+							if (button == Button4 || button == Button5)
+								s_listener.wheel(0.0f, button == Button4 ? 1.0f : -1.0f);
+							else
+								s_listener.wheel(button == 6 ? -1.0f : 1.0f, 0.0f);
+						}
+					}
+					else if (s_listener.pointer_button && button >= Button1 && button <= Button3)
+					{
+						s_listener.pointer_button(button == Button1 ? 0 : button == Button3 ? 1 : 2, down);
+					}
+					break;
+				}
+
 				case FocusOut:
 					if (event.xfocus.window == window && event.xfocus.mode == NotifyNormal)
 					{
@@ -1240,7 +1320,8 @@ namespace ps2n::host::window
 
 		XSetWindowAttributes attributes = {};
 		attributes.background_pixel = BlackPixel(s_display, DefaultScreen(s_display));
-		attributes.event_mask = KeyPressMask | KeyReleaseMask | FocusChangeMask | StructureNotifyMask | PropertyChangeMask;
+		attributes.event_mask = KeyPressMask | KeyReleaseMask | FocusChangeMask | StructureNotifyMask | PropertyChangeMask |
+								PointerMotionMask | ButtonPressMask | ButtonReleaseMask;
 		const Window window = XCreateWindow(s_display, DefaultRootWindow(s_display), x, y, static_cast<unsigned>(client_width),
 			static_cast<unsigned>(client_height), 0, CopyFromParent, InputOutput, CopyFromParent, CWBackPixel | CWEventMask, &attributes);
 		if (!window)
@@ -1423,6 +1504,18 @@ namespace ps2n::host::window
 			Post([enabled]() { ApplyFullscreen(enabled); });
 	}
 
+	void RequestClose()
+	{
+		// As the window manager's WM_DELETE_WINDOW is taken up (Handle).
+		if (s_window.load() && !s_hidden)
+		{
+			Post([]() {
+				if (s_listener.close_requested)
+					s_listener.close_requested();
+			});
+		}
+	}
+
 	void ShowNotice(const std::string& title, const std::string& text, uint32_t seconds)
 	{
 		if (s_window.load() && !s_hidden)
@@ -1472,6 +1565,10 @@ namespace ps2n::host::window
 	}
 
 	void SetFullscreen(bool enabled)
+	{
+	}
+
+	void RequestClose()
 	{
 	}
 

@@ -501,6 +501,23 @@ At the maintainer's answers ("1. Yes, publish yourself", "2. Yes do that", "3.
 Yes please"), 0.4 was published the same day (12:42 UTC, the tag `v0.4`), the
 website and the README moved to it, and their game folders were given its
 programs, each compiling its game again.
+
+The same afternoon, at the maintainer's words (ADR 0060: an overlay opened
+with Esc to quit, edit the controls and choose the graphics card, "the only
+acceptable changeable settings post-compilation", with "PS2 style sounds"),
+a menu over the game, built and checked; at their answers ("1. Yes", "2. Yes",
+"3. No") committed and pushed, given to their game folders, opened by Esc only
+(not by a controller); in no release yet:
+
+- **Esc** opens it over a game played in its window; the machine is held
+  between two frames meanwhile, so a session with the menu opened in it runs
+  again as itself (checked: every fingerprint).
+- **Its pages:** Resume; Controls (each input's key and controller input,
+  kept in the game's data); Graphics card (taken at once, kept in the game's
+  settings file); Quit, which asks first.
+- **Its sounds,** PS2Native's own in the PS2's manner, played beside the
+  game's.
+- docs/app-log.md, "A menu over the game (ADR 0060)".
 docs/app-log.md,
 "Compiled games against PCSX2, as users get them" and "0.2: a game's folder
 brought up to date".**
@@ -1471,6 +1488,33 @@ Decisions:
     on `a243df4`); the website and the README moved to 0.4; their game folders
     (`build\kit\games` on Windows, `build/PS2Native/games` inside WSL) given
     0.4's programs.
+- [ADR 0060](docs/adr/0060-a-menu-over-the-game-opened-with-esc-quit-controls-and-the-graphics-card.md):
+  the maintainer's words of 2026-11-25, "I want to add an overlay that opens
+  when pressing Esc, allowing the user to Quit (loose progress warning), Edit
+  keybinds and controllers and which GPU is in use (if needed and it if makes
+  it easier, ask for a game restart, I don't mind). I think those are the only
+  acceptable changeable settings post-compilation.", "Use a fancy sound when
+  it opens, when it closes and when clicking/hovering the menu items." and "Use
+  PS2 style sounds".
+  - **The menu** (`host/menu.cpp`): Esc opens it over a game played in its
+    window, the game held between two frames meanwhile (a session with the
+    menu in it runs again as itself); Resume, Controls, Graphics card, Quit
+    (asking first). Drawn in the picture with the ImGui of PCSX2's renderer by
+    PS2Native's own code, never PCSX2's own menus.
+  - **Controls:** the controller in port 1, each input's key and controller
+    input set by pressing it, a connected controller chosen to play, the
+    defaults back; kept in the game's data (`inputprofiles\controls.ini`).
+  - **Graphics card:** the cards PCSX2 lists for the game's renderer, a choice
+    taken at once (PCSX2 makes its renderer again on it) and kept in the
+    game's settings file; no restart.
+  - **Sounds** (`host/menu_sound.cpp`): in the manner of the PlayStation 2's
+    own menus, made by PS2Native's own code (nothing of Sony's), played
+    through SDL beside the game's sound at its volume, none where it is muted.
+  - The session's choices are listed in the ADR, for the maintainer to decide
+    otherwise.
+  - **The maintainer's answers** ("1. Yes", "2. Yes", "3. No"): committed and
+    pushed; their game folders given these programs; only Esc opens the menu,
+    never a controller.
 
 ## Layout, build and test
 
@@ -1513,7 +1557,9 @@ host/                     ps2n-host: console frontend for the PCSX2 core, the te
                           core's providers: sync_trace, vu_report, iop_report); with -window, where a game
                           is played (window.cpp: a Win32 window on Windows, an X11 one on Linux; on Linux
                           shm_names.cpp gives PCSX2's one shared memory name for every process the process's
-                          number); a game's launcher on Windows (launcher.cpp:
+                          number), with PS2Native's menu over the game, opened with Esc (menu.cpp: the controls,
+                          the graphics card, quitting; its sounds in menu_sound.cpp; ADR 0060); a game's
+                          launcher on Windows (launcher.cpp:
                           the program a game's folder is started from, which starts the runtime beside it,
                           never with anything left to compile: ADR 0040);
                           and a disc image's files read through PCSX2's own readers of every format it plays

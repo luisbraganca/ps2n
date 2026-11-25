@@ -13,6 +13,8 @@
 
 #include "disc.h"
 #include "host_state.h"
+#include "menu.h"
+#include "menu_sound.h"
 #include "profile.h"
 
 // PS2Native's version: version.txt at the repository's root, which the build
@@ -261,6 +263,7 @@ namespace
 		std::string profile_path; // where the report of where the CPU thread's time went is written
 		std::string sample_profile_path; // where the same samples are written as a sampled profile of the compiled code, for clang
 		std::string code_size_path; // where the report of how much host code the compiled images became is written
+		std::string menu_sounds_dir; // -menu-sounds: where the menu's sounds are written as WAV files (host/menu_sound.h)
 		u32 profile_from = 1; // the frame from which the profile looks (startup left out when later than 1)
 		std::string vu_report_path; // where the report of what the vector units ran is written (vu_report.h)
 		std::string iop_report_path; // where the report of what the IOP ran is written (iop_report.h)
@@ -346,6 +349,14 @@ namespace
 	bool s_controller_mapped = false;
 	std::chrono::steady_clock::time_point s_first_frame_time;
 	std::chrono::steady_clock::time_point s_latest_frame_time;
+
+	// With -window: how often the menu over the game was opened, and for how
+	// long in all. The frames' times leave that out (s_latest_frame_time is the
+	// time played), so that the pace a session writes down is the game's, not
+	// the menu's (docs/adr/0060). CPU thread only.
+	u32 s_menu_opened = 0;
+	std::chrono::steady_clock::duration s_menu_time{0};
+	std::string s_game_title; // the game's name, as the core found it on the disc (OnGameChanged), for the menu
 
 	// What WatchNewCode saw of code met for the first time, interpreted, for the
 	// run's report: how many half seconds it looked at, in how many of them a
@@ -583,7 +594,11 @@ namespace
 			"                     (left stick), T F G H (right stick), I J K L (triangle,\n"
 			"                     square, cross, circle), Q E (L1 R1), 1 3 (L2 R2), 2 4 (L3\n"
 			"                     R3), Return (start), Backspace (select). Alt+Enter or F11\n"
-			"                     covers the screen. The picture is drawn on Vulkan at three\n"
+			"                     covers the screen. Esc opens PS2Native's menu over the\n"
+			"                     game, which waits meanwhile: Resume, Controls (each\n"
+			"                     input's key and controller input, kept in the data\n"
+			"                     directory's inputprofiles\\controls.ini), Graphics card,\n"
+			"                     Quit. The picture is drawn on Vulkan at three\n"
 			"                     times the console's resolution, into an area of 1920 by\n"
 			"                     1080, which covers the screen where a window that size\n"
 			"                     would not fit (-renderer, -upscale, -window-size). The\n"
@@ -700,6 +715,9 @@ namespace
 			"                     host code each compiled image this host holds became,\n"
 			"                     by the kind of generated line, from the host's own\n"
 			"                     debugging information. Needs nothing else. Windows only.\n"
+			"  -menu-sounds <folder>  Instead of booting a file, write the sounds of the\n"
+			"                     menu over a game (Esc, with -window) into this folder as\n"
+			"                     WAV files, to be listened to. Needs nothing else.\n"
 			"\n"
 			"A disc image's files, read through PCSX2's own readers of every format it\n"
 			"plays (.iso, .bin, .img, .mdf, .chd, .cso, .zso, .gz), each a mode of its own:\n"
@@ -830,6 +848,8 @@ namespace
 				o.sample_profile_path = argv[++i];
 			else if (is("-code-size") && has_value)
 				o.code_size_path = argv[++i];
+			else if (is("-menu-sounds") && has_value)
+				o.menu_sounds_dir = argv[++i];
 			else if (is("-vu-report") && has_value)
 				o.vu_report_path = argv[++i];
 			else if (is("-iop-report") && has_value)
@@ -1179,6 +1199,17 @@ namespace
 				std::fprintf(stderr, "ps2n-host: more than one file to boot ('%s')\n", arg);
 				return false;
 			}
+		}
+
+		// The menu's sounds, written to be listened to: no machine.
+		if (!o.menu_sounds_dir.empty())
+		{
+			if (!o.boot_path.empty() || o.selftest || o.window)
+			{
+				std::fputs("ps2n-host: -menu-sounds takes nothing else\n", stderr);
+				return false;
+			}
+			return true;
 		}
 
 		// A report on the host itself, which runs no machine.
@@ -1883,6 +1914,11 @@ namespace
 			si.SetIntValue("EmuCore/GS", "ExclusiveFullscreenControl", 0);
 #endif
 
+			// The player's own controls, where they set them in the menu over the
+			// game: in the place of the defaults (host/menu.h, docs/adr/0060).
+			if (ps2n::host::menu::LoadControls(si, EmuFolders::DataRoot))
+				std::fputs("ps2n-host: the controls are the player's own (inputprofiles/controls.ini)\n", stderr);
+
 			// What the core can draw over the picture: none of it, unless asked
 			// for (docs/adr/0012-ps2native-branding-not-pcsx2s.md).
 			if (!o.osd)
@@ -1962,8 +1998,30 @@ namespace
 	// up between two frames.
 	void OnWindowKey(u32 code, bool pressed)
 	{
+		// Esc, and every key while the menu over the game is open, are the
+		// menu's (host/menu.h); the others the controller's.
 		ps2n::host::RunOnCPUThread(
-			[code, pressed]() { InputManager::InvokeEvents(InputManager::MakeHostKeyboardKey(code), pressed ? 1.0f : 0.0f); }, false);
+			[code, pressed]() {
+				if (!ps2n::host::menu::OnKey(code, pressed))
+					InputManager::InvokeEvents(InputManager::MakeHostKeyboardKey(code), pressed ? 1.0f : 0.0f);
+			},
+			false);
+	}
+
+	// The pointer, which only the menu uses.
+	void OnWindowPointerMoved(float x, float y)
+	{
+		ps2n::host::RunOnCPUThread([x, y]() { ps2n::host::menu::OnPointerMoved(x, y); }, false);
+	}
+
+	void OnWindowPointerButton(u32 button, bool pressed)
+	{
+		ps2n::host::RunOnCPUThread([button, pressed]() { ps2n::host::menu::OnPointerButton(button, pressed); }, false);
+	}
+
+	void OnWindowWheel(float dx, float dy)
+	{
+		ps2n::host::RunOnCPUThread([dx, dy]() { ps2n::host::menu::OnWheel(dx, dy); }, false);
 	}
 
 	void OnWindowResized(u32 width, u32 height, float scale)
@@ -1979,7 +2037,12 @@ namespace
 	void OnWindowFocusLost()
 	{
 		// The keys that are down will come up in some other window.
-		ps2n::host::RunOnCPUThread([]() { InputManager::ClearBindStateFromSource(InputManager::MakeHostKeyboardKey(0)); }, false);
+		ps2n::host::RunOnCPUThread(
+			[]() {
+				InputManager::ClearBindStateFromSource(InputManager::MakeHostKeyboardKey(0));
+				ps2n::host::menu::OnFocusLost();
+			},
+			false);
 	}
 
 	void OnWindowShotRequested(uint32_t number)
@@ -1995,47 +2058,18 @@ namespace
 
 	// Gives the first controller the pad in port 1, beside the keyboard: the
 	// mapping PCSX2 would make for it automatically, added to the bindings that
-	// are there. CPU thread, between two frames.
+	// are there. Not where the player's own controls are the game's (set in the
+	// menu over the game, kept in its folder: host/menu.h), which say what the
+	// controller is. CPU thread, between two frames.
 	void MapFirstController()
 	{
-		if (s_controller_mapped)
+		if (s_controller_mapped || ps2n::host::menu::ControlsAreOwn())
 			return;
-
-		const InputManager::GenericInputBindingMapping mapping = InputManager::GetGenericBindingMapping("SDL-0");
-		const auto find = [&mapping](GenericInputBinding generic) -> const char* {
-			for (const std::pair<GenericInputBinding, std::string>& entry : mapping)
-			{
-				if (entry.first == generic)
-					return entry.second.c_str();
-			}
-			return nullptr;
-		};
 
 		u32 mapped = 0;
 		{
 			std::unique_lock<std::mutex> lock = Host::GetSettingsLock();
-			const std::string section = Pad::GetConfigSection(0);
-			const Pad::ControllerInfo* info = Pad::GetConfigControllerType(s_settings, section.c_str(), 0);
-			if (!info)
-				return;
-
-			for (const InputBindingInfo& binding : info->bindings)
-			{
-				if (binding.generic_mapping == GenericInputBinding::Unknown)
-					continue;
-				if (const char* source = find(binding.generic_mapping))
-				{
-					s_settings.AddToStringList(section.c_str(), binding.name, source);
-					mapped++;
-				}
-			}
-			if (info->vibration_caps == Pad::VibrationCapabilities::LargeSmallMotors)
-			{
-				if (const char* source = find(GenericInputBinding::SmallMotor))
-					s_settings.SetStringValue(section.c_str(), "SmallMotor", source);
-				if (const char* source = find(GenericInputBinding::LargeMotor))
-					s_settings.SetStringValue(section.c_str(), "LargeMotor", source);
-			}
+			mapped = ps2n::host::menu::AddController(s_settings, "SDL-0");
 		}
 		if (mapped == 0)
 			return;
@@ -2073,6 +2107,54 @@ namespace
 			std::fclose(file);
 		if (!written || !FileSystem::RenamePath(part.c_str(), path.c_str()))
 			std::fprintf(stderr, "ps2n-host: cannot write %s\n", path.c_str());
+	}
+
+	// The menu over the game (host/menu.h; docs/adr/0060), opened with Esc. The
+	// machine is held here while it is open, between two frames, where the
+	// window's requests are taken up (OnGuestFrame). The core is told it is
+	// paused (its sound and vibration paused, its frame limiter started again
+	// after) and running again before the frame's event test ends, so that
+	// execution is never left: nothing of the machine changes, and a session in
+	// which the menu was opened runs again as itself. What was held of the
+	// controller comes up as the menu opens and as it closes: in between, the
+	// keys and the controllers are the menu's. CPU thread.
+	void HoldForMenu()
+	{
+		const auto opened = std::chrono::steady_clock::now();
+		s_menu_opened++;
+		VMManager::SetState(VMState::Paused);
+		Pad::ResetAllControllerInputs();
+		ps2n::host::menu::Open(!s_options.window_title.empty() ? s_options.window_title :
+							   !s_game_title.empty()           ? s_game_title :
+																 std::string(kWindowTitle));
+
+		// The menu's frames, about 60 a second, until it closes or the window is.
+		auto next = std::chrono::steady_clock::now();
+		while (!s_close_requested.load())
+		{
+			DrainQueue();
+			InputManager::PollSources();
+			if (const u32 shot = s_shot_requested.exchange(0))
+				WriteShot(shot);
+			if (!ps2n::host::menu::Tick())
+				break;
+			next += std::chrono::microseconds(16667);
+			const auto now = std::chrono::steady_clock::now();
+			if (next < now)
+				next = now;
+			std::this_thread::sleep_until(next);
+		}
+
+		ps2n::host::menu::Close();
+		Pad::ResetAllControllerInputs();
+		if (ps2n::host::menu::QuitChosen())
+		{
+			// Quit: as the window's close button, the session ending at this frame.
+			s_close_requested.store(true);
+			ps2n::host::window::RequestClose();
+		}
+		VMManager::SetState(VMState::Running);
+		s_menu_time += std::chrono::steady_clock::now() - opened;
 	}
 
 	// Reads back the frame the GS has on display and fingerprints it, so that
@@ -2947,6 +3029,13 @@ namespace
 						s_frames - 1, seconds, seconds > 0.0 ? static_cast<double>(s_frames - 1) / seconds : 0.0,
 						static_cast<double>(GetVerticalFrequency()));
 				}
+				if (s_menu_opened > 0)
+				{
+					// The menu over the game (host/menu.h), left out of the time above.
+					std::fprintf(stderr, "ps2n-host: the menu was opened %u times, for %.1f s in all; its sounds asked for: %s%s\n",
+						s_menu_opened, std::chrono::duration<double>(s_menu_time).count(),
+						ps2n::host::menu::sound::Counts().c_str(), EmuConfig.SPU2.OutputMuted ? " (muted: none played)" : "");
+				}
 				if (s_pace.file)
 				{
 					// The worst of the pace the session kept (KeepPace), and where.
@@ -3226,6 +3315,18 @@ namespace
 			return EXIT_USAGE;
 		}
 
+		// The menu's sounds, to be listened to: no machine needed.
+		if (!s_options.menu_sounds_dir.empty())
+		{
+			if (!ps2n::host::menu::sound::WriteFiles(s_options.menu_sounds_dir))
+			{
+				std::fprintf(stderr, "ps2n-host: cannot write the menu's sounds into %s\n", s_options.menu_sounds_dir.c_str());
+				return EXIT_ERROR;
+			}
+			std::fprintf(stderr, "ps2n-host: the menu's sounds: %s\n", s_options.menu_sounds_dir.c_str());
+			return EXIT_MARKER;
+		}
+
 		// How much host code the compiled images became: no machine needed.
 		if (!s_options.code_size_path.empty())
 		{
@@ -3307,8 +3408,8 @@ namespace
 		// while the machine runs on its own.
 		if (s_options.window)
 		{
-			const ps2n::host::window::Listener listener = {
-				&OnWindowKey, &OnWindowResized, &OnWindowFocusLost, &OnWindowCloseRequested, &OnWindowShotRequested};
+			const ps2n::host::window::Listener listener = {&OnWindowKey, &OnWindowResized, &OnWindowFocusLost,
+				&OnWindowCloseRequested, &OnWindowShotRequested, &OnWindowPointerMoved, &OnWindowPointerButton, &OnWindowWheel};
 			if (!ps2n::host::window::Create(s_options.window_title.empty() ? std::string(kWindowTitle) : s_options.window_title,
 					s_options.window_width, s_options.window_height, listener))
 			{
@@ -3377,6 +3478,7 @@ namespace
 		cpu_thread.Join();
 		watchdog.join();
 		ps2n::host::window::Destroy();
+		ps2n::host::menu::sound::Shutdown();
 
 		if (!s_options.profile_path.empty() || !s_options.sample_profile_path.empty())
 		{
@@ -3495,6 +3597,7 @@ namespace
 void ps2n::host::OnGameChanged(std::string_view title, std::string_view serial, uint32_t crc)
 {
 	// A game's folder names its window itself (-title).
+	s_game_title = title;
 	if (s_options.window && s_options.window_title.empty())
 		window::SetTitle(title.empty() ? std::string(kWindowTitle) : fmt::format("{} - {}", title, kWindowTitle));
 	if (crc != 0 && (s_options.patch_widescreen || s_options.patch_fps) && !s_options.patch_archive.empty())
@@ -3754,7 +3857,8 @@ void ps2n::host::OnGuestFrame()
 {
 	s_frames++;
 	const bool profiling = !s_options.profile_path.empty() || !s_options.sample_profile_path.empty();
-	s_latest_frame_time = std::chrono::steady_clock::now();
+	// The time played: the time the menu over the game was open left out.
+	s_latest_frame_time = std::chrono::steady_clock::now() - s_menu_time;
 	if (s_frames == 1)
 	{
 		// From the first frame on: the machine exists now.
@@ -3777,6 +3881,11 @@ void ps2n::host::OnGuestFrame()
 
 	if (s_stop_requested || s_options.selftest)
 		return;
+
+	// Esc in the window: the menu over the game, the machine held while it is
+	// open (HoldForMenu).
+	if (s_options.window && ps2n::host::menu::Requested() && !s_close_requested.load())
+		HoldForMenu();
 
 	// Scripted controller input: what the script has for the frames up to this
 	// one. It changes here, between two frames, in every run alike.

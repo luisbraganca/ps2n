@@ -19,6 +19,10 @@ steps it was given, each at a number of seconds after the window appeared:
                        show. The output says which way it was taken.
   "8 key K 0.2"        press a key in the window for 0.2 s: a letter, a
                        digit, or Return Backspace Up Down Left Right F11
+                       Escape Delete Tab Space
+  "9 click 640 360"    move the pointer to that place of the picture (its
+                       pixels, from the top left) and click its left button
+                       ("rclick" the right one, "move" only moves it)
   "20 close"           close the window, as its close button would
 
 and prints what the window was called and how large it was at each step, and
@@ -122,13 +126,22 @@ public static class Ps2nGameWindow
         PostMessageW(hwnd, down ? 0x0100u : 0x0101u, new IntPtr(vk), new IntPtr(lp));
     }
     public static void Close(IntPtr hwnd) { PostMessageW(hwnd, 0x0010, IntPtr.Zero, IntPtr.Zero); }
+    // The pointer at (x, y) of the picture: moved there, and a button pressed and let go (0 none, 1 left, 2 right).
+    public static void Pointer(IntPtr hwnd, int x, int y, int button)
+    {
+        IntPtr at = new IntPtr((y << 16) | (x & 0xFFFF));
+        PostMessageW(hwnd, 0x0200, IntPtr.Zero, at); // WM_MOUSEMOVE
+        if (button == 1) { PostMessageW(hwnd, 0x0201, new IntPtr(1), at); PostMessageW(hwnd, 0x0202, IntPtr.Zero, at); }
+        if (button == 2) { PostMessageW(hwnd, 0x0204, new IntPtr(2), at); PostMessageW(hwnd, 0x0205, IntPtr.Zero, at); }
+    }
     // ps2n::host::window::kShotMessage: the host writes shot-<number>.png beside its last frame.
     public static void AskShot(IntPtr hwnd, int number) { PostMessageW(hwnd, 0x8050, new IntPtr(number), IntPtr.Zero); }
 }
 '@
 [Ps2nGameWindow]::Init()
 
-$virtualKeys = @{ 'Return' = 0x0D; 'Backspace' = 0x08; 'Up' = 0x26; 'Down' = 0x28; 'Left' = 0x25; 'Right' = 0x27; 'F11' = 0x7A }
+$virtualKeys = @{ 'Return' = 0x0D; 'Backspace' = 0x08; 'Up' = 0x26; 'Down' = 0x28; 'Left' = 0x25; 'Right' = 0x27; 'F11' = 0x7A
+    'Escape' = 0x1B; 'Delete' = 0x2E; 'Tab' = 0x09; 'Space' = 0x20 }
 function VirtualKey([string]$key) {
     if ($virtualKeys.ContainsKey($key)) { return $virtualKeys[$key] }
     if ($key -match '^[A-Za-z0-9]$') { return [int][char]$key.ToUpper() }
@@ -156,7 +169,7 @@ while ($watch.Elapsed.TotalSeconds -lt 60 -and $hwnd -eq [IntPtr]::Zero -and -no
 }
 if ($hwnd -eq [IntPtr]::Zero) {
     Write-Host "No window appeared."
-    if (-not $process.HasExited) { $process.Kill() }
+    if (-not $process.HasExited) { cmd /c "taskkill /T /F /PID $($process.Id) >nul 2>&1" }
     Get-Content -LiteralPath $log, (Join-Path $OutDir 'session.err') -ErrorAction SilentlyContinue | Select-Object -Last 30 | ForEach-Object { Write-Host $_ }
     exit 1
 }
@@ -200,13 +213,19 @@ foreach ($step in $Steps) {
             [Ps2nGameWindow]::Close($hwnd)
             Write-Host ("{0,6:N1} s: the window is asked to close" -f $watch.Elapsed.TotalSeconds)
         }
-        default { throw "Unknown step [$step]: shot <file>, key <key> [seconds], or close." }
+        { $_ -in 'click', 'rclick', 'move' } {
+            $button = @{ 'move' = 0; 'click' = 1; 'rclick' = 2 }[$words[1]]
+            [Ps2nGameWindow]::Pointer($hwnd, [int]$words[2], [int]$words[3], $button)
+            Write-Host ("{0,6:N1} s: {1} at {2},{3}" -f $watch.Elapsed.TotalSeconds, $words[1], $words[2], $words[3])
+        }
+        default { throw "Unknown step [$step]: shot <file>, key <key> [seconds], click|rclick|move <x> <y>, or close." }
     }
 }
 
 if (-not $process.WaitForExit($ExitWait * 1000)) {
     Write-Host "The session did not end within $ExitWait s of the last step; ending it."
-    $process.Kill()
+    # The runtime game.ps1 started with it: its whole tree.
+    cmd /c "taskkill /T /F /PID $($process.Id) >nul 2>&1"
     $failed = $true
 }
 elseif ($process.ExitCode -ne 0) {

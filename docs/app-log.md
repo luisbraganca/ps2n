@@ -5364,3 +5364,144 @@ please. When you say my game folders you mean build/kit/games?"
 - **Jak and Daxter inside WSL,** not played since 2026-11-23, still ran 15,157
   blocks outside its executable by interpreter in those 600 frames. Its next
   session records them, and the compile after it takes them in.
+
+## A menu over the game (ADR 0060)
+
+### Built (2026-11-25)
+
+At the maintainer's words ("I want to add an overlay that opens when pressing
+Esc, allowing the user to Quit (loose progress warning), Edit keybinds and
+controllers and which GPU is in use ...", then "Use a fancy sound when it opens,
+when it closes and when clicking/hovering the menu items."):
+
+- **Opening it** (`host/main.cpp`, `HoldForMenu`): Esc in the game's window
+  asks for the menu; between two frames, where the window's requests are taken
+  up (`OnGuestFrame`), the machine is held while it is open.
+  - The core is told it is paused (`VMManager::SetState`): its sound and the
+    controllers' vibration stop, its frame limiter starts again after.
+  - It is told it runs again before the frame's event test ends, so the
+    processors' execution is never left (`Cpu->ExitExecution()` is not called)
+    and nothing of the machine changes.
+  - What was held of the controller comes up as the menu opens and as it closes
+    (`Pad::ResetAllControllerInputs`): the session written down has that
+    release at that frame, and its replay gives it back there.
+  - The time the menu is open is left out of the frames' times
+    (`s_latest_frame_time`): the pace a session writes down (ADR 0055) and the
+    run's report are the game's. The report says how often the menu was opened
+    and for how long.
+- **Drawing it** (`host/menu.cpp`): each of the menu's frames is one task of
+  the GS thread, the menu drawn with the ImGui of PCSX2's renderer and the
+  game's last picture presented under it (`GSPresentCurrentFrame`), about 60 a
+  second. Four pages, each a window of its own in the middle of the picture:
+  - the first: the game's name, Resume, Controls, Graphics card, Quit;
+  - Quit: "Quit <the game>? Anything you have not saved in the game will be
+    lost.", Quit and Back, Back reached first; its Quit closes the window as
+    its close button does (`window::RequestClose`);
+  - Controls and Graphics card, below.
+  - The keys and controllers move in it as ImGui moves (arrows, Enter, Tab; a
+    controller's D-pad or stick, Cross, Circle back); the mouse points and
+    clicks, the window passing it on (`Listener::pointer_moved`,
+    `pointer_button`, `wheel`; on Linux X11's motion and button events). Esc
+    goes back a page, and out from the first.
+- **Controls:** the controller in port 1 (the one a session writes down).
+  - A line for each of the DualShock 2's inputs (its two motors aside), with
+    what it is on the keyboard and on a controller, as PCSX2 writes a binding,
+    a controller's button as its glyph (PCSX2's icon fonts).
+  - Choosing one waits five seconds for a key, a button or a stick, taken by
+    PCSX2's input hook (`InputManager::SetHook`) as PCSX2's own fullscreen
+    interface takes it: held, and made the binding when let go, in the place of
+    what the line had of that kind. Esc leaves it as it was. Delete,
+    Backspace, a controller's Square or a right click clears one side.
+  - "Play with" a connected controller: its inputs the mapping PCSX2 makes for
+    it (`GetGenericBindingMapping`), the keys kept, its motors the vibration.
+  - "Default controls": PCSX2's keys, and the first controller beside them.
+  - Each change is taken by the core at once (`VMManager::ReloadInputBindings`)
+    and kept: `inputprofiles\controls.ini` in the core's data folder (a game's
+    folder: `data\PCSX2\inputprofiles\controls.ini`), PCSX2's own format for an
+    input profile (`Pad::CopyConfiguration`), read when the game starts. "Default
+    controls" removes it. While a game has its own, the first controller
+    connected is no longer added by itself (`MapFirstController`).
+- **Graphics card:** the card drawing the game and its graphics interface, as
+  the renderer names them; the cards PCSX2 lists for that interface
+  (`GSGetAdapterInfo`), Windows' software renderer left out. A choice goes into
+  the core's settings and its configuration, and PCSX2 makes its renderer
+  again on that card (`MTGS::ApplySettings`, then PCSX2's `GSreopen`). If the
+  card then drawing is the one chosen, it is written into the game's settings
+  file (`EmuCore/GS/Adapter`); otherwise PCSX2 has gone back to the card before,
+  and so does the setting.
+- **Sounds** (`host/menu_sound.cpp`), at the maintainer's "Use PS2 style
+  sounds" after a first set (bell-like notes in a small room): in the manner of
+  the PlayStation 2's own menus, made by the code when first needed, nothing of
+  Sony's. Played through SDL's audio (one device; for each sound one to four
+  streams taken in turn, mixed by SDL, so that a sound played again while it
+  rings is not cut short) beside the game's sound, at its volume
+  (`StandardVolume`), none where it is muted.
+  - The tones: glassy bells by frequency modulation (a modulator three or two
+    times the note's frequency, its depth dying away faster than the note), the
+    right side 4 cents above the left so that the two shimmer; soft held tones
+    with a slight vibrato; a low sine swell; breaths of band-passed noise; then
+    Jezar's Freeverb (eight combs, four allpasses) with a short pre-delay.
+  - Opening: a swell from 68 to 104 Hz and air rising from 220 to 3,400 Hz,
+    bells on D6, A6, E7 and F♯6 90 ms apart over a soft D5–A5 fifth, in a large
+    room; closing: the air falling, a swell from 104 to 60 Hz, bells on E7, A6
+    and D6; an item reached: a soft high tick (about 3.1 kHz, 22 ms) with a
+    little room; chosen: A6 then E7 and a faint A7; back, cleared or given up:
+    E6 then B5, duller.
+  - `ps2n-host -menu-sounds <folder>` writes them as WAV files: opening 3.59 s
+    (within 20 dB of its loudest for its first 1.6 s), closing 2.16 s, chosen
+    1.38 s, back 1.24 s, reached 0.41 s (26 dB down after 0.1 s), each ended
+    where it has died away 56 dB; at most 0.32 of full scale.
+- **Checks** (`scripts\windows\window-check.ps1`): the keys Escape, Delete,
+  Tab and Space, and `click`, `rclick` and `move` steps for the pointer. A
+  session that does not end is stopped with its whole tree (`taskkill /T`): it
+  had left `ps2n-host` running on the hidden desktop.
+
+### Checked (2026-11-25)
+
+On Windows, with the development tree's runtime (Agent Under Fire's code built
+in), each session in a window of 1280 by 720 on the measurement's hidden
+desktop, muted, on Direct3D 12 so that a photograph of the window shows the
+picture (`build\measure\menu-60.ps1`). On that desktop the window is drawn
+about 12 times a second with the menu, and the game at 35 frames a second of
+50: the steps are a second apart.
+
+- **The keys:** Esc opened the menu over the dimmed picture of the game's
+  language screen; Down and Enter opened Controls; D-Pad Up's key set to P, the
+  controller's D-pad kept beside it (`Up = SDL-0/DPadUp`, `Up = Keyboard/P` in
+  `controls.ini`); Esc back, the focus on Controls; the Graphics card page named
+  the RTX 4070 SUPER and Direct3D 12; Esc twice to the game; the menu opened
+  again, and Quit, asked, ended the session as the close button does. The run's
+  report: the menu opened twice, for 24.3 s; its sounds asked for: opening 2,
+  closing 2, reached 7, chosen 5, back 2 (muted: none played).
+- **The replay:** that session, 556 frames with the menu open for 24.3 s in
+  two openings, run again without a window: the session at every one of its
+  11 fingerprints.
+- **The next session** started with the player's own controls ("the controls
+  are the player's own"); the pointer clicked Controls, then Default controls,
+  which put PCSX2's keys back and removed `controls.ini`.
+- **The card changed:** with Windows' software renderer let into the list for
+  the check (a build of its own), the menu's Graphics card page changed to it:
+  PCSX2 made its renderer again there ("The game is drawn by Microsoft Basic
+  Render Driver from now on"), then back to the RTX, which the game's settings
+  file then named. The menu showed over a black picture after each change.
+- **Found on the way:**
+  - ImGui 1.93 leaves an invisible button out of keyboard and controller
+    navigation unless asked (`ImGuiButtonFlags_EnableNav`): the menu drew, Esc
+    worked, the arrows did nothing.
+  - Focusing the page's window at every frame took the focus back out of the
+    controls' table (a child window): the window is focused only when no
+    window is.
+  - The Enter that chooses a control comes up during the wait, which took it:
+    ImGui kept it held and ignored the next Enter. What comes up without having
+    gone down during the wait now goes on to the menu.
+- **With the final programs** (the PS2-style sounds; ImGui's keys let go when
+  the window loses the keyboard while the menu is open): the keys' session
+  again, the menu open 24.2 s in two openings, the same steps carried out; its
+  replay the session at every one of its 9 fingerprints.
+- **Tests:** every test passes: on Windows 556, and 554 in the module tree with
+  the same three comparisons disabled; on Linux, inside WSL, 556 and 553; none
+  skipped.
+- **On Linux** the menu and its window's pointer are built, and the Linux
+  runtime writes the same sounds (the same lengths to the sample), but no game
+  was opened in a window there: a window inside WSL shows on the maintainer's
+  screen.
