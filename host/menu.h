@@ -3,9 +3,10 @@
 // PS2Native's menu over a game played in its window (docs/adr/0060): Esc
 // opens it, and the game waits while it is open. Resume, Controls (what each
 // of the controller's buttons and sticks is on the keyboard and on a
-// controller), Graphics card (which one draws the game), Quit (asking first).
-// The only settings a player changes once a game is made: the rest is as the
-// wizard made it.
+// controller), Graphics card (which one draws the game), Reboot and Quit (each
+// asking first: what was not saved in the game is lost). The window's close
+// button opens it on Quit's question. The only settings a player changes once
+// a game is made: the rest is as the wizard made it.
 //
 // It is drawn into the game's picture with the ImGui of PCSX2's renderer, by
 // PS2Native's own code, never with PCSX2's own menus (docs/adr/0012). The
@@ -60,6 +61,20 @@ namespace ps2n::host::menu
 	/// between two frames.
 	bool Requested();
 
+	/// The window's close button or Alt+F4: the menu asks first, on its Quit
+	/// page, where Back goes back to the game. CPU thread.
+	void AskQuit();
+
+	/// The close button pressed again while Quit's question shows: Quit chosen
+	/// there, refused as it is while the game saves to its memory card. CPU
+	/// thread.
+	void ConfirmQuit();
+
+	/// Whether the menu is open, and whether it shows Quit's question. Any
+	/// thread.
+	bool IsOpen();
+	bool IsAskingQuit();
+
 	/// The menu opened over the game, called `title`, the machine held by the
 	/// caller. CPU thread.
 	void Open(const std::string& title);
@@ -69,8 +84,9 @@ namespace ps2n::host::menu
 	/// Resume, Esc, or Quit.
 	bool Tick();
 
-	/// Whether Quit was chosen (and confirmed) when the menu closed.
+	/// Whether Quit, or Reboot, was chosen (and confirmed) when the menu closed.
 	bool QuitChosen();
+	bool RebootChosen();
 
 	/// The menu closed, before the machine goes on. CPU thread.
 	void Close();

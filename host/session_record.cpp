@@ -43,6 +43,7 @@ namespace ps2n::host::session
 		bool s_have_last = false;
 		uint32_t s_changes = 0;
 		uint32_t s_written_fingerprints = 0;
+		uint32_t s_written_reboots = 0;
 		// How many of the session's frames the console showed at 50 a second
 		// (its PAL modes) and at 60 (every other mode); those before the BIOS
 		// has set a mode are neither.
@@ -56,6 +57,8 @@ namespace ps2n::host::session
 		std::string s_replay_path;
 		std::vector<std::pair<uint32_t, PadBytes>> s_inputs;
 		size_t s_next_input = 0;
+		std::vector<uint32_t> s_reboots; // the frames the session rebooted the game at, in order
+		size_t s_next_reboot = 0;
 		std::map<uint32_t, uint64_t> s_expected;
 		uint32_t s_compared = 0;
 		std::optional<uint32_t> s_parted_at;
@@ -179,12 +182,14 @@ namespace ps2n::host::session
 			"# A session in the window, written down to be run again (ps2n-host -record; host/session_record.h).\n"
 			"# <frame> pad <18 bytes>: what the controller in port 1 held from that frame on, as PCSX2's input\n"
 			"# recording keeps it. <frame> state <fingerprint>: the EE's and the IOP's registers at the start of\n"
-			"# that frame. The memory cards and the console's NVRAM as they were when the session began are\n"
-			"# beside this file. patches: the game's patches it was played with, with the EE overclock their\n"
-			"# note asks for; ee-cycle-rate: PCSX2's EE cycle rate, where the session was given one;\n"
-			"# bios-roms: which of the images the core loads from beside the BIOS image it had; packaged: played\n"
-			"# from a game's folder the wizard made, its own settings file and patch file beside this file;\n"
-			"# vu-thread on, at the end: played with VU1 on PCSX2's VU thread, where a run need not repeat.\n"
+			"# that frame. <frame> reboot: the player rebooted the game there (the menu's Reboot), the machine\n"
+			"# reset once that frame's event test was over. The memory cards and the console's NVRAM as they\n"
+			"# were when the session began are beside this file. patches: the game's patches it was played\n"
+			"# with, with the EE overclock their note asks for; ee-cycle-rate: PCSX2's EE cycle rate, where the\n"
+			"# session was given one; bios-roms: which of the images the core loads from beside the BIOS image it\n"
+			"# had; packaged: played from a game's folder the wizard made, its own settings file and patch file\n"
+			"# beside this file; vu-thread on, at the end: played with VU1 on PCSX2's VU thread, where a run need\n"
+			"# not repeat.\n"
 			"clock %s\n"
 			"patches %s\n",
 			FormatClock(clock).c_str(), patches.c_str());
@@ -260,6 +265,13 @@ namespace ps2n::host::session
 				// replay has no use for it.
 				good = StringUtil::FromChars<u32>(words[1]).has_value();
 			}
+			else if (words.size() == 2 && words[1] == "reboot")
+			{
+				const std::optional<u32> frame = StringUtil::FromChars<u32>(words[0]);
+				good = frame.has_value();
+				if (good)
+					s_reboots.push_back(*frame);
+			}
 			else if (words.size() == 3)
 			{
 				const std::optional<u32> frame = StringUtil::FromChars<u32>(words[0]);
@@ -287,6 +299,7 @@ namespace ps2n::host::session
 		}
 
 		std::stable_sort(s_inputs.begin(), s_inputs.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+		std::sort(s_reboots.begin(), s_reboots.end());
 		s_replay_path = path;
 		s_replaying = true;
 		return true;
@@ -359,6 +372,22 @@ namespace ps2n::host::session
 		}
 	}
 
+	void NoteReboot(uint32_t frame)
+	{
+		if (!s_record)
+			return;
+		std::fprintf(s_record, "%u reboot\n", frame);
+		s_written_reboots++;
+	}
+
+	bool RebootAt(uint32_t frame)
+	{
+		if (!s_replaying || s_next_reboot >= s_reboots.size() || s_reboots[s_next_reboot] != frame)
+			return false;
+		s_next_reboot++;
+		return true;
+	}
+
 	std::vector<std::string> Finish(uint32_t frames)
 	{
 		std::vector<std::string> lines;
@@ -375,8 +404,10 @@ namespace ps2n::host::session
 			std::fclose(s_record);
 			s_record = nullptr;
 			lines.push_back(fmt::format("ps2n-host: the session written down, to be run again: {} changes of the controller in "
-										"port 1 and {} fingerprints of the registers over {} frames, the console's clock from {} ({})",
-				s_changes, s_written_fingerprints, frames, FormatClock(s_record_clock), s_record_path));
+										"port 1 and {} fingerprints of the registers over {} frames{}, the console's clock from {} ({})",
+				s_changes, s_written_fingerprints, frames,
+				s_written_reboots ? fmt::format(", {} reboots", s_written_reboots) : std::string(), FormatClock(s_record_clock),
+				s_record_path));
 		}
 		if (s_replaying)
 		{
@@ -392,9 +423,10 @@ namespace ps2n::host::session
 			}
 			else
 			{
-				lines.push_back(fmt::format("ps2n-host: the replay of {}: {} states of the controller given back; the run is the "
+				lines.push_back(fmt::format("ps2n-host: the replay of {}: {} states of the controller given back{}; the run is the "
 											"session at every one of {} fingerprints compared, of the {} written down",
-					s_replay_path, s_next_input, s_compared, s_expected.size()));
+					s_replay_path, s_next_input, s_reboots.empty() ? std::string() : fmt::format(", {} of {} reboots", s_next_reboot, s_reboots.size()),
+					s_compared, s_expected.size()));
 			}
 		}
 		return lines;

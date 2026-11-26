@@ -321,15 +321,19 @@ namespace ps2n::host::window
 			switch (message)
 			{
 				case WM_CLOSE:
-					// The runner stops the machine; the window goes when that is done.
-					// The right to bring a window to the front goes with this one's,
-					// for the window a game's folder compiles what the session met in
-					// when it has ended (wizard/remake_main.cpp, docs/adr/0040), which
-					// Windows would otherwise leave behind another.
+				{
+					// The runner stops the machine, or asks first (the close button,
+					// Alt+F4); the window goes when the machine has stopped. The right
+					// to bring a window to the front goes with this one's, for the
+					// window a game's folder compiles what the session met in when it
+					// has ended (wizard/remake_main.cpp, docs/adr/0040), which Windows
+					// would otherwise leave behind another.
+					const bool ask = (static_cast<uintptr_t>(wParam) != kCloseWithoutAsking);
 					AllowSetForegroundWindow(ASFW_ANY);
 					if (s_listener.close_requested)
-						s_listener.close_requested();
+						s_listener.close_requested(ask);
 					return 0;
+				}
 
 				case WM_SIZE:
 					if (wParam != SIZE_MINIMIZED && s_listener.resized)
@@ -635,9 +639,10 @@ namespace ps2n::host::window
 
 	void RequestClose()
 	{
-		// The close button's own message, which the window's thread takes up.
+		// The close button's own message, which the window's thread takes up,
+		// marked to close without asking.
 		if (const HWND hwnd = s_window.load())
-			PostMessageW(hwnd, WM_CLOSE, 0, 0);
+			PostMessageW(hwnd, WM_CLOSE, static_cast<WPARAM>(kCloseWithoutAsking), 0);
 	}
 
 	void ShowNotice(const std::string& title, const std::string& text, uint32_t seconds)
@@ -1220,9 +1225,10 @@ namespace ps2n::host::window
 					if (event.xclient.message_type == s_wm_protocols &&
 						static_cast<Atom>(event.xclient.data.l[0]) == s_wm_delete)
 					{
-						// The runner stops the machine; the window goes when that is done.
+						// The close button: the runner asks first, then stops the
+						// machine; the window goes when that is done.
 						if (s_listener.close_requested)
-							s_listener.close_requested();
+							s_listener.close_requested(true);
 					}
 					else if (event.xclient.message_type == s_shot)
 					{
@@ -1511,7 +1517,7 @@ namespace ps2n::host::window
 		{
 			Post([]() {
 				if (s_listener.close_requested)
-					s_listener.close_requested();
+					s_listener.close_requested(false);
 			});
 		}
 	}

@@ -355,7 +355,11 @@ namespace
 	// time played), so that the pace a session writes down is the game's, not
 	// the menu's (docs/adr/0060). CPU thread only.
 	u32 s_menu_opened = 0;
+	u32 s_reboots = 0;
 	std::chrono::steady_clock::duration s_menu_time{0};
+	// When the last frame began (steady_clock's count): whether the game runs its
+	// frames, for the window's close button (OnWindowCloseRequested). Any thread.
+	std::atomic<long long> s_last_frame_ns{0};
 	std::string s_game_title; // the game's name, as the core found it on the disc (OnGameChanged), for the menu
 
 	// What WatchNewCode saw of code met for the first time, interpreted, for the
@@ -598,7 +602,8 @@ namespace
 			"                     game, which waits meanwhile: Resume, Controls (each\n"
 			"                     input's key and controller input, kept in the data\n"
 			"                     directory's inputprofiles\\controls.ini), Graphics card,\n"
-			"                     Quit. The picture is drawn on Vulkan at three\n"
+			"                     Reboot, Quit; the last two, and the window's close\n"
+			"                     button, ask first. The picture is drawn on Vulkan at three\n"
 			"                     times the console's resolution, into an area of 1920 by\n"
 			"                     1080, which covers the screen where a window that size\n"
 			"                     would not fit (-renderer, -upscale, -window-size). The\n"
@@ -2051,9 +2056,26 @@ namespace
 			s_shot_requested.store(number);
 	}
 
-	void OnWindowCloseRequested()
+	// The window's close button or Alt+F4 (`ask`) open the menu over the game on
+	// Quit's question (host/menu.h, docs/adr/0060): what was not saved in the
+	// game is lost. Pressed again while that question shows, they are Quit chosen
+	// there. While the game is not running its frames (still starting, or held
+	// up: the menu could not come), they close it at once, as before. The menu's
+	// own Quit, and a check, close it without asking. Main thread.
+	void OnWindowCloseRequested(bool ask)
 	{
-		s_close_requested.store(true);
+		const long long now_ns =
+			std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+		const bool running = s_last_frame_ns.load() != 0 && now_ns - s_last_frame_ns.load() < 1'000'000'000;
+		if (!ask || (!running && !ps2n::host::menu::IsOpen()))
+		{
+			s_close_requested.store(true);
+			return;
+		}
+		if (ps2n::host::menu::IsAskingQuit())
+			ps2n::host::RunOnCPUThread([]() { ps2n::host::menu::ConfirmQuit(); }, false);
+		else
+			ps2n::host::RunOnCPUThread([]() { ps2n::host::menu::AskQuit(); }, false);
 	}
 
 	// Gives the first controller the pad in port 1, beside the keyboard: the
@@ -2147,13 +2169,25 @@ namespace
 
 		ps2n::host::menu::Close();
 		Pad::ResetAllControllerInputs();
+		bool reboot = false;
 		if (ps2n::host::menu::QuitChosen())
 		{
 			// Quit: as the window's close button, the session ending at this frame.
 			s_close_requested.store(true);
 			ps2n::host::window::RequestClose();
 		}
+		else if (ps2n::host::menu::RebootChosen() && !s_close_requested.load())
+		{
+			// Reboot: the machine reset as PCSX2 resets it, once this frame's event
+			// test is over and execution has been left (VMManager::Reset; the run's
+			// loop in CPUThreadMain). Written down at this frame, so that the session
+			// runs again as itself.
+			reboot = true;
+			ps2n::host::session::NoteReboot(s_frames);
+		}
 		VMManager::SetState(VMState::Running);
+		if (reboot)
+			VMManager::Reset(); // running: only marks the machine to be reset (VMState::Resetting)
 		s_menu_time += std::chrono::steady_clock::now() - opened;
 	}
 
@@ -2898,8 +2932,28 @@ namespace
 				// window someone is playing, and the console's speed is the point.
 				VMManager::SetState(VMState::Running);
 				VMManager::SetLimiterMode(s_options.window ? LimiterModeType::Nominal : LimiterModeType::Unlimited);
-				while (trace_ok && VMManager::GetState() == VMState::Running)
-					VMManager::Execute();
+				for (;;)
+				{
+					const VMState state = VMManager::GetState();
+					if (trace_ok && state == VMState::Running)
+					{
+						VMManager::Execute();
+					}
+					else if (trace_ok && state == VMState::Resetting)
+					{
+						// The game rebooted (the menu's Reboot, or a session's run
+						// again, docs/adr/0060): PCSX2's reset, now that execution has
+						// been left, as its own frontend does it; the machine then runs
+						// on from the BIOS.
+						VMManager::Reset();
+						s_reboots++;
+						std::fprintf(stderr, "ps2n-host: the game rebooted at frame %u\n", s_frames);
+					}
+					else
+					{
+						break;
+					}
+				}
 
 				if (s_options.ee == EEProvider::Ps2n)
 					ps2n::ee::StopTrace();
@@ -3036,6 +3090,8 @@ namespace
 						s_menu_opened, std::chrono::duration<double>(s_menu_time).count(),
 						ps2n::host::menu::sound::Counts().c_str(), EmuConfig.SPU2.OutputMuted ? " (muted: none played)" : "");
 				}
+				if (s_reboots > 0)
+					std::fprintf(stderr, "ps2n-host: the game was rebooted %u times\n", s_reboots);
 				if (s_pace.file)
 				{
 					// The worst of the pace the session kept (KeepPace), and where.
@@ -3858,7 +3914,9 @@ void ps2n::host::OnGuestFrame()
 	s_frames++;
 	const bool profiling = !s_options.profile_path.empty() || !s_options.sample_profile_path.empty();
 	// The time played: the time the menu over the game was open left out.
-	s_latest_frame_time = std::chrono::steady_clock::now() - s_menu_time;
+	const auto now = std::chrono::steady_clock::now();
+	s_latest_frame_time = now - s_menu_time;
+	s_last_frame_ns.store(std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count());
 	if (s_frames == 1)
 	{
 		// From the first frame on: the machine exists now.
@@ -3895,8 +3953,11 @@ void ps2n::host::OnGuestFrame()
 		Pad::SetControllerState(0, event.input, event.value);
 	}
 
-	// A session run again: the controller as the session had it from this frame on.
+	// A session run again: the controller as the session had it from this frame on,
+	// and the game rebooted where the session rebooted it (HoldForMenu).
 	ps2n::host::session::ApplyInput(s_frames);
+	if (ps2n::host::session::RebootAt(s_frames))
+		VMManager::Reset(); // running: only marks the machine to be reset
 
 	// What the vector units did during the frame (-vu-report), and the IOP
 	// (-iop-report).

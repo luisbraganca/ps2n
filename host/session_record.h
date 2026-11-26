@@ -37,6 +37,10 @@
 //                                 replay runs packaged with them in its data folder
 //   41 pad FFFF7F7F7F7F00000000000000000000FF00   at frame 41, the 18 bytes
 //   50 state 0123456789ABCDEF     at the start of frame 50, the registers' fingerprint
+//   900 reboot                    at frame 900 the player rebooted the game (the
+//                                 menu's Reboot, docs/adr/0060): the machine reset once
+//                                 that frame's event test was over; a replay reboots it
+//                                 at the same frame
 //   frames-a-second 50            what the console showed most of its frames at, in the
 //                                 mode the game had it in: 50 (PAL) or 60. With it a
 //                                 game's folder tells how long the session was in the
@@ -101,6 +105,12 @@ namespace ps2n::host::session
 	/// After the frame's other input: a replay gives the controller what the
 	/// session had at this frame.
 	void ApplyInput(uint32_t frame);
+
+	/// The player rebooted the game at `frame` (recording), and whether the
+	/// session rebooted it at `frame` (replay; true once). CPU thread, in the
+	/// frame's place for input.
+	void NoteReboot(uint32_t frame);
+	bool RebootAt(uint32_t frame);
 
 	/// When the run stops: closes the file, and gives the lines for the host's
 	/// report (none when neither was asked for).

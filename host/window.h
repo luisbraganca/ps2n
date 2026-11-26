@@ -65,7 +65,9 @@ namespace ps2n::host::window
 		void (*key)(uint32_t code, bool pressed); // a key went down or came up; repeats are left out
 		void (*resized)(uint32_t width, uint32_t height, float scale); // the area the picture goes into, in pixels
 		void (*focus_lost)(); // the keys that were down will not be seen coming up
-		void (*close_requested)();
+		// The window is to close: `ask`, by its close button or Alt+F4 (the game
+		// then asks first, docs/adr/0060); not, from RequestClose or a check.
+		void (*close_requested)(bool ask);
 		void (*shot_requested)(uint32_t number); // a check asks for the picture on display (window-check.ps1)
 		// The pointer over the picture, in its pixels; its buttons (0 left, 1
 		// right, 2 middle); its wheel, in notches. For PS2Native's menu over the
@@ -83,6 +85,11 @@ namespace ps2n::host::window
 	/// in the first long of its data.
 	constexpr uint32_t kShotMessage = 0x8000 + 0x50; // WM_APP + 0x50
 	constexpr const char* kShotAtom = "PS2NATIVE_SHOT";
+
+	/// WM_CLOSE's wParam that closes the window without asking (Windows):
+	/// RequestClose's, and a check's (window-check.ps1). The close button's is
+	/// 0, and the game asks first.
+	constexpr uintptr_t kCloseWithoutAsking = 0x50534E;
 
 	/// Whether this build has window code for the platform it was built for.
 	bool Available();
@@ -119,9 +126,9 @@ namespace ps2n::host::window
 	bool IsFullscreen();
 	void SetFullscreen(bool enabled);
 
-	/// Closes the window as its close button does: the runner is told
-	/// (Listener::close_requested), and the window goes when the machine has
-	/// stopped. Any thread. The menu's Quit.
+	/// Closes the window as its close button does, without asking: the runner
+	/// is told (Listener::close_requested), and the window goes when the machine
+	/// has stopped. Any thread. The menu's Quit.
 	void RequestClose();
 
 	/// A notice over the picture, PS2Native's own (docs/adr/0035), never the

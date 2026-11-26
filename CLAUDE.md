@@ -506,15 +506,19 @@ The same afternoon, at the maintainer's words (ADR 0060: an overlay opened
 with Esc to quit, edit the controls and choose the graphics card, "the only
 acceptable changeable settings post-compilation", with "PS2 style sounds"),
 a menu over the game, built and checked; at their answers ("1. Yes", "2. Yes",
-"3. No") committed and pushed, given to their game folders, opened by Esc only
-(not by a controller); in no release yet:
+"3. No") committed and pushed (`e616401`), given to their game folders (the
+nine on Windows and the one inside WSL, each compiled again, a session's start
+run again the session), opened by Esc only (not by a controller); in no
+release yet:
 
 - **Esc** opens it over a game played in its window; the machine is held
   between two frames meanwhile, so a session with the menu opened in it runs
   again as itself (checked: every fingerprint).
 - **Its pages:** Resume; Controls (each input's key and controller input,
   kept in the game's data); Graphics card (taken at once, kept in the game's
-  settings file); Quit, which asks first.
+  settings file); Reboot and Quit, which ask first, as the window's close
+  button does (the next day, at the maintainer's word; at their answers
+  committed and pushed, and given to their game folders).
 - **Its sounds,** PS2Native's own in the PS2's manner, played beside the
   game's.
 - docs/app-log.md, "A menu over the game (ADR 0060)".
@@ -1515,6 +1519,13 @@ Decisions:
   - **The maintainer's answers** ("1. Yes", "2. Yes", "3. No"): committed and
     pushed; their game folders given these programs; only Esc opens the menu,
     never a controller.
+  - **2026-11-26, "To finish this feature":** Reboot on the menu, asking first
+    (PCSX2's reset, marked in the session written down so that it runs again
+    as itself), and the window's close button and Alt+F4 asking Quit's
+    question first (pressed again there, Quit chosen; with the game held up,
+    closed at once); neither Quit nor Reboot while PCSX2 counts the memory
+    card busy (300 frames after a write). At their answers ("1. Yes", "2.
+    Yes"): committed and pushed; their game folders given these programs.
 
 ## Layout, build and test
 

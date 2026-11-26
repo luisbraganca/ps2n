@@ -5505,3 +5505,164 @@ about 12 times a second with the menu, and the game at 35 frames a second of
   runtime writes the same sounds (the same lengths to the sample), but no game
   was opened in a window there: a window inside WSL shows on the maintainer's
   screen.
+
+### The maintainer's answers, and their folders given the menu (2026-11-25)
+
+The maintainer's answers: "1. Yes", "2. Yes", "3. No" (to a controller opening
+the menu too).
+
+- **Committed and pushed:** `e616401`, 17:12 UTC.
+- **Their PS2Native folders** made again from it: `build\kit` (`games3.ps1 -Parts
+  kit`, its games kept), and inside WSL `build/PS2Native` (`kit.sh --out`, after
+  `~/ps2n` was brought to the commit and its module tree built there).
+- **Their game folders** given its programs by that folder's wizard
+  (`ps2n-wizard --update`), each compiling its game again before its next start
+  (`ps2n-remake --before-play`), the start of one of its sessions run again with
+  them, the wizard asked again (`build\measure\folders-60.ps1`; inside WSL the
+  scratchpad's `wsl\p60-linux.sh`):
+
+| Folder | Compiled in | Its start run again |
+|---|---:|---|
+| Jak and Daxter | 79 s | 900 frames, 18 of 18 fingerprints |
+| Killzone | 113 s | 900 frames, 18 of 18 |
+| Silent Hill 3 | 88 s | 90 frames, 1 of 1 |
+| Gran Turismo 3 | 22 s | 900 frames, 18 of 18 |
+| Agent Under Fire | 93 s | 900 frames, 18 of 18 |
+| 007 - Agent Under Fire (nine executables) | 324 s | 900 frames, 18 of 18 |
+| Resident Evil – Code: Veronica X | 43 s | no session yet |
+| Secret Agent Clank | 55 s | no session yet |
+| SSX Tricky | 60 s | its sessions played with VU1 on PCSX2's VU thread |
+| Jak and Daxter, inside WSL | 53 s | 600 frames, 12 of 12 |
+
+- **Asked again,** the wizard found every folder up to date and changed nothing.
+- **Memory cards and sessions** are as they were.
+- **Counting once more:** Jak and Daxter's folder on Windows and SSX Tricky's
+  still count their profiles once more after a session of 3 minutes, as since
+  0.4's update; this one, the toolchain the same, adds no count.
+
+### A border on the right in SSX Tricky: not the menu (2026-11-25)
+
+The maintainer, after a session of SSX Tricky with these programs (13 minutes,
+the menu opened twice): "I noticed a small border on the right. I think it
+wasn't there before but I'm not sure. Can you make sure it's not related to our
+new overlay feature?"
+
+- **That session run again** from two copies of their folder, the same in
+  everything but the runtime: 0.4's as released (no menu) and `e616401`'s, on
+  Vulkan at three times the console's resolution as they play it, 24,000
+  frames, a picture every 3,000 (`build\measure\ssx-border.ps1`). Both runs
+  were the session at every one of 480 fingerprints, and their eight pictures
+  are the same byte for byte.
+- **The border is in the game's picture as PCSX2's renderer draws it:** in
+  seven of the eight, the picture's last column of pixels (of 1,536) is one
+  grey (115 of 255) whatever is beside it; in the other, the last two are
+  darker. 0.4's runtime draws it the same. The menu draws nothing when it is
+  not open, and nothing of the game's drawing changed with it.
+- **The maintainer then ran the game on PCSX2 itself,** the next day: "No you're
+  right, I just wan PCSX2 and the issue is there, nvm then."
+
+### Reboot, and the close button asking first (2026-11-26)
+
+The maintainer's words: "To finish this feature, can you add an additional
+overlay button for "Reboot" that allows rebooting the game? Also show a warning
+message because unsaved progress may be list. This warning should also be shown
+when closing the game through the X button on the window (not sure if you added
+it there as well)." It had not been: the close button closed at once.
+
+- **Reboot** (`host/menu.cpp`): the first page is Resume, Controls, Graphics
+  card, Reboot, Quit. Reboot's question: "Reboot <the game>? The game starts
+  again from the beginning. Anything you have not saved in it will be lost.",
+  Reboot and Back, Back reached first, as Quit's.
+- **The reboot itself** (`host/main.cpp`): PCSX2's own reset, as its frontend's
+  "Reset System" does it.
+  - When the menu closes with Reboot, the runner calls `VMManager::Reset`, which
+    with the machine running only marks it (`VMState::Resetting`).
+  - The frame's event test ends and execution is left. The run's loop, which
+    used to end whenever the machine was not running, then calls it again, and
+    PCSX2 resets the machine, which runs on from the BIOS.
+  - The report says how often the game was rebooted, and at which frame.
+- **A session written down** marks the frame (`<frame> reboot` in `input.txt`,
+  `session::NoteReboot`), and a run of it again reboots there
+  (`session::RebootAt`, after the controller's state for that frame), so that
+  it runs again as itself; its report says how many of the session's reboots it
+  made.
+- **The close button** (`host/window.cpp`): the window tells the runner whether
+  to ask (`Listener::close_requested(bool ask)`).
+  - On Windows, `WM_CLOSE` asks, unless its `wParam` is
+    `window::kCloseWithoutAsking`, which the menu's Quit sends
+    (`window::RequestClose`) and a check's `close` step. Alt+F4 is a `WM_CLOSE`.
+  - On Linux, the window manager's `WM_DELETE_WINDOW` asks; the menu's Quit
+    closes without asking.
+- **What asking is** (`OnWindowCloseRequested`, `menu::AskQuit`,
+  `menu::ConfirmQuit`):
+  - The menu opens over the game on Quit's question, at the next frame. Its
+    hint says "Esc: back to the game", and Back or Esc goes back to the game,
+    not to the first page.
+  - With the menu open already, it goes to Quit's question; a control waiting
+    for its key is left as it was.
+  - Pressed again while Quit's question shows, it is Quit chosen there.
+  - Where no frame has begun for a second and the menu is not open (the game
+    still starting, or held up), the window closes at once, as before: a game
+    that hangs can still be closed.
+- **Not while the game saves:** Quit and Reboot are refused while PCSX2 counts a
+  memory card busy, which is for 300 frames after each write or erase
+  (`MemcardBusy`), with "The game is saving to its memory card, or has just
+  saved: go back to the game for a few seconds, then try again." on the
+  question, the menu staying open.
+  - PCSX2 refuses a reset then (`VMManager::RequestReset`). Its own window warns
+    before shutting down that the card can be corrupted, and lets the user
+    insist (`MainWindow::requestShutdown`); the menu refuses.
+  - The count runs down at each frame of the game, which the menu holds: hence
+    back to the game first.
+- **Checks** (`scripts\windows\window-check.ps1`): `close` closes the window
+  without the game asking, and a new step, `close-button`, presses the close
+  button as a player does.
+
+Checked on Windows as the day before (`build\measure\menu-60.ps1`, Agent Under
+Fire on the hidden desktop, muted, Direct3D 12), once the maintainer's session
+of SSX Tricky had ended:
+
+- **The keys' session again**, Quit now a step further down: the menu opened
+  twice for 25.2 s, Quit asked and ended the session (554 frames); its replay
+  the session at every one of its 11 fingerprints.
+- **Reboot:** Esc, down to Reboot, Enter showed its question, Back reached first;
+  up to Reboot and Enter closed the menu.
+  - The game rebooted at frame 471. A photograph 2 seconds after showed the
+    window black as the console started again; one 11 seconds after showed the
+    game's language screen again. The window was closed at frame 982.
+  - The EE's cycle count at the end, 3,008,102,400, is 510 of the console's
+    frames (5,898,240 cycles each): it began again at the reboot.
+  - The session written down has `471 reboot`. Its replay rebooted at frame
+    471 ("1 of 1 reboots") and is the session at every one of its 19
+    fingerprints.
+- **The close button**, pressed in the game: the menu on Quit's question ("Esc:
+  back to the game"); Esc back to the game; pressed again, the question again;
+  pressed a third time while it showed, the window closed (509 frames). The run
+  again with the second press made Quit chosen there: the same.
+- **The card busy,** with a trial build that took it for busy (taken out
+  after): Quit refused with the message on its question; the close button
+  pressed on that question refused too; Reboot refused likewise; Esc twice back
+  to the game.
+- **The close button while a control waited for its key** (D-Pad Up): Quit's
+  question, no message; K pressed on it bound nothing (`controls.ini`
+  unchanged); Esc back to the game.
+- **Tests:** every test passes: on Windows 556, and 554 in the module tree with
+  the same three comparisons disabled; on Linux, inside WSL, 556 and 553; none
+  skipped. The module trees' runtime, built with 0.4's profile of play, takes
+  no counts for the functions that changed (`OnGuestFrame`, `CPUThreadMain`,
+  the session's reading and report): its profile is made again for the next
+  release, as always.
+- **After the tests** the comment at the top of a session's `input.txt` was
+  wrapped again (its text unchanged; a replay reads nothing after a `#`), all
+  four trees built again, and the reboot's check run again: the game rebooted
+  at frame 475, and the session's replay rebooted there and was the session at
+  every one of its 19 fingerprints.
+- **On Linux** it is built and tested, but no game was opened in a window there
+  (a window inside WSL shows on the maintainer's screen). There the close
+  button is the window manager's `WM_DELETE_WINDOW`, which always asks: a
+  scripted close needs it twice.
+
+### The maintainer's answers (2026-11-26)
+
+The maintainer's answers: "1. Yes" (to committing and pushing), "2. Yes" (to
+their game folders given these programs, as the day before).

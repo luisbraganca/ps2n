@@ -2,7 +2,8 @@
 
 - Date: 2026-11-25
 - Status: accepted (the maintainer's words, below). Built, committed and
-  pushed; given to the maintainer's game folders; in no release yet.
+  pushed; given to the maintainer's game folders; in no release yet. Reboot and
+  the close button asking first (2026-11-26) likewise, at their answers.
 
 ## Context
 
@@ -83,7 +84,8 @@ And, once those sounds were made:
     ([ADR 0055](0055-a-session-writes-down-the-pace-it-kept-and-the-notice-shows-for-any-new-code.md))
     leaves the time the menu was open out.
 - **Quit** asks with two items, Quit and Back, Back reached first. The
-  window's close button and Alt+F4 close it as before, without asking.
+  window's close button and Alt+F4 close it as before, without asking (until
+  the next day: below).
 - **Controls:**
   - **The controller in port 1,** the one a session writes down. A second
     player's port is not offered: a session writes down only the first
@@ -187,6 +189,80 @@ maintainer's answers, the same day: "1. Yes", "2. Yes", "3. No".
   inside WSL) are given these programs, their PS2Native folders made again from
   the commit first, each game compiled again before it next plays.
 - **Only Esc opens the menu.** A controller moves in it, but does not open it.
+
+Done the same day:
+
+- **The commit:** `e616401`, at 17:12 UTC, pushed.
+- **Their PS2Native folders** made again from it (`build\kit`, and inside WSL
+  `build/PS2Native`), their games kept.
+- **Their game folders** given its programs by their PS2Native folder's wizard,
+  each compiling its game again: the nine of `build\kit\games` (22 s to 324 s)
+  and Jak and Daxter's inside WSL (53 s). Where a session can be run again as
+  itself, its start was: the session at every fingerprint compared. Asked
+  again, the wizard changed nothing; the memory cards and sessions are as they
+  were (`build\measure\folders-60.ps1`; the scratchpad's `wsl\p60-linux.sh`).
+
+## Reboot, and the close button asking first (2026-11-26)
+
+The next day, a border on the right in SSX Tricky having proved PCSX2's own
+(docs/app-log.md), the maintainer wrote:
+
+> To finish this feature, can you add an additional overlay button for
+> "Reboot" that allows rebooting the game? Also show a warning message because
+> unsaved progress may be list. This warning should also be shown when closing
+> the game through the X button on the window (not sure if you added it there
+> as well).
+
+The session had not: the close button closed at once.
+
+1. **Reboot** on the menu's first page, between Graphics card and Quit, asks
+   first, saying that what has not been saved is lost, and restarts the game
+   from the beginning.
+2. **The window's close button**, and Alt+F4, ask the same question as Quit
+   before closing.
+
+What the session chose within it, for the maintainer to decide otherwise:
+
+- **A reboot is PCSX2's own reset of the machine** (`VMManager::Reset`, its
+  "Reset System"), in the same window, the game starting again from the BIOS.
+  It is done as PCSX2 does it: marked when the menu closes, and carried out
+  once that frame's event test is over and execution has been left.
+- **A session written down marks the frame** (`<frame> reboot`), and a run of
+  it again reboots there: such a session still runs again as itself.
+- **Reboot's question:** "Reboot <the game>? The game starts again from the
+  beginning. Anything you have not saved in it will be lost.", Reboot and Back,
+  Back reached first.
+- **The close button and Alt+F4** open the menu on Quit's question; Back or Esc
+  goes back to the game. Pressed again while that question shows, they are Quit
+  chosen there. They close the window at once when the game is not running its
+  frames (still starting, or held up): a game that hangs can still be closed.
+  The menu's own Quit, and a check, close it without asking.
+- **Not while the game saves:** Quit and Reboot are refused while PCSX2 counts a
+  memory card busy (for 300 frames after each write), saying to go back to the
+  game for a few seconds. PCSX2 refuses a reset then; its own window warns
+  before shutting down that the card can be corrupted, and lets the user insist.
+
+Built and checked the same day on Windows (docs/app-log.md, "Reboot, and the
+close button asking first"):
+
+- **Reboot:** the game rebooted at the frame it was chosen, the BIOS starting
+  again, then the game. The session written down with it ran again as itself,
+  rebooting at the same frame: the session at every one of its 19 fingerprints.
+- **The close button:** the menu on Quit's question; Esc back to the game; the
+  question again, and pressed while it showed, the window closed.
+- **The card busy,** in a trial build: Quit, Reboot and the close button pressed
+  on the question each refused, with the message.
+- **Tests:** every test passes: on Windows 556, and 554 in the module tree; on
+  Linux, inside WSL, 556 and 553; none skipped. On Linux it was not opened in a
+  window.
+
+Asked whether to commit and push, and whether their game folders get these
+programs, the maintainer answered the same day: "1. Yes", "2. Yes".
+
+- **Committed and pushed.**
+- **Their game folders** are given these programs as the day before, their
+  PS2Native folders made again from the commit first, each game compiled again
+  before it next plays.
 
 ## Consequences
 

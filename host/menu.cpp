@@ -39,6 +39,7 @@
 #include "pcsx2/MTGS.h"
 #include "pcsx2/SIO/Pad/Pad.h"
 #include "pcsx2/SIO/Pad/PadTypes.h"
+#include "pcsx2/SIO/Sio.h"
 #include "pcsx2/VMManager.h"
 
 #include "fmt/format.h"
@@ -108,8 +109,10 @@ namespace ps2n::host::menu
 		std::string s_controls_path; // the controls file (LoadControls)
 		bool s_controls_own = false;
 		std::atomic<bool> s_requested{false};
-		bool s_open = false;
+		std::atomic<bool> s_open{false}; // read by the window's thread too (IsOpen)
 		bool s_quit = false;
+		bool s_reboot = false;
+		bool s_ask_quit = false; // the close button asked for the menu: it opens on Quit's question
 		std::string s_title;
 		std::string s_message;
 		std::vector<std::string> s_adapters;
@@ -138,16 +141,21 @@ namespace ps2n::host::menu
 		{
 			Main,
 			Quit,
+			Reboot,
 			Controls,
 			GraphicsCard,
 		};
 		Shown s_shown;
 		Page s_page = Page::Main;
+		// Quit's question came from the window's close button: Back goes back to
+		// the game, not to the first page.
+		bool s_from_close = false;
+		std::atomic<bool> s_asking_quit{false}; // read by the window's thread (IsAskingQuit)
 		// Each page is a window of its own, which ImGui gives the keyboard's and
 		// controllers' focus when it appears, on its first item unless another
 		// says it is the default (SetItemDefaultFocus): on the first page, the
 		// item of the page come back from. The focus is shown at once.
-		int s_main_default = 0; // Resume, Controls, Graphics card, Quit
+		int s_main_default = 0; // Resume, Controls, Graphics card, Reboot, Quit
 		bool s_show_focus = false;
 		bool s_adapters_asked = false;
 
@@ -314,14 +322,16 @@ namespace ps2n::host::menu
 		}
 
 		// The GS thread draws what the CPU thread has now. `fresh`: the menu has
-		// just opened, at its first page.
-		void PostShown(bool fresh = false)
+		// just opened, at its first page, or at Quit's question where the
+		// window's close button asked for it (`at_quit`).
+		void PostShown(bool fresh = false, bool at_quit = false)
 		{
-			MTGS::RunOnGSThread([shown = MakeShown(), fresh]() mutable {
+			MTGS::RunOnGSThread([shown = MakeShown(), fresh, at_quit]() mutable {
 				s_shown = std::move(shown);
 				if (fresh)
 				{
-					s_page = Page::Main;
+					s_page = at_quit ? Page::Quit : Page::Main;
+					s_from_close = at_quit;
 					s_main_default = 0;
 					s_show_focus = true;
 					s_adapters_asked = false;
@@ -353,6 +363,25 @@ namespace ps2n::host::menu
 			}
 			for (const std::function<void()>& action : actions)
 				action();
+		}
+
+		// Quit or Reboot confirmed: the menu closes and the runner does it (main.cpp).
+		// Not while the game is saving to its memory card, or has just saved: PCSX2
+		// counts a card busy for 300 frames after each write (MemcardBusy), refuses
+		// a reset then (VMManager::RequestReset), and warns before shutting down
+		// that the card could be corrupted. The game being held while the menu is
+		// open, that count only runs down in the game: back to it first.
+		void Leave(bool reboot)
+		{
+			if (MemcardBusy::IsBusy())
+			{
+				s_message = "The game is saving to its memory card, or has just saved: go back to the game for a few seconds, then try again.";
+				sound::Play(Sound::Back);
+				PostShown();
+				return;
+			}
+			(reboot ? s_reboot : s_quit) = true;
+			s_open = false;
 		}
 
 		// The controls as they are now kept in the game's folder, in PCSX2's own
@@ -891,9 +920,12 @@ namespace ps2n::host::menu
 				s_main_default = 1;
 			else if (page == Page::GraphicsCard)
 				s_main_default = 2;
-			else if (page == Page::Quit)
+			else if (page == Page::Reboot)
 				s_main_default = 3;
+			else if (page == Page::Quit)
+				s_main_default = 4;
 			s_page = page;
+			s_from_close = false;
 			s_page_changed = true;
 			s_show_focus = true;
 			s_quiet_frames = 4;
@@ -901,10 +933,11 @@ namespace ps2n::host::menu
 			Do([]() { s_message.clear(); });
 		}
 
-		// Back a page, or out of the menu from its first (Close() sounds then).
+		// Back a page, or out of the menu from its first, or from Quit's question
+		// where the window's close button asked it (Close() sounds then).
 		void Back()
 		{
-			if (s_page == Page::Main)
+			if (s_page == Page::Main || (s_page == Page::Quit && s_from_close))
 			{
 				Do([]() { s_open = false; });
 				return;
@@ -933,30 +966,41 @@ namespace ps2n::host::menu
 				if (Item("##card", "Graphics card"))
 					GoTo(Page::GraphicsCard);
 				default_here(2);
+				if (Item("##reboot", "Reboot"))
+					GoTo(Page::Reboot);
+				default_here(3);
 				if (Item("##quit", "Quit"))
 					GoTo(Page::Quit);
-				default_here(3);
+				default_here(4);
 				Hint("Esc: back to the game");
 			}
 			EndPanel();
 		}
 
-		void DrawQuit()
+		// Quit's question, or Reboot's: what was not saved in the game is lost.
+		// Back is reached first: a choice made by mistake loses nothing.
+		void DrawLeave(bool reboot)
 		{
-			if (BeginPanel("##ps2n-quit", Px(560.0f), 0.0f))
+			if (BeginPanel(reboot ? "##ps2n-reboot" : "##ps2n-quit", Px(560.0f), 0.0f))
 			{
-				Text(28.0f, kWhite, fmt::format("Quit {}?", s_shown.title), true);
+				Text(28.0f, kWhite, fmt::format("{} {}?", reboot ? "Reboot" : "Quit", s_shown.title), true);
 				Gap(4.0f);
-				Text(20.0f, kDim, "Anything you have not saved in the game will be lost.", true);
+				Text(20.0f, kDim,
+					reboot ? "The game starts again from the beginning. Anything you have not saved in it will be lost." :
+							 "Anything you have not saved in the game will be lost.",
+					true);
+				if (!s_shown.message.empty())
+				{
+					Gap(4.0f);
+					Text(18.0f, kWhite, s_shown.message, true);
+				}
 				Gap(14.0f);
-				if (Item("##quit-yes", "Quit", {}, 0.0f, false, std::nullopt))
-					Do([]() {
-						s_quit = true;
-						s_open = false;
-					});
-				if (Item("##quit-no", "Back", {}, 0.0f, false, std::nullopt))
+				if (Item(reboot ? "##reboot-yes" : "##quit-yes", reboot ? "Reboot" : "Quit", {}, 0.0f, false, std::nullopt))
+					Do([reboot]() { Leave(reboot); });
+				if (Item(reboot ? "##reboot-no" : "##quit-no", "Back", {}, 0.0f, false, std::nullopt))
 					Back();
-				ImGui::SetItemDefaultFocus(); // Back: a Quit pressed by mistake loses nothing
+				ImGui::SetItemDefaultFocus();
+				Hint(s_from_close ? "Esc: back to the game" : "Esc: back");
 			}
 			EndPanel();
 		}
@@ -1101,10 +1145,12 @@ namespace ps2n::host::menu
 			switch (s_page)
 			{
 				case Page::Main: DrawMain(); break;
-				case Page::Quit: DrawQuit(); break;
+				case Page::Quit: DrawLeave(false); break;
+				case Page::Reboot: DrawLeave(true); break;
 				case Page::Controls: DrawControls(); break;
 				case Page::GraphicsCard: DrawGraphicsCard(); break;
 			}
+			s_asking_quit.store(s_page == Page::Quit);
 
 			// The pointer, the keys or a controller have reached another item.
 			const bool moved = (s_hovered_now != 0 && s_hovered_now != s_hovered) || (s_focused_now != 0 && s_focused_now != s_focused);
@@ -1239,18 +1285,59 @@ namespace ps2n::host::menu
 		return s_requested.load();
 	}
 
+	void AskQuit()
+	{
+		if (s_open)
+		{
+			// Open already: to Quit's question, from where Back goes back to the game.
+			// A control waiting for its key is left as it was: the keys are the
+			// question's now.
+			if (s_capture.row >= 0)
+			{
+				InputManager::RemoveHook();
+				s_capture = {};
+			}
+			s_message.clear();
+			MTGS::RunOnGSThread([]() {
+				GoTo(Page::Quit);
+				s_from_close = true;
+			});
+			return;
+		}
+		s_ask_quit = true;
+		s_requested.store(true);
+	}
+
+	void ConfirmQuit()
+	{
+		if (s_open)
+			Leave(false);
+	}
+
+	bool IsOpen()
+	{
+		return s_open.load();
+	}
+
+	bool IsAskingQuit()
+	{
+		return s_open.load() && s_asking_quit.load();
+	}
+
 	void Open(const std::string& title)
 	{
 		s_requested.store(false);
 		s_open = true;
 		s_quit = false;
+		s_reboot = false;
 		s_title = title;
 		s_message.clear();
 		{
 			std::lock_guard lock(s_actions_mutex);
 			s_actions.clear();
 		}
-		PostShown(true);
+		PostShown(true, s_ask_quit);
+		s_ask_quit = false;
 		if (s_pointer_x >= 0.0f)
 			ImGuiManager::UpdateMousePosition(s_pointer_x, s_pointer_y);
 		sound::Play(Sound::Open);
@@ -1284,6 +1371,11 @@ namespace ps2n::host::menu
 		return s_quit;
 	}
 
+	bool RebootChosen()
+	{
+		return s_reboot;
+	}
+
 	void Close()
 	{
 		if (s_capture.row >= 0)
@@ -1292,6 +1384,8 @@ namespace ps2n::host::menu
 			s_capture = {};
 		}
 		s_open = false;
+		s_asking_quit.store(false);
+		s_ask_quit = false;
 		s_requested.store(false);
 		{
 			std::lock_guard lock(s_actions_mutex);

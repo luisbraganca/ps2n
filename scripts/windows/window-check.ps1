@@ -23,7 +23,9 @@ steps it was given, each at a number of seconds after the window appeared:
   "9 click 640 360"    move the pointer to that place of the picture (its
                        pixels, from the top left) and click its left button
                        ("rclick" the right one, "move" only moves it)
-  "20 close"           close the window, as its close button would
+  "20 close"           close the window, without the game asking first
+  "18 close-button"    the window's close button, as a player presses it: the
+                       game asks first (its menu on Quit's question)
 
 and prints what the window was called and how large it was at each step, and
 what the host reported when the session ended. The photographs are of the
@@ -125,7 +127,9 @@ public static class Ps2nGameWindow
         long lp = down ? 1L : unchecked((long)0xC0000001L);
         PostMessageW(hwnd, down ? 0x0100u : 0x0101u, new IntPtr(vk), new IntPtr(lp));
     }
-    public static void Close(IntPtr hwnd) { PostMessageW(hwnd, 0x0010, IntPtr.Zero, IntPtr.Zero); }
+    // WM_CLOSE as the close button sends it (`ask`: the game asks first, its menu on Quit's question), or
+    // with window::kCloseWithoutAsking for its wParam, which closes it at once.
+    public static void Close(IntPtr hwnd, bool ask) { PostMessageW(hwnd, 0x0010, ask ? IntPtr.Zero : new IntPtr(0x50534E), IntPtr.Zero); }
     // The pointer at (x, y) of the picture: moved there, and a button pressed and let go (0 none, 1 left, 2 right).
     public static void Pointer(IntPtr hwnd, int x, int y, int button)
     {
@@ -210,15 +214,19 @@ foreach ($step in $Steps) {
             Write-Host ("{0,6:N1} s: key {1} for {2} s" -f $watch.Elapsed.TotalSeconds, $words[2], $held)
         }
         'close' {
-            [Ps2nGameWindow]::Close($hwnd)
+            [Ps2nGameWindow]::Close($hwnd, $false)
             Write-Host ("{0,6:N1} s: the window is asked to close" -f $watch.Elapsed.TotalSeconds)
+        }
+        'close-button' {
+            [Ps2nGameWindow]::Close($hwnd, $true)
+            Write-Host ("{0,6:N1} s: the window's close button, as a player presses it" -f $watch.Elapsed.TotalSeconds)
         }
         { $_ -in 'click', 'rclick', 'move' } {
             $button = @{ 'move' = 0; 'click' = 1; 'rclick' = 2 }[$words[1]]
             [Ps2nGameWindow]::Pointer($hwnd, [int]$words[2], [int]$words[3], $button)
             Write-Host ("{0,6:N1} s: {1} at {2},{3}" -f $watch.Elapsed.TotalSeconds, $words[1], $words[2], $words[3])
         }
-        default { throw "Unknown step [$step]: shot <file>, key <key> [seconds], click|rclick|move <x> <y>, or close." }
+        default { throw "Unknown step [$step]: shot <file>, key <key> [seconds], click|rclick|move <x> <y>, close, or close-button." }
     }
 }
 
