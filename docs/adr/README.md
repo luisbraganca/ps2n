@@ -30,7 +30,7 @@ The numbers are the records' own; each is in the list below.
 | The toolchain, a game's folder and its own compile | 0029, 0030, 0031, 0034, 0040, 0044, 0045, 0048, 0057 |
 | Speed | 0015, 0019, 0043, 0046, 0047, 0050, 0051, 0052 |
 | Linux | 0004, 0008, 0038, 0041 |
-| Releases | 0042, 0047, 0049, 0052, 0058, 0059 |
+| Releases | 0042, 0047, 0049, 0052, 0058, 0059, 0063 |
 | The games | 0009 (Killzone), 0026 (Agent Under Fire), 0054 (three more made ready), 0056 (Jak and Daxter at a 130% EE cycle rate) |
 | How the project keeps itself | 0061 (the release's scripts in the repository, `CLAUDE.md` cut to what a session needs) |
 
@@ -901,3 +901,17 @@ The numbers are the records' own; each is in the list below.
     otherwise.
   - **The maintainer's answers** ("1. Yes", "2. Yes"): committed and pushed;
     their game folders given these programs.
+- [ADR 0063](0063-0-5-is-released.md): the maintainer's words of 2026-11-27,
+  "Handle release 0.5".
+  - **Made as 0.4 was,** by the scripts of ADR 0061 for the first time: the
+    version 0.5, committed and pushed; the runtime's profile of play made
+    again on each system from that tree (the last was made at v2.9.189), the
+    training folders brought up to date first (module version 7).
+  - **The downloads:** both made from that tree and tried, a folder of 0.4's
+    download brought up to date among the tries.
+  - **The draft:** the release's runtime timed against stock PCSX2 v2.9.198
+    before the notes quote a number, then a draft pre-release on GitHub.
+  - **The session's choices:** "Handle" read as far as the draft, publishing,
+    the website and their game folders put to them then; their game folders
+    keep `d50ef76`'s programs unless they say otherwise; the website and the
+    README move to 0.5 once it is published.

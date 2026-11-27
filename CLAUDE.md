@@ -44,7 +44,8 @@ As of 2026-11-27. This section is replaced when it changes, never added to.
 - **Phase 5, Maintenance,** since 2026-11-22 (ADR 0053). Phases 1 to 4 are
   done.
 - **Released:** 0.4, a pre-release, on 2026-11-25: the tag `v0.4` on
-  `a243df4`. `version.txt` says 0.4.
+  `a243df4`.
+- **Being released:** 0.5 (ADR 0063). `version.txt` says 0.5.
 - **In `main` and in the maintainer's game folders, in no release:** the menu
   over the game, opened with Esc (ADR 0060; `e616401`, `224d896`).
 - **PCSX2 followed:** v2.9.198 (ADR 0062; v2.9.189 until then), with two

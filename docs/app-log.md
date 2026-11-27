@@ -5861,6 +5861,7 @@ Checked by a script (in the session's scratch folder):
   how-to), and four more, are each in the short file.
 - **Every one of the 117 relative links** in the four files leads to a file
   that exists, and every anchor to a heading.
+
 ### PCSX2 v2.9.198 tried in its worktree (2026-11-27)
 
 At the maintainer's "Follow them in a branch", with `try-pcsx2.ps1 -Tag
@@ -5914,6 +5915,7 @@ fail: five whose entries the lists above lose or gain, and one that waits on
 two of them. With the lists corrected, none.
 
 No timing: a move is decided on what runs, as for v2.9.189 (ADR 0053).
+
 ### The maintainer's answers (2026-11-27)
 
 "1. Yes", "2. Yes", "3. Yes", "4. Yes" (ADR 0061 has the questions):
@@ -5926,6 +5928,7 @@ No timing: a move is decided on what runs, as for v2.9.189 (ADR 0053).
   into this tree (`deps` and both submodules), taken away alone first, so
   that nothing of what they point to was touched; then the folder, and its
   branch `perf`, which `main` held whole.
+
 ### PCSX2 v2.9.198: moved (2026-11-27)
 
 At the maintainer's "3. Yes" (ADR 0062), in `main`, from the trial's
@@ -5966,9 +5969,77 @@ changes saved first (`build\pcsx2-try\v2.9.198\removed`); inside WSL, the
 trial's worktree and its branch likewise, the clone's `deps` untouched. The
 clone's PCSX2, fetched by its commit alone, had no tags, so that its version
 printed empty: `sync.sh` now fetches the tags of the copy of PCSX2 it is given.
-### The maintainer's answers to the move (2026-11-27)
+
+### The maintainer's answers to the move, and their folders given its programs (2026-11-27)
 
 "1. Yes", "2. Yes" (ADR 0062): the move committed and pushed; their game
 folders given these programs, on Windows and inside WSL, by the repository's
 `update-games` scripts, their PS2Native folders made again from the commit
 first.
+
+- **Committed and pushed:** `d50ef76`, 21:11 UTC.
+- **Their PS2Native folders** made again from it by the scripts' first parts:
+  `build\kit`, and inside WSL `build/PS2Native`, after `~/ps2n` was brought to
+  the commit (no file differing from it). The licences in each name the commit,
+  and PCSX2's core in each carries both of PS2Native's changes.
+- **Their game folders** given its programs by that folder's wizard, the
+  scripts' first run on the maintainer's own folders: each compiled its game
+  again before its next start; the start of a session chosen by the scripts'
+  rule (its newest of 900 frames or more, 600 inside WSL; else its longest,
+  whole) was run again with the new programs; the wizard was asked again; the
+  memory cards were compared.
+
+| Folder | Compiled in | Its start run again |
+|---|---:|---|
+| 007 - Agent Under Fire (nine executables) | 341 s | 900 frames of its session of 2026-11-17 22:44, 18 of 18 fingerprints |
+| Agent Under Fire | 95 s | 900 frames of 2026-11-17 18:57, 18 of 18 |
+| Gran Turismo 3 | 23 s | 900 frames of 2026-11-18 10:27, 18 of 18 |
+| Jak and Daxter | 62 s | 900 frames of 2026-11-23 10:47, 18 of 18 |
+| Killzone | 113 s | 900 frames of 2026-11-17 22:18, 18 of 18 |
+| Resident Evil – Code: Veronica X | 38 s | no session yet |
+| Secret Agent Clank | 54 s | no session yet |
+| Silent Hill 3 | 88 s | its longest session, of 2026-11-19 00:00, whole: 120 frames, 2 of 2 |
+| SSX Tricky | 59 s | 900 frames of 2026-11-27 15:42, 18 of 18 |
+| Jak and Daxter, inside WSL | 27 s | 600 frames of 2026-11-19 23:01, 12 of 12 |
+
+- **What each run interpreted.** Where the session is the one checked the day
+  before (both Agent Under Fire folders), the run interpreted what it did then,
+  to the cycle: 54,009,560 and 117 EE cycles of 5,302,517,764. The sessions
+  the rule chose in the other folders are not those checked then. Gran
+  Turismo 3's, Jak and Daxter's and SSX Tricky's reach the frame at the same EE
+  cycle as those did and interpreted as much (111, 104,514 and 111 cycles);
+  Killzone's and Silent Hill 3's interpreted 111, as theirs did. Inside WSL,
+  86,174 cycles, as the session checked at 0.4's update (2026-11-25), another
+  of the same evening, did.
+- **Asked again,** the wizard found every folder up to date and changed nothing.
+- **Memory cards and sessions** are as they were: two cards in each folder that
+  has been played, none changed; the two never played have none.
+- **Counting once more:** SSX Tricky's folder counts its profile once more
+  after its next session of 3 minutes. Jak and Daxter's on Windows still does:
+  its round was waiting before this update too. The other folders have no
+  counts.
+
+## 0.5 (ADR 0063)
+
+### What it holds, and how it is made (2026-11-27)
+
+The maintainer's words: "Handle release 0.5".
+
+Since 0.4, 0.5 holds:
+
+- the menu over the game, opened with Esc, with Reboot, and the window's close
+  button asking first (ADR 0060);
+- PCSX2 v2.9.198, with PS2Native's second change to PCSX2's code, a missing
+  include (ADR 0062; module version 7).
+
+It is made as 0.4 was, by the scripts in the repository for the first time
+(ADR 0061: `release.ps1`, `release.sh`, `time-games.ps1`):
+
+1. The version 0.5, committed and pushed.
+2. The runtime's profile of play made again on each system, the training
+   folders brought up to date first. The last profile was made at v2.9.189.
+3. The trees the downloads come from built with it and tested.
+4. Both downloads made and tried, a folder of 0.4's download brought up to
+   date among the tries.
+5. The release's runtime timed against stock PCSX2 v2.9.198.
+6. A draft for the maintainer.

@@ -435,7 +435,9 @@ downloads made from it and the release a draft on GitHub that the maintainer
 reads and publishes; a folder brought up to date with another toolchain counts
 its profile once more after a session; the session brings the maintainer's own
 seven game folders up to date; and why a compiled game takes more than stock
-PCSX2's time on Linux is looked for after 0.2 is out. Done the same day: both
+PCSX2's time on Linux is looked for after 0.2 is out. docs/app-log.md,
+"Compiled games against PCSX2, as users get them" and "0.2: a game's folder
+brought up to date". Done the same day: both
 downloads made from the commit `4b45373`, every test passing in the trees
 they were made from, each unpacked and tried (its wizard made a game, and a
 session of the maintainer's run again from that folder was the session at
@@ -712,6 +714,41 @@ release yet:
 - **Its sounds,** PS2Native's own in the PS2's manner, played beside the
   game's.
 - docs/app-log.md, "A menu over the game (ADR 0060)".
-docs/app-log.md,
-"Compiled games against PCSX2, as users get them" and "0.2: a game's folder
-brought up to date".
+
+On 2026-11-27, asked what was next, the maintainer chose "Maintenance tools"
+of four options, and, for PCSX2's newest version, v2.9.198, "Follow them in a
+branch" (ADR 0061). Done the same day:
+
+- **The release's scripts in the repository** (`scripts\windows`,
+  `scripts/linux`, each described in `docs/development.md`), where they had
+  been copied from one release to the next in the build tree: the
+  maintainer's game folders brought up to date and checked, compiled games
+  timed against stock PCSX2, a release made and tried, the clone inside WSL
+  brought to the tree. Each was tried on copies and in rehearsals.
+- **A newer PCSX2 tried by one command** (`try-pcsx2.ps1`, `try-pcsx2.sh`): in
+  a worktree and on a branch of its own, built and tested, the measurement
+  folders' sessions run again, a report written. Tried first on v2.9.189, the
+  version followed, where nothing may differ, and nothing did.
+- **`CLAUDE.md` cut** from 23,888 words to 2,627; what left it was moved word
+  for word into this record, `docs/adr/README.md` and `docs/development.md`.
+- **v2.9.198 tried** in its worktree: six of PCSX2's changes touch what
+  PS2Native follows, and PCSX2's own code needed a missing include to compile
+  on Linux here. With PS2Native following them, every test passed on both
+  systems, and the four timed games' sessions ran again as themselves, the
+  compiled games' EE cycles the same on both versions.
+
+At the maintainer's answers ("1. Yes", "2. Yes", "3. Yes", "4. Yes"):
+committed and pushed (`b542370`); the rule that `build\` is never deleted or
+cleaned whole kept; the worktree of Phase 3 removed; and PS2Native moved to
+v2.9.198 (ADR 0062), carrying the include as its second change to PCSX2's
+code, one that stock PCSX2's trees are built with too. The module version is
+7. At their next answers ("1. Yes", "2. Yes"): committed and pushed
+(`d50ef76`), and their game folders given its programs, the nine on Windows
+and the one inside WSL, each compiling its game again; where a session could
+be run again, its start was the session at every fingerprint compared, and
+their memory cards are unchanged. docs/app-log.md, "Maintenance tools (ADR
+0061)".
+
+The same night the maintainer wrote "Handle release 0.5" (ADR 0063). 0.5 is
+made as 0.4 was, by the release's scripts in the repository for the first
+time. The version is 0.5 (`version.txt`).

@@ -93,7 +93,13 @@ The session put two things to them, each with its recommendation:
 
 Their answers: "1. Yes", "2. Yes".
 
-- **Committed and pushed.**
-- **Their game folders** are given these programs, their PS2Native folders
-  made again from the commit first, as docs/development.md says ("The
-  maintainer's game folders brought up to date").
+- **Committed and pushed** (`d50ef76`).
+- **Their game folders** were given these programs the same evening, their
+  PS2Native folders made again from the commit first, as docs/development.md
+  says ("The maintainer's game folders brought up to date"): the nine on
+  Windows and the one inside WSL, each compiling its game again. Where a
+  session could be run again, its start, run again with the new programs, was
+  the session at every fingerprint compared; the wizard, asked again, changed
+  nothing; their memory cards and sessions are as they were (docs/app-log.md,
+  "The maintainer's answers to the move, and their folders given its
+  programs").
