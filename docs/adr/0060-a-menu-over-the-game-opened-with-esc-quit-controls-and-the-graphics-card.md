@@ -264,6 +264,23 @@ programs, the maintainer answered the same day: "1. Yes", "2. Yes".
   PS2Native folders made again from the commit first, each game compiled again
   before it next plays.
 
+Done the same day:
+
+- **The commit:** `224d896`, at 16:34 UTC, pushed.
+- **Their PS2Native folders** made again from it (`build\kit`, and inside WSL
+  `build/PS2Native`), their games kept.
+- **Their game folders** given its programs by their PS2Native folder's wizard,
+  each compiling its game again: the nine of `build\kit\games` (23 s to 319 s)
+  and Jak and Daxter's inside WSL (49 s). Where a session can be run again as
+  itself, its start was, SSX Tricky's among them this time: the session at every
+  fingerprint compared. Asked again, the wizard changed nothing; the memory cards
+  and sessions are as they were (`build\measure\folders-60b.ps1`; the
+  scratchpad's `wsl\p60b-linux.sh`).
+- **SSX Tricky's folder counts its profile once more** after its next session of
+  3 minutes, as Jak and Daxter's still does: the wizard takes a toolchain for
+  another by its files' sizes and times, and every link of the runtime writes
+  the host's import library in it again (docs/app-log.md).
+
 ## Consequences
 
 - **A game's folder gets the menu with this version's programs**, which the

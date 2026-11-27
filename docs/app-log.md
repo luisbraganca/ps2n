@@ -5538,7 +5538,8 @@ the menu too).
 - **Memory cards and sessions** are as they were.
 - **Counting once more:** Jak and Daxter's folder on Windows and SSX Tricky's
   still count their profiles once more after a session of 3 minutes, as since
-  0.4's update; this one, the toolchain the same, adds no count.
+  0.4's update (that this update would have added none was written here at
+  first, and is not so: the next day's section).
 
 ### A border on the right in SSX Tricky: not the menu (2026-11-25)
 
@@ -5662,7 +5663,266 @@ of SSX Tricky had ended:
   button is the window manager's `WM_DELETE_WINDOW`, which always asks: a
   scripted close needs it twice.
 
-### The maintainer's answers (2026-11-26)
+### The maintainer's answers, and their folders given Reboot (2026-11-26)
 
 The maintainer's answers: "1. Yes" (to committing and pushing), "2. Yes" (to
 their game folders given these programs, as the day before).
+
+- **Committed and pushed:** `224d896`, 16:34 UTC.
+- **Their PS2Native folders** made again from it, as the day before: `build\kit`
+  (its licences name the commit; the module tree had nothing left to build), and
+  inside WSL `build/PS2Native`, after `~/ps2n` was brought to the commit and its
+  module tree built there.
+- **Their game folders** given its programs by that folder's wizard, each
+  compiling its game again before its next start, the start of one of its
+  sessions run again with them, the wizard asked again
+  (`build\measure\folders-60b.ps1`; inside WSL the scratchpad's
+  `wsl\p60b-linux.sh`):
+
+| Folder | Compiled in | Its start run again |
+|---|---:|---|
+| Jak and Daxter | 80 s | 900 frames, 18 of 18 fingerprints |
+| Killzone | 113 s | 900 frames, 18 of 18 |
+| Silent Hill 3 | 88 s | 90 frames, 1 of 1 |
+| Gran Turismo 3 | 23 s | 900 frames, 18 of 18 |
+| Agent Under Fire | 92 s | 900 frames, 18 of 18 |
+| 007 - Agent Under Fire (nine executables) | 319 s | 900 frames, 18 of 18 |
+| Resident Evil – Code: Veronica X | 38 s | no session yet |
+| Secret Agent Clank | 55 s | no session yet |
+| SSX Tricky | 58 s | 900 frames of its session of 2026-11-25 17:56, 18 of 18 |
+| Jak and Daxter, inside WSL | 49 s | 600 frames, 12 of 12 |
+
+- **SSX Tricky's session** was played with VU1 on PCSX2's VU thread and run again
+  with VU1 on the CPU thread, as every run without a window has it; its run
+  again for the border had been the session at every fingerprint so too.
+- **What each run interpreted** is what it was the day before, to the cycle, for
+  every folder checked then (all but SSX Tricky).
+- **Asked again,** the wizard found every folder up to date and changed nothing.
+- **Memory cards and sessions** are as they were.
+- **Counting once more:** SSX Tricky's folder now counts its profile once more
+  after a session of 3 minutes, as Jak and Daxter's on Windows still does.
+  - The wizard takes a folder's toolchain for another when a file's size or time
+    differs (`ToolchainFingerprint`, `wizard/package.cpp`), and a folder with
+    counts then counts once more (ADR 0049).
+  - The toolchain holds the host's import library (`toolchain\lib\ps2n-host.lib`),
+    which every link of the runtime writes again. So every update gives such a
+    folder one more round, the generated code the same or not.
+  - The day before, both folders had one waiting already; what was written then,
+    that the update would add none, is corrected there.
+  - The round takes a minute or two at the end of a session, in the compile
+    window, whose Later puts it off.
+
+## Maintenance tools (ADR 0061)
+
+On 2026-11-27, asked what was next, the maintainer chose "Maintenance tools"
+of four options, and, for PCSX2 v2.9.198, "Follow them in a branch" (ADR 0061
+has the options and the words): a newer PCSX2 tried by one command; the
+release's scripts in the repository; `CLAUDE.md` cut to what a session needs;
+and v2.9.198 tried in a worktree of its own.
+
+### The scripts, in the repository (2026-11-27)
+
+What had been done by scripts copied from one release to the next in
+`build\measure` (git-ignored) and in a session's scratch folder is in
+`scripts\windows` and `scripts/linux`, described in `docs/development.md`:
+
+| Script | Made from | What it does |
+|---|---|---|
+| `common.ps1`, `common.sh` | `build\measure\common.ps1`, `replay.ps1`, `variant.ps1`, and the helpers each Linux script repeated | what the others share: waiting while a game is played, a program run without a console, a tree's tests counted, a game folder brought up to date and compiled, a session run again and its verdict read, a folder's twin with another runtime |
+| `hidden.ps1` | `build\measure\hidden.ps1` | a command run on a desktop of its own that nobody sees |
+| `wsl.ps1`, `sync.sh` | `build\measure\wsl-sync.ps1` and its `.sh`, `wsl-after-commit.sh`, `run-04-linux.sh` | the clone inside WSL brought to this tree's commit, or to the working tree as it is, and one of `scripts/linux` run there |
+| `update-games.ps1`, `update-games.sh` | `folders-60b.ps1`, the scratch `p60b-linux.sh` | the maintainer's game folders given this tree's programs and checked |
+| `time-games.ps1` | `release-04-time.ps1` | compiled games timed against stock PCSX2 built as its releases are |
+| `release.ps1`, `release.sh` | `release-04.ps1`, `release-04-all.ps1`, `release-04-linux.sh` | a release's download made from the committed and pushed tree and tried; its draft on GitHub |
+| `try-pcsx2.ps1`, `try-pcsx2.sh`, `pcsx2-watch.txt` | `p189-01.ps1`, `p189-02.ps1`, `p189-linux.sh`, `p189-move.sh` | a newer PCSX2 tried in a worktree, and a report |
+
+What is this computer's or a game's comes from parameters and from lists in
+the build tree (`build\measure\timed.txt`, `build\pgo\training.txt`;
+`build/timed.txt` inside WSL), not from the scripts.
+
+Put right on the way:
+
+- **A release stops** where the tree has changes not committed, is not pushed
+  or does not say the version; it used to say so and go on. `-Rehearsal`
+  goes through it on any tree, into `build\release\rehearsal`, and makes no
+  draft.
+- **The training folders** are brought up to date with a first PS2Native
+  folder of the tree's own, on both systems; Windows had borrowed the
+  maintainer's `build\kit` for it.
+- **Linux's test step** goes through `test.sh`: it had run ctest twice itself,
+  and only the second run's failure stopped it.
+- **A Linux batch waits** for a game played on Windows (`wsl.ps1`).
+- **The clone inside WSL is never overwritten** where it has changes of its
+  own; the folder update's script had discarded them.
+- **A folder's session to check with** is chosen by a rule, its newest of 900
+  frames or more (600 inside WSL), not by a table of the maintainer's games.
+- **A tree's tests are counted** from what ctest said of the tree itself,
+  skipped and disabled apart, the tools' two unit tests beside them.
+
+### Each script tried (2026-11-27)
+
+At `224d896` with the new scripts beside it, on copies and in rehearsals;
+none of the maintainer's own folders was touched.
+
+- **`update-games.ps1`**, on copies of three folders:
+  - Gran Turismo 3, a measurement folder with 0.3's programs and its own
+    counts: brought up to date, compiled in 27 s, 900 frames of its session
+    the session at 18 of 18 fingerprints, the wizard asked again changing
+    nothing, `count-again.txt` left for its next session;
+  - Jak and Daxter, the folder 0.4's download made: compiled in 8 s, 900
+    frames of a session of the maintainer's at 18 of 18;
+  - Silent Hill 3, a copy of the maintainer's, with two memory cards and seven
+    sessions, none of 900 frames: up to date already, the longest session run
+    again whole (120 frames, 2 of 2), its memory cards the bytes they were.
+- **`update-games.sh`**, inside WSL, on a copy of the folder 0.4's archive
+  made (compiled in 8 s, 600 frames at 12 of 12) and on a copy of the
+  maintainer's own Linux folder (up to date already; its newest session of
+  600 frames or more run again at 12 of 12; its two memory cards the same).
+- **`release.ps1 -Rehearsal`**, the whole chain but the draft, in 28 minutes:
+  - the seven training folders brought up to date and compiled (14 to 165 s);
+  - the runtime's profile of play made again (517 s), and the tree built with it;
+  - 554 tests passed, none failed, none skipped, three disabled; the tools'
+    unit tests passed;
+  - the folder for others, 489 files, no game and no patches in it; its
+    download, 115,348,508 bytes;
+  - unpacked, with nothing but Windows on `PATH`: its runtime read a `.chd`,
+    its wizard made Jak and Daxter in 14 s, and a session of the maintainer's
+    run again whole from that folder was the session at every one of its 167
+    fingerprints, 41,554,654,904 EE cycles, as 0.4's check had it;
+  - the folder 0.4's download made, brought up to date by it and compiled
+    (9 s): 900 frames at 18 of 18.
+- **`release.sh --rehearsal`**, inside WSL, in 40 minutes:
+  - the seven training folders (7 to 694 s), each training run of a session
+    the session at every fingerprint compared, the profile made again (682 s);
+  - 553 tests passed in the tree a release is made from, 556 in the
+    development tree, none failed, none skipped;
+  - the archive, 594 files, 144,431,288 bytes, nothing of this computer's
+    paths in its texts;
+  - unpacked: its runtime read the `.chd`, its wizard made Jak and Daxter in
+    11 s, and the same session whole was the session at all 167 fingerprints,
+    the same machine as on Windows to the cycle, its pace written down;
+  - the folder 0.4's archive made, brought up to date and compiled (7 s): 600
+    frames at 12 of 12.
+- **`time-games.ps1`**, and `release.sh --parts stock,time` inside WSL: one
+  round of Jak and Daxter each, stock PCSX2's tree built at the commit first;
+  every run the session at all 167 fingerprints. One round is not a timing:
+  its numbers are quoted nowhere.
+- **`try-pcsx2.ps1`'s check** of v2.9.198: 18 commits and 34 files since
+  v2.9.189, 19 of those files on the watch list, PCSX2's dependency scripts
+  unchanged, PS2Native's change to PCSX2's code still applying.
+- **`try-pcsx2.ps1 -Tag v2.9.189 -Parts all`, the control run** on the version
+  followed, where nothing may differ (40 minutes): the worktree made, both
+  trees built in it from nothing (259 and 300 s), every test passing as in the
+  main tree (556, and 554 with three disabled; none skipped), a PS2Native
+  folder made from it, and the four timed games' sessions run again whole, by
+  stock PCSX2 and by the compiled game, from the measurement folders and from
+  copies brought up to date by the worktree's wizard: every run the session at
+  every fingerprint, the same EE cycles from both. Then `-Remove` took the
+  worktree and its branch away, this tree's `deps` untouched.
+- **Found by running them, and put right:** inside WSL, the copy that brings
+  a worktree's changes over (`sync.sh`, `rsync --delete`) set aside `.git`,
+  `deps`, `build` and `third_party` only where they are folders, and so
+  deleted a worktree's `.git` file and its link to the clone's `deps` (the
+  link, not what it points to). Only the trial's own worktree was harmed; it
+  was made again. And the console's test programs are cloned into a trial's
+  worktree from the clone's own copy, as PCSX2 is: the submodule's own clone
+  failed there. And a test's line in ctest's summary ends with its labels on
+  Linux, which the patterns that count tests had not allowed for: failed tests
+  went unnamed, and a skipped one would have gone uncounted. Every test log of
+  the day, searched again loosely, has no skipped test.
+
+Left by the rehearsals: the runtime's profile of play made again on both
+systems from this tree, the trees a release is made from built with it (the
+profile before kept as `runtime-windows-before-rehearsal.profdata` and
+`runtime-linux-before-rehearsal.profdata`), and the training folders brought
+up to date. The maintainer's PS2Native folders keep their programs; their next
+update gives their games a runtime built with this profile.
+
+### `CLAUDE.md` cut to what a session needs (2026-11-27)
+
+`CLAUDE.md` had 23,888 words; it has 2,627. What left it was moved, word for
+word, into three documents: its history into `docs/history.md` (8,136 words,
+in the order things happened), the decisions' digests into
+`docs/adr/README.md` (with a map by subject), and "Layout, build and test"
+into `docs/development.md`, one section to a task, beside new sections for the
+scripts above. It keeps the brief's pointers, a snapshot of where things
+stand, the rules that bind every session, a table of what to read before what,
+the layout, and the commands of every day.
+
+Checked by a script (in the session's scratch folder):
+
+- **Of the old file's 144 items,** paragraphs and bullets one by one, every
+  one is in the four files, links' targets and the new headings aside, but
+  one: the website's note, which named "the status above" and now names
+  "Where things stand". The rule on `pcsx2-gsrunner` is in two places: among
+  the short file's rules, and in its how-to section.
+- **The 40 rules** an independent read of the old file found binding every
+  session whatever its task (23 of them only inside the history, a digest or a
+  how-to), and four more, are each in the short file.
+- **Every one of the 117 relative links** in the four files leads to a file
+  that exists, and every anchor to a heading.
+### PCSX2 v2.9.198 tried in its worktree (2026-11-27)
+
+At the maintainer's "Follow them in a branch", with `try-pcsx2.ps1 -Tag
+v2.9.198` (its report: `build\pcsx2-try\v2.9.198\report.md`; the worktree's
+changes there as `branch\tree.patch`), in the worktree `..\ps2n-pcsx2-198` on
+the branch `pcsx2-2.9.198`, and inside WSL in `~/ps2n-pcsx2-198`. Nothing in
+`main` changed, nothing is committed.
+
+What PCSX2 changed since v2.9.189: 18 commits, 34 files, 19 of them on the
+watch list. Six change what PS2Native follows; what followed each:
+
+| PCSX2's change | What PS2Native does in the worktree |
+|---|---|
+| Core: Remove FP control registers that don't exist (`fpuRegs.fprc[32]` is one `fcr31`) | Its description of PCSX2's structures follows (`pcsx2_layout.h`, the check in `pcsx2_check.cpp`, `FPU_REVISION` for what CFC1 reads below 16); `ACC` and `ACCflag` are 124 bytes nearer, so the module version is 7 |
+| EE:Rec: Fix unaligned LWR | Nothing: PS2Native kept bits 32 to 63 already, as the console does. The self-test now holds it to the recompiler too, and `cpu/ee/lsu` comes off two lists: stock PCSX2's recompiler matches the console, and PS2Native's run is stock's at every sync point |
+| microVU: Fix FBRST ordering | Nothing: PS2Native stored FBRST before the resets already, as the console does. The self-test holds it to the recompiler, and `cpu/vu0_macro/transfer` comes off the list of runs that part from stock's |
+| VU: Fix flag handling of v[r]sqrt (`microVU_Lower.inl`: the division flag joins a negative operand's invalid flag) | `vu_ops.h` and `ops_vu0.h` follow it |
+| Interpreter: Fix flag and sign handling of [r]sqrt.s | Nothing: PS2Native follows the recompiler, which did not change. CFC1, which the interpreter now reads as the recompiler does, is held to the interpreter too |
+| Interpreter: CTC2 Status only updates sticky flags | Nothing: PS2Native did so already. The self-test holds CTC2 to the status flag to the interpreter too |
+
+Found on the way:
+
+- **PCSX2's own code does not compile on Linux here.**
+  `pcsx2/ImGui/FullscreenUI_Settings.cpp` uses `std::istringstream` without
+  including `<sstream>`, which `common/StringUtil.h` stopped bringing in with
+  v2.9.196. PCSX2's own builds of v2.9.198, Linux's among them, compile it,
+  most likely with a newer libstdc++ than Ubuntu 22.04's. The trial carried a
+  one-line patch adding the include (`patches/pcsx2/0002-...`, in the worktree
+  only): whether PS2Native carries it is the maintainer's to decide (ADR 0050).
+- **A console recording PCSX2's interpreter matched no longer matches it:**
+  `vu/lower/integer` under `stock-interp` shows the zero sticky flag set after
+  each instruction. Its cause is the defect of PCSX2's the maintainer reported
+  on 2026-11-11, issue 15185 (`vu0DenormalizeMicroStatus` shifts the wrong way,
+  so a VU0 micro program starts without the current status flags), which the
+  recompiler and PS2Native already show on this program: the interpreter's
+  CTC2 hid it by overwriting all 32 bits, and v2.9.198 corrected that. The
+  program joins the interpreter's list with that cause. Issue 15185 had no
+  reply on 2026-11-27.
+
+The results, on both systems:
+
+| | Windows | Inside WSL |
+|---|---|---|
+| The development tree | built (341 s); 556 tests passed, none skipped | built; 556 passed, none skipped |
+| The tree a release is made from | built (285 s); 554 passed, three disabled, none skipped | built; 553 passed, three disabled, none skipped |
+| Sessions run again whole, from copies of the measurement folders brought up to date by the worktree's wizard and compiled | Jak and Daxter, Gran Turismo 3, Agent Under Fire, Killzone: on v2.9.189 and on v2.9.198, stock PCSX2 and the compiled game, each the session at every fingerprint (167, 173, 180 and 186) | Jak and Daxter: the same, at all 167 |
+| The compiled games' EE cycles | the same on both versions, to the cycle (41,554,654,904; 42,919,556,668; 53,078,292,439; 54,847,762,075) | the same, 41,554,654,904 |
+
+The first test run inside WSL, before the lists were corrected, had six tests
+fail: five whose entries the lists above lose or gain, and one that waits on
+two of them. With the lists corrected, none.
+
+No timing: a move is decided on what runs, as for v2.9.189 (ADR 0053).
+### The maintainer's answers (2026-11-27)
+
+"1. Yes", "2. Yes", "3. Yes", "4. Yes" (ADR 0061 has the questions):
+
+- **This step committed and pushed,** with the records of 2026-11-26.
+- **The rule kept:** `build\` is never deleted or cleaned whole.
+- **PS2Native moves to v2.9.198,** carrying the patch for the missing include:
+  a step of its own, made in `main` from the worktree's changes.
+- **The worktree of Phase 3 removed:** `..\ps2n-vu0` held three junctions
+  into this tree (`deps` and both submodules), taken away alone first, so
+  that nothing of what they point to was touched; then the folder, and its
+  branch `perf`, which `main` held whole.

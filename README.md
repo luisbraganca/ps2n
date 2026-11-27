@@ -118,7 +118,9 @@ a release is made from.
 | [docs/poc-log.md](docs/poc-log.md) | The proof of concept: what was done and measured |
 | [docs/game-log.md](docs/game-log.md), [docs/phase3-report.md](docs/phase3-report.md) | The first games, and the report on them |
 | [docs/phase4-proposal.md](docs/phase4-proposal.md), [docs/app-log.md](docs/app-log.md) | The application: its design, and what was done and measured |
-| [docs/adr/](docs/adr/) | The decisions, one file each |
+| [docs/adr/README.md](docs/adr/README.md) | The decisions, one file each, and their index |
+| [docs/development.md](docs/development.md) | How things are done: building, testing, timing, a release, a newer PCSX2 tried |
+| [docs/history.md](docs/history.md) | How the project got here, phase by phase |
 | [assets/branding/README.md](assets/branding/README.md) | The logo files, the colours and how to use them |
 | [docs/site/README.md](docs/site/README.md) | The website: which files in `docs/` are its own, and where its numbers come from |
 

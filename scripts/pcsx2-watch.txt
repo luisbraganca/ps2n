@@ -1,0 +1,102 @@
+# PCSX2's files that PS2Native follows or compiles, for scripts/windows/try-pcsx2.ps1
+# (docs/adr/0061). When PCSX2 changes one of them between the version PS2Native
+# follows and a newer one, the trial says so and saves the change to read.
+#
+#   <path in PCSX2's tree, * for any run of characters> | <what of PS2Native follows it>
+#
+# The first line that fits a file is the one taken. A file that fits none is
+# PCSX2's own business: PS2Native runs it as it is.
+
+# What PS2Native describes for its modules (runtime/include/ps2n/pcsx2_layout.h),
+# compared with PCSX2's own when the runtime is built (runtime/pcsx2_check.cpp).
+# A change here usually changes that description, and then the module version
+# (kGameModuleVersion, runtime/game_module.h) is raised.
+pcsx2/R5900.h | pcsx2_layout.h: the EE's and the FPU's registers; the module version
+pcsx2/VU.h | pcsx2_layout.h: VURegs; the module version
+pcsx2/R3000A.h | pcsx2_layout.h: the IOP's registers; the module version
+pcsx2/MemoryTypes.h | pcsx2_layout.h: the hardware registers' memory
+pcsx2/vtlb.h | pcsx2_layout.h: the vtlb's tables; ps2n/recomp.h's loads and stores
+pcsx2/Vif.h | pcsx2_layout.h: VIFregisters
+pcsx2/IopBios.h | pcsx2_layout.h: irxHLE
+pcsx2/Config.h | pcsx2_layout.h: the settings' bits; host/game_settings.h
+common/FPControl.h | pcsx2_layout.h: FPControlRegister
+common/SingleRegisterTypes.h | pcsx2_layout.h: the 128-bit register types
+
+# PCSX2's EE recompiler: instruction semantics follow it (ADR 0005), and time
+# is counted as it counts it (ADR 0011; docs/execution-model.md).
+pcsx2/x86/ix86-32/* | the EE's instruction semantics (runtime/include/ps2n/ops_*.h), the record of blocks (runtime/rec_blocks), core/include/ps2n/rec_rules.h and rec_cop2.h
+pcsx2/x86/iR5900* | the EE's instruction semantics (runtime/include/ps2n/ops_*.h), the record of blocks (runtime/rec_blocks), core/include/ps2n/rec_rules.h and rec_cop2.h
+pcsx2/x86/iCore* | the EE recompiler's registers: what rec_cop2.h and rec_blocks follow of them
+pcsx2/x86/iCOP0* | runtime/include/ps2n/ops_cop0.h, rec_rules.h
+pcsx2/x86/iFPU* | runtime/include/ps2n/ops_fpu.h: the FPU's semantics
+pcsx2/x86/iMMI* | runtime/include/ps2n/ops_mmi.h
+pcsx2/x86/recVTLB* | ps2n/recomp.h: loads and stores, and where they may fault
+pcsx2/x86/BaseblockEx* | the records of blocks (runtime/rec_blocks, runtime/iop_provider.cpp)
+pcsx2/R5900OpcodeTables* | core/src/cycles.cpp: what an instruction costs
+pcsx2/vtlb.cpp | ps2n/recomp.h: loads and stores
+
+# PCSX2's VU recompiler, microVU: the VU provider follows it.
+pcsx2/x86/microVU* | core/src/vu_mvu.cpp, ps2n/vu_mvu.h and vu_plan.h, runtime/vu_interp.cpp, ps2n/vu_ops.h, ops_vu0.h, ops_cop2.h; the VU self-test's capture
+pcsx2/MTVU* | the VU provider on PCSX2's VU thread (ADR 0051); patches/pcsx2
+
+# PCSX2's IOP recompiler: the IOP provider follows it.
+pcsx2/x86/iR3000A* | core/include/ps2n/r3000a.h, runtime/iop_provider.cpp, ps2n/iop_ops.h; the IOP self-test's capture
+pcsx2/IopBios* | r3000a.h: the imports PCSX2 has functions for
+pcsx2/IopGte* | r3000a.h
+
+# PCSX2's interpreters. The self-test holds PS2Native's semantics to them as
+# well as to the recompilers, and the tests' stock-interp runs are theirs.
+pcsx2/Interpreter* | the self-test (host/selftest.cpp); the tests' stock-interp configuration
+pcsx2/R5900* | the self-test (host/selftest.cpp); the tests' stock-interp configuration; ops_cop0.h
+pcsx2/FPU.cpp | the self-test: the FPU, interpreted
+pcsx2/COP0.cpp | ops_cop0.h
+pcsx2/COP2.cpp | the EE's COP2, interpreted
+pcsx2/MMI.cpp | the self-test: the multimedia instructions, interpreted
+pcsx2/VU0* | PCSX2's VU0 interpreter and the EE's COP2 through it: runtime/ops_vu0.cpp
+pcsx2/VU1* | PCSX2's VU1 interpreter: the tests' stock-interp configuration
+pcsx2/VUops* | PCSX2's VU interpreters' instructions
+pcsx2/VUmicro* | how a micro program is started and ended: runtime/vu_interp.cpp
+pcsx2/VUflags* | the VUs' flags
+pcsx2/R3000A* | PCSX2's IOP interpreter
+pcsx2/Cache.cpp | the CACHE instruction
+
+# PS2Native's own changes to PCSX2's code are patches of these (patches/pcsx2).
+pcsx2/Vif* | patches/pcsx2 (Vif.cpp, Vif_Codes.cpp)
+pcsx2/x86/Vif_* | PCSX2's VIF unpack recompiler, which stays (ADR 0006)
+
+# Devices compiled code reaches, and what time passes by.
+pcsx2/Counters* | how time passes: docs/execution-model.md
+pcsx2/Hw* | the hardware registers compiled code reads and writes
+pcsx2/Memory* | the memory map
+
+# What the host and the wizard call of PCSX2.
+pcsx2-gsrunner/* | host/main.cpp, host/host_interface.cpp and host/window.cpp are modelled on it
+pcsx2/VMManager* | host/main.cpp: how a machine is started, reset and ended
+pcsx2/Host* | host/host_interface.cpp, wizard/host_interface.cpp
+pcsx2/Patch* | the patches a game is played with
+pcsx2/GameDatabase* | the game fixes the wizard and the runtime read
+pcsx2/Elfheader* | how a game is identified
+pcsx2/ps2/BiosTools* | how a BIOS image is read
+pcsx2/CDVD/* | the disc readers host/disc.cpp uses
+pcsx2/Input/* | host/menu.cpp: the controls
+pcsx2/SIO/Pad/* | host/menu.cpp, host/session_record.cpp
+pcsx2/Recording/* | host/session_record.cpp
+pcsx2/ImGui/* | host/menu.cpp: the menu is drawn with PCSX2's ImGui
+pcsx2/GS.h | host/: what the frontend asks of the renderer
+pcsx2/GS/GS.h | host/: what the frontend asks of the renderer
+pcsx2/INISettingsInterface* | host/game_settings.h
+pcsx2-qt/Settings/* | the wizard compiles PCSX2's settings pages unchanged (wizard/targets.cmake)
+pcsx2-qt/SettingsWindow* | the wizard compiles it unchanged (wizard/targets.cmake)
+pcsx2-qt/SettingWidgetBinder.h | the wizard compiles it unchanged (wizard/targets.cmake)
+pcsx2-qt/QtUtils* | the wizard compiles it unchanged (wizard/targets.cmake)
+pcsx2-qt/QtProgressCallback* | the wizard compiles it unchanged (wizard/targets.cmake)
+pcsx2-qt/MainWindow.h | wizard/pcsx2-qt/MainWindow.h stands in for it
+pcsx2-qt/QtHost* | wizard/host_interface.cpp, wizard/stand_ins.cpp
+common/*.h | used throughout host/ and wizard/: a changed declaration shows when they are built
+
+# How PCSX2 is built, and with what.
+CMakeLists.txt | cmake/ps2n-inject.cmake: PS2Native's targets are added to PCSX2's project
+cmake/* | cmake/ps2n-inject.cmake; the versions of its dependencies PCSX2 asks for
+pcsx2/CMakeLists.txt | the targets PS2Native's link with (PCSX2, PCSX2_FLAGS)
+common/CMakeLists.txt | the targets PS2Native's link with
+.github/workflows/scripts/* | PCSX2's dependency packages: deps/ has to follow
