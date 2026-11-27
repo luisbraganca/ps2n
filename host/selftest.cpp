@@ -154,7 +154,7 @@ namespace
 		for (u32 i = 0; i < 32; i++)
 			fpuRegs.fpr[i].UL = s.fpr[i];
 		fpuRegs.ACC.UL = s.acc;
-		fpuRegs.fprc[31] = s.fcr31;
+		fpuRegs.fcr31 = s.fcr31;
 		for (u32 i = 0; i < 32; i++)
 			VU0.VI[i].UL = s.vi[i];
 		for (u32 i = 0; i < 32; i++)
@@ -187,7 +187,7 @@ namespace
 		for (u32 i = 0; i < 32; i++)
 			s->fpr[i] = fpuRegs.fpr[i].UL;
 		s->acc = fpuRegs.ACC.UL;
-		s->fcr31 = fpuRegs.fprc[31];
+		s->fcr31 = fpuRegs.fcr31;
 		for (u32 i = 0; i < 32; i++)
 			s->vi[i] = VU0.VI[i].UL;
 		for (u32 i = 0; i < 32; i++)
@@ -483,16 +483,17 @@ namespace
 		if (IsVu0(op))
 			return true;
 
-		// The FPU follows the recompiler, whose arithmetic, comparisons,
-		// conversions and control registers PCSX2's interpreter does
-		// differently. What is left to compare with the interpreter: the
-		// operations on the bits, and the moves.
+		// The FPU follows the recompiler, whose arithmetic, comparisons and
+		// conversions PCSX2's interpreter does differently. What is left to
+		// compare with the interpreter: the operations on the bits, and the
+		// moves, CFC1 among them since v2.9.198 (the interpreter read FCR0 as
+		// 0x2E00 and the others below 16 as 0 until then).
 		if (IsFpu(op))
 		{
 			switch (op)
 			{
 				case Op::ABS_S: case Op::NEG_S: case Op::MAX_S: case Op::MIN_S:
-				case Op::MOV_S: case Op::MFC1: case Op::MTC1: case Op::CTC1:
+				case Op::MOV_S: case Op::MFC1: case Op::MTC1: case Op::CFC1: case Op::CTC1:
 				case Op::LWC1: case Op::SWC1:
 					return false;
 				default:
@@ -504,13 +505,10 @@ namespace
 
 	bool DiffersFromRecompiler(Op op)
 	{
-		// PCSX2's recompiler clears bits 32-63 where the console and PCSX2's
-		// interpreter keep them (cpu/ee/lsu).
-		if (op == Op::LWR)
-			return true;
-
-		// It clamps these, and gives MAX.S and MIN.S of +0 and -0 a result that
-		// depends on its register allocation (cpu/ee_fpu/arithmetic).
+		// PCSX2's recompiler clamps these, and gives MAX.S and MIN.S of +0 and -0
+		// a result that depends on its register allocation
+		// (cpu/ee_fpu/arithmetic). (Until v2.9.198 it also cleared bits 32-63 in
+		// an unaligned LWR, where the console and its interpreter keep them.)
 		return IsFpuBitOperation(op);
 	}
 
@@ -543,14 +541,15 @@ namespace
 			// Starts a VU1 micro program.
 			if (fs == REG_CMSAR1)
 				return true;
-			// The integer registers are 16 bits wide and the status flag register
-			// takes its sticky flags only, as in the recompiler and on the console.
-			if (oracle == Oracle::Interpreter && fs >= 1 && fs <= REG_STATUS_FLAG)
+			// The integer registers are 16 bits wide, as in the recompiler and on
+			// the console. (The status flag register takes its sticky flags only in
+			// the interpreter too since v2.9.198; the copies of the flags PCSX2's
+			// VU recompiler keeps, which the interpreter leaves, are not compared
+			// with it.)
+			if (oracle == Oracle::Interpreter && fs >= 1 && fs < REG_STATUS_FLAG)
 				return true;
-			// FBRST is stored before the resets it asks for, as in the interpreter
-			// and on the console.
-			if (oracle == Oracle::Recompiler && fs == REG_FBRST)
-				return true;
+			// (FBRST is stored before the resets it asks for in both since
+			// v2.9.198, as on the console.)
 		}
 
 		// PCSX2's interpreter leaves bits 32 to 63 of the general register as
@@ -1132,7 +1131,7 @@ namespace
 			bool mul_hack;
 		} kModes[] = {{1, false}, {2, false}, {0, false}, {1, true}};
 
-		const u32 saved_fcr31 = fpuRegs.fprc[31];
+		const u32 saved_fcr31 = fpuRegs.fcr31;
 		const u64 saved_followed[2] = {ps2n::ee::ops::fpu::console_followed[0], ps2n::ee::ops::fpu::console_followed[1]};
 		u32 cases = 0, failed = 0;
 		for (const auto& mode : kModes)
@@ -1163,16 +1162,16 @@ namespace
 					}
 
 					const u64 before[2] = {ps2n::ee::ops::fpu::console_followed[0], ps2n::ee::ops::fpu::console_followed[1]};
-					fpuRegs.fprc[31] = fcr31;
+					fpuRegs.fcr31 = fcr31;
 					const u64 want = fn.call(clean[0], clean[1], clean[2]);
-					const u32 want_fcr31 = fpuRegs.fprc[31];
+					const u32 want_fcr31 = fpuRegs.fcr31;
 					const u64 want_followed[2] = {ps2n::ee::ops::fpu::console_followed[0] - before[0],
 						ps2n::ee::ops::fpu::console_followed[1] - before[1]};
 
 					const u64 middle[2] = {ps2n::ee::ops::fpu::console_followed[0], ps2n::ee::ops::fpu::console_followed[1]};
-					fpuRegs.fprc[31] = fcr31;
+					fpuRegs.fcr31 = fcr31;
 					const u64 got = fn.call(dirty[0], dirty[1], dirty[2]);
-					const u32 got_fcr31 = fpuRegs.fprc[31];
+					const u32 got_fcr31 = fpuRegs.fcr31;
 					const u64 got_followed[2] = {ps2n::ee::ops::fpu::console_followed[0] - middle[0],
 						ps2n::ee::ops::fpu::console_followed[1] - middle[1]};
 
@@ -1194,7 +1193,7 @@ namespace
 		rec.SetEEClampMode(standing);
 		fixes.FpuMulHack = mul_hack;
 		recCpu.Reset();
-		fpuRegs.fprc[31] = saved_fcr31;
+		fpuRegs.fcr31 = saved_fcr31;
 		ps2n::ee::ops::fpu::console_followed[0] = saved_followed[0];
 		ps2n::ee::ops::fpu::console_followed[1] = saved_followed[1];
 

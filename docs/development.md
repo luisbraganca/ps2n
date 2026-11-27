@@ -33,7 +33,7 @@ step: they describe the scripts that came into the repository then.
 ## Layout
 
 ```
-third_party/pcsx2         PCSX2 v2.9.189 (ADR 0054), a pinned submodule. Never edit it; what PS2Native changes of PCSX2's code is in patches/pcsx2
+third_party/pcsx2         PCSX2 v2.9.198 (ADR 0062), a pinned submodule. Never edit it; what PS2Native changes of PCSX2's code is in patches/pcsx2
 patches/pcsx2             PS2Native's changes to PCSX2's code (ADR 0050), one patch to a change, each decided by the
                           maintainer and saying at its top what it changes and why; its README lists them (one so far:
                           PCSX2's VU thread is not woken where it is not in use)
@@ -135,7 +135,8 @@ from (`cmake/ps2n-pcsx2-patches.cmake`; a patch that does not apply, or
 changes a file no target compiles, a header among them, stops the
 configuration). Every tree has them but the one stock PCSX2 is timed on:
 `build.ps1 -Pcsx2Patches off` (`build.sh --pcsx2-patches off`) builds PCSX2
-as it is, and the build tree remembers it. `ps2n-host -help` says in its
+as it is, but for a change that only lets its source compile here and whose
+header says so (`patches/pcsx2/README.md`), and the build tree remembers it. `ps2n-host -help` says in its
 second line which a runtime has, and a release's `licences` folder carries
 the patches. So in every other tree the tests' "stock" configurations run
 PCSX2 with PS2Native's changes: a change that would alter a result of a

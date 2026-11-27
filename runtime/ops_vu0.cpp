@@ -3,7 +3,7 @@
 // VU0's instructions in EE code: what is out of line. ps2n/ops_vu0.h has the
 // instructions themselves, inline, and says what they agree with and where
 // that is not the console; the comments here name the part of microVU
-// (pcsx2/x86/microVU_*.inl, PCSX2 v2.9.189) that each piece reproduces.
+// (pcsx2/x86/microVU_*.inl, PCSX2 v2.9.198) that each piece reproduces.
 
 #include "ps2n/ops_vu0.h"
 

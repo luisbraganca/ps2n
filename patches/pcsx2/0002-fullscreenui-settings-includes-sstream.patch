@@ -1,0 +1,38 @@
+PS2Native's change to PCSX2 number 2: FullscreenUI_Settings.cpp includes
+<sstream>.
+
+Made on 2026-11-27 for PCSX2 v2.9.198, in the trial of that version, and
+carried since PS2Native moved to it, at the maintainer's word (docs/adr/0061
+and 0062 in PS2Native's repository). It is PS2Native's own, not PCSX2's:
+PCSX2's source as PCSX2 released it is the submodule third_party/pcsx2, which
+this is applied to a copy of when PS2Native's runtime is built. Licence:
+PCSX2's, GPL-3.0-or-later.
+
+What it changes. pcsx2/ImGui/FullscreenUI_Settings.cpp uses
+std::istringstream (lines 1568 and 1616) and does not include <sstream>.
+Before v2.9.196 common/StringUtil.h included it for every file that included
+that header; v2.9.196 ("Common: Move To and FromChars implementations out of
+header") took those includes out. This adds the include, and nothing else.
+
+Why. Without it the file does not compile on Linux here (Ubuntu 22.04's
+libstdc++, with LLVM 22.1.3's clang): "implicit instantiation of undefined
+template 'std::basic_istringstream<char>'". PCSX2's own Linux builds of
+v2.9.198 compile it, most likely with a newer libstdc++, whose headers bring
+<sstream> in by another way.
+
+What it does not change: anything a run does. So it is the one kind of change
+applied to the tree stock PCSX2 is timed on as well, which would not build on
+Linux here without it (cmake/ps2n-pcsx2-patches.cmake reads this line):
+
+Stock PCSX2's tree is built with it too.
+
+--- a/pcsx2/ImGui/FullscreenUI_Settings.cpp
++++ b/pcsx2/ImGui/FullscreenUI_Settings.cpp
+@@ -47,6 +47,7 @@
+ #include "fmt/format.h"
+ 
+ #include <set>
++#include <sstream>
+ 
+ namespace FullscreenUI
+ {

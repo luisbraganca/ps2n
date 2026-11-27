@@ -57,8 +57,10 @@ PS2Native's own changes to PCSX2's code are the patches in patches\pcsx2
 (docs\adr\0050). The submodule is never edited for them: each file a patch
 changes is copied into the build tree, the patches are applied to the copies,
 and PCSX2's targets compile the copies (cmake\ps2n-pcsx2-patches.cmake).
--Pcsx2Patches off builds PCSX2 as it is, which is how the tree stock PCSX2 is
-timed on is built; "on", the default, with them. Remembered like -Game.
+-Pcsx2Patches off builds PCSX2 as it is, but for a change that only lets its
+source compile here and whose header says so: that is how the tree stock
+PCSX2 is timed on is built. "on", the default, with them. Remembered like
+-Game.
 
 .EXAMPLE
 scripts\windows\build.ps1
@@ -73,7 +75,7 @@ param(
     # (Not named Pcsx2: PowerShell would take it for the variable $pcsx2 below.)
     [string]$Pcsx2Source = '',
     # PCSX2's code built with PS2Native's changes to it (patches\pcsx2; docs\adr\0050): "on", as by default, or "off",
-    # PCSX2 as it is, for the tree stock PCSX2 is timed on. Remembered by the build tree, as -Game is.
+    # PCSX2 as it is but for a change that only lets its source compile here, for the tree stock PCSX2 is timed on. Remembered by the build tree, as -Game is.
     [ValidateSet('', 'on', 'off')][string]$Pcsx2Patches = '',
     [switch]$Reconfigure,
     # Build only the build-time tools (core/, recompiler/) and their unit tests.

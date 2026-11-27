@@ -8,7 +8,7 @@
 // With -window it is also where a game is played: the same machine in a
 // window, at the console's speed, with sound, the keyboard and a controller.
 //
-// The start-up sequence follows pcsx2-gsrunner/Main.cpp of PCSX2 v2.9.189,
+// The start-up sequence follows pcsx2-gsrunner/Main.cpp of PCSX2 v2.9.198,
 // Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+.
 
 #include "disc.h"

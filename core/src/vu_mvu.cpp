@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // See ps2n/vu_mvu.h. Each function here is microVU's of the same name, from
-// PCSX2 v2.9.189 (Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+), with the
+// PCSX2 v2.9.198 (Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+), with the
 // host code it generates left out; the order of its steps is kept, because
 // several of them read what the one before left.
 

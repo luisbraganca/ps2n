@@ -52,7 +52,8 @@
 #   --pcsx2-patches <on|off>   PCSX2's code built with PS2Native's changes to it (patches/pcsx2,
 #                              docs/adr/0050; applied to copies in the build tree, the submodule
 #                              never edited), as by default, or as it is: "off" for the tree
-#                              stock PCSX2 is timed on
+#                              stock PCSX2 is timed on (but for a change that only lets its
+#                              source compile here and whose header says so)
 #
 # The default target is ps2n-host (with the modules, and the wizard, where the
 # tree builds them). Each game, BIOS and capture option is remembered by the

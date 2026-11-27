@@ -5926,3 +5926,49 @@ No timing: a move is decided on what runs, as for v2.9.189 (ADR 0053).
   into this tree (`deps` and both submodules), taken away alone first, so
   that nothing of what they point to was touched; then the folder, and its
   branch `perf`, which `main` held whole.
+### PCSX2 v2.9.198: moved (2026-11-27)
+
+At the maintainer's "3. Yes" (ADR 0062), in `main`, from the trial's
+worktree:
+
+- **Its changes** applied to `main` as they were tried (16 files), with
+  PS2Native's second change to PCSX2's code,
+  `patches/pcsx2/0002-fullscreenui-settings-includes-sstream.patch`, whose
+  header now says it is carried, and that stock PCSX2's tree is built with it
+  too.
+- **The stock trees.** They are built with none of PS2Native's changes to
+  PCSX2's code, and without the include stock PCSX2 v2.9.198 does not compile
+  on Linux here. A change whose header says, on a line of its own, "Stock
+  PCSX2's tree is built with it too." is now applied there as well
+  (`cmake/ps2n-pcsx2-patches.cmake`); the build says so ("built as it is, but
+  for the changes that only let it compile here"). Only the include is such a
+  change.
+- **The submodule** at v2.9.198 (`51e3036b`), fetched from the copy of PCSX2's
+  repository the trial had read, on Windows and, through `wsl.ps1 -Sync tree
+  -Pcsx2`, inside WSL.
+- **What names the PCSX2 followed** says v2.9.198: the source comments that
+  name the PCSX2 file a file transcribes (25, in 24 files), each unchanged in
+  v2.9.198 or followed; the README, the website (its date with it), the layout in
+  `docs/development.md`, the execution model's two lists of rules, the notes of
+  the test lists. Speed figures measured against v2.9.189, and what is
+  history, stay as they were.
+
+Built and tested, every tree configured again:
+
+| | Windows | Inside WSL |
+|---|---|---|
+| The development tree | built (307 s); 556 tests passed, none failed, none skipped | built (467 s); 556 passed, none failed, none skipped |
+| The tree a release is made from | built (367 s); 554 passed, three disabled, none skipped | built (419 s); 553 passed, three disabled, none skipped |
+| Stock PCSX2's tree, built as its releases are | built (261 s), with the include alone | built (345 s), with the include alone |
+
+The trial's worktree on Windows and its branch were removed afterwards, its
+changes saved first (`build\pcsx2-try\v2.9.198\removed`); inside WSL, the
+trial's worktree and its branch likewise, the clone's `deps` untouched. The
+clone's PCSX2, fetched by its commit alone, had no tags, so that its version
+printed empty: `sync.sh` now fetches the tags of the copy of PCSX2 it is given.
+### The maintainer's answers to the move (2026-11-27)
+
+"1. Yes", "2. Yes" (ADR 0062): the move committed and pushed; their game
+folders given these programs, on Windows and inside WSL, by the repository's
+`update-games` scripts, their PS2Native folders made again from the commit
+first.

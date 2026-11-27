@@ -15,7 +15,7 @@
 // The rules are those of its instruction recompilers and their templates
 // (GPR_SET_CONST and GPR_DEL_CONST in pcsx2/x86/iR5900.h, eeRecompileCodeRC0,
 // RC1 and RC2 in pcsx2/x86/ix86-32/iR5900Templates.cpp, iFlushCall in
-// pcsx2/x86/ix86-32/iR5900.cpp; PCSX2 v2.9.189, Copyright 2002-2026 PCSX2 Dev
+// pcsx2/x86/ix86-32/iR5900.cpp; PCSX2 v2.9.198, Copyright 2002-2026 PCSX2 Dev
 // Team, GPL-3.0+), as far as they can be said without its register
 // allocator: an instruction it folds makes its result a constant; any other
 // write to a register ends that; a call into its interpreter makes it forget

@@ -10,7 +10,11 @@
 #
 # Included once PCSX2's own CMakeLists.txt has finished (cmake/ps2n-inject.cmake),
 # when its targets exist. PS2N_PCSX2_PATCHES=OFF builds PCSX2 as it is: the
-# tree stock PCSX2 is timed on is built so.
+# tree stock PCSX2 is timed on is built so. Only a change that lets PCSX2's
+# source compile here and changes nothing a run does is applied there too, one
+# whose header says so on a line of its own: "Stock PCSX2's tree is built with
+# it too." Without it that tree would not build (since PCSX2 v2.9.198, on
+# Linux).
 #
 # What this carries is a change to a file PCSX2's targets compile (.cpp, .c).
 # A change to a header would not reach the files beside it that include it by
@@ -33,7 +37,25 @@ set(ps2n_pcsx2_files "")
 file(GLOB ps2n_pcsx2_patches CONFIGURE_DEPENDS "${PS2N_ROOT}/patches/pcsx2/*.patch")
 list(SORT ps2n_pcsx2_patches)
 
-if(PS2N_PCSX2_PATCHES AND ps2n_pcsx2_patches)
+# PCSX2 as it is: only the changes whose header says that stock PCSX2's tree
+# is built with them too (the text before the patch's first file).
+if(NOT PS2N_PCSX2_PATCHES)
+	set(ps2n_pcsx2_kept "")
+	foreach(ps2n_patch IN LISTS ps2n_pcsx2_patches)
+		file(READ "${ps2n_patch}" ps2n_text)
+		string(REPLACE "\r\n" "\n" ps2n_text "${ps2n_text}")
+		string(FIND "${ps2n_text}" "\n--- a/" ps2n_diff_at)
+		if(ps2n_diff_at GREATER -1)
+			string(SUBSTRING "${ps2n_text}" 0 ${ps2n_diff_at} ps2n_text)
+		endif()
+		if(ps2n_text MATCHES "(^|\n)Stock PCSX2's tree is built with it too\\.(\n|$)")
+			list(APPEND ps2n_pcsx2_kept "${ps2n_patch}")
+		endif()
+	endforeach()
+	set(ps2n_pcsx2_patches "${ps2n_pcsx2_kept}")
+endif()
+
+if(ps2n_pcsx2_patches)
 	find_package(Git REQUIRED)
 
 	# The copies are patched in a repository of their own, made anew each time:
@@ -212,7 +234,9 @@ if(NOT "${ps2n_pcsx2_changes_h}" STREQUAL "${ps2n_pcsx2_changes_h_old}")
 	file(WRITE "${PS2N_VERSION_DIR}/ps2n_pcsx2_changes.h" "${ps2n_pcsx2_changes_h}")
 endif()
 file(WRITE "${ps2n_pcsx2_dir}/changes.txt" "${ps2n_pcsx2_changes_text}\n")
-if(PS2N_PCSX2_CHANGES)
+if(PS2N_PCSX2_CHANGES AND NOT PS2N_PCSX2_PATCHES)
+	message(STATUS "PS2Native: PCSX2's code is built as it is, but for the changes that only let it compile here: ${ps2n_pcsx2_changes_text} (${ps2n_pcsx2_files})")
+elseif(PS2N_PCSX2_CHANGES)
 	message(STATUS "PS2Native: PCSX2's code is built with PS2Native's changes: ${ps2n_pcsx2_changes_text} (${ps2n_pcsx2_files})")
 else()
 	message(STATUS "PS2Native: PCSX2's code is built as it is, with none of PS2Native's changes")

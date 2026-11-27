@@ -4,7 +4,7 @@
 // runs no machine: its settings pages read the core's databases (the games',
 // the patches') and write a game's settings, and that is all of the core it
 // uses. The same list as the runtime's (host/host_interface.cpp, derived from
-// pcsx2-gsrunner/Main.cpp of PCSX2 v2.9.189, Copyright 2002-2026 PCSX2 Dev
+// pcsx2-gsrunner/Main.cpp of PCSX2 v2.9.198, Copyright 2002-2026 PCSX2 Dev
 // Team, GPL-3.0+), with nothing to show a game in and nothing to run it on.
 
 #include "common/Console.h"

@@ -9,7 +9,7 @@
 // macro mode: REC_COP2_mVU0, setupMacroOp and endMacroOp in
 // pcsx2/x86/microVU_Macro.inl, the instructions in microVU_Upper.inl and
 // microVU_Lower.inl, the clamps in microVU_Clamp.inl, the arithmetic in
-// microVU_Misc.inl, the register allocator in microVU_IR.h (PCSX2 v2.9.189,
+// microVU_Misc.inl, the register allocator in microVU_IR.h (PCSX2 v2.9.198,
 // Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+). The host's SSE instructions
 // are those microVU emits, in the same order on the same operands, under the
 // same control register (the EE's), so that a result is the recompiler's to
@@ -805,8 +805,8 @@ namespace ps2n::ee::vu0
 	}
 
 	// mVU_RSQRT: Q = fs.fsf / the square root of the magnitude of ft.ftf. A
-	// zero root makes the division flag (the invalid one for 0 by 0) the only
-	// one, a negative operand's invalid flag included.
+	// zero root sets the division flag beside a negative operand's invalid one
+	// (since PCSX2 v2.9.198), or the invalid flag alone for 0 by 0.
 	PS2N_VU0_INLINE void VRSQRT(uint32_t flags, uint32_t fs, uint32_t fsf, uint32_t ft, uint32_t ftf)
 	{
 		const Clamp c = Settings();
@@ -823,7 +823,7 @@ namespace ps2n::ee::vu0
 		__m128 q;
 		if (IsZero(root))
 		{
-			div = IsZero(s) ? kDivI : kDivD;
+			div = IsZero(s) ? kDivI : (div | kDivD);
 			q = Scalar((sv & 0x80000000u) | 0x7F7FFFFFu);
 		}
 		else

@@ -55,7 +55,7 @@ has() { [[ ",$parts," == *",$1,"* ]]; }
 number="${tag#v}"
 branch="pcsx2-$number"
 w="$root-pcsx2-${number##*.}"
-pinned="$(git -C "$root/third_party/pcsx2" describe --tags 2>/dev/null)"
+pinned="$(git -C "$root/third_party/pcsx2" describe --tags 2> /dev/null || git -C "$root/third_party/pcsx2" rev-parse --short HEAD)"
 cd "$root" || exit 1
 stamp "try-pcsx2 ($parts): the clone follows PCSX2 $pinned; trying $tag in $w, on the branch $branch"
 

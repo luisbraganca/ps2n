@@ -74,6 +74,8 @@ using ps2n::pcsx2::REG_VI;
 using ps2n::pcsx2::VECTOR;
 using ps2n::pcsx2::VURegs;
 
+using ps2n::pcsx2::FPU_REVISION;
+
 using ps2n::pcsx2::REG_CLIP_FLAG;
 using ps2n::pcsx2::REG_FBRST;
 using ps2n::pcsx2::REG_I;

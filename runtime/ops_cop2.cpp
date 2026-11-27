@@ -99,8 +99,9 @@ void ps2n::ee::ops::CTC2(uint32_t rt, uint32_t fs)
 		}
 
 		case REG_FBRST:
-			// The interpreter and the console: stored first, then the resets,
-			// each of which clears its VU's half of the register again.
+			// Both, and the console (the recompiler since v2.9.198): stored first,
+			// then the resets, each of which clears its VU's half of the register
+			// again.
 			VU0.VI[REG_FBRST].UL = value & 0x0C0Cu;
 			if (value & 0x002u)
 				vu0ResetRegs();

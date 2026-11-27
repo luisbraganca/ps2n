@@ -19,9 +19,11 @@
 //  - Loads and stores do not raise an address error for a misaligned address.
 //  - The shift-amount register is four bits wide (MTSA).
 //  - A load from an EE timer register does not force an event test.
+// LWR at a word boundary sign-extends, and otherwise keeps bits 32-63 of the
+// register, as on the console (cpu/ee/lsu), in both since PCSX2 v2.9.198 (the
+// recompiler cleared them until then, and this followed the interpreter).
+//
 // Differences from PCSX2's recompiler, following its interpreter:
-//  - LWR at a word boundary sign-extends, and otherwise keeps bits 32-63 of
-//    the register, as on the console (cpu/ee/lsu).
 //  - DIV and DIV1 of two values the recompiler knows at compile time leave
 //    the remainder in HI. The recompiler sign-extends the quotient over it
 //    (recDIVconst), so that a negative quotient leaves -1 there.

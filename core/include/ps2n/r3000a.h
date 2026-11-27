@@ -3,7 +3,7 @@
 // The I/O processor's instructions (a MIPS R3000A), as PCSX2's IOP
 // recompiler treats them: which instruction an encoding is to it, which
 // encodings it has none for, what ends a block, and what a block costs.
-// Transcribed from PCSX2 v2.9.189 (pcsx2/x86/iR3000A.cpp, iR3000Atables.cpp,
+// Transcribed from PCSX2 v2.9.198 (pcsx2/x86/iR3000A.cpp, iR3000Atables.cpp,
 // iR3000A.h; Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+).
 //
 // Shared by PS2Native's IOP provider (runtime/iop_provider.h), which forms

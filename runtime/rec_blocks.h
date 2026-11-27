@@ -19,7 +19,7 @@
 // interpreter carries out (runtime/ee_provider.cpp). The rules are those of
 // recRecompile(), recompileNextInstruction(), recClear() and their helpers in
 // pcsx2/x86/ix86-32/iR5900.cpp, of the instruction recompilers beside it, and
-// of COP2MicroFinishPass in pcsx2/x86/iR5900Analysis.cpp (PCSX2 v2.9.189,
+// of COP2MicroFinishPass in pcsx2/x86/iR5900Analysis.cpp (PCSX2 v2.9.198,
 // Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+); docs/execution-model.md
 // lists them.
 #pragma once

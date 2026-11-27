@@ -106,7 +106,7 @@ namespace
 		std::fputs("\n  fpr", s_file);
 		for (u32 r = 0; r < 32; r++)
 			std::fprintf(s_file, " %08X", fpuRegs.fpr[r].UL);
-		std::fprintf(s_file, "\n  acc=%08X fcr0=%08X fcr31=%08X\n  vi ", fpuRegs.ACC.UL, fpuRegs.fprc[0], fpuRegs.fprc[31]);
+		std::fprintf(s_file, "\n  acc=%08X fcr31=%08X\n  vi ", fpuRegs.ACC.UL, fpuRegs.fcr31);
 		for (u32 r = 0; r < 32; r++)
 			std::fprintf(s_file, " %08X", VU0.VI[r].UL);
 		std::fputs("\n", s_file);
@@ -156,7 +156,7 @@ namespace
 		Fold fpu;
 		fpu.add(&fpuRegs.fpr, sizeof(fpuRegs.fpr));
 		fpu.add(fpuRegs.ACC.UL);
-		fpu.add(fpuRegs.fprc[31]);
+		fpu.add(fpuRegs.fcr31);
 
 		Fold cp0;
 		for (u32 r = 0; r < 32; r++)

@@ -13,7 +13,7 @@
 // interpreted, does not burn host time idling.
 //
 // This is the test, transcribed from recRecompile() in
-// pcsx2/x86/ix86-32/iR5900.cpp (PCSX2 v2.9.189, Copyright 2002-2026 PCSX2 Dev
+// pcsx2/x86/ix86-32/iR5900.cpp (PCSX2 v2.9.198, Copyright 2002-2026 PCSX2 Dev
 // Team, GPL-3.0+), on the raw fields as it is there. The recompiler and the
 // runtime's interpreter both use this one definition, so that compiled code
 // and interpreted code skip at exactly the same places.

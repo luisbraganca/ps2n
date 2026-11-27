@@ -134,7 +134,7 @@ PS2N_SAME_FIELD(FPRreg, m::FPRreg, SL);
 
 PS2N_SAME_STRUCT(fpuRegisters, m::fpuRegisters);
 PS2N_SAME_FIELD(fpuRegisters, m::fpuRegisters, fpr);
-PS2N_SAME_FIELD(fpuRegisters, m::fpuRegisters, fprc);
+PS2N_SAME_FIELD(fpuRegisters, m::fpuRegisters, fcr31);
 PS2N_SAME_FIELD(fpuRegisters, m::fpuRegisters, ACC);
 PS2N_SAME_FIELD(fpuRegisters, m::fpuRegisters, ACCflag);
 
@@ -161,7 +161,8 @@ static_assert(SameNumber(m::REG_STATUS_FLAG, REG_STATUS_FLAG) && SameNumber(m::R
 	SameNumber(m::REG_R, REG_R) && SameNumber(m::REG_I, REG_I) && SameNumber(m::REG_Q, REG_Q) &&
 	SameNumber(m::REG_P, REG_P) && SameNumber(m::REG_VF0_FLAG, REG_VF0_FLAG) && SameNumber(m::REG_TPC, REG_TPC) &&
 	SameNumber(m::REG_CMSAR0, REG_CMSAR0) && SameNumber(m::REG_FBRST, REG_FBRST) &&
-	SameNumber(m::REG_VPU_STAT, REG_VPU_STAT) && SameNumber(m::REG_CMSAR1, REG_CMSAR1),
+	SameNumber(m::REG_VPU_STAT, REG_VPU_STAT) && SameNumber(m::REG_CMSAR1, REG_CMSAR1) &&
+	SameNumber(m::FPU_REVISION, FPU_REVISION),
 	"VURegFlags: not the numbers ps2n/pcsx2_layout.h has");
 static_assert(m::kVuFlagMFlagSet == VUFLAG_MFLAGSET);
 

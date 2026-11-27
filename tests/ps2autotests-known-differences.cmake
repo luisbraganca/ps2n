@@ -20,11 +20,11 @@ set(PS2AUTOTESTS_NO_STOCK_RUN
 )
 
 # Stock PCSX2 with its recompilers, BIOS SCPH-70004 v2.00 (v2.9.170 on
-# 2026-11-10, v2.9.189 the same on 2026-11-22): 39 of 55 programs match the
-# console.
+# 2026-11-10, v2.9.189 the same on 2026-11-22; v2.9.198 on 2026-11-27): 40 of
+# 55 programs match the console. (cpu/ee/lsu matches since v2.9.198, whose
+# recompiler's LWR keeps the upper half.)
 set(PS2AUTOTESTS_DIFFERS_stock-jit
 	cpu/ee/branchdelay          # a branch in a branch's delay slot
-	cpu/ee/lsu                  # LWR leaves the upper half zero where the console sign-extends
 	cpu/ee_cop0/performance     # performance counter control register bits
 	cpu/ee_fpu/arithmetic       # the console keeps NaN operands; PCSX2 clamps them to the largest float
 	cpu/ee_fpu/branchdelay      # the recompiler crashes: endless recursion in recBC1T (x86/iFPU.cpp)
@@ -45,9 +45,10 @@ set(PS2AUTOTESTS_DIFFERS_stock-jit
 # Stock PCSX2 with its interpreters, the same BIOS, versions and dates:
 # 38 of 55 programs match the console.
 #
-# Against the recompilers: cpu/ee/lsu and vu/lower/integer match the console
-# here, and cpu/ee_fpu/transfer, cpu/ee_simd/funnel and cpu/ee_simd/muldiv do
-# not. PCSX2's two implementations disagree on five programs.
+# Against the recompilers: cpu/ee_simd/funnel and cpu/ee_simd/muldiv do not
+# match the console here; PCSX2's two implementations disagree on those two.
+# (Until v2.9.198 they also disagreed on cpu/ee/lsu and vu/lower/integer,
+# which matched here, and cpu/ee_fpu/transfer, which did not.)
 set(PS2AUTOTESTS_DIFFERS_stock-interp
 	cpu/ee/branchdelay
 	cpu/ee_cop0/performance
@@ -57,7 +58,6 @@ set(PS2AUTOTESTS_DIFFERS_stock-interp
 	cpu/ee_fpu/fcr
 	cpu/ee_fpu/muldiv
 	cpu/ee_fpu/sqrt
-	cpu/ee_fpu/transfer         # CFC1 of the control register
 	cpu/ee_simd/funnel          # MFSA
 	cpu/ee_simd/muldiv          # PMADDW with -2147483648 * -1
 	cpu/vu0_macro/transfer
@@ -66,6 +66,9 @@ set(PS2AUTOTESTS_DIFFERS_stock-interp
 	dma/vif/unpack
 	vu/games/triace
 	vu/lower/efu
+	vu/lower/integer            # since v2.9.198, as stock-jit: CTC2 leaves the current status flags here too, as
+	                            # on the console, which uncovers vu0DenormalizeMicroStatus, described at
+	                            # ps2n-ee's entry for this program further down
 )
 
 # PS2Native's EE provider, with the IOP and the VUs on PCSX2's recompilers,
@@ -73,16 +76,17 @@ set(PS2AUTOTESTS_DIFFERS_stock-interp
 # instructions, loads and stores, the FPU, the multimedia instructions, the
 # COP0 transfers and the transfers to and from VU0 itself; the VU0
 # instructions and the rest of COP0 call PCSX2's interpreter functions.
-# 40 of 55 programs match the console: more than either stock configuration.
+# 40 of 55 programs match the console, as many as stock-jit (more than either
+# stock configuration until v2.9.198).
 #
-# Against stock-jit (the output differs on three of the 54 programs it
-# completes; tests/same-as-stock-known-differences.cmake has the same three):
-#  - cpu/ee/lsu matches the console here and not there;
+# Against stock-jit (the output differs on one of the 54 programs it
+# completes; tests/same-as-stock-known-differences.cmake has the same one):
 #  - cpu/ee_fpu/arithmetic differs from the console on fewer lines here:
 #    ABS.S, NEG.S, MAX.S and MIN.S are the console's, the rest is identical
-#    to stock-jit's;
-#  - cpu/vu0_macro/transfer differs on 7 lines here and 8 there: FBRST reads
-#    back as on the console here.
+#    to stock-jit's.
+# (Until v2.9.198 also cpu/ee/lsu, which matched the console here and not
+# there, and cpu/vu0_macro/transfer, whose FBRST read back as on the console
+# here and not there.)
 # Every other program below prints exactly what stock-jit prints. For those
 # marked "the core", what differs from the console is PCSX2's hardware model
 # or its VU recompiler, which run them here as well.

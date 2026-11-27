@@ -47,8 +47,11 @@ As of 2026-11-27. This section is replaced when it changes, never added to.
   `a243df4`. `version.txt` says 0.4.
 - **In `main` and in the maintainer's game folders, in no release:** the menu
   over the game, opened with Esc (ADR 0060; `e616401`, `224d896`).
-- **PCSX2 followed:** v2.9.189 (ADR 0054), with one change of PS2Native's own
-  (`patches/pcsx2`, ADR 0050). The module version is 6.
+- **PCSX2 followed:** v2.9.198 (ADR 0062; v2.9.189 until then), with two
+  changes of PS2Native's own (`patches/pcsx2`): ADR 0050's, and a missing
+  include, which stock PCSX2's trees are built with too. The module version is
+  7. Committed and pushed at the maintainer's word; their game folders given
+  these programs.
 - **Games tried, eight:** Killzone, Agent Under Fire, Gran Turismo 3, Jak and
   Daxter and Silent Hill 3, European releases; Resident Evil – Code: Veronica
   X, Secret Agent Clank and SSX Tricky, from the USA. The maintainer's discs
@@ -65,12 +68,7 @@ As of 2026-11-27. This section is replaced when it changes, never added to.
   0.93 times its time, Gran Turismo 3 1.00, Agent Under Fire 0.97, Killzone
   0.94; under WSL 2, Jak and Daxter 0.96.
 - **Maintenance tools** (ADR 0061): the release's scripts in the repository,
-  this file cut; committed and pushed at the maintainer's word.
-- **PCSX2 v2.9.198,** tried in a worktree and branch of its own
-  (`..\ps2n-pcsx2-198`, and `~/ps2n-pcsx2-198` inside WSL): every test passes
-  on both systems and the sessions run again as themselves, with the module
-  version 7 and one change to PCSX2's code (a missing include). PS2Native
-  moves to it, at the maintainer's word ("3. Yes"): being made.
+  this file cut; committed and pushed (`b542370`).
 - **Dates:** from 2026-12-11, read whether PCSX2's issue 15185 has a reply,
   and tell the maintainer (ADR 0010); issue 15223, opened on 2026-11-22,
   likewise from 2026-12-22.

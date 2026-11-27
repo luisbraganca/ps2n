@@ -3,7 +3,7 @@
 // How many cycles each instruction is counted as taking.
 //
 // The values are those of PCSX2's opcode table (the Cycles namespace and the
-// MakeOpcode rows of pcsx2/R5900OpcodeTables.cpp, PCSX2 v2.9.189, Copyright
+// MakeOpcode rows of pcsx2/R5900OpcodeTables.cpp, PCSX2 v2.9.198, Copyright
 // 2002-2026 PCSX2 Dev Team, GPL-3.0+), in its unit of an eighth of a cycle.
 // They are part of how the PCSX2 core keeps time, so PS2Native's recompiler
 // must count the same. The host's self-test compares this function with

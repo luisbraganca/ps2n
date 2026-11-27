@@ -6,7 +6,7 @@
 #
 # Variables are named PROGRAMS_DIFFERS_<configuration>.
 
-# Stock PCSX2 v2.9.189 with its interpreters.
+# Stock PCSX2 with its interpreters (v2.9.189; v2.9.198 the same on 2026-11-27).
 set(PROGRAMS_DIFFERS_stock-interp
 	timeout     # only PCSX2's recompiler skips timeout loops; its interpreter runs the loop at what it costs
 )

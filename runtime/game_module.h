@@ -41,8 +41,10 @@ namespace ps2n
 	// VURegs::nextBlockCycles is 32 bits again: what follows it, the address of
 	// the VU's memory among them, is eight bytes nearer; 6, the images of
 	// other versions of code run outside an executable (ee::ImageInfo::layers,
-	// ADR 0057).
-	inline constexpr uint32_t kGameModuleVersion = 6;
+	// ADR 0057); 7, PCSX2 v2.9.198 (ADR 0061), whose FPU keeps one control
+	// register where it kept 32: fpuRegisters::ACC and ACCflag are 124 bytes
+	// nearer.
+	inline constexpr uint32_t kGameModuleVersion = 7;
 
 	// The lists of the compiled code a module holds, each ending with a null
 	// entry, as the recompiler writes them.

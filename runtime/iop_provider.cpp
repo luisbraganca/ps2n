@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// See iop_provider.h. The names in the comments are PCSX2's (v2.9.189,
+// See iop_provider.h. The names in the comments are PCSX2's (v2.9.198,
 // pcsx2/x86/iR3000A.cpp, iR3000Atables.cpp, BaseblockEx.{h,cpp}; Copyright
 // 2002-2026 PCSX2 Dev Team, GPL-3.0+), so that each piece can be read beside
 // the code it follows.

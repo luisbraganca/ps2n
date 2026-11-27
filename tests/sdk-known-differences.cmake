@@ -11,7 +11,7 @@
 # Variables are named SDK_DIFFERS_<configuration>.
 
 # Stock PCSX2 with its interpreters, BIOS SCPH-70004 v2.00 (v2.9.170 on
-# 2026-11-10, v2.9.189 the same on 2026-11-22).
+# 2026-11-10, v2.9.189 the same on 2026-11-22, v2.9.198 on 2026-11-27).
 set(SDK_DIFFERS_stock-interp
 	vu      # the VU0 status flags after DIV: 00e3 where PCSX2's VU recompiler gives 08e3.
 	        # PCSX2's two VU implementations disagree; the EE has no part in it

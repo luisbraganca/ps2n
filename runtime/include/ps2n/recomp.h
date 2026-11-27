@@ -486,7 +486,7 @@ namespace ps2n::ee
 	PS2N_API bool cop2Condition();
 	inline bool fpuCondition()
 	{
-		return (fpuRegs.fprc[31] & 0x00800000u) != 0; // the C flag of FCR31
+		return (fpuRegs.fcr31 & 0x00800000u) != 0; // the C flag of FCR31
 	}
 
 	// The return address a call leaves in a register.

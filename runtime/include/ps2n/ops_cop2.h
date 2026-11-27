@@ -18,16 +18,17 @@
 // cpu/vu0_macro/transfer; the recompiler's code is recCFC2, recCTC2,
 // recQMFC2, recQMTC2, recLQC2 and recSQC2 in pcsx2/x86/microVU_Macro.inl, the
 // interpreter's functions of those names are in pcsx2/VU0.cpp (PCSX2
-// v2.9.189, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+).
+// v2.9.198, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+).
 //
 // Following the recompiler, where PCSX2's interpreter differs:
 //  - The integer registers VI1 to VI15 are 16 bits wide. CTC2 writes 16 bits
 //    and CFC2 reads 16, zero-extended (the console agrees). The interpreter
 //    writes and reads 32.
 //  - CTC2 to the status flag register writes the six sticky flags (bits 6 to
-//    11) and leaves the six current ones (the console agrees). The interpreter
-//    replaces all 32 bits. As in the recompiler, the copies of the flags that
-//    PCSX2's VU recompiler keeps for a micro program are rewritten as well.
+//    11) and leaves the six current ones (the console agrees; the interpreter
+//    too since v2.9.198). As in the recompiler, the copies of the flags that
+//    PCSX2's VU recompiler keeps for a micro program are rewritten as well,
+//    which the interpreter leaves.
 //  - CFC2 of R gives 23 bits, zero-extended to 64. The interpreter leaves
 //    bits 32 to 63 of the general register as they were.
 //  - CTC2 to CMSAR1 starts the VU1 micro program at the address the 32-bit
@@ -35,11 +36,10 @@
 //  - LQC2 and SQC2 ignore the low four bits of the address. The interpreter
 //    reads and writes sixteen bytes from the address as it is.
 //
-// Following the interpreter, where the recompiler differs:
-//  - CTC2 to FBRST stores the value and then carries out the resets it asks
-//    for, which clear the reset VU's half of the register (the console
-//    agrees: it reads back 0 after writing all ones). The recompiler resets
-//    first and stores afterwards.
+// Both, and the console: CTC2 to FBRST stores the value and then carries out
+// the resets it asks for, which clear the reset VU's half of the register (it
+// reads back 0 after writing all ones). Until v2.9.198 the recompiler reset
+// first and stored afterwards, and this followed the interpreter.
 //
 // CTC2 to the clip flag register writes the register alone, as the
 // recompiler does; PCSX2's interpreter also sets a copy of it that only its

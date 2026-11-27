@@ -22,10 +22,10 @@ The numbers are the records' own; each is in the list below.
 |---|---|
 | What PS2Native is, and on what | 0001 (the platforms), 0002 (the game's code compiled, PCSX2's core the machine), 0003 and 0006 (no recompiler for PS2 code in a game), 0007 (the BIOS's code compiled too), 0028 (Phase 4's design) |
 | What counts as correct | 0005 (never further from the console than PCSX2), 0011 (time counted as PCSX2's recompiler counts it), 0013 (a defect of PCSX2's reproduced until it was corrected) |
-| PCSX2: following it, changing it, telling it | 0004 (the pinned version), 0010 (a fix goes upstream through the maintainer), 0050 (PS2Native's first change to PCSX2's code), 0053 and 0054 (the move to v2.9.189), 0056 (`nextBlockCycles` kept alone), 0061 (a newer version tried by one command) |
+| PCSX2: following it, changing it, telling it | 0004 (the pinned version), 0010 (a fix goes upstream through the maintainer), 0050 (PS2Native's first change to PCSX2's code), 0053 and 0054 (the move to v2.9.189), 0056 (`nextBlockCycles` kept alone), 0061 (a newer version tried by one command), 0062 (the move to v2.9.198, and a change to its code that only lets it compile) |
 | Branding and the website | 0012, 0014 |
 | Commits, and sessions at work at once | 0018, 0020, 0021 |
-| The phases and their steps | Phase 3: 0009, 0015, 0016, 0017, 0018, 0019, 0022, 0023, 0024, 0026, 0027. Phase 4: 0028, 0033, 0036, 0037, 0038, 0041. Phase 5: 0053, 0061 |
+| The phases and their steps | Phase 3: 0009, 0015, 0016, 0017, 0018, 0019, 0022, 0023, 0024, 0026, 0027. Phase 4: 0028, 0033, 0036, 0037, 0038, 0041. Phase 5: 0053, 0061, 0062 |
 | How a game is shown and played | 0025 (the window's defaults, the patches), 0032 (the wizard goes through PCSX2's settings), 0035 and 0055 (the notice over the picture, the pace a session kept), 0039 (full screen), 0060 (the menu over the game) |
 | The toolchain, a game's folder and its own compile | 0029, 0030, 0031, 0034, 0040, 0044, 0045, 0048, 0057 |
 | Speed | 0015, 0019, 0043, 0046, 0047, 0050, 0051, 0052 |
@@ -885,3 +885,19 @@ The numbers are the records' own; each is in the list below.
     committed and pushed; the rule on `build\` kept; PS2Native moves to
     v2.9.198, carrying the patch for the missing include; the worktree of
     Phase 3 removed.
+- [ADR 0062](0062-ps2native-moves-to-pcsx2-2-9-198-carrying-a-missing-include.md):
+  the maintainer's "3. Yes" (2026-11-27) to moving to PCSX2 v2.9.198, which
+  ADR 0061's trial had found every test passing on and the sessions running
+  again as themselves.
+  - **The submodule at v2.9.198,** on Windows and inside WSL, and the
+    worktree's changes in `main`: PS2Native's description of the FPU's one
+    control register, the module version 7, `RSQRT`'s flags, the self-test
+    held to both of PCSX2's implementations where they now agree, the lists
+    of known differences.
+  - **PS2Native's second change to PCSX2's code,** a missing include, without
+    which PCSX2's source does not compile on Linux here. Changing nothing a
+    run does, and saying so, it is applied to stock PCSX2's trees too.
+  - The session's choices are listed in the ADR, for the maintainer to decide
+    otherwise.
+  - **The maintainer's answers** ("1. Yes", "2. Yes"): committed and pushed;
+    their game folders given these programs.

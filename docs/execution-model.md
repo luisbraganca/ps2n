@@ -101,8 +101,8 @@ record the recompiler keeps, without the code: `blocks::Form(pc)` is its
 
 ### What a block is
 
-The rules, each transcribed from PCSX2 v2.9.170 and the same in v2.9.189, the
-version PS2Native is built on since ADR 0054 (`pcsx2/x86/ix86-32/iR5900.cpp`
+The rules, each transcribed from PCSX2 v2.9.170 and the same in v2.9.189 and
+v2.9.198, the version PS2Native is built on since ADR 0062 (`pcsx2/x86/ix86-32/iR5900.cpp`
 unless another file is named):
 
 1. **Where it ends.** From the block's first instruction the recompiler
@@ -1225,8 +1225,8 @@ carried out on paper, `Clear()` its `recClearIOP()`, `Reset()` its
 
 ### What a block of the IOP's is
 
-The rules, each transcribed from PCSX2 v2.9.170 and the same in v2.9.189
-(`pcsx2/x86/iR3000A.cpp`, `iR3000Atables.cpp`, `BaseblockEx.h`):
+The rules, each transcribed from PCSX2 v2.9.170 and the same in v2.9.189 and
+v2.9.198 (`pcsx2/x86/iR3000A.cpp`, `iR3000Atables.cpp`, `BaseblockEx.h`):
 
 1. **Where it ends.** From the block's first instruction the recompiler
    looks ahead and stops after a branch or jump and its delay slot; at an

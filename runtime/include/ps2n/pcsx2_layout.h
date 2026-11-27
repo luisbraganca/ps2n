@@ -3,7 +3,7 @@
 // What compiled code reaches of PCSX2's core, described by PS2Native itself:
 // the layout of the structures it reads and writes, the numbers it uses and
 // the types of the functions of the core it calls. Transcribed from PCSX2
-// v2.9.189 (pcsx2/R5900.h, VU.h, R3000A.h, MemoryTypes.h, vtlb.h, Vif.h,
+// v2.9.198 (pcsx2/R5900.h, VU.h, R3000A.h, MemoryTypes.h, vtlb.h, Vif.h,
 // IopBios.h, Config.h, common/FPControl.h; Copyright 2002-2026 PCSX2 Dev
 // Team, GPL-3.0+), field for field, with nothing of the core's code.
 //
@@ -126,10 +126,15 @@ namespace ps2n::pcsx2
 		int32_t SL;
 	};
 
+	// The FPU's revision, which CFC1 of a control register below 16 reads
+	// (FCR0). Since v2.9.198 the FPU keeps one control register, FCR31, where
+	// it kept 32.
+	inline constexpr uint32_t FPU_REVISION = 0x2e30;
+
 	struct fpuRegisters
 	{
 		FPRreg fpr[32];
-		uint32_t fprc[32];
+		uint32_t fcr31;
 		FPRreg ACC;
 		uint32_t ACCflag;
 	};

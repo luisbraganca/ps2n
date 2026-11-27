@@ -11,7 +11,7 @@
 // recompiler's code is recMFC0 and recMTC0 in pcsx2/x86/iCOP0.cpp and recSYNC,
 // recPREF and recCACHE in pcsx2/x86/iR5900Misc.cpp; the interpreter's is in
 // pcsx2/COP0.cpp, pcsx2/R5900OpcodeImpl.cpp and pcsx2/Cache.cpp (PCSX2
-// v2.9.189, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+).
+// v2.9.198, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+).
 //
 // Following the recompiler, where PCSX2's interpreter differs:
 //  - MFC0 of the status register gives the register as it was written. The

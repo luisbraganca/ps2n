@@ -13,7 +13,7 @@
 //
 // Setting a control waits for a key or a controller's input as PCSX2's own
 // fullscreen interface does (BeginInputBinding in pcsx2/ImGui/FullscreenUI.cpp
-// of PCSX2 v2.9.189, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+): an input
+// of PCSX2 v2.9.198, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+): an input
 // hook takes what is pressed, and the binding is made when it is let go.
 
 #include "menu.h"

@@ -14,17 +14,13 @@
 # out why it differs first.
 #
 # Found on 2026-11-11 with PCSX2 v2.9.170 and BIOS SCPH-70004 v2.00: 59 of the
-# 63 programs are the same as stock at every sync point.
+# 63 programs are the same as stock at every sync point. With v2.9.198, whose
+# recompiler's LWR and CTC2 to FBRST are the console's too (2026-11-27), 61:
+# cpu/ee/lsu and cpu/vu0_macro/transfer came off the list.
 #
 # Variables are named <SUITE>_DIFFERS_same-as-stock.
 
 set(PS2AUTOTESTS_DIFFERS_same-as-stock
-	# LWR sign-extends here as on the console, where PCSX2's recompiler leaves
-	# the upper half zero (ops_int.h). The program prints what it computed:
-	# 4 of its 171 lines differ from stock's, and the runs part at sync point
-	# 33,024.
-	cpu/ee/lsu
-
 	# ABS.S, NEG.S, MAX.S and MIN.S are the console's here (ops_fpu.h). 48 of
 	# the program's 293 lines differ from stock's; the FPU registers differ
 	# from sync point 25,857 and the runs part at 26,066.
@@ -34,11 +30,6 @@ set(PS2AUTOTESTS_DIFFERS_same-as-stock
 	# an FPU branch in an FPU branch's delay slot (endless recursion in recBC1T,
 	# x86/iFPU.cpp), so there is no whole stock run to compare with.
 	cpu/ee_fpu/branchdelay
-
-	# CTC2 to FBRST reads back here as on the console (ops_cop2.h). 1 of the
-	# program's 36 lines differs from stock's, and the runs part at sync point
-	# 26,961.
-	cpu/vu0_macro/transfer
 )
 
 set(SDK_DIFFERS_same-as-stock)
@@ -51,7 +42,7 @@ set(PROGRAMS_DIFFERS_same-as-stock)
 # lists them as not run; without link-time optimization they run and pass.
 # Found on 2026-11-21 (docs/app-log.md, "The runtime itself").
 #
-# dma/vif/stcycl: a defect of PCSX2's (v2.9.170 to v2.9.189, x86). An UNPACK with masks
+# dma/vif/stcycl: a defect of PCSX2's (v2.9.170 to v2.9.198, x86). An UNPACK with masks
 # that would run past the end of a VU's memory is carried out by PCSX2's
 # interpreted unpack routines (dVifUnpack, pcsx2/x86/Vif_Dynarec.cpp, falls
 # back to them). Their masked write (VifUnpackSSE_Simple::doMaskWrite,

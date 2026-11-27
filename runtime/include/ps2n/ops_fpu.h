@@ -7,7 +7,7 @@
 // SSE unit, and games are tested against that approximation, so this file
 // reproduces it instruction for instruction: the same SSE operations, in the
 // same order, under the same control register, as the code PCSX2's EE
-// recompiler emits (pcsx2/x86/iFPU.cpp, PCSX2 v2.9.189, Copyright 2002-2026
+// recompiler emits (pcsx2/x86/iFPU.cpp, PCSX2 v2.9.198, Copyright 2002-2026
 // PCSX2 Dev Team, GPL-3.0+). The host's -selftest compares every function
 // here with that recompiler on random and boundary operands.
 //
@@ -319,9 +319,9 @@ namespace ps2n::ee::ops
 		inline void setCondition(bool value)
 		{
 			if (value)
-				fpuRegs.fprc[31] |= kFlagC;
+				fpuRegs.fcr31 |= kFlagC;
 			else
-				fpuRegs.fprc[31] &= ~kFlagC;
+				fpuRegs.fcr31 &= ~kFlagC;
 		}
 		PS2N_FPU_INLINE __m128 comparand(val::Fpr v) { return opaque(clampBySign(v)); }
 	} // namespace fpu
@@ -399,10 +399,10 @@ namespace ps2n::ee::val
 		namespace fpu = ops::fpu;
 		const fpu::ScopedControl control(EmuConfig.Cpu.FPUDivFPCR.bitmask);
 
-		fpuRegs.fprc[31] &= ~(fpu::kFlagI | fpu::kFlagD);
+		fpuRegs.fcr31 &= ~(fpu::kFlagI | fpu::kFlagD);
 		if (fpu::isZero(t))
 		{
-			fpuRegs.fprc[31] |= fpu::isZero(s) ? (fpu::kFlagI | fpu::kFlagSI) : (fpu::kFlagD | fpu::kFlagSD);
+			fpuRegs.fcr31 |= fpu::isZero(s) ? (fpu::kFlagI | fpu::kFlagSI) : (fpu::kFlagD | fpu::kFlagSD);
 			return fpu::fromBits(((fpu::toBits(s) ^ fpu::toBits(t)) & fpu::kSign) | fpu::kMax);
 		}
 
@@ -424,11 +424,11 @@ namespace ps2n::ee::val
 		const uint32_t nearest = (EmuConfig.Cpu.FPUFPCR.bitmask & ~ps2n::pcsx2::kRoundingControlBits) | ps2n::pcsx2::kRoundNearest;
 		const fpu::ScopedControl control(nearest);
 
-		fpuRegs.fprc[31] &= ~(fpu::kFlagI | fpu::kFlagD);
+		fpuRegs.fcr31 &= ~(fpu::kFlagI | fpu::kFlagD);
 		uint32_t bits = fpu::toBits(t);
 		if (bits & fpu::kSign)
 		{
-			fpuRegs.fprc[31] |= fpu::kFlagI | fpu::kFlagSI;
+			fpuRegs.fcr31 |= fpu::kFlagI | fpu::kFlagSI;
 			bits &= ~fpu::kSign;
 		}
 
@@ -446,18 +446,18 @@ namespace ps2n::ee::val
 	{
 		namespace fpu = ops::fpu;
 
-		fpuRegs.fprc[31] &= ~(fpu::kFlagI | fpu::kFlagD);
+		fpuRegs.fcr31 &= ~(fpu::kFlagI | fpu::kFlagD);
 		uint32_t bits = fpu::toBits(t);
 		if (bits & fpu::kSign)
 		{
-			fpuRegs.fprc[31] |= fpu::kFlagI | fpu::kFlagSI;
+			fpuRegs.fcr31 |= fpu::kFlagI | fpu::kFlagSI;
 			bits &= ~fpu::kSign;
 		}
 
 		__m128 root = fpu::fromBits(bits);
 		if (fpu::isZero(root))
 		{
-			fpuRegs.fprc[31] |= fpu::isZero(d) ? (fpu::kFlagI | fpu::kFlagSI) : (fpu::kFlagD | fpu::kFlagSD);
+			fpuRegs.fcr31 |= fpu::isZero(d) ? (fpu::kFlagI | fpu::kFlagSI) : (fpu::kFlagD | fpu::kFlagSD);
 			return fpu::fromBits((fpu::toBits(d) & fpu::kSign) | fpu::kMax);
 		}
 
@@ -508,19 +508,20 @@ namespace ps2n::ee::ops
 	inline void MTC1(uint32_t rt, uint32_t fs) { fpu::set(fs, val::MTC1(ru64(rt))); }
 
 	// FCR31 reads with its always-zero bits clear and its always-one bits set;
-	// every control register below 16 reads as FCR0. Only FCR31 can be written,
-	// and takes whatever is written.
+	// every control register below 16 reads as FCR0, the FPU's revision (a
+	// number since PCSX2 v2.9.198, which keeps no FCR0). Only FCR31 can be
+	// written, and takes whatever is written.
 	inline void CFC1(uint32_t rt, uint32_t fs)
 	{
 		if (fs >= 16)
-			setU32(rt, (fpuRegs.fprc[31] & 0x0083C078u) | 0x01000001u);
+			setU32(rt, (fpuRegs.fcr31 & 0x0083C078u) | 0x01000001u);
 		else
-			setU32(rt, fpuRegs.fprc[0]);
+			setU32(rt, FPU_REVISION);
 	}
 	inline void CTC1(uint32_t rt, uint32_t fs)
 	{
 		if (fs == 31)
-			fpuRegs.fprc[31] = ru32(rt);
+			fpuRegs.fcr31 = ru32(rt);
 	}
 
 	inline void MOV_S(uint32_t fd, uint32_t fs) { fpuRegs.fpr[fd].UL = fpuRegs.fpr[fs].UL; }

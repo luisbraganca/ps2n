@@ -119,9 +119,11 @@ held="$(git -C third_party/pcsx2 rev-parse HEAD 2>/dev/null || true)"
 if [ -n "$named" ] && [ "$named" != "$held" ]; then
 	echo "PCSX2: the tree names $named, the clone holds ${held:-nothing}: fetching it"
 	if [ -n "$pcsx2" ]; then
-		# By its name where that clone lets it be asked for so, by its tags otherwise.
-		git -C third_party/pcsx2 fetch -q --depth 1 "file://$pcsx2" "$named" 2>/dev/null ||
-			git -C third_party/pcsx2 fetch -q --depth 1 "file://$pcsx2" 'refs/tags/*:refs/tags/*'
+		# Its tags, which name the versions (a few in such a clone), and the commit
+		# itself where no tag holds it.
+		git -C third_party/pcsx2 fetch -q --depth 1 "file://$pcsx2" 'refs/tags/*:refs/tags/*' 2> /dev/null || true
+		git -C third_party/pcsx2 cat-file -e "$named^{commit}" 2> /dev/null ||
+			git -C third_party/pcsx2 fetch -q --depth 1 "file://$pcsx2" "$named"
 	else
 		git -C third_party/pcsx2 fetch -q --depth 1 origin "$named"
 	fi

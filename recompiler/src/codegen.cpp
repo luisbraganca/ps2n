@@ -1306,7 +1306,7 @@ private:
         line(call + ";", &in, note);
         forget(writtenMask(in), fpu);
         // The moves to and from COP0 call into the core, which is free to let
-        // time pass (it does not, in PCSX2 v2.9.189).
+        // time pass (it does not, in PCSX2 v2.9.198).
         if (in.is(F_COP0)) line("PS2N_TIME();");
         return after;
     }

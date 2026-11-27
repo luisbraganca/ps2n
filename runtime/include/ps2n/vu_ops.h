@@ -11,7 +11,7 @@
 // What they agree with is PCSX2's VU recompiler (microVU) in micro mode, as
 // docs/adr/0005 has every family follow PCSX2's recompiler: the host's SSE
 // instructions are the ones microVU emits (microVU_Upper.inl,
-// microVU_Lower.inl, microVU_Clamp.inl, microVU_Misc.inl; PCSX2 v2.9.189,
+// microVU_Lower.inl, microVU_Clamp.inl, microVU_Misc.inl; PCSX2 v2.9.198,
 // Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+), in the same order on the
 // same operands, under the VU's floating-point control register, which
 // whoever runs a block has set. The arithmetic is the helpers of
@@ -1042,7 +1042,13 @@ namespace ps2n::vu
 			t = d::SQRTSS(t);
 			if (d::IsZero(t))
 			{
-				a.c.divFlag = d::IsZero(s) ? d::kDivI : d::kDivD;
+				// 0/0 the invalid flag alone; otherwise the division flag beside a
+				// negative operand's invalid one (microVU_Lower.inl's xOR, since
+				// PCSX2 v2.9.198).
+				if (d::IsZero(s))
+					a.c.divFlag = d::kDivI;
+				else
+					a.c.divFlag |= d::kDivD;
 				s = _mm_and_ps(s, d::All(0x80000000u));
 				s = _mm_or_ps(s, d::All(0x7f7fffffu));
 			}

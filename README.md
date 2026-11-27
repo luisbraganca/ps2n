@@ -88,7 +88,7 @@ and the application ([docs/app-log.md](docs/app-log.md)).
 
 ## Building it
 
-PS2Native builds inside PCSX2's own CMake project, with PCSX2 `v2.9.189` as a
+PS2Native builds inside PCSX2's own CMake project, with PCSX2 `v2.9.198` as a
 submodule that is never edited (`git submodule update --init --depth 1`).
 What PS2Native changes of PCSX2's code is in [patches/pcsx2](patches/pcsx2/),
 applied to copies of the files concerned when it is built.

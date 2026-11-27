@@ -11,7 +11,7 @@
 // interpreter carries those blocks out instruction by instruction; compiled
 // code asks at every label where the block it is in ends. Each function here
 // that stands for a part of the recompiler's generated code names it (PCSX2
-// v2.9.189, pcsx2/x86, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+).
+// v2.9.198, pcsx2/x86, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+).
 //
 // An instruction is carried out with PS2Native's own semantics where those
 // exist (runtime/include/ps2n/ops_*.h). Every other instruction is carried
@@ -864,7 +864,7 @@ namespace
 				}
 				std::fprintf(s_trace_file, "  hi=%016llX lo=%016llX hi1=%016llX lo1=%016llX sa=%X fcr31=%08X status=%08X epc=%08X\n",
 					static_cast<ull>(cpuRegs.HI.UD[0]), static_cast<ull>(cpuRegs.LO.UD[0]), static_cast<ull>(cpuRegs.HI.UD[1]),
-					static_cast<ull>(cpuRegs.LO.UD[1]), cpuRegs.sa, fpuRegs.fprc[31], cpuRegs.CP0.n.Status.val, cpuRegs.CP0.n.EPC);
+					static_cast<ull>(cpuRegs.LO.UD[1]), cpuRegs.sa, fpuRegs.fcr31, cpuRegs.CP0.n.Status.val, cpuRegs.CP0.n.EPC);
 			}
 		}
 
@@ -2711,7 +2711,7 @@ namespace
 		cpuRegs.branch = 0;
 
 		// Compiled code continues with the next instruction unconditionally.
-		// Nothing delegated in PCSX2 v2.9.189 redirects the PC; if that ever
+		// Nothing delegated in PCSX2 v2.9.198 redirects the PC; if that ever
 		// changes, it must not go unnoticed.
 		if (cpuRegs.pc != pc + 4) [[unlikely]]
 		{
