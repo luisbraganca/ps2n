@@ -6342,3 +6342,52 @@ desktop, muted, on Direct3D 12 (`build\measure\players-64.ps1`).
   compiler says so, and compiles them without it. Each runs at most once a
   frame, none is the game's code, and the next release makes the profile
   again.
+
+### The maintainer's answers, and their folders given a second controller (2026-11-28)
+
+The maintainer's answers: "1. Yes" (to committing and pushing), "2. Yes" (to
+their game folders given these programs, so that they can try two
+controllers).
+
+- **The development tree's tests run again** before the commit: the 556 above
+  had run on a build from before the last change to the menu (its page shown
+  again when a controller connects or goes). On the final programs: 556, every
+  one passing, none skipped.
+- **Committed and pushed:** `1993dc8`, 11:07 UTC.
+- **Their PS2Native folders** made again from it by the scripts' first parts:
+  `build\kit`, and inside WSL `build/PS2Native`, after `~/ps2n` was brought to
+  the commit (no file differing from it). The licences in each name the
+  commit.
+- **Their game folders** given its programs by that folder's wizard and checked
+  (`update-games.ps1 -Except SLES_505.39`, `update-games.sh`, every part): each
+  compiled its game again; the start of the session the scripts' rule chose was
+  run again with the new programs; the wizard was asked again; the memory cards
+  were compared.
+
+| Folder | Compiled in | Its start run again |
+|---|---:|---|
+| 007 - Agent Under Fire (nine executables) | 341 s | 900 frames of its session of 2026-11-17 22:44, 18 of 18 fingerprints |
+| Agent Under Fire | 93 s | 900 frames of 2026-11-17 18:57, 18 of 18 |
+| Gran Turismo 3 | 23 s | 900 frames of 2026-11-18 10:27, 18 of 18 |
+| Jak and Daxter | 59 s | 900 frames of 2026-11-23 10:47, 18 of 18 |
+| Killzone | 112 s | 900 frames of 2026-11-17 22:18, 18 of 18 |
+| Resident Evil – Code: Veronica X | 38 s | no session yet |
+| Secret Agent Clank | 54 s | no session yet |
+| Silent Hill 3 | 88 s | its longest session, of 2026-11-19 00:00, whole: 120 frames, 2 of 2 |
+| SSX Tricky | 59 s | 900 frames of 2026-11-27 15:42, 18 of 18 |
+| Jak and Daxter, inside WSL | 26 s | 600 frames of 2026-11-19 23:01, 12 of 12 |
+
+- **What each run interpreted** is what the same sessions' runs interpreted at
+  0.5's update, to the cycle: 54,009,560 and 117 EE cycles in the two Agent
+  Under Fire folders, 104,514 in Jak and Daxter's, 111 in the other four that
+  were checked, 86,174 inside WSL. None of these sessions has port 2 in it.
+- **Asked again,** the wizard found every folder up to date and changed nothing.
+- **Memory cards and sessions** are as they were: two cards in each folder that
+  has been played, none changed; the two never played have none.
+- **Counting once more:** Jak and Daxter's folder on Windows and SSX Tricky's
+  count their profiles once more after their next session of 3 minutes, as
+  both were waiting to before this update. The other folders have no counts.
+- **Two players** are the maintainer's to try. None of their folders keeps
+  controls of its own, so two controllers connected, before the game or while
+  it plays, go to player 1 and player 2 in turn; or player 2's keys are set in
+  the menu (Esc, Controls, Player 2).

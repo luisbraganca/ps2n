@@ -790,5 +790,7 @@ again as themselves, compiled and on stock PCSX2's recompilers; sessions
 written down before did too; every test passes on both systems. No game's
 mode for two players was reached in the checks: that is the maintainer's to
 try. At their answers ("1. Yes", "2. Yes") it was committed and pushed, and
-their game folders get its programs. docs/app-log.md, "A second controller
-(ADR 0064)".
+their game folders were given its programs, the nine on Windows and the one
+inside WSL, each compiling its game again; where a session could be run again,
+its start was the session at every fingerprint compared. docs/app-log.md, "A
+second controller (ADR 0064)".

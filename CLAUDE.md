@@ -46,10 +46,9 @@ As of 2026-11-28. This section is replaced when it changes, never added to.
 - **Released:** 0.5, a pre-release, on 2026-11-28: the tag `v0.5` on
   `bbe4e56` (ADR 0063), with the menu over the game, opened with Esc
   (ADR 0060), and PCSX2 v2.9.198.
-- **In `main` but in no release:** a second controller, for a second player
-  (ADR 0064), committed and pushed at the maintainer's word. Their game
-  folders, on Windows and inside WSL, get its programs after the commit; until
-  then they have 0.5's.
+- **In `main` and in the maintainer's game folders, in no release:** a second
+  controller, for a second player (ADR 0064; `1993dc8`), on Windows and inside
+  WSL.
 - **PCSX2 followed:** v2.9.198 (ADR 0062; v2.9.189 until then), with two
   changes of PS2Native's own (`patches/pcsx2`): ADR 0050's, and a missing
   include, which stock PCSX2's trees are built with too. The module version is

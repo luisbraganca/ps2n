@@ -2,8 +2,8 @@
 
 - Date: 2026-11-28
 - Status: accepted (the maintainer's words, below). Built, checked, committed
-  and pushed at the maintainer's word; their game folders get these programs
-  after the commit; in no release.
+  and pushed (`1993dc8`), and given to the maintainer's game folders, at their
+  word; in no release.
 
 ## Context
 
@@ -142,7 +142,15 @@ The session put two things to them, each with its recommendation:
 
 Their answers, the same day: "1. Yes", "2. Yes".
 
-- **Committed and pushed.**
-- **Their game folders** get these programs, their PS2Native folders made
-  again from the commit first, as docs/development.md says ("The maintainer's
-  game folders brought up to date").
+- **Committed and pushed** (`1993dc8`), after the development tree's tests
+  were run again on the final programs: 556, none skipped.
+- **Their game folders** were given these programs the same day, their
+  PS2Native folders made again from the commit first, as docs/development.md
+  says ("The maintainer's game folders brought up to date"): the nine on
+  Windows and the one inside WSL, each compiling its game again. Where a
+  session could be run again, its start, run again with the new programs, was
+  the session at every fingerprint compared; the wizard, asked again, changed
+  nothing; their memory cards and sessions are as they were (docs/app-log.md,
+  "The maintainer's answers, and their folders given a second controller").
+- **This record of the update** committed and pushed at their next answer,
+  "1. Yes".

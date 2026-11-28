@@ -938,5 +938,5 @@ The numbers are the records' own; each is in the list below.
     before had port 2 empty and runs again so.
   - The session's choices are listed in the ADR, for the maintainer to decide
     otherwise.
-  - **The maintainer's answers** ("1. Yes", "2. Yes"): committed and pushed;
-    their game folders get these programs after the commit.
+  - **The maintainer's answers** ("1. Yes", "2. Yes"): committed and pushed
+    (`1993dc8`); their game folders given these programs.
