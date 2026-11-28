@@ -821,3 +821,11 @@ Primal's disc was read in its place, and Silent Hill 3 was deleted whole, its
 disc image among it. Free space on C: went from 258 GB to 470 GB, with WSL's
 disk file compacted from 64 GB to 35 GB. docs/app-log.md, "The project's files
 cleaned up (ADR 0065)".
+
+Making Primal, the maintainer saw Windows' default icon on the wizard's window
+and asked why (ADR 0066). Qt takes an executable's icon by itself only under
+one name, which PS2Native's has not. The game's window and the recompile's
+took it themselves, the wizard's never had. At their "Yes" the wizard sets it
+when it starts, on Windows and on Linux. On the hidden desktop its window now
+shows PS2Native's emblem, where 0.5's shows Windows' default. docs/app-log.md,
+"The wizard's icon (ADR 0066)".

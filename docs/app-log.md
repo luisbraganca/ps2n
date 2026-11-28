@@ -6535,3 +6535,45 @@ also be CHF file type".
   morning, with their PS2Native folder's wizard. It has no session yet. A
   measurement folder made from its disc, for its boot among the training
   runs, waits until it plays.
+
+## The wizard's icon (ADR 0066)
+
+### Built and checked (2026-11-28)
+
+The maintainer's words, with two pictures of the wizard making Primal, its
+title bar and its taskbar button showing Windows' default icon: "why isnt our
+ps2n icon being used buy the wizard?". Then, to fixing it: "2. Yes".
+
+- **Why it had none:** `ps2n-wizard.exe` carries PS2Native's icon as resource
+  1 (`assets/ps2n.rc`). Qt's window class takes an executable's icon only when
+  it is named `IDI_ICON1` (`QWindowsContext::registerWindowClass`), and
+  otherwise takes Windows' default application icon. The game's window and
+  ps2n-remake's load resource 1 themselves; the wizard did not. On Linux the
+  icon, a resource of Qt's, had been given to ps2n-remake and the launcher only.
+- **The change:** `wizard/main.cpp` sets the icon as the application's when
+  the wizard starts, taken as `wizard/remake_main.cpp` takes it (resource 1 at
+  the small and large sizes; elsewhere `:/ps2native/icon.png`).
+  `wizard/targets.cmake` compiles that resource into the wizard on Linux.
+- **Built:**
+  - `build\windows-clang-module` in 46 s, the wizard's `main.cpp` compiled
+    again and the programs linked;
+  - inside WSL, `build/linux-clang-module` in 34 s, the icon's resource and
+    `main.cpp` compiled into the wizard.
+- **Checked on the hidden desktop.** A copy of 0.5's runtime held the new
+  wizard and 0.5's. Each was opened in turn, its window found, the icons read
+  back from it (`WM_GETICON`, and its window class's), saved as pictures and
+  looked at:
+
+| Wizard | Its window's own icons | Its window class's icon |
+|---|---|---|
+| This tree's | 32×32 and 16×16, PS2Native's blue emblem | 32×32 |
+| 0.5's | none | 32×32, Windows' default application icon, as in the maintainer's pictures |
+
+- **Not looked at on Linux:** a window opened inside WSL appears on the
+  maintainer's screen. The build is the check there.
+- **No test runs the wizard,** so the test suites were not run for this
+  change.
+- **The maintainer's answers:** "1. Yes" to committing and pushing it; "2.
+  Agree" to their PS2Native folder getting the new wizard with the next
+  release, since an update now would compile their eight games again for the
+  icon alone.

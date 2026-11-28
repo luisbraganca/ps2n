@@ -23,7 +23,7 @@ The numbers are the records' own; each is in the list below.
 | What PS2Native is, and on what | 0001 (the platforms), 0002 (the game's code compiled, PCSX2's core the machine), 0003 and 0006 (no recompiler for PS2 code in a game), 0007 (the BIOS's code compiled too), 0028 (Phase 4's design) |
 | What counts as correct | 0005 (never further from the console than PCSX2), 0011 (time counted as PCSX2's recompiler counts it), 0013 (a defect of PCSX2's reproduced until it was corrected) |
 | PCSX2: following it, changing it, telling it | 0004 (the pinned version), 0010 (a fix goes upstream through the maintainer), 0050 (PS2Native's first change to PCSX2's code), 0053 and 0054 (the move to v2.9.189), 0056 (`nextBlockCycles` kept alone), 0061 (a newer version tried by one command), 0062 (the move to v2.9.198, and a change to its code that only lets it compile) |
-| Branding and the website | 0012, 0014 |
+| Branding and the website | 0012, 0014, 0066 (the wizard's windows carry PS2Native's icon) |
 | Commits, and sessions at work at once | 0018, 0020, 0021 |
 | The phases and their steps | Phase 3: 0009, 0015, 0016, 0017, 0018, 0019, 0022, 0023, 0024, 0026, 0027. Phase 4: 0028, 0033, 0036, 0037, 0038, 0041. Phase 5: 0053, 0061, 0062 |
 | How a game is shown and played | 0025 (the window's defaults, the patches), 0032 (the wizard goes through PCSX2's settings), 0035 and 0055 (the notice over the picture, the pace a session kept), 0039 (full screen), 0060 (the menu over the game), 0064 (a second controller) |
@@ -958,9 +958,24 @@ The numbers are the records' own; each is in the list below.
     Deleted whole, its disc image among it. Primal's `.chd` takes over the
     check, and the profile is trained on six runs until Primal's boot may be
     added.
-  - **The maintainer's answer** ("1. Yes"): this record committed and pushed.
   - **Kept:** the trees, captures, profiles and measurement folders in use;
     their other game folders; the copies of their memory cards; 0.5's files and
     0.1's folder; their discs and the old project, outside the build tree.
   - The session's choices are listed in the ADR, for the maintainer to decide
     otherwise.
+  - **The maintainer's answer** ("1. Yes"): this record committed and pushed.
+- [ADR 0066](0066-the-wizards-windows-carry-ps2natives-icon.md): the
+  maintainer's words of 2026-11-28, "why isnt our ps2n icon being used buy the
+  wizard?", and "2. Yes" to fixing it.
+  - **Why:** Qt gives a window an executable's icon by itself only when the
+    icon is named `IDI_ICON1`; PS2Native's is resource 1. The game's window and
+    ps2n-remake's took it themselves, the wizard's never had. On Linux the
+    wizard had no icon at all.
+  - **The wizard makes PS2Native's icon the application's** at its start, taken
+    as ps2n-remake takes it: on Windows resource 1, elsewhere the Qt resource,
+    now compiled into the wizard too. Every window of it carries the icon.
+  - **Checked:** built on both systems; on the hidden desktop the new wizard's
+    window has PS2Native's emblem at 32 and 16 pixels, and 0.5's has
+    Windows' default.
+  - **The maintainer's answers** ("1. Yes", "2. Agree"): committed and pushed;
+    their folders get it with the next release.

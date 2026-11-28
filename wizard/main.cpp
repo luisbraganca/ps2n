@@ -38,23 +38,53 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtGui/QIcon>
+#include <QtGui/QImage>
+#include <QtGui/QPixmap>
 #include <QtGui/QStyleHints>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QMessageBox>
 
 #include <string>
 
+#ifdef _WIN32
+#include "common/RedtapeWindows.h"
+#endif
+
 namespace
 {
 	// The defaults the settings pages show, and a game's settings are written
 	// over: PS2Native's for a game, the runtime's (docs/adr/0032).
 	MemorySettingsInterface s_base;
+
+	// PS2Native's icon, for every window of the wizard (docs/adr/0066). On
+	// Windows the executable's (assets/ps2n.rc, resource 1): Qt takes an
+	// executable's icon by itself only when it is named IDI_ICON1, so without
+	// this the windows had Windows' default icon. Elsewhere a resource of Qt's
+	// (wizard/targets.cmake). As ps2n-remake takes it.
+	QIcon OwnIcon()
+	{
+#ifdef _WIN32
+		QIcon result;
+		for (const int size : {GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CXICON)})
+		{
+			if (const HICON icon = static_cast<HICON>(LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1), IMAGE_ICON, size, size, 0)))
+			{
+				result.addPixmap(QPixmap::fromImage(QImage::fromHICON(icon)));
+				DestroyIcon(icon);
+			}
+		}
+		return result;
+#else
+		return QIcon(QStringLiteral(":/ps2native/icon.png"));
+#endif
+	}
 } // namespace
 
 int main(int argc, char* argv[])
 {
 	QApplication app(argc, argv);
 	QApplication::setApplicationName(QStringLiteral("PS2Native"));
+	QApplication::setWindowIcon(OwnIcon());
 	// The icons of PCSX2's pages, from its theme for the window's colours, as
 	// PCSX2 chooses it (pcsx2-qt/Themes.cpp).
 	QIcon::setThemeName(QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark ? QStringLiteral("white") :

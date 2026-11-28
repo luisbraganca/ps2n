@@ -149,11 +149,11 @@ endif()
 
 # On Linux (step P4.7): PS2Native's icon, which Windows' executables carry as
 # a resource of theirs (assets/ps2n.rc), as a resource of Qt's
-# (":/ps2native/icon.png"), for ps2n-remake's icon in the notification area and
-# the launcher's windows; and a game's launcher (wizard/launcher_main.cpp),
-# Windows' being host/launcher.cpp, whose windows, the wait for a compile and
-# why a game could not play, are Qt's, which a game's folder carries for
-# ps2n-remake.
+# (":/ps2native/icon.png"), for ps2n-remake's icon in the notification area,
+# the wizard's windows (docs/adr/0066) and the launcher's windows; and a game's
+# launcher (wizard/launcher_main.cpp), Windows' being host/launcher.cpp, whose
+# windows, the wait for a compile and why a game could not play, are Qt's,
+# which a game's folder carries for ps2n-remake.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	set(ps2n_icon_qrc_file "${CMAKE_BINARY_DIR}/ps2n-icon.qrc")
 	set(ps2n_icon_qrc "<RCC>\n<qresource prefix=\"/ps2native\">\n<file alias=\"icon.png\">${PS2N_ROOT}/assets/branding/icons/ps2native-icon-blue-256.png</file>\n</qresource>\n</RCC>\n")
@@ -165,6 +165,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	endif()
 	target_sources(ps2n-remake PRIVATE "${ps2n_icon_qrc_file}")
 	set_target_properties(ps2n-remake PROPERTIES AUTORCC ON)
+	target_sources(ps2n-wizard PRIVATE "${ps2n_icon_qrc_file}")
 
 	add_executable(ps2n-launcher "${CMAKE_CURRENT_LIST_DIR}/launcher_main.cpp" "${ps2n_icon_qrc_file}")
 	ps2n_not_the_runtime(ps2n-launcher)

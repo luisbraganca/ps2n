@@ -49,10 +49,18 @@ where it was measured.
 
 - The README's heading shows the light or the dark logo, following the
   reader's colour scheme.
-- On Windows, `ps2n-recomp.exe` and `ps2n-host.exe` carry `favicon.ico`,
-  through `assets/ps2n.rc`. Explorer shows it. The host has no window yet;
-  the one it gets takes the same icon, which is resource 1 of the
-  executable. Nothing is done for other platforms yet.
+- On Windows the executables carry `favicon.ico` as their resource 1,
+  through `assets/ps2n.rc`: `ps2n-recomp`, `ps2n-host`, a game's launcher,
+  `ps2n-wizard` and `ps2n-remake`. Explorer shows it. Their windows take it
+  from there themselves, since Qt would take it by itself only if it were
+  named `IDI_ICON1`:
+  - the game's window (`host/window.cpp`);
+  - ps2n-remake's (`wizard/remake_main.cpp`);
+  - since [ADR 0066](../../docs/adr/0066-the-wizards-windows-carry-ps2natives-icon.md),
+    the wizard's (`wizard/main.cpp`).
+- On Linux the windows of `ps2n-remake`, a game's launcher and the wizard take
+  `icons/ps2native-icon-blue-256.png`, compiled into them as a resource of
+  Qt's (`wizard/targets.cmake`).
 - The social preview is set on GitHub (Settings, General, Social preview),
   not from a file in the repository.
 - The website (`docs/index.html`) shows the dark horizontal logo and the

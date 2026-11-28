@@ -46,8 +46,10 @@ As of 2026-11-28. This section is replaced when it changes, never added to.
 - **Released:** 0.5, a pre-release, on 2026-11-28: the tag `v0.5` on
   `bbe4e56` (ADR 0063), with the menu over the game, opened with Esc
   (ADR 0060), and PCSX2 v2.9.198.
-- **In `main` and in the maintainer's game folders, in no release:** a second
-  controller, for a second player (ADR 0064; `1993dc8`).
+- **In `main`, in no release:** a second controller, for a second player
+  (ADR 0064; `1993dc8`), in the maintainer's game folders too; the wizard's
+  windows carrying PS2Native's icon (ADR 0066), which their folders get with
+  the next release, at their word.
 - **PCSX2 followed:** v2.9.198 (ADR 0062; v2.9.189 until then), with two
   changes of PS2Native's own (`patches/pcsx2`): ADR 0050's, and a missing
   include, which stock PCSX2's trees are built with too. The module version is
