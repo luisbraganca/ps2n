@@ -520,8 +520,9 @@ overclock the frame-rate patch asks for (steps G15 to G17; `-Patches
 none` leaves both out, `-Patches widescreen` the frame-rate one,
 `-EeCycleRate 0` the overclock; the game's patch file is copied into the
 run's data folder), at the
-console's speed, with sound, the keyboard and the first controller
-(`ps2n-host -help` has the keys), until the window is closed; `-Config
+console's speed, with sound, the keyboard and the first controller, and a
+second controller for a second player, in port 2 (ADR 0064; `ps2n-host
+-help` has the keys), until the window is closed; `-Config
 stock-jit` puts stock PCSX2 in the same window. In a window VU1 is carried
 out on PCSX2's own VU thread where the settings have it, as in PCSX2 (ADR
 0051: its default where the computer has three processor cores or more, a
@@ -538,7 +539,11 @@ on (`vu-thread on`): a run of it again need not be it then (Agent Under
 Fire's is not, with the thread or without: with the thread on its run does
 not repeat). To check what a played game gets without a window on the
 maintainer's screen, a game's window runs on the measurement's hidden
-desktop, muted (`build\measure\vut-04.ps1`). `game.ps1 -Patches
+desktop, muted (`build\measure\vut-04.ps1`). A controller connected to this
+computer is given to such a game too, as to any played (one was, on
+2026-11-28): a check that must not make it vibrate writes the game's controls
+beforehand, keys only (`data\PCSX2\inputprofiles\controls.ini` in its play
+folder; `build\measure\players-64.ps1`). `game.ps1 -Patches
 widescreen,fps` gives a comparison's two runs the patches and the
 overclock their note asks for. A session
 in the window takes `-Pad`, `-Frames` and `-Marks` as a scripted run
@@ -550,7 +555,8 @@ last session had to interpret of the game (`capture.toml`; `-Capture
 micro code (`vu-capture.toml`; `-VuCapture <file>` likewise) and of the
 IOP's code (`iop-capture.toml`; `-IopCapture <file>`). Every session is
 written down to be run again, in `build\game\<name>\play\sessions\<time>`
-(its controller frame by frame, the clock it started at, its memory
+(its controllers frame by frame, port 2's from the frame a controller was
+put into it, the clock it started at, its memory
 cards and NVRAM as they were, a new card where a slot had none, the
 patches it was played with; `ps2n-host -record`), and `game.ps1 -Replay
 <that folder>` runs it again without a window, in any configuration,

@@ -776,3 +776,19 @@ Windows and the one inside WSL, each compiling its game again; where a session
 could be run again, its start was the session at every fingerprint compared.
 Jak and Daxter's 3% is not looked into further. docs/app-log.md, "0.5 (ADR
 0063)".
+
+The same day the maintainer asked "Can you add 2 controllers support? I think
+currently we only support 1 controller but I could be wrong" (ADR 0064). They
+were right: port 2 had been empty, and a session kept port 1's controller
+only. A second player now plays in port 2. A controller is put in there while
+the game runs, as PCSX2 puts one in, once a second player has something to
+play with: a second controller, given out in the order they connect, or keys
+of their own. A session written down keeps it, so that a session played by
+two runs again as itself. The menu's Controls page has both players. Checked
+in a window on the hidden desktop: three sessions with port 2 in them ran
+again as themselves, compiled and on stock PCSX2's recompilers; sessions
+written down before did too; every test passes on both systems. No game's
+mode for two players was reached in the checks: that is the maintainer's to
+try. At their answers ("1. Yes", "2. Yes") it was committed and pushed, and
+their game folders get its programs. docs/app-log.md, "A second controller
+(ADR 0064)".

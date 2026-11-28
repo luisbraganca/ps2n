@@ -343,10 +343,18 @@ namespace
 	std::vector<PadEvent> s_pad_events;
 	size_t s_pad_next = 0;
 
-	// With -window: whether the first controller has been given the pad in
-	// port 1, and when the first and the latest frame were shown, to report the
-	// pace the session kept. CPU thread only.
-	bool s_controller_mapped = false;
+	// With -window: the controllers connected since the last frame, to be given
+	// to the players at the next (GiveControllers). Under s_queue_mutex.
+	std::vector<std::string> s_controllers_connected;
+
+	// Whether port 2 has a controller in it, for a second player
+	// (docs/adr/0064): put in between two frames once player 2 has something to
+	// play with, or where a session run again had one put in; there until the
+	// run ends. CPU thread only.
+	bool s_port2_connected = false;
+
+	// With -window: when the first and the latest frame were shown, to report
+	// the pace the session kept. CPU thread only.
 	std::chrono::steady_clock::time_point s_first_frame_time;
 	std::chrono::steady_clock::time_point s_latest_frame_time;
 
@@ -460,10 +468,11 @@ namespace
 			"                     2026-11-14T23:45:07. Default fixed; host with -window;\n"
 			"                     with -input, the session's.\n"
 			"  -record <dir>      With -window: write the session down in <dir>/input.txt,\n"
-			"                     to be run again (host/session_record.h): the controller\n"
-			"                     in port 1 frame by frame, the clock it started at, its\n"
-			"                     patches and the EE cycle rate it was given, and a\n"
-			"                     fingerprint of the registers every 50 frames. The memory\n"
+			"                     to be run again (host/session_record.h): the controllers\n"
+			"                     frame by frame (port 2's from the frame it was put in),\n"
+			"                     the clock it started at, its patches and the EE cycle\n"
+			"                     rate it was given, and a fingerprint of the registers\n"
+			"                     every 50 frames. The memory\n"
 			"                     cards and the NVRAM it began with go beside it\n"
 			"                     (game.ps1 -Play copies them there; -sessions does it).\n"
 			"  -sessions <dir>    With -window: write each session down in a folder of its\n"
@@ -481,7 +490,7 @@ namespace
 			"                     at all, the host reads settings.txt beside it, where there\n"
 			"                     is one: a game's folder (docs/app-log.md, P4.4).\n"
 			"  -input <file>      Run a session written down with -record again, without a\n"
-			"                     window: its controller, its clock, its number of frames,\n"
+			"                     window: its controllers, its clock, its number of frames,\n"
 			"                     its patches and its EE cycle rate, unless -clock,\n"
 			"                     -frames, -patches or -ee-cycle-rate say otherwise.\n"
 			"                     Reports whether the run is the session at every\n"
@@ -594,13 +603,15 @@ namespace
 			"  -window            Play: the machine in a window, at the console's speed, with\n"
 			"                     sound, a memory card in the data directory, and the pad in\n"
 			"                     port 1 on the keyboard and on the first controller, all as\n"
-			"                     PCSX2 sets them up by default. Keys: arrows (d-pad), W A S D\n"
+			"                     PCSX2 sets them up by default. The second controller is\n"
+			"                     player 2's: a pad is put into port 2 for it when it\n"
+			"                     connects, and stays. Keys: arrows (d-pad), W A S D\n"
 			"                     (left stick), T F G H (right stick), I J K L (triangle,\n"
 			"                     square, cross, circle), Q E (L1 R1), 1 3 (L2 R2), 2 4 (L3\n"
 			"                     R3), Return (start), Backspace (select). Alt+Enter or F11\n"
 			"                     covers the screen. Esc opens PS2Native's menu over the\n"
 			"                     game, which waits meanwhile: Resume, Controls (each\n"
-			"                     input's key and controller input, kept in the data\n"
+			"                     player's keys and controller, kept in the data\n"
 			"                     directory's inputprofiles\\controls.ini), Graphics card,\n"
 			"                     Reboot, Quit; the last two, and the window's close\n"
 			"                     button, ask first. The picture is drawn on Vulkan at three\n"
@@ -1908,9 +1919,9 @@ namespace
 			// Someone is playing. Everything else stays as PCSX2 sets it up by
 			// default (VMManager::SetDefaultSettings above): the frame limiter
 			// holds the machine to the console's speed, the sound goes to the
-			// system's output, the pad in port 1 is on the keyboard, controllers
-			// are looked for, and slot 1 holds a memory card, which the core
-			// makes in the data directory when there is none.
+			// system's output, the pad in port 1 is on the keyboard, port 2 is
+			// empty, controllers are looked for, and slot 1 holds a memory card,
+			// which the core makes in the data directory when there is none.
 			si.SetBoolValue("SPU2/Output", "OutputMuted", o.mute);
 
 #ifdef _WIN32
@@ -1923,6 +1934,13 @@ namespace
 			// game: in the place of the defaults (host/menu.h, docs/adr/0060).
 			if (ps2n::host::menu::LoadControls(si, EmuFolders::DataRoot))
 				std::fputs("ps2n-host: the controls are the player's own (inputprofiles/controls.ini)\n", stderr);
+
+			// Port 2 empty when the machine starts, whatever the controls give
+			// player 2: a second player's controller is put in between two
+			// frames, once it has something to play with, so that a session
+			// written down has the moment (ConnectSecondController,
+			// docs/adr/0064).
+			si.SetStringValue("Pad2", "Type", Pad::GetControllerInfo(Pad::ControllerType::NotConnected)->name);
 
 			// What the core can draw over the picture: none of it, unless asked
 			// for (docs/adr/0012-ps2native-branding-not-pcsx2s.md).
@@ -2078,27 +2096,69 @@ namespace
 			ps2n::host::RunOnCPUThread([]() { ps2n::host::menu::AskQuit(); }, false);
 	}
 
-	// Gives the first controller the pad in port 1, beside the keyboard: the
-	// mapping PCSX2 would make for it automatically, added to the bindings that
-	// are there. Not where the player's own controls are the game's (set in the
-	// menu over the game, kept in its folder: host/menu.h), which say what the
-	// controller is. CPU thread, between two frames.
-	void MapFirstController()
+	// A controller put into port 2 for a second player (docs/adr/0064), as PCSX2
+	// puts one in when a port's type changes while a game runs (Pad::LoadConfig):
+	// the console sees one plugged in. Between two frames, on the CPU thread;
+	// written down where a session is (session::NoteConnect), and put in at the
+	// same frame where a session is run again (session::ConnectAt). There until
+	// the run ends: a player's controller that goes (put down, its battery flat)
+	// leaves it in, as it leaves the one in port 1.
+	void ConnectSecondController()
 	{
-		if (s_controller_mapped || ps2n::host::menu::ControlsAreOwn())
+		if (s_port2_connected)
 			return;
-
-		u32 mapped = 0;
+		s_port2_connected = true;
 		{
 			std::unique_lock<std::mutex> lock = Host::GetSettingsLock();
-			mapped = ps2n::host::menu::AddController(s_settings, "SDL-0");
+			// In the settings too: the core reads the ports' types from them again
+			// (when a game's executable starts, VMManager::ApplyCoreSettings), and
+			// binds the inputs of a port only where it takes one to be there
+			// (InputManager::AddPadBindings).
+			s_settings.SetStringValue("Pad2", "Type", Pad::GetControllerInfo(Pad::ControllerType::DualShock2)->name);
+			EmuConfig.Pad.Ports[1].Type = Pad::ControllerType::DualShock2;
+			Pad::LoadConfig(*Host::GetSettingsInterface());
 		}
-		if (mapped == 0)
-			return;
-
-		s_controller_mapped = true;
 		VMManager::ReloadInputBindings(true);
-		std::fprintf(stderr, "ps2n-host: the first controller has the pad in port 1 (%u inputs), beside the keyboard\n", mapped);
+		ps2n::host::session::NoteConnect(s_frames, 1);
+		std::fprintf(stderr, "ps2n-host: a controller put into port 2 at frame %u, for a second player\n", s_frames);
+	}
+
+	// Gives the controllers connected since the last frame to the players
+	// (host/menu.h, GiveController; docs/adr/0064): the first to player 1,
+	// beside the keyboard, where the controls are the defaults, as before; the
+	// next to player 2, whose controller is then put into port 2. Each gets the
+	// mapping PCSX2 would make for it automatically. Those connected together
+	// in the order of their numbers ("SDL-0" before "SDL-1"). CPU thread,
+	// between two frames.
+	void GiveControllers()
+	{
+		std::vector<std::string> devices;
+		{
+			std::lock_guard lock(s_queue_mutex);
+			devices.swap(s_controllers_connected);
+		}
+		std::sort(devices.begin(), devices.end(),
+			[](const std::string& a, const std::string& b) { return a.size() != b.size() ? a.size() < b.size() : a < b; });
+		bool given = false;
+		for (const std::string& device : devices)
+		{
+			const std::vector<std::pair<std::string, std::string>> connected = InputManager::EnumerateDevices();
+			std::optional<ps2n::host::menu::Given> to;
+			{
+				std::unique_lock<std::mutex> lock = Host::GetSettingsLock();
+				to = ps2n::host::menu::GiveController(s_settings, device, connected);
+			}
+			if (to)
+			{
+				given = true;
+				std::fprintf(stderr, "ps2n-host: %s plays for player %u (%u inputs)%s\n", device.c_str(), to->port + 1, to->inputs,
+					to->port == 0 ? ", beside the keyboard" : "");
+			}
+		}
+		if (given)
+			VMManager::ReloadInputBindings(true);
+		ps2n::host::ConnectSecondControllerIfPlayed();
+		ps2n::host::menu::Refresh();
 	}
 
 	// Writes the picture the GS has on display, at the internal resolution,
@@ -3726,13 +3786,46 @@ void ps2n::host::OnSettingsLoaded()
 
 void ps2n::host::OnInputDeviceConnected(std::string_view identifier)
 {
-	// Only the first controller, and only when someone is playing. Not at
-	// once: the core may be holding its settings. Between two frames.
-	if (!s_options.window || identifier != "SDL-0")
+	// Controllers, and only when someone is playing. Not at once: the core may
+	// be holding its settings. Between two frames, with those connected
+	// meanwhile (GiveControllers).
+	if (!s_options.window || identifier == "Keyboard" || identifier == "Mouse")
 		return;
 
 	std::lock_guard lock(s_queue_mutex);
-	s_queue.push_back([]() { MapFirstController(); });
+	if (s_controllers_connected.empty())
+		s_queue.push_back([]() { GiveControllers(); });
+	s_controllers_connected.emplace_back(identifier);
+}
+
+void ps2n::host::OnInputDeviceDisconnected()
+{
+	// The menu, where it is open, no longer offers it. Between two frames.
+	if (!s_options.window)
+		return;
+	std::lock_guard lock(s_queue_mutex);
+	s_queue.push_back([]() { ps2n::host::menu::Refresh(); });
+}
+
+void ps2n::host::ConnectSecondControllerIfPlayed()
+{
+	// Only where someone is playing: a session run again has its controller
+	// put in where the session had it (OnGuestFrame).
+	if (s_port2_connected || !s_options.window)
+		return;
+	const std::vector<std::pair<std::string, std::string>> connected = InputManager::EnumerateDevices();
+	bool played = false;
+	{
+		std::unique_lock<std::mutex> lock = Host::GetSettingsLock();
+		played = ps2n::host::menu::PlaysWithSomething(s_settings, 1, connected);
+	}
+	if (played)
+		ConnectSecondController();
+}
+
+bool ps2n::host::SecondControllerConnected()
+{
+	return s_port2_connected;
 }
 
 // What the processors have done since the start, and how much of it was
@@ -3940,6 +4033,12 @@ void ps2n::host::OnGuestFrame()
 	if (s_stop_requested || s_options.selftest)
 		return;
 
+	// Player 2's own keys, kept with the controls (host/menu.h): a controller
+	// put into port 2 for them at the first frame (docs/adr/0064). Controllers
+	// come later, as the core finds them (GiveControllers).
+	if (s_options.window && s_frames == 1)
+		ps2n::host::ConnectSecondControllerIfPlayed();
+
 	// Esc in the window: the menu over the game, the machine held while it is
 	// open (HoldForMenu).
 	if (s_options.window && ps2n::host::menu::Requested() && !s_close_requested.load())
@@ -3953,8 +4052,15 @@ void ps2n::host::OnGuestFrame()
 		Pad::SetControllerState(0, event.input, event.value);
 	}
 
-	// A session run again: the controller as the session had it from this frame on,
-	// and the game rebooted where the session rebooted it (HoldForMenu).
+	// A session run again: a controller put into port 2 where the session had
+	// one put in (docs/adr/0064), the controllers as the session had them from
+	// this frame on, and the game rebooted where the session rebooted it
+	// (HoldForMenu).
+	while (const std::optional<u32> port = ps2n::host::session::ConnectAt(s_frames))
+	{
+		if (*port == 1)
+			ConnectSecondController();
+	}
 	ps2n::host::session::ApplyInput(s_frames);
 	if (ps2n::host::session::RebootAt(s_frames))
 		VMManager::Reset(); // running: only marks the machine to be reset

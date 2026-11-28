@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <iterator>
 #include <map>
 #include <utility>
 
@@ -30,6 +31,12 @@ namespace ps2n::host::session
 		// How often the registers' fingerprint is written down, in frames.
 		constexpr uint32_t kFingerprintEvery = 50;
 
+		// The controller ports written down: port 1, and port 2 where a second
+		// player had a controller put in (docs/adr/0064). Each port's lines are
+		// called by its word: "pad", "pad2".
+		constexpr uint32_t kPorts = 2;
+		constexpr const char* kPadWords[kPorts] = {"pad", "pad2"};
+
 		// The bytes PCSX2's input recording keeps of a DualShock 2, in its order
 		// (pcsx2/Recording/PadData.cpp): the buttons (pressed is 0), the right
 		// stick, the left stick, and the pressure of right, left, up, down,
@@ -39,9 +46,10 @@ namespace ps2n::host::session
 		std::FILE* s_record = nullptr;
 		std::string s_record_path;
 		Clock s_record_clock{};
-		PadBytes s_last{};
-		bool s_have_last = false;
-		uint32_t s_changes = 0;
+		std::array<PadBytes, kPorts> s_last{};
+		std::array<bool, kPorts> s_have_last{};
+		std::array<uint32_t, kPorts> s_changes{};
+		std::optional<uint32_t> s_connected_at; // the frame a controller was put into port 2 at
 		uint32_t s_written_fingerprints = 0;
 		uint32_t s_written_reboots = 0;
 		// How many of the session's frames the console showed at 50 a second
@@ -55,19 +63,27 @@ namespace ps2n::host::session
 		// a game's run need not repeat (its record says so: "vu-thread on").
 		bool s_replay_vu_thread = false;
 		std::string s_replay_path;
-		std::vector<std::pair<uint32_t, PadBytes>> s_inputs;
+		struct Input
+		{
+			uint32_t frame;
+			uint32_t port; // 0 for port 1
+			PadBytes bytes;
+		};
+		std::vector<Input> s_inputs;
 		size_t s_next_input = 0;
 		std::vector<uint32_t> s_reboots; // the frames the session rebooted the game at, in order
 		size_t s_next_reboot = 0;
+		std::vector<std::pair<uint32_t, uint32_t>> s_connects; // the frames controllers were put in at, and the ports, in order
+		size_t s_next_connect = 0;
 		std::map<uint32_t, uint64_t> s_expected;
 		uint32_t s_compared = 0;
 		std::optional<uint32_t> s_parted_at;
 		uint64_t s_parted_expected = 0;
 		uint64_t s_parted_found = 0;
 
-		bool ReadPad(PadBytes* bytes)
+		bool ReadPad(uint32_t port, PadBytes* bytes)
 		{
-			PadBase* pad = Pad::GetPad(0);
+			PadBase* pad = Pad::GetPad(static_cast<u8>(port));
 			if (!pad || pad->GetType() != Pad::ControllerType::DualShock2)
 				return false;
 			const u32 buttons = pad->GetButtons();
@@ -181,7 +197,9 @@ namespace ps2n::host::session
 		std::fprintf(s_record,
 			"# A session in the window, written down to be run again (ps2n-host -record; host/session_record.h).\n"
 			"# <frame> pad <18 bytes>: what the controller in port 1 held from that frame on, as PCSX2's input\n"
-			"# recording keeps it. <frame> state <fingerprint>: the EE's and the IOP's registers at the start of\n"
+			"# recording keeps it; <frame> pad2 <18 bytes>, the same of the controller in port 2. <frame> connect 2:\n"
+			"# a controller was put into port 2 there, for a second player (empty until then, and throughout where\n"
+			"# no such line is). <frame> state <fingerprint>: the EE's and the IOP's registers at the start of\n"
 			"# that frame. <frame> reboot: the player rebooted the game there (the menu's Reboot), the machine\n"
 			"# reset once that frame's event test was over. The memory cards and the console's NVRAM as they\n"
 			"# were when the session began are beside this file. patches: the game's patches it was played\n"
@@ -275,12 +293,20 @@ namespace ps2n::host::session
 			else if (words.size() == 3)
 			{
 				const std::optional<u32> frame = StringUtil::FromChars<u32>(words[0]);
-				if (frame && words[1] == "pad")
+				const auto port = std::find(std::begin(kPadWords), std::end(kPadWords), words[1]);
+				if (frame && port != std::end(kPadWords))
 				{
 					PadBytes bytes;
 					good = ParseHex(words[2], &bytes);
 					if (good)
-						s_inputs.emplace_back(*frame, bytes);
+						s_inputs.push_back({*frame, static_cast<uint32_t>(port - std::begin(kPadWords)), bytes});
+				}
+				else if (frame && words[1] == "connect")
+				{
+					// Port 2 only: port 1 always has its controller.
+					good = words[2] == "2";
+					if (good)
+						s_connects.emplace_back(*frame, 1u);
 				}
 				else if (frame && words[1] == "state")
 				{
@@ -298,8 +324,9 @@ namespace ps2n::host::session
 			}
 		}
 
-		std::stable_sort(s_inputs.begin(), s_inputs.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+		std::stable_sort(s_inputs.begin(), s_inputs.end(), [](const Input& a, const Input& b) { return a.frame < b.frame; });
 		std::sort(s_reboots.begin(), s_reboots.end());
+		std::sort(s_connects.begin(), s_connects.end());
 		s_replay_path = path;
 		s_replaying = true;
 		return true;
@@ -327,14 +354,18 @@ namespace ps2n::host::session
 					break;
 			}
 
-			// Taken in at the previous frame boundary, read by the game since.
-			PadBytes now;
-			if (ReadPad(&now) && (!s_have_last || now != s_last))
+			// Taken in at the previous frame boundary, read by the game since: of
+			// each port that has a controller.
+			for (uint32_t port = 0; port < kPorts; port++)
 			{
-				std::fprintf(s_record, "%u pad %s\n", frame - 1, Hex(now).c_str());
-				s_last = now;
-				s_have_last = true;
-				s_changes++;
+				PadBytes now;
+				if (ReadPad(port, &now) && (!s_have_last[port] || now != s_last[port]))
+				{
+					std::fprintf(s_record, "%u %s %s\n", frame - 1, kPadWords[port], Hex(now).c_str());
+					s_last[port] = now;
+					s_have_last[port] = true;
+					s_changes[port]++;
+				}
 			}
 			if (frame % kFingerprintEvery == 0)
 			{
@@ -364,12 +395,32 @@ namespace ps2n::host::session
 
 	void ApplyInput(uint32_t frame)
 	{
-		while (s_replaying && s_next_input < s_inputs.size() && s_inputs[s_next_input].first <= frame)
+		while (s_replaying && s_next_input < s_inputs.size() && s_inputs[s_next_input].frame <= frame)
 		{
-			const std::array<u8, 18>& bytes = s_inputs[s_next_input].second;
-			PadData(0, 0, bytes).OverrideActualController();
+			const Input& input = s_inputs[s_next_input];
+			// (A port with no DualShock 2 in it has nothing to take them: only a
+			// file not written by a session would give it some.)
+			const PadBase* pad = Pad::GetPad(static_cast<u8>(input.port));
+			if (pad && pad->GetType() == Pad::ControllerType::DualShock2)
+				PadData(static_cast<int>(input.port), 0, input.bytes).OverrideActualController();
 			s_next_input++;
 		}
+	}
+
+	void NoteConnect(uint32_t frame, uint32_t port)
+	{
+		if (!s_record)
+			return;
+		std::fprintf(s_record, "%u connect %u\n", frame, port + 1);
+		if (port == 1 && !s_connected_at)
+			s_connected_at = frame;
+	}
+
+	std::optional<uint32_t> ConnectAt(uint32_t frame)
+	{
+		if (!s_replaying || s_next_connect >= s_connects.size() || s_connects[s_next_connect].first > frame)
+			return std::nullopt;
+		return s_connects[s_next_connect++].second;
 	}
 
 	void NoteReboot(uint32_t frame)
@@ -404,28 +455,35 @@ namespace ps2n::host::session
 			std::fclose(s_record);
 			s_record = nullptr;
 			lines.push_back(fmt::format("ps2n-host: the session written down, to be run again: {} changes of the controller in "
-										"port 1 and {} fingerprints of the registers over {} frames{}, the console's clock from {} ({})",
-				s_changes, s_written_fingerprints, frames,
+										"port 1{} and {} fingerprints of the registers over {} frames{}, the console's clock from {} ({})",
+				s_changes[0],
+				s_connected_at ? fmt::format(", {} of the one in port 2, put in at frame {},", s_changes[1], *s_connected_at) : std::string(),
+				s_written_fingerprints, frames,
 				s_written_reboots ? fmt::format(", {} reboots", s_written_reboots) : std::string(), FormatClock(s_record_clock),
 				s_record_path));
 		}
 		if (s_replaying)
 		{
+			// The controller in port 2, where the session had one put in.
+			const std::string second = s_connects.empty() ?
+										   std::string() :
+										   fmt::format("s, the one in port 2 put in at frame {} as the session had it,", s_connects.front().first);
 			if (s_parted_at)
 			{
-				lines.push_back(fmt::format("ps2n-host: the replay of {}: {} states of the controller given back; the run is the "
+				lines.push_back(fmt::format("ps2n-host: the replay of {}: {} states of the controller{} given back; the run is the "
 											"session at {} fingerprints and parts from it at frame {} (fingerprint {:016X}, the "
 											"session's {:016X}){}",
-					s_replay_path, s_next_input, s_compared, *s_parted_at, s_parted_found, s_parted_expected,
+					s_replay_path, s_next_input, second, s_compared, *s_parted_at, s_parted_found, s_parted_expected,
 					s_replay_vu_thread ? "; the session was played with VU1 on PCSX2's VU thread, where a run need not repeat" :
 					THREAD_VU1         ? "; this run has VU1 on PCSX2's VU thread, where a run need not repeat" :
 										 ""));
 			}
 			else
 			{
-				lines.push_back(fmt::format("ps2n-host: the replay of {}: {} states of the controller given back{}; the run is the "
+				lines.push_back(fmt::format("ps2n-host: the replay of {}: {} states of the controller{} given back{}; the run is the "
 											"session at every one of {} fingerprints compared, of the {} written down",
-					s_replay_path, s_next_input, s_reboots.empty() ? std::string() : fmt::format(", {} of {} reboots", s_next_reboot, s_reboots.size()),
+					s_replay_path, s_next_input, second,
+					s_reboots.empty() ? std::string() : fmt::format(", {} of {} reboots", s_next_reboot, s_reboots.size()),
 					s_compared, s_expected.size()));
 			}
 		}

@@ -6220,3 +6220,125 @@ The maintainer's answers: "1. Yes", "2. Yes", "3. Yes", "4. No" (ADR 0063).
   count their profiles once more after their next session of 3 minutes, as
   both were waiting to before this update. The other folders have no counts.
 - **Jak and Daxter's 3%** is not looked into further, at the maintainer's word.
+
+## A second controller (ADR 0064)
+
+### Built (2026-11-28)
+
+At the maintainer's words ("Can you add 2 controllers support? I think
+currently we only support 1 controller but I could be wrong"). Until then port 2
+was empty, as PCSX2 has it by default; only the controller called `SDL-0` was
+given to port 1; the menu set port 1's controls only; and a session kept port
+1's controller only, which is why ADR 0060 had left a second player out.
+
+- **Port 2's controller** (`host/main.cpp`, `ConnectSecondController`): put in
+  between two frames as PCSX2 puts one in when a port's type changes while a
+  game runs. The type goes into the core's settings and its configuration
+  (`Pad2/Type`, `EmuConfig.Pad.Ports[1]`), then `Pad::LoadConfig` makes the
+  DualShock 2 with PCSX2's 50 "eject ticks", so that the console sees one
+  plugged in; then the bindings are loaded again.
+  - In the settings too: the core reads the ports' types from them again when
+    a game's executable starts (`VMManager::ApplyCoreSettings`), and binds a
+    port's inputs only where it takes a controller to be there
+    (`InputManager::AddPadBindings`).
+  - When: at the first frame, where player 2's own keys came with the
+    controls; when a controller player 2 plays with connects; when the menu
+    gives player 2 something to play with. Port 2 is set empty when the machine
+    starts, whatever the controls say, so that each of those is a moment a
+    session writes down. It stays until the run ends.
+- **Controllers given out** (`GiveControllers`, `menu::GiveController`):
+  those connected since the last frame, at the next, in the order of their
+  numbers. One that a player's controls already name is theirs. Otherwise:
+  player 1's, beside the keys, where the controls are the defaults and player 1
+  has no controller connected; player 2's, where player 1 plays with another
+  controller that is connected and player 2 with none. Each gets the mapping
+  PCSX2 makes for it (`GetGenericBindingMapping`) and its motors. Any
+  controller now, where only `SDL-0` was before.
+- **The menu** (`host/menu.cpp`):
+  - "Player 1" and "Player 2" at the top of the Controls page; the page shows
+    and sets the one chosen, player 1 each time the menu opens. A controller's
+    L1 and R1 go from one to the other.
+  - "Play with" lines name the player each controller plays for.
+  - For player 2 before port 2 has its controller, the page says what is
+    missing: "Player 2 has nothing to play with yet. Give them a controller
+    below, or keys: the game sees a second controller from then on."
+  - An input, and a controller, play for one player at a time: a key or button
+    set for one is taken from the other's controls (`TakeFromOther`), and a
+    controller chosen to play for one is taken from the other
+    (`TakeController`).
+  - "Default controls" puts back PCSX2's keys for player 1 and nothing for
+    player 2, and gives out the controllers connected again in order.
+  - The page is shown again when a controller connects or goes while the menu
+    is open (`menu::Refresh`); before, it showed them as they were when it
+    opened.
+- **Player 2's controls kept:** read and written as a DualShock 2's whatever
+  the settings say port 2 holds, since `Pad::CopyConfiguration` copies only
+  the inputs of the type they name. The file calls port 2 a DualShock 2's where
+  player 2 has any input.
+- **A session** (`host/session_record.cpp`):
+  - `<frame> connect 2` where port 2 got its controller, `<frame> pad2 <18
+    bytes>` for its changes.
+  - A run of it again puts the controller in at that frame (`session::ConnectAt`,
+    in `OnGuestFrame`), before giving the controllers their states.
+    `PadData` gives port 2 its bytes as it gives port 1 its own.
+  - The run's report says how many of port 2's changes were written down, and
+    at which frame it was put in; a replay's, that it was put in.
+- `ps2n-host -help` says so.
+
+### Checked (2026-11-28)
+
+On Windows, with the development tree's runtime (Agent Under Fire's code built
+in), each session in a window of 1280 by 720 on the measurement's hidden
+desktop, muted, on Direct3D 12 (`build\measure\players-64.ps1`).
+
+- **The menu:**
+  - Esc, Controls, Player 2: the page said that player 2 had nothing to play
+    with yet.
+  - Two keys set for player 2. The check meant Cross and Start; they went to
+    Circle and Select, because a controller connected to this computer added a
+    "Play with" line the steps had not counted.
+  - With the first key, the page said player 2's controller is connected to
+    the game from now on, and the session has `457 connect 2`. `controls.ini`
+    has `[Pad2]` with `Type = DualShock2` and the two keys.
+  - The two keys pressed in the game are in the session's `pad2` lines.
+  - Again with the final programs, the controls written beforehand with
+    player 1 on keys only: player 2's Cross set to K, which is player 1's
+    Cross key, and Start to N. K left player 1's Cross, as an input plays for
+    one player. The session has `439 connect 2`, and player 2's K and N
+    pressed in the game.
+- **A controller of the computer's:** an XInput controller connected to this
+  computer (`SDL-0`) was given to player 1 by the default controls, as a
+  player would have it. The checks after wrote the controls beforehand with
+  keys only, so that a check never makes it vibrate. docs/development.md says
+  so.
+- **Player 2's own keys at the start:** with the controls written beforehand,
+  player 2 on keys of their own, the controller went into port 2 at frame 1
+  (`1 connect 2`). Player 2's presses are in 13 `pad2` lines.
+- **Run again without a window** (`game.ps1 -Replay`), with the final
+  programs: the three sessions are the session at every fingerprint, 19 of 19,
+  20 of 20 and 13 of 13, compiled (`ps2n-static`) and on stock PCSX2's
+  recompilers (`stock-jit`) alike.
+- **The console reads port 2:** the second session run again with its
+  `connect 2` and `pad2` lines taken out parts from it at frame 200. With
+  them, it is the session throughout.
+- **Sessions written down before,** two of the menu's check of 2026-11-26 (982
+  and 988 frames, a reboot in each), run again with these programs: the
+  session at every one of 19 fingerprints, each.
+- **The games' own pages:** Agent Under Fire's language page and Gran Turismo
+  3's take player 1's controller only.
+  - On Gran Turismo 3's, played on stock PCSX2's recompilers, player 2's Down
+    pressed eight times did not move it; player 1's, once, did. On a console
+    too, many games read only the first controller in their menus.
+  - No game's mode for two players was reached in these checks: getting there
+    with keys sent blind, through the intro films, takes more runs than it was
+    worth. It is the maintainer's to try, with two controllers.
+- **Tests:** every test passes: on Windows 556, and 554 in the module tree;
+  on Linux, inside WSL, 556 and 553. The module trees have the same three
+  comparisons disabled; none skipped. Linux was built and tested only: its
+  window was not opened.
+- **The runtime's profile of play** no longer fits six of the host's functions
+  changed here: `OnGuestFrame`, `OnInputDeviceConnected`, and the session's
+  `LoadReplay`, `FrameStart`, `ApplyInput` and `Finish`. The module trees'
+  compiler says so, and compiles them without it. Each runs at most once a
+  frame, none is the game's code, and the next release makes the profile
+  again.

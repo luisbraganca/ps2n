@@ -115,6 +115,7 @@ void Host::OnInputDeviceConnected(const std::string_view identifier, const std::
 
 void Host::OnInputDeviceDisconnected(const InputBindingKey key, const std::string_view identifier)
 {
+	ps2n::host::OnInputDeviceDisconnected();
 }
 
 void Host::SetMouseMode(bool relative_mode, bool hide_cursor)

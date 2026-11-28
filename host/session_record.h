@@ -6,13 +6,15 @@
 // What the game reads of the controller in port 1 is written down frame by
 // frame, as PCSX2's own input recording takes it (pcsx2/Recording/PadData.cpp):
 // eighteen bytes, the buttons, the sticks and the pressure of each button that
-// has one. The core takes the controller in at a frame boundary (the host's
-// queue, a controller script, then the input devices, all in
-// VMManager::Internal::PollInputOnCPUThread), and the game reads it during the
-// frame that follows; so the state found at the start of frame n is the one
-// taken in at frame n - 1, and a replay gives it back there, exactly, through
-// PadData::OverrideActualController. Every 50 frames a fingerprint of the
-// EE's and the IOP's registers is written down too, so that a replay says
+// has one; and of the controller in port 2 the same, where a second player had
+// one put in (docs/adr/0064), with the frame it was put in at. The core takes
+// the controllers in at a frame boundary (the host's queue, a controller
+// script, then the input devices, all in
+// VMManager::Internal::PollInputOnCPUThread), and the game reads them during
+// the frame that follows; so the state found at the start of frame n is the
+// one taken in at frame n - 1, and a replay gives it back there, exactly,
+// through PadData::OverrideActualController. Every 50 frames a fingerprint of
+// the EE's and the IOP's registers is written down too, so that a replay says
 // whether, and from where, it is no longer the session.
 //
 // The file, input.txt in the session's folder (game.ps1 -Play makes one for
@@ -36,6 +38,13 @@
 //                                 and patch file are copied beside this file, and a
 //                                 replay runs packaged with them in its data folder
 //   41 pad FFFF7F7F7F7F00000000000000000000FF00   at frame 41, the 18 bytes
+//   120 connect 2                 at frame 120 a controller was put into port 2, for
+//                                 a second player (docs/adr/0064), as PCSX2 puts one in
+//                                 while a game runs; a replay puts one in at the same
+//                                 frame. Port 2 is empty until then: a session without
+//                                 such a line had it empty throughout
+//   121 pad2 FFFF7F7F7F7F00000000000000000000FF00 at frame 121, the 18 bytes of the
+//                                 controller in port 2
 //   50 state 0123456789ABCDEF     at the start of frame 50, the registers' fingerprint
 //   900 reboot                    at frame 900 the player rebooted the game (the
 //                                 menu's Reboot, docs/adr/0060): the machine reset once
@@ -102,9 +111,18 @@ namespace ps2n::host::session
 	/// fingerprint (replay).
 	void FrameStart(uint32_t frame);
 
-	/// After the frame's other input: a replay gives the controller what the
-	/// session had at this frame.
+	/// After the frame's other input: a replay gives the controllers what the
+	/// session had at this frame. After the controller put into port 2 at this
+	/// frame, where the session put one in (ConnectAt).
 	void ApplyInput(uint32_t frame);
+
+	/// A controller put into port `port` + 1 at `frame`, for a second player
+	/// (`port` 1; docs/adr/0064): written down (recording). And the ports a
+	/// session had a controller put into at `frame` (replay): one at each call,
+	/// nothing once there are no more. CPU thread, in the frame's place for
+	/// input.
+	void NoteConnect(uint32_t frame, uint32_t port);
+	std::optional<uint32_t> ConnectAt(uint32_t frame);
 
 	/// The player rebooted the game at `frame` (recording), and whether the
 	/// session rebooted it at `frame` (replay; true once). CPU thread, in the

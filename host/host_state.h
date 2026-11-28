@@ -26,6 +26,20 @@ namespace ps2n::host
 	/// CPU thread, possibly while the core holds its settings.
 	void OnInputDeviceConnected(std::string_view identifier);
 
+	/// The core has closed an input device (a controller disconnected). CPU
+	/// thread, possibly while the core holds its settings.
+	void OnInputDeviceDisconnected();
+
+	/// A controller put into port 2 for a second player (docs/adr/0064), where
+	/// player 2 has something to play with (a key, or a controller that is
+	/// connected) and none is there yet: as PCSX2 puts one in while a game
+	/// runs, written down in the session. There until the run ends. CPU thread,
+	/// between two frames, without the core's settings held.
+	void ConnectSecondControllerIfPlayed();
+
+	/// Whether port 2 has a controller in it. CPU thread.
+	bool SecondControllerConnected();
+
 	/// The core has read its settings into its configuration, a game's own
 	/// over the host's (while it holds them; again whenever they change, and
 	/// before it applies its game database to them). What the host decides

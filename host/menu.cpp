@@ -15,9 +15,16 @@
 // fullscreen interface does (BeginInputBinding in pcsx2/ImGui/FullscreenUI.cpp
 // of PCSX2 v2.9.198, Copyright 2002-2026 PCSX2 Dev Team, GPL-3.0+): an input
 // hook takes what is pressed, and the binding is made when it is let go.
+//
+// Two players (docs/adr/0064): player 1's controller is the one in port 1,
+// player 2's the one in port 2, which the runner puts in once player 2 has
+// something to play with (main.cpp, ConnectSecondController); the settings
+// call port 2 empty until then, and player 2's controls are a DualShock 2's
+// all the same. An input, and a controller, play for one player at a time.
 
 #include "menu.h"
 
+#include "host_state.h"
 #include "menu_sound.h"
 #include "window.h"
 
@@ -66,10 +73,9 @@ namespace ps2n::host::menu
 		// How long setting a control waits for something to be pressed.
 		constexpr auto kCaptureTime = std::chrono::seconds(5);
 
-		// The controller port the menu sets: the first, the one a session writes
-		// down (host/session_record.h). A second player's is not offered: a
-		// session with it could not be run again as itself.
-		constexpr u32 kPort = 0;
+		// The players, whose controllers are in ports 1 and 2; a session writes
+		// down both (host/session_record.h, docs/adr/0064).
+		constexpr u32 kPlayers = 2;
 
 		// ---- what the menu shows (the CPU thread makes it, the GS thread draws it) ----
 
@@ -88,13 +94,16 @@ namespace ps2n::host::menu
 		{
 			std::string id; // "SDL-0"
 			std::string name;
+			int player = -1; // the player it plays for (0 or 1), or -1
 		};
 
 		struct Shown
 		{
 			std::string title;
+			u32 player = 0; // whose controls the Controls page shows
+			bool port2 = false; // whether port 2 has its controller (player 2's)
 			std::vector<Row> rows;
-			std::string playing; // what the controller is played with
+			std::string playing; // what the player's controller is played with
 			std::vector<Device> controllers; // connected
 			int capturing = -1; // the row being set, or -1
 			Clock::time_point capture_until;
@@ -108,6 +117,7 @@ namespace ps2n::host::menu
 
 		std::string s_controls_path; // the controls file (LoadControls)
 		bool s_controls_own = false;
+		u32 s_player = 0; // whose controls the Controls page shows and sets: 0 player 1, 1 player 2
 		std::atomic<bool> s_requested{false};
 		std::atomic<bool> s_open{false}; // read by the window's thread too (IsOpen)
 		bool s_quit = false;
@@ -175,15 +185,23 @@ namespace ps2n::host::menu
 			return *Host::Internal::GetBaseSettingsLayer();
 		}
 
-		std::string Section()
+		// The settings' section of a player's controller: "Pad1", "Pad2".
+		std::string Section(u32 port)
 		{
-			return Pad::GetConfigSection(kPort);
+			return Pad::GetConfigSection(port);
 		}
 
-		const Pad::ControllerInfo* PadInfo(const SettingsInterface& si)
+		// What a player's controller is: the type the settings give its port (a
+		// DualShock 2 in port 1); player 2's a DualShock 2, the one put into port
+		// 2 once player 2 has something to play with, before it is there too
+		// (the settings call port 2 empty until then).
+		const Pad::ControllerInfo* PadInfo(const SettingsInterface& si, u32 port)
 		{
-			const std::string section = Section();
-			return Pad::GetConfigControllerType(si, section.c_str(), kPort);
+			const std::string section = Section(port);
+			const Pad::ControllerInfo* info = Pad::GetConfigControllerType(si, section.c_str(), port);
+			if (port == 1 && (!info || info->type == Pad::ControllerType::NotConnected))
+				return Pad::GetControllerInfo(Pad::ControllerType::DualShock2);
+			return info;
 		}
 
 		// The device a binding is on ("Keyboard", "SDL-0"), from its first part.
@@ -196,6 +214,125 @@ namespace ps2n::host::menu
 		bool IsKeyboard(std::string_view binding)
 		{
 			return DeviceOf(binding) == "Keyboard";
+		}
+
+		// A controller, not the keyboard or the pointer, which are always there.
+		bool IsController(std::string_view device)
+		{
+			return device != "Keyboard" && device != "Mouse" && !device.starts_with("Pointer");
+		}
+
+		bool IsConnected(std::string_view device, const Devices& connected)
+		{
+			return !IsController(device) ||
+				   std::any_of(connected.begin(), connected.end(), [device](const auto& d) { return d.first == device; });
+		}
+
+		// Each of a player's inputs, the motors left out, with its bindings.
+		template <typename F>
+		void ForEachInput(const SettingsInterface& si, u32 port, F&& f)
+		{
+			const Pad::ControllerInfo* info = PadInfo(si, port);
+			if (!info)
+				return;
+			const std::string section = Section(port);
+			for (const InputBindingInfo& bi : info->bindings)
+			{
+				if (bi.bind_type != InputBindingInfo::Type::Motor)
+					f(bi, si.GetStringList(section.c_str(), bi.name));
+			}
+		}
+
+		// Whether a player's controls have any input at all.
+		bool HasAnyInput(const SettingsInterface& si, u32 port)
+		{
+			bool found = false;
+			ForEachInput(si, port, [&](const InputBindingInfo&, const std::vector<std::string>& bindings) { found = found || !bindings.empty(); });
+			return found;
+		}
+
+		// Whether a player's controls have an input on `device`.
+		bool Names(const SettingsInterface& si, u32 port, std::string_view device)
+		{
+			bool found = false;
+			ForEachInput(si, port, [&](const InputBindingInfo&, const std::vector<std::string>& bindings) {
+				found = found || std::any_of(bindings.begin(), bindings.end(), [device](const std::string& b) { return DeviceOf(b) == device; });
+			});
+			return found;
+		}
+
+		// Whether a player plays with a controller: one their controls have an
+		// input on, other than `except`; only one that is connected where
+		// `connected` is given.
+		bool PlaysWithController(const SettingsInterface& si, u32 port, const Devices* connected, std::string_view except = {})
+		{
+			bool found = false;
+			ForEachInput(si, port, [&](const InputBindingInfo&, const std::vector<std::string>& bindings) {
+				for (const std::string& binding : bindings)
+				{
+					const std::string_view device = DeviceOf(binding);
+					if (IsController(device) && device != except && (!connected || IsConnected(device, *connected)))
+						found = true;
+				}
+			});
+			return found;
+		}
+
+		// Every input of a player's controls, its motors among them, gone.
+		void ClearPlayer(SettingsInterface& si, u32 port)
+		{
+			const Pad::ControllerInfo* info = PadInfo(si, port);
+			if (!info)
+				return;
+			const std::string section = Section(port);
+			for (const InputBindingInfo& bi : info->bindings)
+				si.DeleteValue(section.c_str(), bi.name);
+		}
+
+		// Player 2's controls copied as a DualShock 2's, whatever the settings
+		// say port 2 holds (Pad::CopyConfiguration copies the inputs of the type
+		// they say only).
+		void CopyPlayer2(SettingsInterface& to, const SettingsInterface& from)
+		{
+			const std::string section = Section(1);
+			for (const InputBindingInfo& bi : Pad::GetControllerInfo(Pad::ControllerType::DualShock2)->bindings)
+				to.CopyStringListValue(from, section.c_str(), bi.name);
+		}
+
+		// An input plays for one player: `binding` given to `port`'s, taken from
+		// the other's.
+		void TakeFromOther(SettingsInterface& si, u32 port, const std::string& binding)
+		{
+			const u32 other = (port == 0) ? 1 : 0;
+			const std::string section = Section(other);
+			ForEachInput(si, other, [&](const InputBindingInfo& bi, std::vector<std::string> bindings) {
+				if (std::erase(bindings, binding) == 0)
+					return;
+				if (bindings.empty())
+					si.DeleteValue(section.c_str(), bi.name);
+				else
+					si.SetStringList(section.c_str(), bi.name, bindings);
+			});
+		}
+
+		// A controller plays for one player: `device`'s inputs and motors taken
+		// from `port`'s.
+		void TakeController(SettingsInterface& si, u32 port, std::string_view device)
+		{
+			const std::string section = Section(port);
+			ForEachInput(si, port, [&](const InputBindingInfo& bi, std::vector<std::string> bindings) {
+				if (std::erase_if(bindings, [device](const std::string& b) { return DeviceOf(b) == device; }) == 0)
+					return;
+				if (bindings.empty())
+					si.DeleteValue(section.c_str(), bi.name);
+				else
+					si.SetStringList(section.c_str(), bi.name, bindings);
+			});
+			for (const char* motor : {"LargeMotor", "SmallMotor"})
+			{
+				if (DeviceOf(si.GetStringValue(section.c_str(), motor)) == device)
+					si.DeleteValue(section.c_str(), motor);
+			}
 		}
 
 		// What a binding looks like: a key's name, a controller's button as its
@@ -221,11 +358,11 @@ namespace ps2n::host::menu
 		}
 
 		// The vibration of the port given to `device`, where it has motors.
-		void SetMotors(SettingsInterface& si, const Pad::ControllerInfo& info, std::string_view device)
+		void SetMotors(SettingsInterface& si, const Pad::ControllerInfo& info, u32 port, std::string_view device)
 		{
 			if (info.vibration_caps != Pad::VibrationCapabilities::LargeSmallMotors)
 				return;
-			const std::string section = Section();
+			const std::string section = Section(port);
 			const InputManager::GenericInputBindingMapping mapping = InputManager::GetGenericBindingMapping(device);
 			const std::string* large = Mapped(mapping, GenericInputBinding::LargeMotor);
 			const std::string* small = Mapped(mapping, GenericInputBinding::SmallMotor);
@@ -241,6 +378,8 @@ namespace ps2n::host::menu
 		{
 			Shown shown;
 			shown.title = s_title;
+			shown.player = s_player;
+			shown.port2 = ps2n::host::SecondControllerConnected();
 			shown.capturing = s_capture.row;
 			shown.capture_until = s_capture.until;
 			shown.own = s_controls_own;
@@ -259,19 +398,27 @@ namespace ps2n::host::menu
 			};
 			for (const auto& [device, name] : devices)
 			{
-				if (device != "Keyboard" && device != "Mouse")
+				if (IsController(device))
 					shown.controllers.push_back({device, name});
 			}
 
 			// Each input's bindings, and the devices the controls are on, in their
-			// order.
+			// order; and which player each controller connected plays for.
 			std::vector<std::pair<Row, std::vector<std::string>>> inputs;
 			std::vector<std::string> used;
 			{
 				auto lock = Host::GetSettingsLock();
 				SettingsInterface& si = Base();
-				const std::string section = Section();
-				if (const Pad::ControllerInfo* info = PadInfo(si))
+				for (Device& device : shown.controllers)
+				{
+					for (u32 port = 0; port < kPlayers && device.player < 0; port++)
+					{
+						if (Names(si, port, device.id))
+							device.player = static_cast<int>(port);
+					}
+				}
+				const std::string section = Section(s_player);
+				if (const Pad::ControllerInfo* info = PadInfo(si, s_player))
 				{
 					for (const InputBindingInfo& bi : info->bindings)
 					{
@@ -395,6 +542,12 @@ namespace ps2n::host::menu
 			{
 				auto lock = Host::GetSettingsLock();
 				Pad::CopyConfiguration(&ini, Base(), true, true, false);
+				// Player 2's, whether or not port 2 has its controller yet; port 2
+				// named a DualShock 2's where player 2 has any (the runner puts it in
+				// once the game runs: LoadControls).
+				CopyPlayer2(ini, Base());
+				ini.SetStringValue(Section(1).c_str(), "Type",
+					Pad::GetControllerInfo(HasAnyInput(Base(), 1) ? Pad::ControllerType::DualShock2 : Pad::ControllerType::NotConnected)->name);
 			}
 			if (ini.Save())
 			{
@@ -407,17 +560,24 @@ namespace ps2n::host::menu
 			}
 		}
 
-		// Controls changed: the core takes them at once, and they are kept.
+		// Controls changed: the core takes them at once, and they are kept. Where
+		// player 2 now has something to play with, a controller is put into port
+		// 2 for them (between two frames: the machine is held between two while
+		// the menu is open).
 		void Changed()
 		{
+			const bool before = ps2n::host::SecondControllerConnected();
+			ps2n::host::ConnectSecondControllerIfPlayed();
 			VMManager::ReloadInputBindings(true);
 			SaveControls();
+			if (!before && ps2n::host::SecondControllerConnected())
+				s_message += " Player 2's controller is connected to the game from now on.";
 			PostShown();
 		}
 
 		const InputBindingInfo* RowInfo(const SettingsInterface& si, int row)
 		{
-			const Pad::ControllerInfo* info = PadInfo(si);
+			const Pad::ControllerInfo* info = PadInfo(si, s_player);
 			if (!info || row < 0)
 				return nullptr;
 			int index = 0;
@@ -432,29 +592,31 @@ namespace ps2n::host::menu
 		}
 
 		// `binding` in the place of what the row had of its kind (the keyboard's,
-		// or controllers').
+		// or controllers'), for the player shown; taken from the other player,
+		// where it was one of theirs.
 		void SetBinding(int row, const std::string& binding)
 		{
 			{
 				auto lock = Host::GetSettingsLock();
 				SettingsInterface& si = Base();
 				const InputBindingInfo* bi = RowInfo(si, row);
-				const Pad::ControllerInfo* info = PadInfo(si);
+				const Pad::ControllerInfo* info = PadInfo(si, s_player);
 				if (!bi || !info)
 					return;
-				const std::string section = Section();
+				const std::string section = Section(s_player);
 				const bool keyboard = IsKeyboard(binding);
 				std::vector<std::string> list = si.GetStringList(section.c_str(), bi->name);
 				std::erase_if(list, [keyboard](const std::string& b) { return IsKeyboard(b) == keyboard; });
 				list.push_back(binding);
 				si.SetStringList(section.c_str(), bi->name, list);
+				TakeFromOther(si, s_player, binding);
 
 				// A controller given a control by hand also vibrates, where nothing
 				// does yet.
 				if (!keyboard && si.GetStringValue(section.c_str(), "LargeMotor").empty() &&
 					si.GetStringValue(section.c_str(), "SmallMotor").empty())
 				{
-					SetMotors(si, *info, DeviceOf(binding));
+					SetMotors(si, *info, s_player, DeviceOf(binding));
 				}
 			}
 			Changed();
@@ -468,7 +630,7 @@ namespace ps2n::host::menu
 				const InputBindingInfo* bi = RowInfo(si, row);
 				if (!bi)
 					return;
-				const std::string section = Section();
+				const std::string section = Section(s_player);
 				std::vector<std::string> list = si.GetStringList(section.c_str(), bi->name);
 				const size_t before = list.size();
 				std::erase_if(list, [keyboard](const std::string& b) { return IsKeyboard(b) == keyboard; });
@@ -482,17 +644,45 @@ namespace ps2n::host::menu
 			Changed();
 		}
 
-		// The controller `device` plays: its inputs are the mapping PCSX2 makes
-		// for it, in the place of other controllers'; the keys stay.
+		// Gives `device` the controller of `port`'s player beside what is there:
+		// the mapping PCSX2 would make for it automatically, its motors for the
+		// vibration. With the core's settings held. Returns the inputs mapped.
+		u32 AddController(SettingsInterface& si, u32 port, std::string_view device)
+		{
+			const Pad::ControllerInfo* info = PadInfo(si, port);
+			if (!info)
+				return 0;
+			const std::string section = Section(port);
+			const InputManager::GenericInputBindingMapping mapping = InputManager::GetGenericBindingMapping(device);
+			u32 mapped = 0;
+			for (const InputBindingInfo& bi : info->bindings)
+			{
+				if (bi.generic_mapping == GenericInputBinding::Unknown || bi.bind_type == InputBindingInfo::Type::Motor)
+					continue;
+				if (const std::string* binding = Mapped(mapping, bi.generic_mapping))
+				{
+					si.AddToStringList(section.c_str(), bi.name, binding->c_str());
+					mapped++;
+				}
+			}
+			if (mapped > 0)
+				SetMotors(si, *info, port, device);
+			return mapped;
+		}
+
+		// The controller `device` plays the shown player's: its inputs are the
+		// mapping PCSX2 makes for it, in the place of other controllers'; the
+		// keys stay. Taken from the other player, where it was theirs.
 		void UseController(const std::string& device)
 		{
 			{
 				auto lock = Host::GetSettingsLock();
 				SettingsInterface& si = Base();
-				const Pad::ControllerInfo* info = PadInfo(si);
+				const Pad::ControllerInfo* info = PadInfo(si, s_player);
 				if (!info)
 					return;
-				const std::string section = Section();
+				TakeController(si, (s_player == 0) ? 1 : 0, device);
+				const std::string section = Section(s_player);
 				const InputManager::GenericInputBindingMapping mapping = InputManager::GetGenericBindingMapping(device);
 				for (const InputBindingInfo& bi : info->bindings)
 				{
@@ -509,32 +699,54 @@ namespace ps2n::host::menu
 				}
 				si.DeleteValue(section.c_str(), "LargeMotor");
 				si.DeleteValue(section.c_str(), "SmallMotor");
-				SetMotors(si, *info, device);
+				SetMotors(si, *info, s_player, device);
 			}
 			Changed();
 		}
 
-		// PCSX2's keys again, and the first controller beside them, as when the
-		// game had no controls of its own; the file goes.
+		// PCSX2's keys again for player 1, nothing for player 2, and the
+		// controllers connected given out again as when they connected: the
+		// first to player 1, beside the keys, the next to player 2 (as when the
+		// game had no controls of its own); the file goes. A controller in port 2
+		// stays there, as it does until the game ends.
 		void DefaultControls()
 		{
 			MemorySettingsInterface defaults;
 			Pad::SetDefaultControllerConfig(defaults);
 			{
 				auto lock = Host::GetSettingsLock();
+				ClearPlayer(Base(), 1);
 				Pad::CopyConfiguration(&Base(), defaults, true, true, false);
+				if (ps2n::host::SecondControllerConnected())
+					Base().SetStringValue(Section(1).c_str(), "Type", Pad::GetControllerInfo(Pad::ControllerType::DualShock2)->name);
 			}
-			const std::vector<std::pair<std::string, std::string>> devices = InputManager::EnumerateDevices();
-			if (std::any_of(devices.begin(), devices.end(), [](const auto& d) { return d.first == "SDL-0"; }))
+			s_controls_own = false;
+			Devices devices = InputManager::EnumerateDevices();
+			std::stable_sort(devices.begin(), devices.end(), [](const auto& a, const auto& b) {
+				return a.first.size() != b.first.size() ? a.first.size() < b.first.size() : a.first < b.first;
+			});
+			for (const auto& [device, name] : devices)
 			{
+				if (!IsController(device))
+					continue;
 				auto lock = Host::GetSettingsLock();
-				AddController(Base(), "SDL-0");
+				GiveController(Base(), device, devices);
 			}
+			ps2n::host::ConnectSecondControllerIfPlayed();
 			VMManager::ReloadInputBindings(true);
 			if (!s_controls_path.empty() && FileSystem::FileExists(s_controls_path.c_str()))
 				FileSystem::DeleteFilePath(s_controls_path.c_str());
-			s_controls_own = false;
 			s_message = "The default controls: the game starts with them.";
+			PostShown();
+		}
+
+		// The Controls page shows `player`'s controls (0 or 1), and sets them.
+		void SelectPlayer(u32 player)
+		{
+			if (player >= kPlayers || player == s_player)
+				return;
+			s_player = player;
+			s_message.clear();
 			PostShown();
 		}
 
@@ -1011,20 +1223,49 @@ namespace ps2n::host::menu
 			if (BeginPanel("##ps2n-controls", Px(880.0f), io.DisplaySize.y - Px(64.0f)))
 			{
 				const bool waiting = s_shown.capturing >= 0;
+				const u32 player = s_shown.player;
 				Text(28.0f, kWhite, "Controls");
-				Text(18.0f, kDim, s_shown.playing.empty() ? std::string("Nothing plays the controller.") :
-															 fmt::format("The controller is played with {}.", s_shown.playing),
-					true);
+				Gap(4.0f);
+
+				// The players: the one whose controls are shown, marked.
+				const float tab = std::floor((ImGui::GetContentRegionAvail().x - Px(8.0f)) * 0.5f);
+				for (u32 p = 0; p < kPlayers; p++)
+				{
+					if (p > 0)
+						ImGui::SameLine(0.0f, Px(8.0f));
+					const bool this_one = (p == player);
+					if (Item(fmt::format("##player-{}", p + 1).c_str(), fmt::format("Player {}", p + 1), {}, tab, this_one,
+							(waiting || this_one) ? std::nullopt : std::optional<Sound>(Sound::Choose)) &&
+						!waiting && !this_one)
+						Do([p]() { SelectPlayer(p); });
+				}
+				Gap(4.0f);
+				std::string said;
+				if (player == 1 && !s_shown.port2)
+				{
+					said = s_shown.playing.empty() ?
+							   std::string("Player 2 has nothing to play with yet. Give them a controller below, or keys: the game "
+										   "sees a second controller from then on.") :
+							   fmt::format("Player 2 plays with {}: the game sees a second controller once one of them is connected.",
+								   s_shown.playing);
+				}
+				else
+				{
+					said = s_shown.playing.empty() ? fmt::format("Nothing plays player {}'s controller.", player + 1) :
+													 fmt::format("Player {} plays with {}.", player + 1, s_shown.playing);
+				}
+				Text(18.0f, kDim, said, true);
 				Gap(8.0f);
 
-				// The controllers connected: one chosen plays with the mapping PCSX2
-				// makes for it.
+				// The controllers connected: one chosen plays the shown player's, with
+				// the mapping PCSX2 makes for it.
 				if (s_shown.controllers.empty())
 					Text(18.0f, kDim, "No controller is connected.");
 				for (const Device& device : s_shown.controllers)
 				{
-					if (Item(fmt::format("##use-{}", device.id).c_str(), fmt::format("Play with {}", device.name), device.id, 0.0f, false,
-							waiting ? std::nullopt : std::optional<Sound>(Sound::Choose)) &&
+					const std::string whose = (device.player < 0) ? device.id : fmt::format("Player {}'s", device.player + 1);
+					if (Item(fmt::format("##use-{}", device.id).c_str(), fmt::format("Play with {}", device.name), whose, 0.0f,
+							device.player == static_cast<int>(player), waiting ? std::nullopt : std::optional<Sound>(Sound::Choose)) &&
 						!waiting)
 						Do([id = device.id]() { UseController(id); });
 				}
@@ -1044,8 +1285,9 @@ namespace ps2n::host::menu
 				ImGui::PopStyleColor();
 				ImGui::PopFont();
 
-				// Under the table: what was last done (a line), the two items, the hint.
-				const float footer = Px(4.0f) + Px(24.0f) + Px(44.0f) + Px(6.0f) + Px(6.0f) + Px(22.0f) + Px(8.0f);
+				// Under the table: what was last done (a line), the two items, the hint
+				// (two lines).
+				const float footer = Px(4.0f) + Px(24.0f) + Px(44.0f) + Px(6.0f) + Px(6.0f) + Px(44.0f) + Px(8.0f);
 				const float rows_height = std::max(Px(120.0f), ImGui::GetContentRegionAvail().y - footer);
 				if (ImGui::BeginChild("##rows", ImVec2(0.0f, rows_height), ImGuiChildFlags_NavFlattened, 0))
 				{
@@ -1085,8 +1327,11 @@ namespace ps2n::host::menu
 				ImGui::SameLine(0.0f, Px(8.0f));
 				if (Item("##back", "Back", {}, half, false, std::nullopt) && !waiting)
 					Back();
-				Hint(waiting ? "Press a key, or a controller's button or stick, and let go. Esc: leave it as it is." :
-							   "Enter, Cross or a click: set it. Delete, Square or a right click: clear it. Esc or Circle: back.");
+				Hint(waiting ? fmt::format("Press a key, or a controller's button or stick, for player {}, and let go. Esc: leave it as "
+										   "it is.",
+								   player + 1) :
+							   std::string("Enter, Cross or a click: set it. Delete, Square or a right click: clear it. L1 or R1: the "
+										   "other player. Esc or Circle: back."));
 			}
 			EndPanel();
 		}
@@ -1142,6 +1387,15 @@ namespace ps2n::host::menu
 			if (s_shown.capturing < 0 && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
 				Back();
 
+			// On the Controls page its L1 and R1 show the other player's.
+			if (s_page == Page::Controls && s_shown.capturing < 0 &&
+				(ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false) || ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false)))
+			{
+				const u32 other = (s_shown.player == 0) ? 1 : 0;
+				sound::Play(Sound::Point);
+				Do([other]() { SelectPlayer(other); });
+			}
+
 			switch (s_page)
 			{
 				case Page::Main: DrawMain(); break;
@@ -1165,27 +1419,46 @@ namespace ps2n::host::menu
 		}
 	} // namespace
 
-	u32 AddController(SettingsInterface& si, std::string_view device)
+	std::optional<Given> GiveController(SettingsInterface& si, std::string_view device, const Devices& connected)
 	{
-		const Pad::ControllerInfo* info = PadInfo(si);
-		if (!info)
-			return 0;
-		const std::string section = Section();
-		const InputManager::GenericInputBindingMapping mapping = InputManager::GetGenericBindingMapping(device);
-		u32 mapped = 0;
-		for (const InputBindingInfo& bi : info->bindings)
+		if (!IsController(device))
+			return std::nullopt;
+		// Already a player's: theirs.
+		for (u32 port = 0; port < kPlayers; port++)
 		{
-			if (bi.generic_mapping == GenericInputBinding::Unknown || bi.bind_type == InputBindingInfo::Type::Motor)
-				continue;
-			if (const std::string* binding = Mapped(mapping, bi.generic_mapping))
-			{
-				si.AddToStringList(section.c_str(), bi.name, binding->c_str());
-				mapped++;
-			}
+			if (Names(si, port, device))
+				return std::nullopt;
 		}
-		if (mapped > 0)
-			SetMotors(si, *info, device);
-		return mapped;
+		// Player 1's, beside the keys, where the controls are the defaults and
+		// player 1 has no controller connected; player 2's, where player 1 plays
+		// with another that is, and player 2 with none.
+		std::optional<u32> port;
+		if (!s_controls_own && !PlaysWithController(si, 0, &connected, device))
+			port = 0;
+		else if (PlaysWithController(si, 0, &connected, device) && !PlaysWithController(si, 1, nullptr))
+			port = 1;
+		if (!port)
+			return std::nullopt;
+		const u32 inputs = AddController(si, *port, device);
+		if (inputs == 0)
+			return std::nullopt;
+		return Given{*port, inputs};
+	}
+
+	bool PlaysWithSomething(const SettingsInterface& si, u32 port, const Devices& connected)
+	{
+		bool found = false;
+		ForEachInput(si, port, [&](const InputBindingInfo&, const std::vector<std::string>& bindings) {
+			found = found ||
+					std::any_of(bindings.begin(), bindings.end(), [&connected](const std::string& b) { return IsConnected(DeviceOf(b), connected); });
+		});
+		return found;
+	}
+
+	void Refresh()
+	{
+		if (s_open)
+			PostShown();
 	}
 
 	bool LoadControls(SettingsInterface& si, const std::string& data_root)
@@ -1198,6 +1471,9 @@ namespace ps2n::host::menu
 		if (!ini.Load())
 			return false;
 		Pad::CopyConfiguration(&si, ini, true, true, false);
+		// Player 2's whatever port 2 is said to hold (the runner has it empty
+		// until a controller is put in for them: main.cpp).
+		CopyPlayer2(si, ini);
 		s_controls_own = true;
 		return true;
 	}
@@ -1332,6 +1608,7 @@ namespace ps2n::host::menu
 		s_reboot = false;
 		s_title = title;
 		s_message.clear();
+		s_player = 0;
 		{
 			std::lock_guard lock(s_actions_mutex);
 			s_actions.clear();

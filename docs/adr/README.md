@@ -26,7 +26,7 @@ The numbers are the records' own; each is in the list below.
 | Branding and the website | 0012, 0014 |
 | Commits, and sessions at work at once | 0018, 0020, 0021 |
 | The phases and their steps | Phase 3: 0009, 0015, 0016, 0017, 0018, 0019, 0022, 0023, 0024, 0026, 0027. Phase 4: 0028, 0033, 0036, 0037, 0038, 0041. Phase 5: 0053, 0061, 0062 |
-| How a game is shown and played | 0025 (the window's defaults, the patches), 0032 (the wizard goes through PCSX2's settings), 0035 and 0055 (the notice over the picture, the pace a session kept), 0039 (full screen), 0060 (the menu over the game) |
+| How a game is shown and played | 0025 (the window's defaults, the patches), 0032 (the wizard goes through PCSX2's settings), 0035 and 0055 (the notice over the picture, the pace a session kept), 0039 (full screen), 0060 (the menu over the game), 0064 (a second controller) |
 | The toolchain, a game's folder and its own compile | 0029, 0030, 0031, 0034, 0040, 0044, 0045, 0048, 0057 |
 | Speed | 0015, 0019, 0043, 0046, 0047, 0050, 0051, 0052 |
 | Linux | 0004, 0008, 0038, 0041 |
@@ -921,3 +921,22 @@ The numbers are the records' own; each is in the list below.
     on Windows, `build/PS2Native/games` inside WSL) given 0.5's programs; Jak
     and Daxter's compiled run on Windows, about 3% more than 0.4's, not looked
     into further.
+- [ADR 0064](0064-a-second-controller-for-a-second-player.md): the
+  maintainer's words of 2026-11-28, "Can you add 2 controllers support? I
+  think currently we only support 1 controller but I could be wrong".
+  - **A second player, in port 2:** a controller put into port 2 while the
+    game runs, as PCSX2 puts one in, once a second player has something to
+    play with (a second controller, or keys of their own); there until the
+    game ends. A game played by one player is as before, port 2 empty.
+  - **Controllers given out in the order they connect:** the first to player
+    1, beside the keys, as before; the second to player 2.
+  - **The menu's Controls page has both players,** each with its keys and
+    controller; an input, and a controller, play for one player at a time;
+    both kept with the controls in the game's folder.
+  - **A session keeps the second controller too** (`connect 2`, `pad2`
+    lines): a session played by two runs again as itself; one written down
+    before had port 2 empty and runs again so.
+  - The session's choices are listed in the ADR, for the maintainer to decide
+    otherwise.
+  - **The maintainer's answers** ("1. Yes", "2. Yes"): committed and pushed;
+    their game folders get these programs after the commit.
