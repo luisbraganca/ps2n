@@ -785,6 +785,13 @@ profiles of play: it is never deleted or cleaned whole.
 - **For one command of your own,** write it into a file in the scratch folder
   and run `wsl.exe -d Ubuntu-22.04 -- bash /mnt/c/<that file>`: a command line
   given to `wsl.exe` loses its quotes on the way.
+- **Space freed inside WSL stays in its disk file** until the file is
+  compacted. With nothing running there:
+  - `wsl.exe -d Ubuntu-22.04 -u root -- fstrim -av`;
+  - `wsl.exe --terminate Ubuntu-22.04`;
+  - `wsl.exe --manage Ubuntu-22.04 --compact`.
+
+  The file is `%LOCALAPPDATA%\wsl\{...}\ext4.vhdx` (ADR 0065).
 
 ## The maintainer's game folders brought up to date
 
@@ -793,9 +800,9 @@ programs the way a user's do, by the wizard (ADR 0048), and each is checked:
 `scripts\windows\update-games.ps1`, and `scripts/linux/update-games.sh`
 inside WSL. Their help has the parts.
 
-- **Which folders.** On Windows, those of `build\kit\games`; `SLES_505.39`
-  among them is an early check's and is left out (`-Except SLES_505.39`).
-  Inside WSL, those of `build/PS2Native/games`. Asked about "my game folders",
+- **Which folders.** On Windows, those of `build\kit\games`. Inside WSL, those
+  of `build/PS2Native/games`, where there have been none since Jak and
+  Daxter's was deleted (ADR 0065). Asked about "my game folders",
   say both places.
 - **Only at the maintainer's word,** and after the commit: the PS2Native
   folder is made from a tree with nothing left to commit, since its licences
@@ -812,7 +819,7 @@ inside WSL. Their help has the parts.
   toolchain from another by its files' sizes and times, and every link of the
   runtime writes the host's import library again.
 
-      & scripts\windows\hidden.ps1 -Script update-games.ps1 -Arguments '-Bios <BIOS image> -Except SLES_505.39' -Output build\measure\update-games.log
+      & scripts\windows\hidden.ps1 -Script update-games.ps1 -Arguments '-Bios <BIOS image>' -Output build\measure\update-games.log
       scripts\windows\wsl.ps1 -Script update-games.sh -Bios <BIOS image> -Log build\wsl\update-games.log
 
 ## Compiled games timed against stock PCSX2
@@ -897,7 +904,14 @@ What has gone wrong before:
   most of its code is interpreted, and it is slow. It is a check, not a
   timing.
 - **`build\release\PS2Native` is 0.1's own folder,** kept to try updates on. A
-  version's files are in `build\release\<version>`.
+  version's files are in `build\release\<version>`. Only the last release's
+  are kept: the game its download made, in `check`, is the next release's
+  `-Earlier` (ADR 0065).
+- **Jak and Daxter's timed session** is in `build\measure\sessions\jak`, since
+  the maintainer's folder of it was deleted (ADR 0065). It is the `-Session`
+  the downloads of 0.5 were tried with.
+- **The disc in another format** (`-Disc`, `--disc`) is Primal's `.chd`, in
+  `C:\ps2\primal`, since Silent Hill 3's was deleted (ADR 0065).
 - **GitHub shows a file's size in binary megabytes.**
 - **A correction to a published release's notes** is marked as a correction,
   and nothing else of the release is touched.

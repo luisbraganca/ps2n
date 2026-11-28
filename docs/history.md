@@ -794,3 +794,30 @@ their game folders were given its programs, the nine on Windows and the one
 inside WSL, each compiling its game again; where a session could be run again,
 its start was the session at every fingerprint compared. docs/app-log.md, "A
 second controller (ADR 0064)".
+
+That day the maintainer asked for space back: "Can you do some clean-up?
+Games, old tests that aren't used anymore...". They had finished Jak and Daxter
+and said its folder could go, unless their recordings were still used (ADR
+0065). What nothing read any more was deleted, folder by folder, on both
+systems:
+
+- the build trees of trials;
+- the files of 1,321 game runs;
+- 34 measurement folders that no list named;
+- releases 0.2 to 0.4.
+
+Two of their Jak and Daxter sessions were still used, for its timing and for
+the profile's training. They were kept, copied into the measurement folder,
+and its folders were deleted.
+
+Then they said that Silent Hill 3 could go too, "if it's not useful for tests";
+they were preparing Primal, also a `.chd`. Silent Hill 3 had been used only as
+the one `.chd` among their discs:
+
+- for a release's check that its runtime reads one;
+- for one of the profile's training runs.
+
+Primal's disc was read in its place, and Silent Hill 3 was deleted whole, its
+disc image among it. Free space on C: went from 258 GB to 470 GB, with WSL's
+disk file compacted from 64 GB to 35 GB. docs/app-log.md, "The project's files
+cleaned up (ADR 0065)".

@@ -6391,3 +6391,147 @@ controllers).
   controls of its own, so two controllers connected, before the game or while
   it plays, go to player 1 and player 2 in turn; or player 2's keys are set in
   the menu (Esc, Controls, Player 2).
+
+## The project's files cleaned up (ADR 0065)
+
+### What was deleted, and what was kept (2026-11-28)
+
+The maintainer's words: "Everything related to this project is taking a lot of
+space. Can you do some clean-up? Games, old tests that aren't used anymore...
+Also fyi, I finished Jak and Daxter 100% so, unless you still use my recordings
+for tests, you can delete it."
+
+- **What is still read was found first:**
+  - the scripts' defaults;
+  - the lists in the build tree: `build\measure\timed.txt` and
+    `build\pgo\training*.txt`, and inside WSL `build/timed.txt` and
+    `build/pgo/training*.txt`;
+  - the captures and profiles the build trees are configured with (their
+    `CMakeCache.txt`);
+  - docs/development.md's procedures.
+
+  Everything else in the build tree had been left by trials, measurements and
+  checks.
+- **Jak and Daxter's two sessions still in use** were copied to
+  `build\measure\sessions\jak`. Each file was compared with its original (its
+  SHA-256 and its time). The lists that named the originals now name the copies:
+  - `timed.txt` and `training-vut.txt` on Windows;
+  - `timed.txt` and `training-03.txt` inside WSL.
+
+  Then every disc, folder and session the lists name was found to be there.
+- **Deleted on Windows,** one folder at a time, at below-normal priority. Before
+  each one the deletion waited while a game was played; none was. Sizes are
+  counted from the files' sizes before (GB of 2^30 bytes, as Windows counts
+  them):
+
+| What | Counted |
+|---|---:|
+| 34 measurement folders no list names (`build\measure`: `kit` to `kit14`, `kit57`, `kit-new3`, `kit-wiz`, `jak57`, `jaklag`, `pace`, `syncdetail-clank`, `v01`, trials of updates and of profiles) | 95.5 GB |
+| Game runs' files in the development tree (`ps2n\tests\game`, 1,321 runs since 2026-11-10; `sync`, `sync-all`) | 43.9 GB |
+| Eleven build trees of trials (`windows-clang-imports`, `-rt-check`, `-vu0fix`, `-trial`, `-trial-prof`, `-trial-stock`, the three `-rpgo-` trees, and the two at v2.9.170) | 15.2 GB |
+| One-off checks and copies (`kit-for-others`, `kit-check`, `notice-folder`, `notice-replay`, `p43`, `release-check`, `trial`, three copies of PCSX2's source) | 6.0 GB |
+| Releases 0.2 to 0.4 and the rehearsal's files, and 0.1's two downloads, all of them on GitHub | 5.9 GB |
+| Seventeen old runs' folders in `build\game` | 0.9 GB |
+| Their Jak and Daxter folder | 0.9 GB |
+| `SLES_505.39`, an early check's folder in `build\kit\games` | 0.6 GB |
+| 344 old logs at the root of `build` | 0.01 GB |
+
+- **Free space on C:**
+  - 258.2 GB before;
+  - 439.8 GB after the first pass;
+  - 441.3 GB after their folder, the early check's and the logs;
+  - 461.3 GB at the end, after WSL's disk was compacted and the session's own
+    old scratch files (0.7 GB) were deleted.
+
+  The two passes gave 183.1 GB, 14 GB more than their counts add up to. Why
+  was not looked into.
+- **Deleted inside WSL,** by a script that stopped if anything of PS2Native ran
+  there (nothing did). Sizes are counted the same way:
+
+| What | Counted |
+|---|---:|
+| Releases 0.2 to 0.4 and the rehearsal's files, and 0.1's archive | 10.1 GB |
+| Folders of trials and checks (`v01`, `kit-linux-adr44`, `kit-linux-adr45`, `trial-update`, `update-trial`, `patch-01-before`, `pcsx2-trial`, `linux-variants`, `check-jak`, `window-check`, an archive of 0.1) | 7.0 GB |
+| Four build trees of trials (`linux-clang-rt-check`, `-rt-count`, `-trial`, `-trial-stock`) | 4.0 GB |
+| LLVM's download (the toolchain unpacked from it stays) | 1.8 GB |
+| `kit-linux`, the folder `kit.sh` makes when given none, made again by it | 1.7 GB |
+| Two measurement folders no list names (`kit-measure`'s `Jak and Daxter - The Precursor Legacy` and `jak-new`) | 1.6 GB |
+| Their Jak and Daxter folder | 0.8 GB |
+| 101 old logs at the root of `build` | 0.01 GB |
+
+- **Inside WSL,** 59 GB was used before and 32 GB after.
+- **WSL's disk file** then went from 63.9 GB to 35.8 GB, in four steps:
+  - `fstrim -av` as root told the virtual disk which of its blocks are free;
+  - the distribution was stopped. Nothing ran there but what this session's
+    own check had started;
+  - `wsl --manage Ubuntu-22.04 --compact` (WSL 3.0.5);
+  - WSL was looked at again. The clone was at `1993dc8` with nothing
+    differing from it, `git fsck --connectivity-only` found no fault, clang
+    22.1.3 ran, and the four build trees were there.
+- **Kept:**
+  - the trees in use, the captures they are built with, the profiles of play,
+    and the measurement folders the lists name (`build\measure\kit15`;
+    `build/kit-measure` inside WSL, but for the two above);
+  - the copies of the maintainer's memory cards each update made, 0.7 GB, with
+    Jak and Daxter's cards as they were in its folder
+    (`build\measure\update-games\saves`);
+  - 0.5's files, where the Jak and Daxter folder its download made is the next
+    release's `-Earlier`;
+  - 0.1's own folder;
+  - the old scripts of `build\measure`.
+
+  Outside the build tree nothing was touched:
+  - their discs, and the folders extracted from them, in `C:\ps2`, 45 GB then
+    (Silent Hill 3's disc image went later, below);
+  - the old project, 1.9 GB;
+  - `deps`, 3.9 GB.
+- **Their game folders now:** eight on Windows: 007 – Agent Under Fire, Agent
+  Under Fire, Gran Turismo 3, Killzone, Resident Evil – Code: Veronica X,
+  Secret Agent Clank, Silent Hill 3, SSX Tricky. None inside WSL.
+- **The default lists of training runs** (`build\pgo\training.txt` on both
+  systems) had named folders now deleted (`kit13`, and a folder of
+  `kit-measure`). They now hold the runs 0.4 and 0.5 were trained on, the
+  same as `training-vut.txt` and `training-03.txt`.
+
+### Silent Hill 3, and Primal's disc in its place (2026-11-28)
+
+The maintainer's words: "Also I don't think silent hill 3 is used by me, if
+it's not useful for tests, feel free to delete it. If you only use it because
+it's a different file type, don't worry I'm preparing Primal game that will
+also be CHF file type".
+
+- **What used it:** two things, both because its disc image was the one `.chd`
+  among the maintainer's games:
+  - a release's check that the runtime of its downloads reads such a disc
+    (`-Disc`: 0.5's log says "boot SLES_514.34");
+  - one of the seven training runs of the profile of play, on each system:
+    `sh3-boot`, 3,000 frames without a session.
+
+  Their game folder of it was used by nothing.
+- **Primal's disc read in its place:** `ps2n-host -disc-executables` was run
+  as `release.ps1` runs it, from 0.5's unpacked download, with nothing but
+  Windows on `PATH`.
+  - Primal's `.chd` gave "boot SCES_511.35", exit 0.
+  - Silent Hill 3's, before it was deleted, gave "boot SLES_514.34", exit 0.
+- **Deleted:**
+  - their game folder of it, 0.7 GB, and the copy of its memory cards;
+  - `kit15\games\sh3`, 0.6 GB;
+  - `kit-measure/games/Silent Hill 3` inside WSL, 0.8 GB;
+  - its run in the four lists of training runs;
+  - `C:\ps2\silent-hill-3`, its `.chd`, 2.0 GB.
+- **Deleted from `kit15` too:** 37 folders no list names, 5.0 GB of files of
+  their own, the rest of their files hard links to the measured folders:
+  - older timings' twins (`-r3`, `-r4`, `-s4`, `-rv`);
+  - the last timing's `-release` and `-stock`, which `time-games.ps1` makes
+    again at every timing;
+  - trials' copies (`-drift`, `-win`, `-chk`, `-db`, `-pkg`, `-pkgfalse`,
+    `-c05`, `-p04`) and an empty folder.
+- **Free space on C:** 460.8 GB before, 467.7 GB after the build tree's part,
+  469.8 GB after the disc image, 470.1 GB after WSL's disk was compacted
+  again, to 35.0 GB.
+- **The lists:** six training runs on each system. Every disc, folder and
+  session the lists and `timed.txt` name is there.
+- **Primal's folder** in `build\kit\games` was made by the maintainer that
+  morning, with their PS2Native folder's wizard. It has no session yet. A
+  measurement folder made from its disc, for its boot among the training
+  runs, waits until it plays.

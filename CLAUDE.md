@@ -47,8 +47,7 @@ As of 2026-11-28. This section is replaced when it changes, never added to.
   `bbe4e56` (ADR 0063), with the menu over the game, opened with Esc
   (ADR 0060), and PCSX2 v2.9.198.
 - **In `main` and in the maintainer's game folders, in no release:** a second
-  controller, for a second player (ADR 0064; `1993dc8`), on Windows and inside
-  WSL.
+  controller, for a second player (ADR 0064; `1993dc8`).
 - **PCSX2 followed:** v2.9.198 (ADR 0062; v2.9.189 until then), with two
   changes of PS2Native's own (`patches/pcsx2`): ADR 0050's, and a missing
   include, which stock PCSX2's trees are built with too. The module version is
@@ -56,8 +55,13 @@ As of 2026-11-28. This section is replaced when it changes, never added to.
 - **Games tried, eight:** Killzone, Agent Under Fire, Gran Turismo 3, Jak and
   Daxter and Silent Hill 3, European releases; Resident Evil – Code: Veronica
   X, Secret Agent Clank and SSX Tricky, from the USA. The maintainer's discs
-  are in `C:\ps2\<game>`. Their game folders are in `build\kit\games` and,
-  inside WSL, in `build/PS2Native/games`.
+  are in `C:\ps2\<game>`. At their word on 2026-11-28 (ADR 0065), Silent
+  Hill 3 was deleted whole, its disc image too, and Jak and Daxter's folders
+  on both systems. Jak's disc stays, and its two sessions still in use are
+  kept in `build\measure\sessions\jak`. Their game folders are in
+  `build\kit\games`: seven folders of six of those games (Agent Under Fire has
+  two), and Primal's, a `.chd` they made that day, which no session has tried
+  yet. Inside WSL, `build/PS2Native/games` has none.
 - **Systems:** Windows x64, on two computers of the maintainer's. Linux x64 is
   tested under WSL 2 (Ubuntu 22.04) on the development computer only, and
   described so.

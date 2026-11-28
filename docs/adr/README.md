@@ -31,8 +31,8 @@ The numbers are the records' own; each is in the list below.
 | Speed | 0015, 0019, 0043, 0046, 0047, 0050, 0051, 0052 |
 | Linux | 0004, 0008, 0038, 0041 |
 | Releases | 0042, 0047, 0049, 0052, 0058, 0059, 0063 |
-| The games | 0009 (Killzone), 0026 (Agent Under Fire), 0054 (three more made ready), 0056 (Jak and Daxter at a 130% EE cycle rate) |
-| How the project keeps itself | 0061 (the release's scripts in the repository, `CLAUDE.md` cut to what a session needs) |
+| The games | 0009 (Killzone), 0026 (Agent Under Fire), 0054 (three more made ready), 0056 (Jak and Daxter at a 130% EE cycle rate), 0065 (Jak and Daxter's folders deleted, its two sessions in use kept; Silent Hill 3 deleted, Primal's disc in its place) |
+| How the project keeps itself | 0061 (the release's scripts in the repository, `CLAUDE.md` cut to what a session needs), 0065 (the build tree cleaned up) |
 
 ## In the order they were made
 
@@ -940,3 +940,27 @@ The numbers are the records' own; each is in the list below.
     otherwise.
   - **The maintainer's answers** ("1. Yes", "2. Yes"): committed and pushed
     (`1993dc8`); their game folders given these programs.
+- [ADR 0065](0065-the-projects-files-cleaned-up-jak-and-daxters-folders-and-silent-hill-3-deleted.md):
+  the maintainer's words of 2026-11-28, "Can you do some clean-up? Games, old
+  tests that aren't used anymore...", "I finished Jak and Daxter 100% so,
+  unless you still use my recordings for tests, you can delete it", and of
+  Silent Hill 3, "if it's not useful for tests, feel free to delete it".
+  - **Deleted:** what nothing reads any more, folder by folder, on Windows and
+    inside WSL: trials' build trees, old game runs' files, measurement folders
+    no list names, releases 0.2 to 0.4 and a rehearsal. Free space on C: went
+    from 258.2 GB to 470.1 GB, WSL's disk file compacted among it.
+  - **Jak and Daxter:** two of its sessions are still used, for its timing and
+    the profile's training. They were copied to `build\measure\sessions\jak`
+    and the lists changed; then its folders were deleted on both systems. The
+    disc image stays.
+  - **Silent Hill 3:** used only as the one `.chd` among their discs, for a
+    release's check that its runtime reads one and for one training run.
+    Deleted whole, its disc image among it. Primal's `.chd` takes over the
+    check, and the profile is trained on six runs until Primal's boot may be
+    added.
+  - **The maintainer's answer** ("1. Yes"): this record committed and pushed.
+  - **Kept:** the trees, captures, profiles and measurement folders in use;
+    their other game folders; the copies of their memory cards; 0.5's files and
+    0.1's folder; their discs and the old project, outside the build tree.
+  - The session's choices are listed in the ADR, for the maintainer to decide
+    otherwise.
