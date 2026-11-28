@@ -829,3 +829,11 @@ took it themselves, the wizard's never had. At their "Yes" the wizard sets it
 when it starts, on Windows and on Linux. On the hidden desktop its window now
 shows PS2Native's emblem, where 0.5's shows Windows' default. docs/app-log.md,
 "The wizard's icon (ADR 0066)".
+
+The same day the maintainer had PS2Native given an `AGENTS.md` of its own
+(ADR 0067). PCSX2's, which PS2Native keeps to on PCSX2's GitHub, had given them
+"so many headaches", and they asked for ours to answer it, sarcastic and
+indirect. It follows PCSX2's heading by heading. It asks how developers can
+still refuse AI's help in 2026, and whether that is why so many are losing
+their jobs. Its one strict rule is the maintainer's own: no bug is ever blamed
+on AI, since AI cannot take responsibility for a human's decisions.

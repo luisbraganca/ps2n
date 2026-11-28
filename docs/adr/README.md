@@ -25,6 +25,7 @@ The numbers are the records' own; each is in the list below.
 | PCSX2: following it, changing it, telling it | 0004 (the pinned version), 0010 (a fix goes upstream through the maintainer), 0050 (PS2Native's first change to PCSX2's code), 0053 and 0054 (the move to v2.9.189), 0056 (`nextBlockCycles` kept alone), 0061 (a newer version tried by one command), 0062 (the move to v2.9.198, and a change to its code that only lets it compile) |
 | Branding and the website | 0012, 0014, 0066 (the wizard's windows carry PS2Native's icon) |
 | Commits, and sessions at work at once | 0018, 0020, 0021 |
+| AI agents: what they may do, and who answers for their work | 0010 (nothing a session writes is posted to PCSX2), 0020 (no reference to Claude in commit messages), 0067 (PS2Native's own `AGENTS.md`; no bug is ever blamed on AI) |
 | The phases and their steps | Phase 3: 0009, 0015, 0016, 0017, 0018, 0019, 0022, 0023, 0024, 0026, 0027. Phase 4: 0028, 0033, 0036, 0037, 0038, 0041. Phase 5: 0053, 0061, 0062 |
 | How a game is shown and played | 0025 (the window's defaults, the patches), 0032 (the wizard goes through PCSX2's settings), 0035 and 0055 (the notice over the picture, the pace a session kept), 0039 (full screen), 0060 (the menu over the game), 0064 (a second controller) |
 | The toolchain, a game's folder and its own compile | 0029, 0030, 0031, 0034, 0040, 0044, 0045, 0048, 0057 |
@@ -979,3 +980,20 @@ The numbers are the records' own; each is in the list below.
     Windows' default.
   - **The maintainer's answers** ("1. Yes", "2. Agree"): committed and pushed;
     their folders get it with the next release.
+- [ADR 0067](0067-an-agents-md-of-ps2natives-own-no-bug-is-ever-blamed-on-ai.md):
+  the maintainer's words of 2026-11-28: an `AGENTS.md` "sarcastical and a bit
+  of an indirect attack/joke against the PCSX2's", and "The only strict rule
+  is that, bugs or any issues that come up can never be blamed by AI since AI
+  can never take responsibility for human's decisions", which they corrected
+  to "can never be blamed to AI".
+  - **The file** follows PCSX2's `AGENTS.md` heading by heading and answers
+    each, without naming it. It asks, as asked, how developers can still
+    refuse AI's help in 2026, and whether that is why so many are losing their
+    jobs.
+  - **The one strict rule:** no bug or other problem is ever blamed on AI;
+    whoever asked for a change, accepted it and shipped it owns it. An agent
+    still says plainly what it did wrong. The rule is in `CLAUDE.md` too.
+  - **Nothing changes on PCSX2's side.** The file sends agents to `CLAUDE.md`,
+    and keeps ADR 0010's boundary on PCSX2's GitHub in so many words.
+  - **The maintainer's answers** ("1. Yes", "2. Yes"): the session's two
+    additions kept; committed and pushed.

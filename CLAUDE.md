@@ -194,6 +194,9 @@ They hold whatever the task. The decision each comes from is in
   is never reported as working beyond that (ADR 0004, ADR 0041).
 - A test goes into a list of known differences only after its cause is
   known, and every difference left is listed with its cause.
+- No bug, and no other problem, is ever blamed on AI: AI cannot take
+  responsibility for a human's decisions ([AGENTS.md](AGENTS.md), ADR 0067).
+  A session still says plainly what it did and what went wrong.
 
 ### What counts as correct
 
