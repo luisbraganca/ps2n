@@ -75,6 +75,13 @@ namespace ps2n::host::window
 		void (*pointer_moved)(float x, float y);
 		void (*pointer_button)(uint32_t button, bool pressed);
 		void (*wheel)(float dx, float dy);
+		// Whether something over the picture is used with the pointer now (the
+		// menu over the game): the pointer is not hidden while it is
+		// (host/pointer_hiding.h). Asked on the main thread too.
+		bool (*pointer_used)();
+		// The pointer has hidden over the picture (host/pointer_hiding.h): until
+		// it moves, it points at nothing.
+		void (*pointer_hidden)();
 	};
 
 	/// The message by which another program asks for the picture on display,
@@ -85,6 +92,11 @@ namespace ps2n::host::window
 	/// in the first long of its data.
 	constexpr uint32_t kShotMessage = 0x8000 + 0x50; // WM_APP + 0x50
 	constexpr const char* kShotAtom = "PS2NATIVE_SHOT";
+
+	/// The message by which another program asks whether the pointer is hidden
+	/// over the picture now (Windows; window-check.ps1's `pointer` step): the
+	/// window answers 1 when it is, 0 when it is not.
+	constexpr uint32_t kPointerMessage = 0x8000 + 0x51; // WM_APP + 0x51
 
 	/// WM_CLOSE's wParam that closes the window without asking (Windows):
 	/// RequestClose's, and a check's (window-check.ps1). The close button's is
@@ -122,7 +134,8 @@ namespace ps2n::host::window
 	void SetTitle(const std::string& title);
 
 	/// Whether the window covers its screen, and making it do so. Any thread.
-	/// Alt+Enter and F11 switch as well.
+	/// Alt+Enter and F11 switch as well. Covering it, the pointer hides over
+	/// the picture while it is still (host/pointer_hiding.h, docs/adr/0068).
 	bool IsFullscreen();
 	void SetFullscreen(bool enabled);
 

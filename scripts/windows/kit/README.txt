@@ -87,7 +87,8 @@ saves, its settings and its sessions stay as they are. programs.txt in a
 game's folder says which PS2Native's its programs are.
 
 In the window: the keyboard and the first controller play; F11 or Alt+Enter
-covers the screen; closing the window ends the session.
+covers the screen, where the pointer hides once it is still or clicked, until
+it moves; closing the window ends the session.
 
 From a command line, from a PowerShell window in this folder:
 

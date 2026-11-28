@@ -1533,6 +1533,14 @@ namespace ps2n::host::menu
 			ImGuiManager::ProcessPointerButtonEvent(InputManager::MakePointerButtonKey(0, button), pressed ? 1.0f : 0.0f);
 	}
 
+	void OnPointerHidden()
+	{
+		s_pointer_x = -1.0f;
+		s_pointer_y = -1.0f;
+		if (s_open)
+			ImGuiManager::UpdateMousePosition(-FLT_MAX, -FLT_MAX);
+	}
+
 	void OnWheel(float dx, float dy)
 	{
 		if (!s_open)

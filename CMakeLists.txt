@@ -7,7 +7,8 @@
 #
 # The run-time side (runtime/, host/) is NOT built from here. It is added to
 # PCSX2's own CMake project, which has to be the top-level one; see
-# cmake/ps2n-inject.cmake and the scripts under scripts/.
+# cmake/ps2n-inject.cmake and the scripts under scripts/. Only a rule of the
+# host's that needs nothing of PCSX2 is tested here too (tests/unit).
 
 cmake_minimum_required(VERSION 3.20)
 

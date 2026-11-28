@@ -609,17 +609,19 @@ namespace
 			"                     (left stick), T F G H (right stick), I J K L (triangle,\n"
 			"                     square, cross, circle), Q E (L1 R1), 1 3 (L2 R2), 2 4 (L3\n"
 			"                     R3), Return (start), Backspace (select). Alt+Enter or F11\n"
-			"                     covers the screen. Esc opens PS2Native's menu over the\n"
-			"                     game, which waits meanwhile: Resume, Controls (each\n"
-			"                     player's keys and controller, kept in the data\n"
-			"                     directory's inputprofiles\\controls.ini), Graphics card,\n"
-			"                     Reboot, Quit; the last two, and the window's close\n"
-			"                     button, ask first. The picture is drawn on Vulkan at three\n"
-			"                     times the console's resolution, into an area of 1920 by\n"
-			"                     1080, which covers the screen where a window that size\n"
-			"                     would not fit (-renderer, -upscale, -window-size). The\n"
-			"                     run ends when the window is closed; -frames and -seconds\n"
-			"                     only apply when given. Windows only.\n"
+			"                     covers the screen, where the pointer hides once it has\n"
+			"                     been still for 2 s, or at a click, until it moves. Esc\n"
+			"                     opens PS2Native's menu over the game, which waits\n"
+			"                     meanwhile: Resume, Controls (each player's keys and\n"
+			"                     controller, kept in the data directory's\n"
+			"                     inputprofiles\\controls.ini), Graphics card, Reboot, Quit;\n"
+			"                     the last two, and the window's close button, ask first.\n"
+			"                     The picture is drawn on Vulkan at three times the\n"
+			"                     console's resolution, into an area of 1920 by 1080, which\n"
+			"                     covers the screen where a window that size would not fit\n"
+			"                     (-renderer, -upscale, -window-size). The run ends when the\n"
+			"                     window is closed; -frames and -seconds only apply when\n"
+			"                     given. Windows only.\n"
 			"  -window-size <w>x<h>  With -window: the area the picture goes into, at a\n"
 			"                     display scaling of 100% (default 1920x1080).\n"
 			"  -mute              With -window: no sound.\n"
@@ -2045,6 +2047,18 @@ namespace
 	void OnWindowWheel(float dx, float dy)
 	{
 		ps2n::host::RunOnCPUThread([dx, dy]() { ps2n::host::menu::OnWheel(dx, dy); }, false);
+	}
+
+	// The pointer is used over the picture while the menu is open: it does not
+	// hide then (host/pointer_hiding.h). Main thread.
+	bool OnWindowPointerUsed()
+	{
+		return ps2n::host::menu::IsOpen();
+	}
+
+	void OnWindowPointerHidden()
+	{
+		ps2n::host::RunOnCPUThread([]() { ps2n::host::menu::OnPointerHidden(); }, false);
 	}
 
 	void OnWindowResized(u32 width, u32 height, float scale)
@@ -3525,7 +3539,8 @@ namespace
 		if (s_options.window)
 		{
 			const ps2n::host::window::Listener listener = {&OnWindowKey, &OnWindowResized, &OnWindowFocusLost,
-				&OnWindowCloseRequested, &OnWindowShotRequested, &OnWindowPointerMoved, &OnWindowPointerButton, &OnWindowWheel};
+				&OnWindowCloseRequested, &OnWindowShotRequested, &OnWindowPointerMoved, &OnWindowPointerButton, &OnWindowWheel,
+				&OnWindowPointerUsed, &OnWindowPointerHidden};
 			if (!ps2n::host::window::Create(s_options.window_title.empty() ? std::string(kWindowTitle) : s_options.window_title,
 					s_options.window_width, s_options.window_height, listener))
 			{

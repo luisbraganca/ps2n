@@ -82,6 +82,11 @@ namespace ps2n::host::menu
 	void OnPointerButton(u32 button, bool pressed);
 	void OnWheel(float dx, float dy);
 
+	/// The pointer has hidden over the picture (host/pointer_hiding.h): until it
+	/// moves, it points at nothing, and the menu opened meanwhile shows no item
+	/// pointed at. CPU thread.
+	void OnPointerHidden();
+
 	/// The window lost the keyboard: what was held for the menu will come up
 	/// elsewhere. CPU thread.
 	void OnFocusLost();

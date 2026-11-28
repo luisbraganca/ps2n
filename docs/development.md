@@ -92,7 +92,8 @@ wizard/                   ps2n-wizard, the application a game is made with (Phas
                           a window of its own (settings_window.cpp: PCSX2's SettingsWindow class with the pages a
                           game has), with what they call of the rest of PCSX2's frontend (stand_ins.cpp,
                           pcsx2-qt/MainWindow.h, found before PCSX2's) and of the core (host_interface.cpp)
-tests/unit/               unit tests of the build-time tools
+tests/unit/               unit tests of the build-time tools, and of a rule of the host's that needs nothing of PCSX2
+                          (host_tests.cpp: when the pointer hides over a game, host/pointer_hiding.h)
 tests/module/             what a module defines for itself, tested (stack_probe.cpp: its __chkstk)
 tests/disc/               a small disc of our own in three formats, for the runtime's reading of a disc (disc/formats)
 tests/                    CTest registration for programs booted on the core, the driver script, the recorded
@@ -575,7 +576,10 @@ of 1280 by 720 (`-WindowSize ''` for the game's own default), has the
 host write the picture on display at each `shot` and photographs the
 window beside it (`a-window.png`: a picture Vulkan presents comes out
 white in a photograph on this computer), presses keys in it and closes
-it (look at the pictures with the Read tool).
+it (look at the pictures with the Read tool). A `pointer hidden` or
+`pointer shown` step asks the window whether the pointer is hidden over
+the picture (ADR 0068), and fails the check where it is not: the hidden
+desktop has no pointer to photograph (`build\measure\pointer-68.ps1`).
 
 ## The tests: suites and configurations
 

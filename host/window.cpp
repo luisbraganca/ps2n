@@ -12,12 +12,17 @@
 // over the game, docs/adr/0060), its size and its closing. And a
 // notice of PS2Native's own can show over the picture (docs/adr/0035). The
 // Linux part is PS2Native's, the same window drawn as PCSX2's renderers draw
-// into an X11 one (common/WindowInfo.h).
+// into an X11 one (common/WindowInfo.h). Covering the screen, both hide the
+// pointer over the picture while it is still (pointer_hiding.h,
+// docs/adr/0068).
 
 #include "window.h"
 
+#include "pointer_hiding.h"
+
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <iterator>
@@ -104,6 +109,7 @@ namespace ps2n::host::window
 		constexpr UINT kMessageSetTitle = WM_APP + 1; // lParam: a std::wstring made with new, which the window deletes
 		constexpr UINT kMessageSetFullscreen = WM_APP + 2; // wParam: whether to cover the screen
 		constexpr UINT kMessageShowNotice = WM_APP + 3; // lParam: a Notice made with new, which the window deletes
+		constexpr UINT_PTR kPointerTimer = 1; // the window's: when the pointer is to hide (PointerHiding)
 
 		// A notice over the picture (ShowNotice).
 		struct Notice
@@ -128,6 +134,9 @@ namespace ps2n::host::window
 		// Main thread only: where the window was before it covered the screen.
 		LONG s_windowed_style = 0;
 		WINDOWPLACEMENT s_windowed_placement = {sizeof(WINDOWPLACEMENT)};
+
+		// Main thread only: when the pointer hides over the picture.
+		PointerHiding s_pointer;
 
 		// Main thread only: the notice's window, made the first time one is
 		// shown and owned by the game's, so that it stays above it; and what it
@@ -172,6 +181,52 @@ namespace ps2n::host::window
 			return dpi ? static_cast<float>(dpi) / 96.0f : 1.0f;
 		}
 
+		bool PointerUsed()
+		{
+			return s_listener.pointer_used && s_listener.pointer_used();
+		}
+
+		// Whether the pointer is over the picture now, and not over another
+		// window in front of it; or the window holds it, a button being held.
+		bool PointerOverPicture(HWND hwnd)
+		{
+			if (GetCapture() == hwnd)
+				return true;
+			POINT at = {};
+			if (!GetCursorPos(&at) || WindowFromPoint(at) != hwnd)
+				return false;
+			RECT client = {};
+			GetClientRect(hwnd, &client);
+			ScreenToClient(hwnd, &at);
+			return PtInRect(&client, at) != FALSE;
+		}
+
+		// The pointer as the rule has it now, `was_hidden` before: shown or
+		// hidden where it is over the picture, the runner told when it hides,
+		// and the rule asked again when it wants to be.
+		void ApplyPointer(HWND hwnd, bool was_hidden)
+		{
+			const bool hidden = s_pointer.Hidden();
+			if (hidden != was_hidden)
+			{
+				// Windows asks the window for the pointer's shape when it next
+				// moves (WM_SETCURSOR): until then, it is set here.
+				if (PointerOverPicture(hwnd))
+					SetCursor(hidden ? nullptr : LoadCursorW(nullptr, IDC_ARROW));
+				if (hidden && s_listener.pointer_hidden)
+					s_listener.pointer_hidden();
+			}
+			if (const std::optional<PointerHiding::Clock::time_point> until = s_pointer.Until())
+			{
+				const long long left = std::chrono::ceil<std::chrono::milliseconds>(*until - PointerHiding::Clock::now()).count();
+				SetTimer(hwnd, kPointerTimer, static_cast<UINT>(std::clamp<long long>(left, USER_TIMER_MINIMUM, 60000)), nullptr);
+			}
+			else
+			{
+				KillTimer(hwnd, kPointerTimer);
+			}
+		}
+
 		// The way to cover a screen without changing its mode: take the frame
 		// off and put the window over the whole monitor it is on.
 		void ApplyFullscreen(HWND hwnd, bool enabled)
@@ -201,6 +256,10 @@ namespace ps2n::host::window
 					SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
 			}
 			s_fullscreen.store(enabled);
+
+			const bool was_hidden = s_pointer.Hidden();
+			s_pointer.SetFullscreen(enabled, PointerHiding::Clock::now());
+			ApplyPointer(hwnd, was_hidden);
 		}
 
 		// The notice's measures, in pixels at the game window's scaling.
@@ -391,12 +450,24 @@ namespace ps2n::host::window
 						return 0;
 					break;
 
-				// The pointer, for PS2Native's menu over the game (host/menu.h).
+				// The pointer, for PS2Native's menu over the game (host/menu.h);
+				// hidden over the picture in full screen while it is still
+				// (pointer_hiding.h).
 				case WM_MOUSEMOVE:
+				{
+					const int x = static_cast<short>(LOWORD(lParam));
+					const int y = static_cast<short>(HIWORD(lParam));
+					// Where it is on the screen: a window that moved under a still
+					// pointer has not moved it.
+					POINT at = {x, y};
+					ClientToScreen(hwnd, &at);
+					const bool was_hidden = s_pointer.Hidden();
+					if (s_pointer.Moved(at.x, at.y, PointerHiding::Clock::now()))
+						ApplyPointer(hwnd, was_hidden);
 					if (s_listener.pointer_moved)
-						s_listener.pointer_moved(static_cast<float>(static_cast<short>(LOWORD(lParam))),
-							static_cast<float>(static_cast<short>(HIWORD(lParam))));
+						s_listener.pointer_moved(static_cast<float>(x), static_cast<float>(y));
 					return 0;
+				}
 
 				case WM_LBUTTONDOWN:
 				case WM_RBUTTONDOWN:
@@ -414,10 +485,38 @@ namespace ps2n::host::window
 						SetCapture(hwnd);
 					else if (!(wParam & (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON)))
 						ReleaseCapture();
+					if (down)
+					{
+						const bool was_hidden = s_pointer.Hidden();
+						s_pointer.Pressed(PointerUsed());
+						ApplyPointer(hwnd, was_hidden);
+					}
 					if (s_listener.pointer_button)
 						s_listener.pointer_button(button, down);
 					return 0;
 				}
+
+				case WM_SETCURSOR:
+					// Over the picture while the pointer is hidden there: no pointer.
+					if (LOWORD(lParam) == HTCLIENT && s_pointer.Hidden())
+					{
+						SetCursor(nullptr);
+						return TRUE;
+					}
+					break;
+
+				case WM_TIMER:
+					if (wParam == kPointerTimer)
+					{
+						const bool was_hidden = s_pointer.Hidden();
+						s_pointer.Tick(PointerUsed(), PointerHiding::Clock::now());
+						ApplyPointer(hwnd, was_hidden);
+						return 0;
+					}
+					break;
+
+				case kPointerMessage:
+					return s_pointer.Hidden() ? 1 : 0;
 
 				case WM_MOUSEWHEEL:
 				case WM_MOUSEHWHEEL:
@@ -595,6 +694,7 @@ namespace ps2n::host::window
 		UnregisterClassW(kWindowClass, GetModuleHandleW(nullptr));
 		UnregisterClassW(kNoticeClass, GetModuleHandleW(nullptr));
 		s_fullscreen.store(false);
+		s_pointer = {};
 	}
 
 	WindowInfo GetInfo()
@@ -795,6 +895,9 @@ namespace ps2n::host::window
 		Notice s_notice_shown;
 		bool s_notice_up = false;
 		std::chrono::steady_clock::time_point s_notice_until;
+		PointerHiding s_pointer; // when the pointer hides over the picture
+		Cursor s_blank = 0; // the pointer hidden: a cursor with no pixels, made when first wanted
+		bool s_blank_on = false; // whether the window has it now
 
 		std::optional<uint32_t> KeyFromKeySym(KeySym sym)
 		{
@@ -915,6 +1018,55 @@ namespace ps2n::host::window
 			XFlush(s_display);
 		}
 
+		bool PointerUsed()
+		{
+			return s_listener.pointer_used && s_listener.pointer_used();
+		}
+
+		// The pointer as the rule has it now: hidden, the window has a cursor
+		// with no pixels of its own; shown, none of its own, the desktop's as
+		// before. The runner is told when it hides.
+		void ApplyPointer()
+		{
+			const bool hidden = s_pointer.Hidden();
+			if (hidden == s_blank_on)
+				return;
+			s_blank_on = hidden;
+			const Window window = s_window.load();
+			if (hidden)
+			{
+				if (!s_blank)
+				{
+					const char nothing[1] = {0};
+					if (const Pixmap pixmap = XCreateBitmapFromData(s_display, window, nothing, 1, 1))
+					{
+						XColor black = {};
+						s_blank = XCreatePixmapCursor(s_display, pixmap, pixmap, &black, &black, 0, 0);
+						XFreePixmap(s_display, pixmap);
+					}
+				}
+				if (s_blank)
+					XDefineCursor(s_display, window, s_blank);
+				if (s_listener.pointer_hidden)
+					s_listener.pointer_hidden();
+			}
+			else
+			{
+				XUndefineCursor(s_display, window);
+			}
+			XFlush(s_display);
+		}
+
+		// The window covers its screen now, or has stopped: the pointer's rule
+		// is told, when it has changed.
+		void CoveringChanged(bool covering)
+		{
+			if (covering == s_fullscreen.exchange(covering))
+				return;
+			s_pointer.SetFullscreen(covering, PointerHiding::Clock::now());
+			ApplyPointer();
+		}
+
 		// Covering the screen is the window manager's to do: asked through
 		// _NET_WM_STATE, as every desktop of today has it.
 		void ApplyFullscreen(bool enabled)
@@ -931,7 +1083,7 @@ namespace ps2n::host::window
 			event.xclient.data.l[3] = 1; // asked by an application
 			XSendEvent(s_display, DefaultRootWindow(s_display), False, SubstructureRedirectMask | SubstructureNotifyMask, &event);
 			XFlush(s_display);
-			s_fullscreen.store(enabled);
+			CoveringChanged(enabled);
 		}
 
 		// Whether the window manager has the window covering the screen now,
@@ -953,7 +1105,7 @@ namespace ps2n::host::window
 			}
 			if (data)
 				XFree(data);
-			s_fullscreen.store(covering);
+			CoveringChanged(covering);
 		}
 
 		// ---- the notice ---------------------------------------------------------------
@@ -1154,10 +1306,18 @@ namespace ps2n::host::window
 					break;
 				}
 
-				// The pointer, for PS2Native's menu over the game (host/menu.h).
+				// The pointer, for PS2Native's menu over the game (host/menu.h);
+				// hidden over the picture in full screen while it is still
+				// (pointer_hiding.h). Where it is on the screen tells whether it
+				// moved: a window that moved under it has not moved it.
 				case MotionNotify:
-					if (event.xmotion.window == window && s_listener.pointer_moved)
-						s_listener.pointer_moved(static_cast<float>(event.xmotion.x), static_cast<float>(event.xmotion.y));
+					if (event.xmotion.window == window)
+					{
+						if (s_pointer.Moved(event.xmotion.x_root, event.xmotion.y_root, PointerHiding::Clock::now()))
+							ApplyPointer();
+						if (s_listener.pointer_moved)
+							s_listener.pointer_moved(static_cast<float>(event.xmotion.x), static_cast<float>(event.xmotion.y));
+					}
 					break;
 
 				case ButtonPress:
@@ -1179,9 +1339,15 @@ namespace ps2n::host::window
 								s_listener.wheel(button == 6 ? -1.0f : 1.0f, 0.0f);
 						}
 					}
-					else if (s_listener.pointer_button && button >= Button1 && button <= Button3)
+					else if (button >= Button1 && button <= Button3)
 					{
-						s_listener.pointer_button(button == Button1 ? 0 : button == Button3 ? 1 : 2, down);
+						if (down)
+						{
+							s_pointer.Pressed(PointerUsed());
+							ApplyPointer();
+						}
+						if (s_listener.pointer_button)
+							s_listener.pointer_button(button == Button1 ? 0 : button == Button3 ? 1 : 2, down);
 					}
 					break;
 				}
@@ -1362,7 +1528,7 @@ namespace ps2n::host::window
 			// Asked before the window is shown: it comes up covering the screen.
 			XChangeProperty(s_display, window, s_net_wm_state, XA_ATOM, 32, PropModeReplace,
 				reinterpret_cast<const unsigned char*>(&s_net_wm_state_fullscreen), 1);
-			s_fullscreen.store(true);
+			CoveringChanged(true);
 		}
 
 		// A key held down sends its presses again, but not its releases.
@@ -1412,6 +1578,11 @@ namespace ps2n::host::window
 				const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(s_notice_until - std::chrono::steady_clock::now());
 				timeout = static_cast<int>(std::clamp<long long>(left.count(), 0, timeout));
 			}
+			if (const std::optional<PointerHiding::Clock::time_point> until = s_pointer.Until())
+			{
+				const auto left = std::chrono::ceil<std::chrono::milliseconds>(*until - PointerHiding::Clock::now());
+				timeout = static_cast<int>(std::clamp<long long>(left.count(), 0, timeout));
+			}
 			pollfd fds[2] = {{ConnectionNumber(s_display), POLLIN, 0}, {s_wake[0], POLLIN, 0}};
 			poll(fds, 2, timeout);
 
@@ -1441,6 +1612,10 @@ namespace ps2n::host::window
 				XFlush(s_display);
 				s_notice_up = false;
 			}
+
+			// The pointer, still long enough, hides.
+			s_pointer.Tick(PointerUsed(), PointerHiding::Clock::now());
+			ApplyPointer();
 		}
 	}
 
@@ -1456,6 +1631,11 @@ namespace ps2n::host::window
 			}
 			if (window)
 				XDestroyWindow(s_display, window);
+			if (s_blank)
+			{
+				XFreeCursor(s_display, s_blank);
+				s_blank = 0;
+			}
 			XCloseDisplay(s_display);
 			s_display = nullptr;
 		}
@@ -1475,6 +1655,8 @@ namespace ps2n::host::window
 		s_down.clear();
 		s_toggles_down.clear();
 		s_fullscreen.store(false);
+		s_pointer = {};
+		s_blank_on = false;
 	}
 
 	WindowInfo GetInfo()

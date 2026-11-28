@@ -837,3 +837,15 @@ indirect. It follows PCSX2's heading by heading. It asks how developers can
 still refuse AI's help in 2026, and whether that is why so many are losing
 their jobs. Its one strict rule is the maintainer's own: no bug is ever blamed
 on AI, since AI cannot take responsibility for a human's decisions.
+
+Then they asked for the pointer to be hidden over a game in full screen
+(ADR 0068), unsure how without spoiling the mouse's buttons and moves as
+controls. In PS2Native the mouse reaches the menu over the game alone, never
+a game, so hiding it spoils nothing. Their own idea, hidden at a click and
+shown when moved, was kept, and one rule added: the pointer also hides once
+it has been still for two seconds. It never hides in a window, nor while the
+menu is open. One rule serves Windows and Linux, with a unit test of its own.
+On the hidden desktop the window, asked 22 times through windowed play, full
+screen, clicks and the menu, answered as expected every time. They kept the
+rule, knowing it may change if a game can ever be played with the mouse, as
+PCSX2 allows. docs/app-log.md, "The pointer hidden in full screen (ADR 0068)".

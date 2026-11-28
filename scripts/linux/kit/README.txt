@@ -93,7 +93,8 @@ settings and its sessions stay as they are. programs.txt in a game's folder
 says which PS2Native's its programs are.
 
 In the window: the keyboard and the first controller play; F11 or Alt+Enter
-covers the screen; closing the window ends the session.
+covers the screen, where the pointer hides once it is still or clicked, until
+it moves; closing the window ends the session.
 
 Licences: licences/ has the licence of everything in this folder, and
 licences/README.txt says which is which and where the source of each is

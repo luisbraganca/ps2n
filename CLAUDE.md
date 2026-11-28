@@ -49,7 +49,8 @@ As of 2026-11-28. This section is replaced when it changes, never added to.
 - **In `main`, in no release:** a second controller, for a second player
   (ADR 0064; `1993dc8`), in the maintainer's game folders too; the wizard's
   windows carrying PS2Native's icon (ADR 0066), which their folders get with
-  the next release, at their word.
+  the next release, at their word; the pointer hidden over a game in full
+  screen while it is still (ADR 0068).
 - **PCSX2 followed:** v2.9.198 (ADR 0062; v2.9.189 until then), with two
   changes of PS2Native's own (`patches/pcsx2`): ADR 0050's, and a missing
   include, which stock PCSX2's trees are built with too. The module version is

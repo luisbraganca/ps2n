@@ -27,7 +27,7 @@ The numbers are the records' own; each is in the list below.
 | Commits, and sessions at work at once | 0018, 0020, 0021 |
 | AI agents: what they may do, and who answers for their work | 0010 (nothing a session writes is posted to PCSX2), 0020 (no reference to Claude in commit messages), 0067 (PS2Native's own `AGENTS.md`; no bug is ever blamed on AI) |
 | The phases and their steps | Phase 3: 0009, 0015, 0016, 0017, 0018, 0019, 0022, 0023, 0024, 0026, 0027. Phase 4: 0028, 0033, 0036, 0037, 0038, 0041. Phase 5: 0053, 0061, 0062 |
-| How a game is shown and played | 0025 (the window's defaults, the patches), 0032 (the wizard goes through PCSX2's settings), 0035 and 0055 (the notice over the picture, the pace a session kept), 0039 (full screen), 0060 (the menu over the game), 0064 (a second controller) |
+| How a game is shown and played | 0025 (the window's defaults, the patches), 0032 (the wizard goes through PCSX2's settings), 0035 and 0055 (the notice over the picture, the pace a session kept), 0039 (full screen), 0060 (the menu over the game), 0064 (a second controller), 0068 (the pointer hidden in full screen while it is still) |
 | The toolchain, a game's folder and its own compile | 0029, 0030, 0031, 0034, 0040, 0044, 0045, 0048, 0057 |
 | Speed | 0015, 0019, 0043, 0046, 0047, 0050, 0051, 0052 |
 | Linux | 0004, 0008, 0038, 0041 |
@@ -997,3 +997,25 @@ The numbers are the records' own; each is in the list below.
     and keeps ADR 0010's boundary on PCSX2's GitHub in so many words.
   - **The maintainer's answers** ("1. Yes", "2. Yes"): the session's two
     additions kept; committed and pushed.
+- [ADR 0068](0068-the-pointer-hides-over-a-game-in-full-screen-while-it-is-still.md):
+  the maintainer's words of 2026-11-28, "Can you hide the mouse when on
+  full-screen? I'm not sure what's the best policy to avoid messing with
+  Mouse1 or mouse swipes if it's used as keybinds. Maybe hide it when clicking
+  the game view? And show it if the mouse moves?"
+  - **The mouse is no game's control in PS2Native:** the window passes it to
+    the menu over the game alone. Hiding the pointer takes nothing from a game.
+  - **The rule, in full screen:** the pointer hides once it has been still for
+    two seconds, and at once at a click on the picture; any move shows it. In a
+    window it never hides, nor while the menu is open.
+  - **Both systems follow one rule** (`host/pointer_hiding.h`), with a unit
+    test of its own; a check can ask the window whether the pointer is hidden.
+  - **Checked:** the unit test on both systems; on the hidden desktop, 22
+    answers of the window, every one as expected; the session written down runs
+    again as itself; every test of the development tree, 556, passes.
+  - The session's choices are listed in the ADR, for the maintainer to decide
+    otherwise.
+  - **The maintainer's answers** ("1. Ok, we might need to change the rule in
+    the future...", "2. Yes", "3. Sure"): the rule kept, to be looked at again
+    if the mouse ever becomes a game's control (PCSX2 binds its buttons and
+    wheel, and its moves where "Enable Mouse Mapping" is ticked); committed and
+    pushed; their game folders given these programs after the commit.

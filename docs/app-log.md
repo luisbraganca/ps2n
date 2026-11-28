@@ -6577,3 +6577,106 @@ ps2n icon being used buy the wizard?". Then, to fixing it: "2. Yes".
   Agree" to their PS2Native folder getting the new wizard with the next
   release, since an update now would compile their eight games again for the
   icon alone.
+
+## The pointer hidden in full screen (ADR 0068)
+
+### Built (2026-11-28)
+
+The maintainer's words: "Can you hide the mouse when on full-screen? I'm not
+sure what's the best policy to avoid messing with Mouse1 or mouse swipes if
+it's used as keybinds. Maybe hide it when clicking the game view? And show it
+if the mouse moves?"
+
+- **What the mouse reaches,** read first: the window passes the pointer, its
+  buttons and its wheel to the menu over the game alone (`host/main.cpp`,
+  `OnWindowPointer*`), which takes them only while it is open
+  (`host/menu.cpp`); the menu's control capture leaves the pointer's events to
+  the menu; the wizard has none of PCSX2's controller pages. No game gets a
+  click or a move.
+- **The rule,** `host/pointer_hiding.h`, without a platform's window: covering
+  the screen, the pointer hides once still for two seconds, and at once when
+  one of its three buttons goes down over the picture, unless the pointer is
+  used (the menu open: then it waits two seconds again); a move shows it, a
+  move being a new place on the screen; the window covering the screen, or no
+  longer, shows it.
+- **Windows** (`host/window.cpp`): a move is told by the place on the screen
+  (`ClientToScreen`), so that the window covering the screen under a still
+  pointer is not one; the pointer is hidden by answering `WM_SETCURSOR` over
+  the picture with none, and set at once where it is over the picture when
+  the rule changes its mind; a timer of the window's asks the rule again when
+  it wants to be. The window answers `window::kPointerMessage` (`WM_APP +
+  0x51`) with whether the pointer is hidden, for a check.
+- **Linux** (X11): a move by `MotionNotify`'s place on the screen (`x_root`,
+  `y_root`); hidden, the window is given a cursor with no pixels (a 1-by-1
+  bitmap with an empty mask), shown, none of its own, the desktop's as before;
+  the loop that serves the window wakes when the rule wants to be asked. Its
+  covering the screen is followed whoever asked for it (`_NET_WM_STATE`).
+- **The runner** tells the window that the pointer is used while the menu is
+  open (`Listener::pointer_used`, `menu::IsOpen`), and the window tells the
+  menu when the pointer hides (`Listener::pointer_hidden`,
+  `menu::OnPointerHidden`): the menu forgets where it was, so that, opened
+  meanwhile, it shows no item as pointed at by a pointer no one sees.
+- **The unit test,** `tests/unit/host_tests.cpp` (`unit/host`), in the tools'
+  tree, which needs no PCSX2: eight cases (never hidden in a window; hidden
+  after two seconds still, not after 1.999; shown by a move and still from
+  then; the same place said again not a move; hidden at once at a click; never
+  hidden while used, hidden two seconds after; hidden when the menu opens,
+  until moved; shown when the window stops covering the screen).
+- **`ps2n-host -help`** says it under `-window`, and `window-check.ps1` has a
+  `pointer` step, which asks the window and fails the check where the answer
+  is not the one given.
+- **Built:** `build\windows-clang` (with `-Reconfigure`: the unit test is new)
+  and `build\tools-windows`; inside WSL, `~/ps2n` given this working tree as a
+  patch (15 files differing from `2b28b49`), `build/linux-clang` and
+  `build/tools-linux`. No warning on either.
+
+### Checked (2026-11-28)
+
+- **The unit tests:** 3 of 3 in the tools' tree on Windows and inside WSL,
+  `unit/host`'s eight cases among them.
+- **In a window on the hidden desktop** (`build\measure\pointer-68.ps1`,
+  through `hidden.ps1`): a muted session of Agent Under Fire with the
+  development tree's runtime, its controls written beforehand on keys only, so
+  that no controller of this computer was given anything. The script moved,
+  clicked and pressed keys in the window, and asked it 22 times whether the
+  pointer was hidden (`pointer` steps). Every answer was the one expected:
+
+| Seconds | Done before | The window's answer |
+|---:|---|---|
+| 10, 11.5 | in a window of 1280 by 720; moved, then a click | shown, shown |
+| 13, 15 | F11 at 12.2: covering the screen | shown, hidden |
+| 16.5, 17.5, 19.5 | moved at 16 | shown, shown, hidden |
+| 20.6 | moved at 20, a click there at 20.3 | hidden |
+| 23 | Esc at 21.2: the menu open | hidden |
+| 24.5, 28 | moved at 24 | shown, shown |
+| 29 | a click beside the menu's panel at 28.5 | shown |
+| 33.5 | Esc at 30.2: the menu closed | hidden |
+| 34.5 | moved at 34 | shown |
+| 35.5, 38.5, 39.5 | F11 at 35.2: a window again; a click at 39 | shown, shown, shown |
+
+- **The session it wrote down** (1,498 frames, the menu open once for 9.0 s)
+  runs again without a window as itself: at every one of its 29 fingerprints,
+  to the same EE cycle (8,829,665,287) and the same sound at its last frame.
+- **Every test of the development tree** (`test.ps1`, 196 s): 556 passed, 0
+  failed, 0 skipped, 0 disabled; the tools' unit tests 3 of 3.
+
+### The maintainer's answers (2026-11-28)
+
+"1. Ok, we might need to change the rule in the future. I'm not sure how it
+works on PCSX2, but if it allows to bind mouse movement or mouse clicks, we may
+need to change things." "2. Yes" (to committing and pushing). "3. Sure" (to
+their game folders given these programs after the commit).
+
+- **What PCSX2 allows,** read in its source for them
+  (`pcsx2-qt/Settings/InputBindingWidget.cpp`): while one of a controller's
+  inputs waits for its binding, a click binds that mouse button
+  (`MakePointerButtonKey`), and a turn of the wheel the wheel's direction,
+  always; a move of 50 pixels or more binds the mouse's moves, X or Y, only
+  where "Enable Mouse Mapping" is ticked (`UI/EnableMouseMapping`, off by
+  default). With moves bound, `InputManager::UpdateHostMouseMode` asks the
+  frontend for relative mode with the pointer hidden. PS2Native's menu sets
+  none of these, and its window gives the core no pointer events.
+- **Not seen on a screen:** the hidden desktop has no pointer to see, and a
+  check on the maintainer's own screen would take their mouse. Inside WSL a
+  window appears on that screen: there the build and the unit test are the
+  check.

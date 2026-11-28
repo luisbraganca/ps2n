@@ -23,6 +23,10 @@ steps it was given, each at a number of seconds after the window appeared:
   "9 click 640 360"    move the pointer to that place of the picture (its
                        pixels, from the top left) and click its left button
                        ("rclick" the right one, "move" only moves it)
+  "12 pointer hidden"  whether the pointer is hidden over the picture now
+                       (ADR 0068): printed, and the check fails where it is
+                       not as given ("hidden" or "shown"; nothing given,
+                       only printed)
   "20 close"           close the window, without the game asking first
   "18 close-button"    the window's close button, as a player presses it: the
                        game asks first (its menu on Quit's question)
@@ -140,6 +144,16 @@ public static class Ps2nGameWindow
     }
     // ps2n::host::window::kShotMessage: the host writes shot-<number>.png beside its last frame.
     public static void AskShot(IntPtr hwnd, int number) { PostMessageW(hwnd, 0x8050, new IntPtr(number), IntPtr.Zero); }
+    [DllImport("user32.dll")] static extern IntPtr SendMessageTimeoutW(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
+    // ps2n::host::window::kPointerMessage: 1 the pointer is hidden over the picture, 0 it is not, -1 the window did
+    // not answer. Sent, so answered before what was posted and not yet taken up: a step leaves a moment after one
+    // that posts.
+    public static int PointerHidden(IntPtr hwnd)
+    {
+        IntPtr result;
+        if (SendMessageTimeoutW(hwnd, 0x8051, IntPtr.Zero, IntPtr.Zero, 0x0002, 5000, out result) == IntPtr.Zero) return -1; // SMTO_ABORTIFHUNG
+        return result.ToInt32();
+    }
 }
 '@
 [Ps2nGameWindow]::Init()
@@ -226,7 +240,16 @@ foreach ($step in $Steps) {
             [Ps2nGameWindow]::Pointer($hwnd, [int]$words[2], [int]$words[3], $button)
             Write-Host ("{0,6:N1} s: {1} at {2},{3}" -f $watch.Elapsed.TotalSeconds, $words[1], $words[2], $words[3])
         }
-        default { throw "Unknown step [$step]: shot <file>, key <key> [seconds], click|rclick|move <x> <y>, close, or close-button." }
+        'pointer' {
+            $said = switch ([Ps2nGameWindow]::PointerHidden($hwnd)) { 1 { 'hidden' } 0 { 'shown' } default { 'not known (no answer)' } }
+            $expected = if ($words.Count -gt 2) { $words[2] } else { '' }
+            $verdict = ''
+            if ($expected) {
+                if ($said -eq $expected) { $verdict = ', as expected' } else { $verdict = ", NOT $expected as expected"; $failed = $true }
+            }
+            Write-Host ("{0,6:N1} s: the pointer {1}{2}" -f $watch.Elapsed.TotalSeconds, $said, $verdict)
+        }
+        default { throw "Unknown step [$step]: shot <file>, key <key> [seconds], click|rclick|move <x> <y>, pointer [hidden|shown], close, or close-button." }
     }
 }
 
