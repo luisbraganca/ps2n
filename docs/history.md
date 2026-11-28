@@ -752,3 +752,27 @@ their memory cards are unchanged. docs/app-log.md, "Maintenance tools (ADR
 The same night the maintainer wrote "Handle release 0.5" (ADR 0063). 0.5 is
 made as 0.4 was, by the release's scripts in the repository for the first
 time. The version is 0.5 (`version.txt`).
+
+Done the same night:
+
+- committed and pushed (`bbe4e56`);
+- the training folders brought up to date, and the runtime's profile of play
+  made again on both systems;
+- every test passing in the trees the downloads are made from (554 on Windows;
+  553 on Linux, and 556 in its development tree), none skipped;
+- both downloads made and tried: the session at every fingerprint from a folder
+  each wizard made, a folder of 0.4's download brought up to date;
+- timed twice against stock PCSX2 v2.9.198 with its VU thread on: Jak and
+  Daxter 0.98, Gran Turismo 3 1.01, Agent Under Fire 0.98, Killzone 0.95;
+  under WSL 2, Jak and Daxter 0.98. Jak and Daxter's compiled run on Windows
+  took about 3% more than 0.4's, the runtime's profile of play ruled out as
+  the cause;
+- a draft pre-release on GitHub for the maintainer to publish.
+
+At the maintainer's answers ("1. Yes", "2. Yes", "3. Yes", "4. No"), 0.5 was
+published on 2026-11-28 (08:23 UTC, the tag `v0.5`), the website and the README
+moved to it, and their game folders were given its programs, the nine on
+Windows and the one inside WSL, each compiling its game again; where a session
+could be run again, its start was the session at every fingerprint compared.
+Jak and Daxter's 3% is not looked into further. docs/app-log.md, "0.5 (ADR
+0063)".

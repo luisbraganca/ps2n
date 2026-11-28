@@ -28,13 +28,13 @@ and nothing generated from them is.
 
 ## Download
 
-**PS2Native 0.4**, a pre-release, published on 2026-11-25:
-[the release, with its notes](https://github.com/luisbraganca/ps2n/releases/tag/v0.4).
+**PS2Native 0.5**, a pre-release, published on 2026-11-28:
+[the release, with its notes](https://github.com/luisbraganca/ps2n/releases/tag/v0.5).
 
 | | File | Runs on |
 |---|---|---|
-| Windows | `PS2Native-0.4-windows-x64.zip` | Windows 10 (version 1803 or later) or Windows 11, 64-bit |
-| Linux | `PS2Native-0.4-linux-x64.tar.xz` | 64-bit Linux with glibc 2.35 or later (Ubuntu 22.04, Linux Mint 21 and later) |
+| Windows | `PS2Native-0.5-windows-x64.zip` | Windows 10 (version 1803 or later) or Windows 11, 64-bit |
+| Linux | `PS2Native-0.5-linux-x64.tar.xz` | 64-bit Linux with glibc 2.35 or later (Ubuntu 22.04, Linux Mint 21 and later) |
 
 Nothing to install: unpack it and start **PS2Native**. Its wizard takes five
 steps: the game's disc image, in any format PCSX2 plays; the BIOS; the
@@ -61,18 +61,22 @@ as their menus. Every other game is untried and may not work.
   PCSX2 gives the console's second vector unit (VU1) a thread of its own by
   default, on a computer with three cores or more, and PS2Native does too
   since 0.3, wherever PCSX2 would. On the maintainer's own sessions played
-  back, a compiled game as 0.4 has it takes 0.93 to 1.00 times the time of
-  stock PCSX2 2.9.189 with its VU thread on, built as PCSX2's releases are
-  (Jak and Daxter 0.93, Gran Turismo 3 1.00, Agent Under Fire 0.97, Killzone
-  0.94). 0.3 took 0.94 to 1.00 times the time of stock PCSX2 2.9.170 so. 0.2,
-  which kept VU1 on the main processor thread, took 1.02 to 1.65 times it
-  (and 0.98 to 1.00 times the time of stock PCSX2 with VU1 on its main thread
-  too).
+  back, a compiled game as 0.5 has it takes 0.95 to 1.01 times the time of
+  stock PCSX2 2.9.198 with its VU thread on, built as PCSX2's releases are
+  (Jak and Daxter 0.98, Gran Turismo 3 1.01, Agent Under Fire 0.98, Killzone
+  0.95). 0.4 took 0.93 to 1.00 times the time of stock PCSX2 2.9.189 so; Jak
+  and Daxter's rose because stock PCSX2 2.9.198 took about 2% less time on
+  its session than 2.9.189, and the compiled game about 3% more than 0.4's.
+  0.3 took 0.94 to 1.00 times the time of stock PCSX2 2.9.170 so. 0.2, which kept VU1 on the main
+  processor thread, took 1.02 to 1.65 times it (and 0.98 to 1.00 times the
+  time of stock PCSX2 with VU1 on its main thread too).
 - **Linux x64.** Built and tested only inside WSL 2 (Ubuntu 22.04) so far,
   every test passing there, and games made and played there. One game was
-  timed, Jak and Daxter: as 0.4 has it, 0.96 times the time of stock PCSX2
-  with its VU thread on, where 0.3 took 0.99 times it and 0.2 about 2.2 times.
-  Nothing is known to work on a Linux machine of its own yet.
+  timed, Jak and Daxter: as 0.5 has it, 0.98 times the time of stock PCSX2
+  with its VU thread on, where 0.4 took 0.96 times it, 0.3 0.99 times and 0.2
+  about 2.2 times. The menu over a game, new in 0.5, has not yet been opened
+  in a game's window there. Nothing is known to work on a Linux machine of
+  its own yet.
 - **What a compiled game is held to.** A run on PS2Native is compared with
   the same run on stock PCSX2 at every point where the two can be compared,
   and with recordings made on a console: 556 tests.
@@ -131,9 +135,9 @@ or later ([LICENSE](LICENSE)). It builds on PCSX2 (GPL-3.0 or later,
 Copyright PCSX2 Dev Team), which is included as PCSX2 released it, as a
 submodule under `third_party/pcsx2`. PS2Native's own changes to PCSX2's code
 are the patches in [patches/pcsx2](patches/pcsx2/), each saying what it
-changes and why; 0.3 and 0.4 have the first, 0.2 and 0.1 none. Each download's
-`licences` folder has
-the licence of everything in it, and where the source of each is.
+changes and why; 0.5 has both, 0.3 and 0.4 the first, 0.2 and 0.1 none. Each
+download's `licences` folder has the licence of everything in it, and where
+the source of each is.
 
 PS2Native is an independent project. It is not affiliated with the PCSX2
 project or with Sony Interactive Entertainment.

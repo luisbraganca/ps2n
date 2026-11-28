@@ -864,11 +864,15 @@ through the same parts (`scripts\windows\release.ps1`,
    public yet.
 8. **Published at the maintainer's word,** by them or by the session: `gh
    release edit v<version> --draft=false`. The tag is made then.
-9. **After it is published:** the website's downloads and the README move to
-   the version, in a commit of its own (a draft's files are not public
-   before). At the maintainer's word their own PS2Native folders are made
-   again (`-Parts theirs`, `--parts theirs`) and their game folders brought up
-   to date.
+9. **After it is published:** at the maintainer's word their own PS2Native
+   folders are made again from the release's commit (`-Parts theirs`,
+   `--parts theirs`) and their game folders brought up to date (`-Parts
+   saves,update,remake,check,again`). Then the website's downloads and the
+   README move to the version, in a commit of its own with the records (a
+   draft's files are not public before). `-Parts theirs` refuses a tree with
+   changes not committed, and `--parts theirs` a clone whose commit is no
+   longer the one pushed: records written since the release's commit are set
+   aside while it runs, and put back.
 
 `-Rehearsal` (`--rehearsal`) goes through it on any tree, into
 `build\release\rehearsal`: it makes no draft and leaves the maintainer's

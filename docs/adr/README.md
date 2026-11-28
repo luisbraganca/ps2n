@@ -915,3 +915,9 @@ The numbers are the records' own; each is in the list below.
     the website and their game folders put to them then; their game folders
     keep `d50ef76`'s programs unless they say otherwise; the website and the
     README move to 0.5 once it is published.
+  - **The maintainer's answers to the draft** ("1. Yes", "2. Yes", "3. Yes",
+    "4. No"): published by the session (the tag `v0.5` on `bbe4e56`); the
+    website and the README moved to 0.5; their game folders (`build\kit\games`
+    on Windows, `build/PS2Native/games` inside WSL) given 0.5's programs; Jak
+    and Daxter's compiled run on Windows, about 3% more than 0.4's, not looked
+    into further.

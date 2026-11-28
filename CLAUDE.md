@@ -39,20 +39,19 @@ needs.
 
 ## Where things stand
 
-As of 2026-11-27. This section is replaced when it changes, never added to.
+As of 2026-11-28. This section is replaced when it changes, never added to.
 
 - **Phase 5, Maintenance,** since 2026-11-22 (ADR 0053). Phases 1 to 4 are
   done.
-- **Released:** 0.4, a pre-release, on 2026-11-25: the tag `v0.4` on
-  `a243df4`.
-- **Being released:** 0.5 (ADR 0063). `version.txt` says 0.5.
-- **In `main` and in the maintainer's game folders, in no release:** the menu
-  over the game, opened with Esc (ADR 0060; `e616401`, `224d896`).
+- **Released:** 0.5, a pre-release, on 2026-11-28: the tag `v0.5` on
+  `bbe4e56` (ADR 0063), with the menu over the game, opened with Esc
+  (ADR 0060), and PCSX2 v2.9.198. The maintainer's game folders have its
+  programs, on Windows and inside WSL.
+- **In `main` but in no release:** nothing of the programs.
 - **PCSX2 followed:** v2.9.198 (ADR 0062; v2.9.189 until then), with two
   changes of PS2Native's own (`patches/pcsx2`): ADR 0050's, and a missing
   include, which stock PCSX2's trees are built with too. The module version is
-  7. Committed and pushed at the maintainer's word; their game folders given
-  these programs.
+  7.
 - **Games tried, eight:** Killzone, Agent Under Fire, Gran Turismo 3, Jak and
   Daxter and Silent Hill 3, European releases; Resident Evil – Code: Veronica
   X, Secret Agent Clank and SSX Tricky, from the USA. The maintainer's discs
@@ -64,12 +63,14 @@ As of 2026-11-27. This section is replaced when it changes, never added to.
 - **Tests:** 556 in the development trees on both systems; 554 (Windows) and
   553 (Linux) in the trees a release is made from, where three comparisons
   are disabled; none skipped.
-- **Speed, as 0.4 has it,** on the maintainer's sessions, against stock PCSX2
-  v2.9.189 built as its releases are, with its VU thread on: Jak and Daxter
-  0.93 times its time, Gran Turismo 3 1.00, Agent Under Fire 0.97, Killzone
-  0.94; under WSL 2, Jak and Daxter 0.96.
-- **Maintenance tools** (ADR 0061): the release's scripts in the repository,
-  this file cut; committed and pushed (`b542370`).
+- **Speed, as 0.5 has it,** on the maintainer's sessions, against stock PCSX2
+  v2.9.198 built as its releases are, with its VU thread on: Jak and Daxter
+  0.98 times its time, Gran Turismo 3 1.01, Agent Under Fire 0.98, Killzone
+  0.95; under WSL 2, Jak and Daxter 0.98. Jak and Daxter's compiled run on
+  Windows took about 3% more than 0.4's; why is not known, and at the
+  maintainer's word it is not looked into for now (ADR 0063).
+- **Maintenance tools** (ADR 0061): the release's scripts in the repository
+  (`b542370`), first used for 0.5; this file cut.
 - **Dates:** from 2026-12-11, read whether PCSX2's issue 15185 has a reply,
   and tell the maintainer (ADR 0010); issue 15223, opened on 2026-11-22,
   likewise from 2026-12-22.
